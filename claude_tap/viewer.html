@@ -345,16 +345,17 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   border-radius: 14px 14px 0 0;
 }
 .diff-header .diff-title { font-size: 14px; font-weight: 600; color: var(--text); }
-.diff-nav { margin-left: auto; display: flex; align-items: center; gap: 4px; margin-right: 12px; }
 .diff-nav-btn {
   background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-size: 14px; color: var(--text-secondary); cursor: pointer;
-  padding: 2px 8px; line-height: 1.2;
+  font-size: 13px; color: var(--text-secondary); cursor: pointer;
+  padding: 3px 10px; line-height: 1.2;
 }
-.diff-nav-btn:hover { background: var(--bg-active); color: var(--text); }
-.diff-nav-pos { font-size: 11px; color: var(--text-tertiary); min-width: 30px; text-align: center; font-variant-numeric: tabular-nums; }
+.diff-nav-btn:hover:not(:disabled) { background: var(--bg-active); color: var(--text); }
+.diff-nav-btn:disabled { opacity: 0.3; cursor: default; }
+.diff-nav-prev { margin-right: 8px; }
+.diff-nav-next { margin-left: 8px; }
 .diff-header .diff-close {
-  background: none; border: none;
+  margin-left: auto; background: none; border: none;
   font-size: 18px; color: var(--text-tertiary); cursor: pointer;
   padding: 4px 10px; border-radius: var(--radius-sm); line-height: 1;
 }
@@ -1241,53 +1242,66 @@ function findPrevSameModel(idx) {
 }
 
 function showDiff(btn) {
-  const prevIdx = findPrevSameModel(activeIdx);
+  showDiffForIdx(activeIdx, btn);
+}
+
+function findNextSameModel(idx) {
+  const model = filtered[idx]?.request?.body?.model;
+  for (let i = idx + 1; i < filtered.length; i++) {
+    if (filtered[i]?.request?.body?.model === model) return i;
+  }
+  return -1;
+}
+
+function showDiffForIdx(curIdx, triggerBtn) {
+  const prevIdx = findPrevSameModel(curIdx);
   if (prevIdx < 0) {
-    const orig = btn.innerHTML;
-    btn.textContent = t('no_prev');
-    setTimeout(() => btn.innerHTML = orig, 1500);
+    if (triggerBtn) {
+      const orig = triggerBtn.innerHTML;
+      triggerBtn.textContent = t('no_prev');
+      setTimeout(() => triggerBtn.innerHTML = orig, 1500);
+    }
     return;
   }
+  // Remove existing overlay if any
+  document.querySelector('.diff-overlay')?.remove();
+
   const oldBody = filtered[prevIdx].request?.body || {};
-  const newBody = filtered[activeIdx].request?.body || {};
+  const newBody = filtered[curIdx].request?.body || {};
   const diff = structuralDiff(oldBody, newBody);
   const html = renderStructuralDiff(diff);
+
+  // Check if prev/next diff pairs exist
+  const hasPrev = findPrevSameModel(prevIdx) >= 0;
+  const hasNext = findPrevSameModel(findNextSameModel(curIdx)) >= 0;
 
   const overlay = document.createElement('div');
   overlay.className = 'diff-overlay';
   overlay.innerHTML = `<div class="diff-modal">
     <div class="diff-header">
-      <span class="diff-title">${t('turn')} ${filtered[prevIdx].turn || '?'} &rarr; ${t('turn')} ${filtered[activeIdx].turn || '?'}</span>
-      <span class="diff-nav">
-        <button class="diff-nav-btn" data-dir="-1" title="Previous change">&uarr;</button>
-        <span class="diff-nav-pos"></span>
-        <button class="diff-nav-btn" data-dir="1" title="Next change">&darr;</button>
-      </span>
+      <button class="diff-nav-btn diff-nav-prev" ${hasPrev ? '' : 'disabled'}>&#9664;</button>
+      <span class="diff-title">${t('turn')} ${filtered[prevIdx].turn || '?'} &rarr; ${t('turn')} ${filtered[curIdx].turn || '?'}</span>
+      <button class="diff-nav-btn diff-nav-next" ${hasNext ? '' : 'disabled'}>&#9654;</button>
       <button class="diff-close">&#10005;</button>
     </div>
     <div class="diff-body">${html}</div>
   </div>`;
-  overlay.querySelector('.diff-close').onclick = () => overlay.remove();
-  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', escHandler); };
+  overlay.querySelector('.diff-close').onclick = close;
+  overlay.onclick = e => { if (e.target === overlay) close(); };
+  // Navigate to prev/next diff pair
+  overlay.querySelector('.diff-nav-prev').onclick = () => {
+    if (hasPrev) { selectEntry(filtered.indexOf(filtered[prevIdx])); showDiffForIdx(prevIdx); }
+  };
+  overlay.querySelector('.diff-nav-next').onclick = () => {
+    const nextIdx = findNextSameModel(curIdx);
+    if (nextIdx >= 0 && hasNext) { selectEntry(filtered.indexOf(filtered[nextIdx])); showDiffForIdx(nextIdx); }
+  };
   document.body.appendChild(overlay);
-  // Diff change navigation
-  const body = overlay.querySelector('.diff-body');
-  const markers = body.querySelectorAll('.diff-modified-msg, .diff-new-msg, .diff-removed-msg, .diff-section-body .sys-diff-del, .diff-side-by-side');
-  let navIdx = -1;
-  const posEl = overlay.querySelector('.diff-nav-pos');
-  function updatePos() { posEl.textContent = markers.length > 0 ? `${navIdx + 1}/${markers.length}` : '0/0'; }
-  function navTo(dir) {
-    if (markers.length === 0) return;
-    navIdx = Math.max(0, Math.min(markers.length - 1, navIdx + dir));
-    markers[navIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
-    updatePos();
-  }
-  updatePos();
-  overlay.querySelectorAll('.diff-nav-btn').forEach(b => b.onclick = () => navTo(parseInt(b.dataset.dir)));
   const escHandler = e => {
-    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); }
-    if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); navTo(1); }
-    if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); navTo(-1); }
+    if (e.key === 'Escape') close();
+    if (e.key === 'ArrowLeft') { overlay.querySelector('.diff-nav-prev').click(); }
+    if (e.key === 'ArrowRight') { overlay.querySelector('.diff-nav-next').click(); }
   };
   document.addEventListener('keydown', escHandler);
 }
