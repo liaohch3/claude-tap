@@ -1,0 +1,50 @@
+[project]
+name = "claude-tap"
+version = "0.1.0"
+description = "Trace Claude Code API requests via a local reverse proxy. Inspect system prompts, messages, tools, and token usage."
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "liaohch3" }]
+readme = "README.md"
+keywords = ["claude", "claude-code", "trace", "proxy", "api", "llm", "context-engineering"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "aiohttp>=3.9,<4",
+    "anthropic>=0.79.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/liaohch3/claude-tap"
+Repository = "https://github.com/liaohch3/claude-tap"
+Issues = "https://github.com/liaohch3/claude-tap/issues"
+
+[project.scripts]
+claude-tap = "claude_tap:main_entry"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["claude_tap"]
+
+[tool.setuptools.package-data]
+claude_tap = ["viewer.html", "py.typed"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

@@ -1,0 +1,1397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Trace Viewer</title>
+<style>
+:root {
+  --bg: #f4f5f7;
+  --bg-card: #ffffff;
+  --bg-hover: #f0f1f4;
+  --bg-active: #e8ecf4;
+  --bg-code: #f6f8fa;
+  --border: #e2e4e9;
+  --border-light: #edeef1;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.08);
+  --radius: 10px;
+  --radius-sm: 6px;
+
+  --text: #1c2024;
+  --text-secondary: #60646c;
+  --text-tertiary: #a0a4ab;
+
+  --blue: #3b82f6;
+  --blue-bg: #eff6ff;
+  --green: #10b981;
+  --green-bg: #ecfdf5;
+  --amber: #f59e0b;
+  --amber-bg: #fffbeb;
+  --red: #ef4444;
+  --red-bg: #fef2f2;
+  --purple: #8b5cf6;
+  --purple-bg: #f5f3ff;
+  --cyan: #06b6d4;
+  --cyan-bg: #ecfeff;
+  --orange: #f97316;
+  --orange-bg: #fff7ed;
+  --indigo: #6366f1;
+
+  --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', 'Consolas', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+}
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --bg-card: #161b22;
+  --bg-hover: #1c2128;
+  --bg-active: #252c35;
+  --bg-code: #1c2128;
+  --border: #30363d;
+  --border-light: #21262d;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.4);
+  --text: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-tertiary: #6e7681;
+  --blue: #58a6ff;
+  --blue-bg: #0d2240;
+  --green: #3fb950;
+  --green-bg: #0d2d1a;
+  --amber: #d29922;
+  --amber-bg: #2d2200;
+  --red: #f85149;
+  --red-bg: #3d1117;
+  --purple: #bc8cff;
+  --purple-bg: #1f1338;
+  --cyan: #39d2c0;
+  --cyan-bg: #0a2e2c;
+  --orange: #f0883e;
+  --orange-bg: #2d1b00;
+  --indigo: #8b8fff;
+}
+[data-theme="dark"] .msg.user { border-color: #1f3a5f; }
+[data-theme="dark"] .msg.assistant { border-color: #1a3a26; }
+[data-theme="dark"] .msg.system { border-color: #3d3000; }
+[data-theme="dark"] .msg.tool_result { border-color: #2a1f48; }
+[data-theme="dark"] .msg pre { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.06); }
+[data-theme="dark"] .json-view .jk { color: #bc8cff; }
+[data-theme="dark"] .json-view .js { color: #3fb950; }
+[data-theme="dark"] .json-view .jn { color: #d29922; }
+[data-theme="dark"] .json-view .jb { color: #f85149; }
+*,*::before,*::after { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--sans); background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; -webkit-font-smoothing: antialiased; }
+
+/* ─── Header ─── */
+.header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 20px; height: 52px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0; z-index: 10;
+}
+.header .logo { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.header .logo svg { width: 22px; height: 22px; }
+.header .logo span { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: -0.3px; }
+.header .divider { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; }
+.path-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.filter-chip {
+  font-size: 12px; font-family: var(--mono); padding: 4px 10px; border-radius: 20px;
+  border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary);
+  cursor: pointer; transition: all .15s; white-space: nowrap; line-height: 1;
+}
+.filter-chip:hover { border-color: var(--blue); color: var(--blue); }
+.filter-chip.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+.filter-chip .chip-count { font-size: 10px; margin-left: 4px; opacity: .6; }
+.stats {
+  margin-left: auto; display: flex; gap: 16px; font-size: 12px; color: var(--text-tertiary); flex-shrink: 0;
+}
+.stats .stat-group { display: flex; align-items: center; gap: 4px; }
+.stats .stat-val { font-weight: 600; color: var(--text-secondary); font-family: var(--mono); }
+
+/* ─── Layout ─── */
+.main { display: flex; flex: 1; overflow: hidden; }
+
+/* ─── Sidebar ─── */
+#sidebar-wrap {
+  width: 300px; min-width: 260px; flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.sidebar {
+  overflow-y: auto;
+}
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.sidebar-group-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; cursor: pointer; user-select: none;
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 1;
+  text-transform: uppercase; letter-spacing: .5px;
+}
+.sidebar-group-header:hover { background: var(--bg-hover); }
+.sidebar-group-header .group-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.sidebar-group-header .group-name { flex: 1; }
+.sidebar-group-header .group-count {
+  font-size: 10px; font-weight: 500; color: var(--text-tertiary);
+  background: var(--bg-hover); padding: 1px 6px; border-radius: 8px;
+}
+.sidebar-group-header .group-chevron {
+  font-size: 10px; color: var(--text-tertiary); transition: transform .15s;
+}
+.sidebar-group-header .group-chevron.open { transform: rotate(90deg); }
+
+.sidebar-item {
+  padding: 10px 16px; cursor: pointer; transition: background .1s;
+  border-bottom: 1px solid var(--border-light); position: relative;
+}
+.sidebar-item:hover { background: var(--bg-hover); }
+.sidebar-item.active { background: var(--blue-bg); }
+.sidebar-item.active::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px; background: var(--blue); border-radius: 0 2px 2px 0;
+}
+.sidebar-item .si-row1 { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.sidebar-item .si-turn { font-size: 13px; font-weight: 600; color: var(--text); }
+.sidebar-item .si-model {
+  font-size: 11px; padding: 1px 6px; border-radius: 4px;
+  font-weight: 500; margin-left: auto;
+}
+.sidebar-item .si-row2 { display: flex; gap: 10px; font-size: 11px; }
+.sidebar-item .si-tok { color: var(--green); font-family: var(--mono); font-weight: 500; }
+.sidebar-item .si-dur { color: var(--amber); font-family: var(--mono); font-weight: 500; }
+.sidebar-item .si-path {
+  font-size: 10px; color: var(--text-tertiary); font-family: var(--mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px;
+}
+
+/* ─── Detail ─── */
+.detail { flex: 1; overflow-y: auto; padding: 20px 28px; background: var(--bg); }
+.detail::-webkit-scrollbar { width: 6px; }
+.detail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* ─── Action bar ─── */
+.action-bar { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+.act-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; padding: 6px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: var(--text-secondary); cursor: pointer; font-family: var(--sans);
+  transition: all .15s; box-shadow: var(--shadow-sm);
+}
+.act-btn:hover { border-color: var(--blue); color: var(--blue); }
+.act-btn svg { width: 14px; height: 14px; }
+
+/* ─── Section ─── */
+.section {
+  margin-bottom: 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+  background: var(--bg-card); box-shadow: var(--shadow-sm);
+}
+.section-header {
+  display: flex; align-items: center; padding: 10px 16px;
+  cursor: pointer; user-select: none; gap: 8px;
+  transition: background .1s;
+}
+.section-header:hover { background: var(--bg-hover); }
+.section-header .chevron {
+  font-size: 10px; color: var(--text-tertiary); transition: transform .2s; width: 12px;
+}
+.section-header .chevron.open { transform: rotate(90deg); }
+.section-header .title { font-size: 13px; font-weight: 600; color: var(--text); }
+.section-header .badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  background: var(--bg); color: var(--text-tertiary); font-weight: 500; margin-left: auto;
+}
+.section-header .copy-btn {
+  font-size: 11px; padding: 3px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: var(--text-tertiary); cursor: pointer; margin-left: 6px; transition: all .15s;
+}
+.section-header .copy-btn:hover { color: var(--blue); border-color: var(--blue); }
+.section-body { padding: 0 16px 16px; display: none; overflow-x: auto; }
+.section-body.open { display: block; }
+.section-body pre {
+  white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
+  font-size: 12px; background: var(--bg-code); padding: 12px 14px;
+  border-radius: var(--radius-sm); line-height: 1.6; border: 1px solid var(--border-light);
+  max-height: 500px; overflow-y: auto;
+}
+
+/* ─── Messages ─── */
+.msg {
+  margin-bottom: 8px; border-radius: var(--radius-sm);
+  padding: 12px 16px; font-size: 13px; line-height: 1.6;
+  border: 1px solid var(--border-light);
+}
+.msg.user { background: var(--blue-bg); border-color: #c7d2fe; }
+.msg.assistant { background: var(--green-bg); border-color: #a7f3d0; }
+.msg.system { background: var(--amber-bg); border-color: #fde68a; }
+.msg.tool_result { background: var(--purple-bg); border-color: #c4b5fd; }
+.msg-role {
+  display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .5px; padding: 2px 8px; border-radius: 4px; margin-bottom: 8px;
+}
+.msg.user .msg-role { background: var(--blue); color: #fff; }
+.msg.assistant .msg-role { background: var(--green); color: #fff; }
+.msg.system .msg-role { background: var(--amber); color: #fff; }
+.msg.tool_result .msg-role { background: var(--purple); color: #fff; }
+.msg pre {
+  white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
+  font-size: 12px; background: rgba(0,0,0,0.04); padding: 10px 12px;
+  border-radius: var(--radius-sm); margin-top: 8px; max-height: 400px;
+  overflow-y: auto; border: 1px solid rgba(0,0,0,0.06); line-height: 1.5;
+}
+.content-block { margin-top: 8px; }
+.content-block:first-child { margin-top: 0; }
+.tool-use-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; color: var(--cyan);
+  background: var(--cyan-bg); padding: 2px 8px; border-radius: 4px; margin-bottom: 4px;
+}
+.thinking-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; color: var(--indigo);
+  background: #eef2ff; padding: 2px 8px; border-radius: 4px; margin-bottom: 4px;
+}
+
+/* ─── Tool blocks ─── */
+.tool-block {
+  border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+  margin-bottom: 4px; overflow: hidden; background: var(--bg-card);
+}
+.tool-block-header {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 8px 12px; cursor: pointer; user-select: none; transition: background .1s;
+}
+.tool-block-header:hover { background: var(--bg-hover); }
+.tb-arrow { font-size: 9px; color: var(--text-tertiary); transition: transform .15s; flex-shrink: 0; }
+.tb-arrow.open { transform: rotate(90deg); }
+.tb-name { color: var(--cyan); font-family: var(--mono); font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.tb-desc { color: var(--text-tertiary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tool-block-body {
+  display: none; padding: 10px 12px 12px; border-top: 1px solid var(--border-light); font-size: 12px;
+}
+.tool-block-body.open { display: block; }
+.tb-full-desc {
+  color: var(--text-secondary); white-space: pre-wrap; word-break: break-word;
+  margin-bottom: 10px; line-height: 1.55; font-size: 12px;
+}
+.tb-params-title { font-size: 11px; font-weight: 600; color: var(--text); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .3px; }
+.tb-param {
+  padding: 8px 10px; margin-bottom: 4px; border-radius: var(--radius-sm);
+  background: var(--bg); font-size: 12px;
+}
+.tb-param:last-child { margin-bottom: 0; }
+.tb-param-row1 { display: flex; align-items: center; gap: 8px; }
+.tb-pname { color: var(--blue); font-family: var(--mono); font-weight: 600; font-size: 12px; }
+.tb-ptype {
+  font-size: 10px; font-family: var(--mono); color: var(--amber);
+  background: var(--amber-bg); padding: 1px 6px; border-radius: 3px; font-weight: 500;
+}
+.tb-prequired {
+  font-size: 10px; font-weight: 600; color: var(--red);
+  background: var(--red-bg); padding: 1px 6px; border-radius: 3px;
+}
+.tb-pdesc {
+  color: var(--text-tertiary); margin-top: 4px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word; font-size: 12px;
+}
+
+/* ─── Token usage ─── */
+.token-bar { display: flex; gap: 20px; font-size: 13px; padding: 4px 0; flex-wrap: wrap; }
+.tok-item { display: flex; align-items: center; gap: 6px; }
+.tok-dot { width: 8px; height: 8px; border-radius: 50%; }
+.tok-label { color: var(--text-tertiary); font-size: 12px; }
+.tok-val { color: var(--text); font-weight: 600; font-family: var(--mono); font-size: 13px; }
+
+/* ─── JSON viewer ─── */
+.json-view {
+  font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word;
+  max-height: 600px; overflow-y: auto; line-height: 1.55;
+  background: var(--bg-code); padding: 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+}
+.json-view .jk { color: #7c3aed; }
+.json-view .js { color: #059669; }
+.json-view .jn { color: #d97706; }
+.json-view .jb { color: #dc2626; }
+.json-view .jnull { color: var(--text-tertiary); }
+
+/* ─── Diff modal ─── */
+.diff-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100; backdrop-filter: blur(2px);
+}
+.diff-modal {
+  background: var(--bg); border-radius: 14px;
+  width: 96vw; max-width: 1100px; max-height: 92vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.2);
+}
+.diff-header {
+  display: flex; align-items: center; padding: 16px 20px;
+  background: var(--bg-card); border-bottom: 1px solid var(--border);
+  border-radius: 14px 14px 0 0;
+}
+.diff-header .diff-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.diff-header .diff-close {
+  margin-left: auto; background: none; border: none;
+  font-size: 18px; color: var(--text-tertiary); cursor: pointer;
+  padding: 4px 10px; border-radius: var(--radius-sm); line-height: 1;
+}
+.diff-header .diff-close:hover { background: var(--bg-hover); color: var(--text); }
+.diff-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+.diff-section {
+  margin-bottom: 14px; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.diff-section-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; font-size: 13px; font-weight: 600; color: var(--text);
+}
+.diff-section-header .ds-badge {
+  font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+}
+.diff-section-header .ds-badge.add { background: var(--green-bg); color: var(--green); }
+.diff-section-header .ds-badge.del { background: var(--red-bg); color: var(--red); }
+.diff-section-header .ds-badge.change { background: var(--amber-bg); color: var(--amber); }
+.diff-section-header .ds-badge.same { background: var(--bg); color: var(--text-tertiary); }
+.diff-section-body { padding: 0 16px 14px; }
+.diff-unchanged-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--text-tertiary);
+  font-size: 12px; margin-bottom: 8px;
+}
+.diff-unchanged-bar .dub-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border); }
+.diff-new-msg {
+  position: relative; margin-bottom: 8px;
+  border: 2px solid var(--green); border-radius: var(--radius-sm);
+}
+.diff-new-msg::before {
+  content: attr(data-label); position: absolute; top: -1px; right: 10px;
+  font-size: 9px; font-weight: 700; letter-spacing: .5px;
+  color: #fff; background: var(--green); padding: 2px 8px;
+  border-radius: 0 0 4px 4px;
+}
+.diff-removed-msg {
+  position: relative; margin-bottom: 8px;
+  border: 2px solid var(--red); border-radius: var(--radius-sm); opacity: .7;
+}
+.diff-removed-msg::before {
+  content: attr(data-label); position: absolute; top: -1px; right: 10px;
+  font-size: 9px; font-weight: 700; letter-spacing: .5px;
+  color: #fff; background: var(--red); padding: 2px 8px;
+  border-radius: 0 0 4px 4px;
+}
+.diff-field-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 6px 0; border-bottom: 1px solid var(--border-light);
+  font-size: 12px;
+}
+.diff-field-row:last-child { border-bottom: none; }
+.diff-field-key { font-family: var(--mono); font-weight: 600; color: var(--text); min-width: 120px; flex-shrink: 0; }
+.diff-field-old {
+  font-family: var(--mono); color: var(--red); text-decoration: line-through;
+  background: var(--red-bg); padding: 1px 6px; border-radius: 3px; max-width: 300px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.diff-field-arrow { color: var(--text-tertiary); flex-shrink: 0; }
+.diff-field-new {
+  font-family: var(--mono); color: var(--green);
+  background: var(--green-bg); padding: 1px 6px; border-radius: 3px; max-width: 300px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ─── System prompt diff ─── */
+.sys-diff-view {
+  font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow-x: auto; max-height: 400px; overflow-y: auto;
+}
+.sys-diff-view > div { padding: 1px 12px; white-space: pre-wrap; word-break: break-word; }
+.sys-diff-prefix { display: inline-block; width: 16px; color: var(--text-tertiary); user-select: none; flex-shrink: 0; }
+.sys-diff-ctx { color: var(--text-secondary); }
+.sys-diff-del { background: var(--red-bg); color: var(--red); }
+.sys-diff-add { background: var(--green-bg); color: var(--green); }
+.sys-diff-fold {
+  padding: 2px 12px; color: var(--text-tertiary); font-style: italic;
+  background: var(--bg); border-top: 1px solid var(--border-light); border-bottom: 1px solid var(--border-light);
+  text-align: center; font-size: 11px;
+}
+
+/* ─── SSE events ─── */
+.sse-event { margin-bottom: 4px; font-family: var(--mono); font-size: 12px; padding: 3px 0; }
+.sse-type { color: var(--cyan); font-weight: 600; margin-right: 8px; }
+.sse-data { color: var(--text-tertiary); white-space: pre-wrap; word-break: break-word; }
+
+/* ─── Drop zone ─── */
+.drop-zone { display: flex; align-items: center; justify-content: center; flex: 1; padding: 40px; }
+.drop-zone-inner {
+  border: 2px dashed var(--border); border-radius: 16px;
+  padding: 60px 40px; text-align: center; max-width: 480px;
+  transition: all .25s; background: var(--bg-card);
+}
+.drop-zone-inner.dragover { border-color: var(--blue); background: var(--blue-bg); }
+.drop-zone-inner h2 { font-size: 18px; color: var(--text); margin-bottom: 8px; font-weight: 600; }
+.drop-zone-inner p { font-size: 14px; color: var(--text-secondary); margin-bottom: 20px; }
+.drop-zone-inner input[type="file"] { display: none; }
+.drop-zone-inner label {
+  display: inline-block; padding: 10px 24px; background: var(--blue);
+  color: #fff; border-radius: var(--radius-sm); cursor: pointer; font-size: 14px;
+  font-weight: 500; transition: background .15s;
+}
+.drop-zone-inner label:hover { background: #2563eb; }
+
+/* ─── Empty state ─── */
+.empty-state { padding: 40px; text-align: center; color: var(--text-tertiary); font-size: 14px; }
+
+/* ─── Scrollbar for detail ─── */
+/* ─── Search bar ─── */
+.search-bar {
+  position: relative; padding: 8px 12px; border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.search-bar input {
+  width: 100%; padding: 6px 10px 6px 30px; font-size: 12px; font-family: var(--sans);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--text); outline: none; transition: border-color .15s;
+}
+.search-bar input:focus { border-color: var(--blue); }
+.search-bar input::placeholder { color: var(--text-tertiary); }
+.search-bar .search-icon {
+  position: absolute; left: 20px; top: 50%; transform: translateY(-50%);
+  color: var(--text-tertiary); font-size: 13px; pointer-events: none;
+}
+.search-bar .search-clear {
+  position: absolute; right: 20px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
+  font-size: 14px; padding: 2px 4px; display: none; line-height: 1;
+}
+.search-bar .search-clear:hover { color: var(--text); }
+
+/* ─── Theme toggle ─── */
+.theme-toggle {
+  background: none; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 4px 8px; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center;
+  transition: all .15s; font-size: 14px; line-height: 1;
+}
+.theme-toggle:hover { border-color: var(--blue); color: var(--blue); }
+
+/* ─── Language selector ─── */
+.lang-select {
+  font-size: 12px; padding: 4px 8px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary);
+  cursor: pointer; font-family: var(--sans); outline: none; margin-left: 8px;
+}
+.lang-select:hover { border-color: var(--blue); }
+
+/* ─── RTL support ─── */
+[dir="rtl"] #sidebar-wrap { border-right: none; border-left: 1px solid var(--border); }
+[dir="rtl"] .sidebar-item.active::before { left: auto; right: 0; border-radius: 2px 0 0 2px; }
+[dir="rtl"] .si-model { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .stats { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .diff-field-arrow { transform: scaleX(-1); }
+
+@media (max-width: 900px) {
+  .sidebar { width: 240px; min-width: 200px; }
+  .detail { padding: 16px; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    <span id="logo-text">Claude Trace</span>
+  </div>
+  <div class="divider"></div>
+  <div class="path-filter" id="path-filter" style="display:none"></div>
+  <div class="stats" id="stats" style="display:none">
+    <div class="stat-group"><span id="label-turns">Turns</span> <span class="stat-val" id="stat-turns">0</span></div>
+    <div class="stat-group"><span id="label-tokens">Tokens</span> <span class="stat-val" id="stat-tokens">0</span></div>
+    <div class="stat-group"><span id="label-time">Time</span> <span class="stat-val" id="stat-duration">0s</span></div>
+  </div>
+  <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode">&#9790;</button>
+  <select class="lang-select" id="lang-select" onchange="setLang(this.value)">
+    <option value="en">English</option>
+    <option value="zh-CN">简体中文</option>
+    <option value="ja">日本語</option>
+    <option value="ko">한국어</option>
+    <option value="fr">Français</option>
+    <option value="ar">العربية</option>
+    <option value="de">Deutsch</option>
+    <option value="ru">Русский</option>
+  </select>
+</div>
+
+<div class="main" id="main-area">
+  <div class="drop-zone" id="drop-zone">
+    <div class="drop-zone-inner" id="drop-inner">
+      <h2 id="drop-title">Load Trace File</h2>
+      <p id="drop-desc">Drag &amp; drop a .jsonl trace file, or click to browse</p>
+      <label for="file-input" id="drop-btn-label">Choose File</label>
+      <input type="file" id="file-input" accept=".jsonl,.json">
+    </div>
+  </div>
+  <div id="sidebar-wrap" style="display:none;display:flex;flex-direction:column">
+    <div class="search-bar" id="search-bar">
+      <span class="search-icon">&#128269;</span>
+      <input type="text" id="search-input" placeholder="Search messages, tools, prompts..." oninput="onSearch(this.value)">
+      <button class="search-clear" id="search-clear" onclick="clearSearch()">&#10005;</button>
+    </div>
+    <div class="sidebar" id="sidebar" style="flex:1;overflow-y:auto"></div>
+  </div>
+  <div class="detail" id="detail" style="display:none"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '';
+
+/* ─── i18n ─── */
+const I18N = {
+  en: {
+    title: "Claude Trace", stats_turns: "Turns", stats_tokens: "Tokens", stats_time: "Time",
+    drop_title: "Load Trace File", drop_desc: "Drag & drop a .jsonl trace file, or click to browse", drop_btn: "Choose File",
+    turn: "Turn", tok: "tok",
+    btn_request_json: "Request JSON", btn_curl: "cURL", btn_diff: "Diff with Prev",
+    section_system: "System Prompt", section_messages: "Messages", section_tools: "Tools",
+    section_response: "Response", section_usage: "Token Usage", section_sse: "SSE Events", section_json: "Full JSON",
+    copy: "Copy", copied: "Copied!",
+    params: "Parameters", required: "required",
+    tok_input: "Input", tok_output: "Output", tok_cache_read: "Cache Read", tok_cache_create: "Cache Create",
+    empty_state: "No entries for selected paths", no_prev: "No previous request",
+    no_content: "No content", no_messages: "No messages in either request",
+    diff_unchanged: "previous messages unchanged", diff_msg_range: "message #1 ~ #",
+    diff_new: "new", diff_removed: "removed", diff_added: "added", diff_changed: "changed",
+    diff_no_change: "no change", diff_unchanged_lbl: "unchanged",
+    diff_system: "System Prompt", diff_tools: "Tools", diff_params: "Parameters",
+    diff_chars: "chars", diff_tools_unchanged: "tools, unchanged",
+    badge_messages: "messages", badge_tools: "tools", badge_events: "events",
+    search_placeholder: "Search messages, tools, prompts...",
+    diff_sys_old: "Previous", diff_sys_new: "Current",
+  },
+  "zh-CN": {
+    title: "Claude Trace", stats_turns: "轮次", stats_tokens: "Token", stats_time: "耗时",
+    drop_title: "加载 Trace 文件", drop_desc: "拖放 .jsonl 文件到此处，或点击选择文件", drop_btn: "选择文件",
+    turn: "轮次", tok: "tok",
+    btn_request_json: "请求 JSON", btn_curl: "cURL", btn_diff: "对比上次",
+    section_system: "系统提示词", section_messages: "消息", section_tools: "工具",
+    section_response: "响应", section_usage: "Token 用量", section_sse: "SSE 事件", section_json: "完整 JSON",
+    copy: "复制", copied: "已复制！",
+    params: "参数", required: "必填",
+    tok_input: "输入", tok_output: "输出", tok_cache_read: "缓存读取", tok_cache_create: "缓存创建",
+    empty_state: "当前路径下无条目", no_prev: "无前序请求",
+    no_content: "无内容", no_messages: "两次请求均无消息",
+    diff_unchanged: "条前序消息未变化", diff_msg_range: "消息 #1 ~ #",
+    diff_new: "新增", diff_removed: "移除", diff_added: "新增", diff_changed: "变化",
+    diff_no_change: "无变化", diff_unchanged_lbl: "无变化",
+    diff_system: "系统提示词", diff_tools: "工具", diff_params: "参数",
+    diff_chars: "字符", diff_tools_unchanged: "个工具，无变化",
+    badge_messages: "条消息", badge_tools: "个工具", badge_events: "个事件",
+    search_placeholder: "搜索消息、工具、提示词...",
+    diff_sys_old: "上次", diff_sys_new: "本次",
+  },
+  ja: {
+    title: "Claude Trace", stats_turns: "ターン", stats_tokens: "トークン", stats_time: "時間",
+    drop_title: "トレースファイルを読み込む", drop_desc: ".jsonl ファイルをドラッグ＆ドロップ、またはクリックして選択", drop_btn: "ファイル選択",
+    turn: "ターン", tok: "tok",
+    btn_request_json: "リクエスト JSON", btn_curl: "cURL", btn_diff: "前回と比較",
+    section_system: "システムプロンプト", section_messages: "メッセージ", section_tools: "ツール",
+    section_response: "レスポンス", section_usage: "トークン使用量", section_sse: "SSE イベント", section_json: "完全 JSON",
+    copy: "コピー", copied: "コピー済み！",
+    params: "パラメータ", required: "必須",
+    tok_input: "入力", tok_output: "出力", tok_cache_read: "キャッシュ読取", tok_cache_create: "キャッシュ作成",
+    empty_state: "選択パスにエントリがありません", no_prev: "前回のリクエストなし",
+    no_content: "コンテンツなし", no_messages: "両方のリクエストにメッセージなし",
+    diff_unchanged: "件の前のメッセージは変更なし", diff_msg_range: "メッセージ #1 ~ #",
+    diff_new: "新規", diff_removed: "削除", diff_added: "追加", diff_changed: "変更",
+    diff_no_change: "変更なし", diff_unchanged_lbl: "変更なし",
+    diff_system: "システムプロンプト", diff_tools: "ツール", diff_params: "パラメータ",
+    diff_chars: "文字", diff_tools_unchanged: "個のツール、変更なし",
+    badge_messages: "件のメッセージ", badge_tools: "個のツール", badge_events: "件のイベント",
+    search_placeholder: "メッセージ、ツール、プロンプトを検索...",
+    diff_sys_old: "前回", diff_sys_new: "今回",
+  },
+  ko: {
+    title: "Claude Trace", stats_turns: "턴", stats_tokens: "토큰", stats_time: "시간",
+    drop_title: "트레이스 파일 로드", drop_desc: ".jsonl 파일을 드래그 앤 드롭하거나 클릭하여 선택", drop_btn: "파일 선택",
+    turn: "턴", tok: "tok",
+    btn_request_json: "요청 JSON", btn_curl: "cURL", btn_diff: "이전과 비교",
+    section_system: "시스템 프롬프트", section_messages: "메시지", section_tools: "도구",
+    section_response: "응답", section_usage: "토큰 사용량", section_sse: "SSE 이벤트", section_json: "전체 JSON",
+    copy: "복사", copied: "복사됨!",
+    params: "매개변수", required: "필수",
+    tok_input: "입력", tok_output: "출력", tok_cache_read: "캐시 읽기", tok_cache_create: "캐시 생성",
+    empty_state: "선택한 경로에 항목이 없습니다", no_prev: "이전 요청 없음",
+    no_content: "내용 없음", no_messages: "두 요청 모두 메시지 없음",
+    diff_unchanged: "개의 이전 메시지 변경 없음", diff_msg_range: "메시지 #1 ~ #",
+    diff_new: "신규", diff_removed: "삭제", diff_added: "추가", diff_changed: "변경",
+    diff_no_change: "변경 없음", diff_unchanged_lbl: "변경 없음",
+    diff_system: "시스템 프롬프트", diff_tools: "도구", diff_params: "매개변수",
+    diff_chars: "자", diff_tools_unchanged: "개 도구, 변경 없음",
+    badge_messages: "개 메시지", badge_tools: "개 도구", badge_events: "개 이벤트",
+    search_placeholder: "메시지, 도구, 프롬프트 검색...",
+    diff_sys_old: "이전", diff_sys_new: "현재",
+  },
+  fr: {
+    title: "Claude Trace", stats_turns: "Tours", stats_tokens: "Tokens", stats_time: "Durée",
+    drop_title: "Charger un fichier trace", drop_desc: "Glissez-déposez un fichier .jsonl, ou cliquez pour parcourir", drop_btn: "Choisir un fichier",
+    turn: "Tour", tok: "tok",
+    btn_request_json: "JSON Requête", btn_curl: "cURL", btn_diff: "Comparer avec préc.",
+    section_system: "Prompt système", section_messages: "Messages", section_tools: "Outils",
+    section_response: "Réponse", section_usage: "Utilisation des tokens", section_sse: "Événements SSE", section_json: "JSON complet",
+    copy: "Copier", copied: "Copié !",
+    params: "Paramètres", required: "requis",
+    tok_input: "Entrée", tok_output: "Sortie", tok_cache_read: "Lecture cache", tok_cache_create: "Création cache",
+    empty_state: "Aucune entrée pour les chemins sélectionnés", no_prev: "Aucune requête précédente",
+    no_content: "Pas de contenu", no_messages: "Aucun message dans les deux requêtes",
+    diff_unchanged: "messages précédents inchangés", diff_msg_range: "message #1 ~ #",
+    diff_new: "nouveau", diff_removed: "supprimé", diff_added: "ajouté", diff_changed: "modifié",
+    diff_no_change: "aucun changement", diff_unchanged_lbl: "inchangé",
+    diff_system: "Prompt système", diff_tools: "Outils", diff_params: "Paramètres",
+    diff_chars: "car.", diff_tools_unchanged: "outils, inchangés",
+    badge_messages: "messages", badge_tools: "outils", badge_events: "événements",
+    search_placeholder: "Rechercher messages, outils, prompts...",
+    diff_sys_old: "Précédent", diff_sys_new: "Actuel",
+  },
+  ar: {
+    title: "Claude Trace", stats_turns: "الأدوار", stats_tokens: "الرموز", stats_time: "المدة",
+    drop_title: "تحميل ملف التتبع", drop_desc: "اسحب وأفلت ملف .jsonl هنا، أو انقر للاستعراض", drop_btn: "اختر ملفاً",
+    turn: "دور", tok: "رمز",
+    btn_request_json: "JSON الطلب", btn_curl: "cURL", btn_diff: "مقارنة مع السابق",
+    section_system: "موجه النظام", section_messages: "الرسائل", section_tools: "الأدوات",
+    section_response: "الاستجابة", section_usage: "استخدام الرموز", section_sse: "أحداث SSE", section_json: "JSON الكامل",
+    copy: "نسخ", copied: "تم النسخ!",
+    params: "المعاملات", required: "مطلوب",
+    tok_input: "الإدخال", tok_output: "الإخراج", tok_cache_read: "قراءة التخزين", tok_cache_create: "إنشاء التخزين",
+    empty_state: "لا توجد إدخالات للمسارات المحددة", no_prev: "لا يوجد طلب سابق",
+    no_content: "لا يوجد محتوى", no_messages: "لا توجد رسائل في كلا الطلبين",
+    diff_unchanged: "رسالة سابقة بدون تغيير", diff_msg_range: "الرسالة #1 ~ #",
+    diff_new: "جديد", diff_removed: "محذوف", diff_added: "مضاف", diff_changed: "معدّل",
+    diff_no_change: "بدون تغيير", diff_unchanged_lbl: "بدون تغيير",
+    diff_system: "موجه النظام", diff_tools: "الأدوات", diff_params: "المعاملات",
+    diff_chars: "حرف", diff_tools_unchanged: "أداة، بدون تغيير",
+    badge_messages: "رسالة", badge_tools: "أداة", badge_events: "حدث",
+    search_placeholder: "بحث في الرسائل والأدوات والموجهات...",
+    diff_sys_old: "السابق", diff_sys_new: "الحالي",
+  },
+  de: {
+    title: "Claude Trace", stats_turns: "Runden", stats_tokens: "Token", stats_time: "Dauer",
+    drop_title: "Trace-Datei laden", drop_desc: "Ziehen Sie eine .jsonl-Datei hierher, oder klicken Sie zum Auswählen", drop_btn: "Datei wählen",
+    turn: "Runde", tok: "Tok",
+    btn_request_json: "Anfrage-JSON", btn_curl: "cURL", btn_diff: "Mit vorh. vergleichen",
+    section_system: "System-Prompt", section_messages: "Nachrichten", section_tools: "Werkzeuge",
+    section_response: "Antwort", section_usage: "Token-Nutzung", section_sse: "SSE-Ereignisse", section_json: "Vollständiges JSON",
+    copy: "Kopieren", copied: "Kopiert!",
+    params: "Parameter", required: "erforderlich",
+    tok_input: "Eingabe", tok_output: "Ausgabe", tok_cache_read: "Cache-Lesen", tok_cache_create: "Cache-Erstellen",
+    empty_state: "Keine Einträge für ausgewählte Pfade", no_prev: "Keine vorherige Anfrage",
+    no_content: "Kein Inhalt", no_messages: "Keine Nachrichten in beiden Anfragen",
+    diff_unchanged: "vorherige Nachrichten unverändert", diff_msg_range: "Nachricht #1 ~ #",
+    diff_new: "neu", diff_removed: "entfernt", diff_added: "hinzugefügt", diff_changed: "geändert",
+    diff_no_change: "keine Änderung", diff_unchanged_lbl: "unverändert",
+    diff_system: "System-Prompt", diff_tools: "Werkzeuge", diff_params: "Parameter",
+    diff_chars: "Zeichen", diff_tools_unchanged: "Werkzeuge, unverändert",
+    badge_messages: "Nachrichten", badge_tools: "Werkzeuge", badge_events: "Ereignisse",
+    search_placeholder: "Nachrichten, Werkzeuge, Prompts suchen...",
+    diff_sys_old: "Vorherige", diff_sys_new: "Aktuelle",
+  },
+  ru: {
+    title: "Claude Trace", stats_turns: "Ходы", stats_tokens: "Токены", stats_time: "Время",
+    drop_title: "Загрузить файл трассировки", drop_desc: "Перетащите .jsonl файл сюда или нажмите для выбора", drop_btn: "Выбрать файл",
+    turn: "Ход", tok: "ток",
+    btn_request_json: "JSON запроса", btn_curl: "cURL", btn_diff: "Сравнить с пред.",
+    section_system: "Системный промпт", section_messages: "Сообщения", section_tools: "Инструменты",
+    section_response: "Ответ", section_usage: "Использование токенов", section_sse: "SSE-события", section_json: "Полный JSON",
+    copy: "Копировать", copied: "Скопировано!",
+    params: "Параметры", required: "обязательно",
+    tok_input: "Ввод", tok_output: "Вывод", tok_cache_read: "Чтение кэша", tok_cache_create: "Создание кэша",
+    empty_state: "Нет записей для выбранных путей", no_prev: "Нет предыдущего запроса",
+    no_content: "Нет содержимого", no_messages: "Нет сообщений в обоих запросах",
+    diff_unchanged: "предыдущих сообщений без изменений", diff_msg_range: "сообщение #1 ~ #",
+    diff_new: "новое", diff_removed: "удалено", diff_added: "добавлено", diff_changed: "изменено",
+    diff_no_change: "без изменений", diff_unchanged_lbl: "без изменений",
+    diff_system: "Системный промпт", diff_tools: "Инструменты", diff_params: "Параметры",
+    diff_chars: "симв.", diff_tools_unchanged: "инструм., без изменений",
+    badge_messages: "сообщений", badge_tools: "инструм.", badge_events: "событий",
+    search_placeholder: "Поиск сообщений, инструментов, промптов...",
+    diff_sys_old: "Предыдущий", diff_sys_new: "Текущий",
+  },
+};
+let currentLang = localStorage.getItem('claude-tap-lang') || 'en';
+function t(key) { return (I18N[currentLang] || I18N.en)[key] || I18N.en[key] || key; }
+function setLang(lang) {
+  currentLang = lang;
+  localStorage.setItem('claude-tap-lang', lang);
+  document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
+  document.documentElement.lang = lang;
+  $('#lang-select').value = lang;
+  updateStaticTexts();
+  if (filtered.length) { applyFilter(); selectEntry(activeIdx >= 0 ? activeIdx : 0); }
+}
+function updateStaticTexts() {
+  const e = id => document.getElementById(id);
+  if (e('logo-text')) e('logo-text').textContent = t('title');
+  if (e('label-turns')) e('label-turns').textContent = t('stats_turns');
+  if (e('label-tokens')) e('label-tokens').textContent = t('stats_tokens');
+  if (e('label-time')) e('label-time').textContent = t('stats_time');
+  if (e('drop-title')) e('drop-title').textContent = t('drop_title');
+  if (e('drop-desc')) e('drop-desc').textContent = t('drop_desc');
+  if (e('drop-btn-label')) e('drop-btn-label').textContent = t('drop_btn');
+  if (e('search-input')) e('search-input').placeholder = t('search_placeholder');
+}
+
+/* ─── Theme ─── */
+function initTheme() {
+  const saved = localStorage.getItem('claude-tap-theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const theme = saved || (prefersDark ? 'dark' : 'light');
+  applyTheme(theme);
+}
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  localStorage.setItem('claude-tap-theme', next);
+}
+function applyTheme(theme) {
+  if (theme === 'dark') {
+    document.documentElement.dataset.theme = 'dark';
+    $('#theme-toggle').textContent = '\u2600'; // sun
+  } else {
+    delete document.documentElement.dataset.theme;
+    $('#theme-toggle').textContent = '\u263E'; // moon
+  }
+}
+
+/* ─── Init ─── */
+function initLang() {
+  document.documentElement.dir = currentLang === 'ar' ? 'rtl' : 'ltr';
+  document.documentElement.lang = currentLang;
+  $('#lang-select').value = currentLang;
+  updateStaticTexts();
+}
+if (typeof EMBEDDED_TRACE_DATA !== 'undefined' && EMBEDDED_TRACE_DATA.length) {
+  entries = EMBEDDED_TRACE_DATA;
+  document.addEventListener('DOMContentLoaded', () => { initTheme(); initLang(); renderApp(); });
+} else {
+  document.addEventListener('DOMContentLoaded', () => {
+    initTheme(); initLang();
+    const dropInner = $('#drop-inner'), fileInput = $('#file-input');
+    ['dragover','dragenter'].forEach(e => dropInner.addEventListener(e, ev => { ev.preventDefault(); dropInner.classList.add('dragover'); }));
+    ['dragleave','drop'].forEach(e => dropInner.addEventListener(e, () => dropInner.classList.remove('dragover')));
+    dropInner.addEventListener('drop', ev => { ev.preventDefault(); if (ev.dataTransfer.files.length) loadFile(ev.dataTransfer.files[0]); });
+    fileInput.addEventListener('change', () => { if (fileInput.files.length) loadFile(fileInput.files[0]); });
+  });
+}
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    entries = reader.result.trim().split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+    if (!entries.length) { alert('No valid entries found / 未找到有效条目'); return; }
+    renderApp();
+  };
+  reader.readAsText(file);
+}
+
+/* ─── Path & filter ─── */
+function getPath(e) { return (e.request?.path || '/unknown').replace(/\?.*$/, ''); }
+
+function renderApp() {
+  $('#drop-zone').style.display = 'none';
+  $('#sidebar-wrap').style.display = 'flex';
+  $('#detail').style.display = '';
+  $('#stats').style.display = '';
+  $('#path-filter').style.display = '';
+  const pathCounts = {};
+  entries.forEach(e => { const p = getPath(e); pathCounts[p] = (pathCounts[p] || 0) + 1; });
+  const paths = Object.keys(pathCounts).sort();
+  if (activePaths.size === 0) {
+    if (paths.includes('/v1/messages')) activePaths.add('/v1/messages');
+    else paths.forEach(p => activePaths.add(p));
+  }
+  renderPathFilter(paths, pathCounts);
+  applyFilter();
+}
+
+function renderPathFilter(paths, pathCounts) {
+  const c = $('#path-filter'); c.innerHTML = '';
+  paths.forEach(p => {
+    const chip = document.createElement('button');
+    chip.className = 'filter-chip' + (activePaths.has(p) ? ' active' : '');
+    chip.innerHTML = `${esc(p)}<span class="chip-count">${pathCounts[p]}</span>`;
+    chip.onclick = () => {
+      if (activePaths.has(p)) activePaths.delete(p); else activePaths.add(p);
+      if (activePaths.size === 0) activePaths.add(p);
+      chip.classList.toggle('active');
+      applyFilter();
+    };
+    c.appendChild(chip);
+  });
+}
+
+function applyFilter() {
+  filtered = entries.filter(e => activePaths.has(getPath(e)));
+  if (searchQuery) filtered = filtered.filter(e => matchSearch(e, searchQuery));
+  let totalTokens = 0, totalDuration = 0;
+  filtered.forEach(e => {
+    totalDuration += e.duration_ms || 0;
+    const u = e.response?.body?.usage;
+    if (u) totalTokens += (u.input_tokens || 0) + (u.output_tokens || 0);
+  });
+  $('#stat-turns').textContent = filtered.length;
+  $('#stat-tokens').textContent = totalTokens.toLocaleString();
+  $('#stat-duration').textContent = fmtDuration(totalDuration);
+  renderSidebar();
+}
+
+/* ─── Search ─── */
+function onSearch(value) {
+  searchQuery = value.toLowerCase().trim();
+  $('#search-clear').style.display = searchQuery ? '' : 'none';
+  applyFilter();
+}
+function clearSearch() {
+  searchQuery = '';
+  $('#search-input').value = '';
+  $('#search-clear').style.display = 'none';
+  applyFilter();
+}
+function matchSearch(e, q) {
+  const body = e.request?.body;
+  if ((body?.model || '').toLowerCase().includes(q)) return true;
+  const sys = extractSystem(body) || '';
+  if (sys.toLowerCase().includes(q)) return true;
+  const msgs = body?.messages || [];
+  for (const m of msgs) {
+    const mc = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    if (mc.toLowerCase().includes(q)) return true;
+  }
+  const tools = body?.tools || [];
+  for (const td of tools) {
+    if ((td.name || '').toLowerCase().includes(q)) return true;
+    if ((td.description || '').toLowerCase().includes(q)) return true;
+  }
+  const rc = e.response?.body?.content;
+  if (Array.isArray(rc)) {
+    for (const block of rc) {
+      if ((block.text || block.name || '').toLowerCase().includes(q)) return true;
+    }
+  }
+  return false;
+}
+
+/* ─── Model helpers ─── */
+function modelPriority(m) {
+  const l = m.toLowerCase();
+  if (l.includes('opus')) return 0;
+  if (l.includes('sonnet')) return 1;
+  if (l.includes('haiku')) return 3;
+  return 2;
+}
+function modelColor(m) {
+  const l = m.toLowerCase();
+  if (l.includes('opus')) return 'var(--purple)';
+  if (l.includes('sonnet')) return 'var(--blue)';
+  if (l.includes('haiku')) return 'var(--green)';
+  return 'var(--text-tertiary)';
+}
+function modelBadge(m) {
+  const l = m.toLowerCase();
+  if (l.includes('opus')) return { bg: 'var(--purple-bg)', fg: 'var(--purple)' };
+  if (l.includes('sonnet')) return { bg: 'var(--blue-bg)', fg: 'var(--blue)' };
+  if (l.includes('haiku')) return { bg: 'var(--green-bg)', fg: 'var(--green)' };
+  return { bg: 'var(--bg)', fg: 'var(--text-tertiary)' };
+}
+
+/* ─── Sidebar ─── */
+function createSidebarItem(e, i) {
+  const item = document.createElement('div');
+  item.className = 'sidebar-item';
+  item.dataset.idx = i;
+  const u = e.response?.body?.usage;
+  const inTok = u?.input_tokens || 0, outTok = u?.output_tokens || 0;
+  const model = e.request?.body?.model || '';
+  const shortModel = model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+  const badge = modelBadge(model);
+  item.innerHTML = `
+    <div class="si-row1">
+      <span class="si-turn">${t('turn')} ${e.turn || '?'}</span>
+      <span class="si-model" style="background:${badge.bg};color:${badge.fg}">${esc(shortModel)}</span>
+    </div>
+    <div class="si-row2">
+      <span class="si-tok">${(inTok + outTok).toLocaleString()} ${t('tok')}</span>
+      <span class="si-dur">${fmtDuration(e.duration_ms || 0)}</span>
+    </div>
+    <div class="si-path">${esc((e.request?.method || '') + ' ' + (e.request?.path || ''))}</div>`;
+  item.onclick = () => selectEntry(i);
+  return item;
+}
+
+function renderSidebar() {
+  const sb = $('#sidebar'); sb.innerHTML = '';
+  const groups = new Map();
+  filtered.forEach((e, i) => {
+    const model = e.request?.body?.model || 'unknown';
+    if (!groups.has(model)) groups.set(model, []);
+    groups.get(model).push({ entry: e, idx: i });
+  });
+  const sorted = [...groups.keys()].sort((a, b) => {
+    const pa = modelPriority(a), pb = modelPriority(b);
+    return pa !== pb ? pa - pb : a.localeCompare(b);
+  });
+  if (sorted.length <= 1) {
+    filtered.forEach((e, i) => sb.appendChild(createSidebarItem(e, i)));
+  } else {
+    sorted.forEach(model => {
+      const items = groups.get(model);
+      const shortModel = model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+      const color = modelColor(model);
+      const header = document.createElement('div');
+      header.className = 'sidebar-group-header';
+      header.innerHTML = `<span class="group-dot" style="background:${color}"></span><span class="group-name">${esc(shortModel)}</span><span class="group-count">${items.length}</span><span class="group-chevron open">&#9654;</span>`;
+      const content = document.createElement('div');
+      items.forEach(({ entry: e, idx: i }) => content.appendChild(createSidebarItem(e, i)));
+      header.onclick = () => {
+        content.style.display = content.style.display === 'none' ? '' : 'none';
+        header.querySelector('.group-chevron').classList.toggle('open');
+      };
+      sb.appendChild(header);
+      sb.appendChild(content);
+    });
+  }
+  // Default select first opus/sonnet entry, fall back to first entry
+  let defaultIdx = 0;
+  for (let i = 0; i < filtered.length; i++) {
+    const m = (filtered[i].request?.body?.model || '').toLowerCase();
+    if (m.includes('opus') || m.includes('sonnet')) { defaultIdx = i; break; }
+  }
+  if (filtered.length) selectEntry(defaultIdx);
+  else { activeIdx = -1; $('#detail').innerHTML = `<div class="empty-state">${t('empty_state')}</div>`; }
+}
+
+function selectEntry(idx) {
+  if (idx < 0 || idx >= filtered.length) return;
+  activeIdx = idx;
+  document.querySelectorAll('.sidebar-item').forEach(el => {
+    el.classList.toggle('active', parseInt(el.dataset.idx) === idx);
+  });
+  renderDetail(filtered[idx]);
+  const active = document.querySelector('.sidebar-item.active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+/* ─── Detail ─── */
+function renderDetail(e) {
+  const d = $('#detail'); d.scrollTop = 0;
+  const reqBody = e.request?.body, respBody = e.response?.body, usage = respBody?.usage;
+  let html = '';
+
+  // Action bar
+  html += `<div class="action-bar">
+    <button class="act-btn" onclick="copyRequestBody(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>${t('btn_request_json')}</button>
+    <button class="act-btn" onclick="copyCurl(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>${t('btn_curl')}</button>
+    <button class="act-btn" onclick="showDiff(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><path d="M3 6h18M3 18h18" opacity=".4"/></svg>${t('btn_diff')}</button>
+  </div>`;
+
+  const sysPrompt = extractSystem(reqBody);
+  if (sysPrompt) html += section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt);
+
+  const msgs = reqBody?.messages;
+  if (msgs && msgs.length) html += section(t('section_messages'), renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'));
+
+  const tools = reqBody?.tools;
+  if (tools && tools.length) html += section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'));
+
+  if (respBody?.content) html += section(t('section_response'), renderResponseContent(respBody), true);
+  if (usage) html += section(t('section_usage'), renderTokenUsage(usage), true);
+
+  const sseEvents = e.response?.sse_events;
+  if (sseEvents && sseEvents.length) html += section(t('section_sse'), renderSSEEvents(sseEvents), false, null, sseEvents.length + ' ' + t('badge_events'));
+
+  html += section(t('section_json'), `<div class="json-view">${syntaxHL(e)}</div>`, false, JSON.stringify(e, null, 2));
+
+  d.innerHTML = html;
+  bindSections(d);
+}
+
+/* ─── Renderers ─── */
+function extractSystem(body) {
+  if (!body) return null;
+  if (typeof body.system === 'string') return body.system;
+  if (Array.isArray(body.system)) return body.system.map(b => typeof b === 'string' ? b : b.type === 'text' ? (b.text || '') : JSON.stringify(b)).join('\n\n');
+  return null;
+}
+function renderSystemPrompt(text) { return `<pre>${esc(text)}</pre>`; }
+
+function renderMessages(msgs) {
+  return msgs.map(m => {
+    const role = m.role || 'unknown';
+    const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : 'system';
+    return `<div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${renderContent(m.content, role)}</div>`;
+  }).join('');
+}
+
+function renderContent(content, role) {
+  if (typeof content === 'string') return `<div>${esc(content)}</div>`;
+  if (!Array.isArray(content)) return `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
+  return content.map(block => {
+    if (block.type === 'text') return `<div class="content-block">${esc(block.text || '')}</div>`;
+    if (block.type === 'thinking') return `<div class="content-block"><span class="thinking-label">thinking</span><pre>${esc(block.thinking || '')}</pre></div>`;
+    if (block.type === 'tool_use') return `<div class="content-block"><span class="tool-use-label">${esc(block.name || 'tool_use')}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre></div>`;
+    if (block.type === 'tool_result') {
+      const rc = block.content;
+      if (typeof rc === 'string') return `<div class="content-block"><span class="tool-use-label">result (${esc(block.tool_use_id || '')})</span><pre>${esc(rc)}</pre></div>`;
+      if (Array.isArray(rc)) { const txt = rc.map(c => c.type === 'text' ? c.text : JSON.stringify(c)).join('\n'); return `<div class="content-block"><span class="tool-use-label">result</span><pre>${esc(txt)}</pre></div>`; }
+      return `<div class="content-block"><pre>${esc(JSON.stringify(block, null, 2))}</pre></div>`;
+    }
+    if (block.type === 'image') return `<div class="content-block"><em>[image: ${esc(block.source?.media_type || 'unknown')}]</em></div>`;
+    return `<div class="content-block"><pre>${esc(JSON.stringify(block, null, 2))}</pre></div>`;
+  }).join('');
+}
+
+function renderTools(tools) {
+  return tools.map(td => {
+    const name = td.name || 'unknown', desc = td.description || '';
+    const shortDesc = desc.split('\n')[0].substring(0, 120);
+    const props = td.input_schema?.properties || {};
+    const required = new Set(td.input_schema?.required || []);
+    let paramsHtml = '';
+    const keys = Object.keys(props);
+    if (keys.length) {
+      paramsHtml = `<div class="tb-params-title">${t('params')}</div>` + keys.map(k => {
+        const p = props[k], type = p.type || (p.enum ? 'enum' : ''), pdesc = p.description || '';
+        const req = required.has(k) ? `<span class="tb-prequired">${t('required')}</span>` : '';
+        const typeTag = type ? `<span class="tb-ptype">${esc(type)}</span>` : '';
+        const descLine = pdesc ? `<div class="tb-pdesc">${esc(pdesc)}</div>` : '';
+        return `<div class="tb-param"><div class="tb-param-row1"><span class="tb-pname">${esc(k)}</span>${typeTag}${req}</div>${descLine}</div>`;
+      }).join('');
+    }
+    return `<div class="tool-block"><div class="tool-block-header"><span class="tb-arrow">&#9654;</span><span class="tb-name">${esc(name)}</span><span class="tb-desc">${esc(shortDesc)}</span></div><div class="tool-block-body">${desc ? `<div class="tb-full-desc">${esc(desc)}</div>` : ''}${paramsHtml}</div></div>`;
+  }).join('');
+}
+
+function renderResponseContent(body) {
+  if (!body.content) return `<em style="color:var(--text-tertiary)">${t('no_content')}</em>`;
+  return renderContent(body.content, 'assistant');
+}
+
+function renderTokenUsage(u) {
+  const items = [
+    { label: t('tok_input'), val: u.input_tokens || 0, color: 'var(--blue)' },
+    { label: t('tok_output'), val: u.output_tokens || 0, color: 'var(--green)' },
+    { label: t('tok_cache_read'), val: u.cache_read_input_tokens || 0, color: 'var(--cyan)' },
+    { label: t('tok_cache_create'), val: u.cache_creation_input_tokens || 0, color: 'var(--amber)' },
+  ];
+  return `<div class="token-bar">${items.map(i =>
+    `<div class="tok-item"><span class="tok-dot" style="background:${i.color}"></span><span class="tok-label">${i.label}</span><span class="tok-val">${i.val.toLocaleString()}</span></div>`
+  ).join('')}</div>`;
+}
+
+function renderSSEEvents(events) {
+  return events.map(e => {
+    const data = typeof e.data === 'string' ? e.data : JSON.stringify(e.data);
+    const short = data.length > 200 ? data.substring(0, 200) + '...' : data;
+    return `<div class="sse-event"><span class="sse-type">${esc(e.event)}</span><span class="sse-data">${esc(short)}</span></div>`;
+  }).join('');
+}
+
+/* ─── Section ─── */
+function section(title, body, defaultOpen = true, copyText = null, badge = null) {
+  const oc = defaultOpen ? 'open' : '', ac = defaultOpen ? 'chevron open' : 'chevron';
+  let extra = '';
+  if (badge) extra += `<span class="badge">${esc(badge)}</span>`;
+  if (copyText !== null) extra += `<button class="copy-btn" data-copy="${btoa(unescape(encodeURIComponent(copyText)))}">${t('copy')}</button>`;
+  return `<div class="section"><div class="section-header"><span class="${ac}">&#9654;</span><span class="title">${title}</span>${extra}</div><div class="section-body ${oc}">${body}</div></div>`;
+}
+
+function bindSections(container) {
+  container.querySelectorAll('.section-header').forEach(h => {
+    h.addEventListener('click', ev => {
+      if (ev.target.classList.contains('copy-btn')) {
+        const text = decodeURIComponent(escape(atob(ev.target.dataset.copy)));
+        navigator.clipboard.writeText(text).then(() => { ev.target.textContent = t('copied'); setTimeout(() => ev.target.textContent = t('copy'), 1500); });
+        return;
+      }
+      h.nextElementSibling.classList.toggle('open');
+      h.querySelector('.chevron').classList.toggle('open');
+    });
+  });
+  container.querySelectorAll('.tool-block-header').forEach(h => {
+    h.addEventListener('click', () => {
+      h.nextElementSibling.classList.toggle('open');
+      h.querySelector('.tb-arrow').classList.toggle('open');
+    });
+  });
+}
+
+/* ─── Syntax highlight ─── */
+function syntaxHL(obj) {
+  const s = JSON.stringify(obj, null, 2);
+  let out = '', i = 0; const len = s.length;
+  while (i < len) {
+    const c = s[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < len) { if (s[j] === '\\') { j += 2; continue; } if (s[j] === '"') break; j++; }
+      j++;
+      const raw = s.slice(i, j); let k = j;
+      while (k < len && s[k] === ' ') k++;
+      out += k < len && s[k] === ':' ? `<span class="jk">${esc(raw)}</span>` : `<span class="js">${esc(raw)}</span>`;
+      i = j;
+    } else if (c === '-' || (c >= '0' && c <= '9')) {
+      const m = s.slice(i).match(/^-?\d+(\.\d+)?([eE][+-]?\d+)?/);
+      if (m) { out += `<span class="jn">${m[0]}</span>`; i += m[0].length; } else { out += esc(c); i++; }
+    } else if (s.slice(i, i + 4) === 'true') { out += '<span class="jb">true</span>'; i += 4; }
+    else if (s.slice(i, i + 5) === 'false') { out += '<span class="jb">false</span>'; i += 5; }
+    else if (s.slice(i, i + 4) === 'null') { out += '<span class="jnull">null</span>'; i += 4; }
+    else { out += esc(c); i++; }
+  }
+  return out;
+}
+
+/* ─── Copy helpers ─── */
+function copyToClipboard(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    if (!btn) return;
+    const orig = btn.innerHTML; btn.textContent = t('copied');
+    setTimeout(() => btn.innerHTML = orig, 1500);
+  });
+}
+function copyRequestBody(btn) {
+  const e = filtered[activeIdx]; if (!e) return;
+  copyToClipboard(JSON.stringify(e.request?.body, null, 2), btn);
+}
+function copyCurl(btn) {
+  const e = filtered[activeIdx]; if (!e) return;
+  const method = e.request?.method || 'POST', path = e.request?.path || '/v1/messages';
+  const headers = e.request?.headers || {}, body = e.request?.body;
+  let cmd = `curl -X ${method} 'https://api.anthropic.com${path}'`;
+  for (const [k, v] of Object.entries(headers)) {
+    const kl = k.toLowerCase();
+    if (kl === 'host' || kl === 'content-length' || kl === 'accept-encoding') continue;
+    cmd += ` \\\n  -H '${k}: ${v}'`;
+  }
+  if (body) cmd += ` \\\n  -d '${JSON.stringify(body).replace(/'/g, "'\\''")}'`;
+  copyToClipboard(cmd, btn);
+}
+
+/* ─── Diff ─── */
+function findPrevSameModel(idx) {
+  const model = filtered[idx]?.request?.body?.model;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (filtered[i]?.request?.body?.model === model) return i;
+  }
+  return -1;
+}
+
+function showDiff(btn) {
+  const prevIdx = findPrevSameModel(activeIdx);
+  if (prevIdx < 0) {
+    const orig = btn.innerHTML;
+    btn.textContent = t('no_prev');
+    setTimeout(() => btn.innerHTML = orig, 1500);
+    return;
+  }
+  const oldBody = filtered[prevIdx].request?.body || {};
+  const newBody = filtered[activeIdx].request?.body || {};
+  const diff = structuralDiff(oldBody, newBody);
+  const html = renderStructuralDiff(diff);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'diff-overlay';
+  overlay.innerHTML = `<div class="diff-modal">
+    <div class="diff-header">
+      <span class="diff-title">${t('turn')} ${filtered[prevIdx].turn || '?'} &rarr; ${t('turn')} ${filtered[activeIdx].turn || '?'}</span>
+      <button class="diff-close">&#10005;</button>
+    </div>
+    <div class="diff-body">${html}</div>
+  </div>`;
+  overlay.querySelector('.diff-close').onclick = () => overlay.remove();
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+  const escHandler = e => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); } };
+  document.addEventListener('keydown', escHandler);
+}
+
+function msgContentEqual(a, b) {
+  // Compare by role + content only, ignore cache_control and other metadata
+  return a.role === b.role && JSON.stringify(a.content) === JSON.stringify(b.content);
+}
+
+function structuralDiff(oldB, newB) {
+  const d = { unchangedMsgs: 0, newMsgs: [], removedMsgs: [],
+    systemChanged: false, oldSystemLen: 0, newSystemLen: 0, oldSystemText: '', newSystemText: '',
+    toolsChanged: false, oldToolCount: 0, newToolCount: 0,
+    addedTools: [], removedTools: [], fieldChanges: [] };
+  // Messages — compare by role+content (ignore cache_control etc.)
+  const om = oldB.messages || [], nm = newB.messages || [];
+  let common = 0;
+  for (let i = 0; i < Math.min(om.length, nm.length); i++) {
+    if (msgContentEqual(om[i], nm[i])) common++; else break;
+  }
+  d.unchangedMsgs = common;
+  for (let i = common; i < om.length; i++) d.removedMsgs.push(om[i]);
+  for (let i = common; i < nm.length; i++) d.newMsgs.push(nm[i]);
+  // System
+  const oldSys = extractSystem(oldB) || '', newSys = extractSystem(newB) || '';
+  d.systemChanged = oldSys !== newSys;
+  d.oldSystemLen = oldSys.length;
+  d.newSystemLen = newSys.length;
+  d.oldSystemText = oldSys;
+  d.newSystemText = newSys;
+  // Tools — find added/removed by name
+  const oldTools = (oldB.tools || []).map(x => x.name);
+  const newTools = (newB.tools || []).map(x => x.name);
+  const oldSet = new Set(oldTools), newSet = new Set(newTools);
+  d.addedTools = newTools.filter(n => !oldSet.has(n));
+  d.removedTools = oldTools.filter(n => !newSet.has(n));
+  d.toolsChanged = d.addedTools.length > 0 || d.removedTools.length > 0 || oldTools.length !== newTools.length;
+  d.oldToolCount = oldTools.length;
+  d.newToolCount = newTools.length;
+  // Other fields
+  const skip = new Set(['messages', 'system', 'tools']);
+  const allKeys = new Set([...Object.keys(oldB), ...Object.keys(newB)]);
+  for (const k of allKeys) {
+    if (skip.has(k)) continue;
+    const ov = JSON.stringify(oldB[k]), nv = JSON.stringify(newB[k]);
+    if (ov !== nv) d.fieldChanges.push({ key: k, oldVal: oldB[k], newVal: newB[k], added: ov === undefined, removed: nv === undefined });
+  }
+  return d;
+}
+
+function renderStructuralDiff(d) {
+  let html = '';
+  // ── Messages ──
+  const totalNew = d.newMsgs.length, totalRm = d.removedMsgs.length;
+  const badges = [];
+  if (totalNew > 0) badges.push(`<span class="ds-badge add">+${totalNew} ${t('diff_new')}</span>`);
+  if (totalRm > 0) badges.push(`<span class="ds-badge del">-${totalRm} ${t('diff_removed')}</span>`);
+  if (!totalNew && !totalRm) badges.push(`<span class="ds-badge same">${t('diff_no_change')}</span>`);
+  html += `<div class="diff-section"><div class="diff-section-header">${t('section_messages')} ${badges.join(' ')}</div><div class="diff-section-body">`;
+  if (d.unchangedMsgs > 0) {
+    html += `<div class="diff-unchanged-bar"><span class="dub-dot"></span><strong>${d.unchangedMsgs}</strong> ${t('diff_unchanged')} (${t('diff_msg_range')}${d.unchangedMsgs})</div>`;
+  }
+  if (d.removedMsgs.length > 0) {
+    d.removedMsgs.forEach((m, i) => {
+      const role = m.role || 'unknown';
+      const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : 'system';
+      html += `<div class="diff-removed-msg" data-label="${t('diff_removed').toUpperCase()}"><div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${renderContent(m.content, role)}</div></div>`;
+    });
+  }
+  d.newMsgs.forEach((m, i) => {
+    const role = m.role || 'unknown';
+    const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : 'system';
+    html += `<div class="diff-new-msg" data-label="${t('diff_new').toUpperCase()}"><div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${renderContent(m.content, role)}</div></div>`;
+  });
+  if (totalNew === 0 && totalRm === 0 && d.unchangedMsgs === 0) html += `<div style="color:var(--text-tertiary);font-size:12px">${t('no_messages')}</div>`;
+  html += `</div></div>`;
+
+  // ── Parameters ──
+  if (d.fieldChanges.length > 0) {
+    html += `<div class="diff-section"><div class="diff-section-header">${t('diff_params')} <span class="ds-badge change">${d.fieldChanges.length} ${t('diff_changed')}</span></div><div class="diff-section-body">`;
+    d.fieldChanges.forEach(f => {
+      const ov = f.oldVal !== undefined ? truncJson(f.oldVal) : '';
+      const nv = f.newVal !== undefined ? truncJson(f.newVal) : '';
+      if (f.added) {
+        html += `<div class="diff-field-row"><span class="diff-field-key">${esc(f.key)}</span><span class="diff-field-new">${esc(nv)}</span><span class="ds-badge add" style="font-size:9px">${t('diff_added')}</span></div>`;
+      } else if (f.removed) {
+        html += `<div class="diff-field-row"><span class="diff-field-key">${esc(f.key)}</span><span class="diff-field-old">${esc(ov)}</span><span class="ds-badge del" style="font-size:9px">${t('diff_removed')}</span></div>`;
+      } else {
+        html += `<div class="diff-field-row"><span class="diff-field-key">${esc(f.key)}</span><span class="diff-field-old">${esc(ov)}</span><span class="diff-field-arrow">&rarr;</span><span class="diff-field-new">${esc(nv)}</span></div>`;
+      }
+    });
+    html += `</div></div>`;
+  }
+
+  // ── System Prompt ──
+  if (d.systemChanged) {
+    const lenDiff = d.newSystemLen - d.oldSystemLen;
+    const lenStr = lenDiff > 0 ? `+${lenDiff}` : `${lenDiff}`;
+    html += `<div class="diff-section"><div class="diff-section-header">${t('diff_system')} <span class="ds-badge change">${t('diff_changed')} (${fmtChars(d.oldSystemLen)} &rarr; ${fmtChars(d.newSystemLen)}, ${lenStr} ${t('diff_chars')})</span></div>`;
+    html += `<div class="diff-section-body">${renderLineDiff(d.oldSystemText, d.newSystemText)}</div></div>`;
+  } else {
+    html += `<div class="diff-section"><div class="diff-section-header">${t('diff_system')} <span class="ds-badge same">${fmtChars(d.newSystemLen)}, ${t('diff_unchanged_lbl')}</span></div></div>`;
+  }
+
+  // ── Tools ──
+  if (d.toolsChanged) {
+    html += `<div class="diff-section"><div class="diff-section-header">${t('diff_tools')} <span class="ds-badge change">${d.oldToolCount} &rarr; ${d.newToolCount}</span></div>`;
+    if (d.addedTools.length || d.removedTools.length) {
+      html += `<div class="diff-section-body">`;
+      d.addedTools.forEach(n => { html += `<div class="diff-field-row"><span class="diff-field-key" style="color:var(--cyan)">${esc(n)}</span><span class="ds-badge add" style="font-size:9px">${t('diff_added')}</span></div>`; });
+      d.removedTools.forEach(n => { html += `<div class="diff-field-row"><span class="diff-field-key" style="color:var(--cyan)">${esc(n)}</span><span class="ds-badge del" style="font-size:9px">${t('diff_removed')}</span></div>`; });
+      html += `</div>`;
+    }
+    html += `</div>`;
+  } else {
+    html += `<div class="diff-section"><div class="diff-section-header">${t('diff_tools')} <span class="ds-badge same">${d.newToolCount} ${t('diff_tools_unchanged')}</span></div></div>`;
+  }
+  return html;
+}
+
+function lineDiff(oldText, newText) {
+  const ol = oldText.split('\n'), nl = newText.split('\n');
+  let pre = 0;
+  while (pre < ol.length && pre < nl.length && ol[pre] === nl[pre]) pre++;
+  let suf = 0;
+  while (suf < ol.length - pre && suf < nl.length - pre && ol[ol.length - 1 - suf] === nl[nl.length - 1 - suf]) suf++;
+  const result = [];
+  const addCtx = (start, end, lines) => {
+    const count = end - start;
+    if (count <= 0) return;
+    if (count <= 4) { for (let i = start; i < end; i++) result.push({ type: 'ctx', text: lines[i] }); }
+    else { result.push({ type: 'ctx', text: lines[start] }); result.push({ type: 'ctx', text: lines[start + 1] }); result.push({ type: 'fold', count: count - 4 }); result.push({ type: 'ctx', text: lines[end - 2] }); result.push({ type: 'ctx', text: lines[end - 1] }); }
+  };
+  addCtx(0, pre, ol);
+  const oldEnd = ol.length - suf, newEnd = nl.length - suf;
+  for (let i = pre; i < oldEnd; i++) result.push({ type: 'del', text: ol[i] });
+  for (let i = pre; i < newEnd; i++) result.push({ type: 'add', text: nl[i] });
+  addCtx(ol.length - suf, ol.length, ol);
+  return result;
+}
+
+function renderLineDiff(oldText, newText) {
+  const lines = lineDiff(oldText, newText);
+  let html = '<div class="sys-diff-view">';
+  for (const ln of lines) {
+    if (ln.type === 'fold') { html += `<div class="sys-diff-fold">... ${ln.count} lines ...</div>`; continue; }
+    const cls = ln.type === 'del' ? 'sys-diff-del' : ln.type === 'add' ? 'sys-diff-add' : 'sys-diff-ctx';
+    const prefix = ln.type === 'del' ? '-' : ln.type === 'add' ? '+' : ' ';
+    html += `<div class="${cls}"><span class="sys-diff-prefix">${prefix}</span>${esc(ln.text)}</div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function truncJson(v) {
+  if (v === undefined) return '';
+  const s = typeof v === 'string' ? v : JSON.stringify(v);
+  return s.length > 80 ? s.substring(0, 77) + '...' : s;
+}
+
+/* ─── Utilities ─── */
+function esc(s) { if (!s) return ''; return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function fmtDuration(ms) { return ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(1) + 's'; }
+function fmtChars(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
+
+/* ─── Keyboard nav ─── */
+document.addEventListener('keydown', ev => {
+  if (!filtered.length) return;
+  if (ev.key === 'ArrowDown' || ev.key === 'j') { ev.preventDefault(); selectEntry(Math.min(activeIdx + 1, filtered.length - 1)); }
+  if (ev.key === 'ArrowUp' || ev.key === 'k') { ev.preventDefault(); selectEntry(Math.max(activeIdx - 1, 0)); }
+});
+</script>
+</body>
+</html>

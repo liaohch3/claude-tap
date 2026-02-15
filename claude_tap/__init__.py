@@ -1,0 +1,504 @@
+#!/usr/bin/env python3
+"""claude-tap: Reverse proxy to trace Claude Code API requests."""
+
+import argparse
+import asyncio
+import gzip
+import json
+import logging
+import os
+import shutil
+import signal
+import sys
+import time
+import uuid
+import zlib
+from datetime import datetime, timezone
+from pathlib import Path
+
+import aiohttp
+from aiohttp import web
+from anthropic.lib.streaming._messages import accumulate_event
+from anthropic.types import RawMessageStreamEvent
+from pydantic import TypeAdapter
+
+log = logging.getLogger("claude-tap")
+
+_sse_event_adapter = TypeAdapter(RawMessageStreamEvent)
+
+
+# ---------------------------------------------------------------------------
+# SSEReassembler – parse SSE bytes, use Anthropic SDK to rebuild Message
+# ---------------------------------------------------------------------------
+
+class SSEReassembler:
+    """Parse raw SSE bytes and use the Anthropic SDK's accumulate_event()
+    to reconstruct the full API response object."""
+
+    def __init__(self):
+        self.events: list[dict] = []
+        self._buf = b""
+        self._current_event: str | None = None
+        self._current_data_lines: list[str] = []
+        self._snapshot = None  # anthropic ParsedMessage
+
+    def feed_bytes(self, chunk: bytes):
+        self._buf += chunk
+        while b"\n" in self._buf:
+            line, self._buf = self._buf.split(b"\n", 1)
+            self._feed_line(line.decode("utf-8", errors="replace"))
+
+    def _feed_line(self, line: str):
+        line = line.rstrip("\r")
+        if line.startswith("event:"):
+            self._current_event = line[len("event:"):].strip()
+            self._current_data_lines = []
+        elif line.startswith("data:"):
+            self._current_data_lines.append(line[len("data:"):].strip())
+        elif line == "":
+            if self._current_event is not None:
+                raw_data = "\n".join(self._current_data_lines)
+                try:
+                    data = json.loads(raw_data)
+                except (json.JSONDecodeError, ValueError):
+                    data = raw_data
+                event_record = {"event": self._current_event, "data": data}
+                self.events.append(event_record)
+                self._accumulate(data)
+                self._current_event = None
+                self._current_data_lines = []
+
+    def _accumulate(self, data):
+        if not isinstance(data, dict):
+            return
+        try:
+            event = _sse_event_adapter.validate_python(data)
+            self._snapshot = accumulate_event(
+                event=event, current_snapshot=self._snapshot,
+            )
+        except Exception:
+            pass
+
+    def reconstruct(self) -> dict | None:
+        if self._snapshot is None:
+            return None
+        return self._snapshot.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# TraceWriter – async JSONL writer
+# ---------------------------------------------------------------------------
+
+class TraceWriter:
+    def __init__(self, path: Path):
+        self.path = path
+        self._lock = asyncio.Lock()
+        self.count = 0
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    async def write(self, record: dict):
+        async with self._lock:
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+            self.count += 1
+
+
+# ---------------------------------------------------------------------------
+# Header helpers
+# ---------------------------------------------------------------------------
+
+HOP_BY_HOP = frozenset({
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade",
+})
+
+
+def filter_headers(headers, *, redact_keys=False):
+    out = {}
+    for k, v in headers.items():
+        if k.lower() in HOP_BY_HOP:
+            continue
+        if redact_keys and k.lower() in ("x-api-key", "authorization"):
+            out[k] = v[:12] + "..." if len(v) > 12 else "***"
+        else:
+            out[k] = v
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Proxy handler
+# ---------------------------------------------------------------------------
+
+async def proxy_handler(request: web.Request) -> web.StreamResponse:
+    ctx: dict = request.app["trace_ctx"]
+    target: str = ctx["target_url"]
+    writer: TraceWriter = ctx["writer"]
+    session: aiohttp.ClientSession = ctx["session"]
+
+    upstream_url = target.rstrip("/") + "/" + request.path_qs.lstrip("/")
+
+    body = await request.read()
+
+    fwd_headers = filter_headers(request.headers)
+    fwd_headers.pop("Host", None)
+
+    req_id = f"req_{uuid.uuid4().hex[:12]}"
+    t0 = time.monotonic()
+
+    # Parse request body
+    try:
+        req_body = json.loads(body) if body else None
+    except (json.JSONDecodeError, ValueError):
+        req_body = body.decode("utf-8", errors="replace") if body else None
+
+    is_streaming = False
+    if isinstance(req_body, dict):
+        is_streaming = req_body.get("stream", False)
+
+    ctx["turn_counter"] = ctx.get("turn_counter", 0) + 1
+    turn = ctx["turn_counter"]
+
+    model = req_body.get("model", "") if isinstance(req_body, dict) else ""
+    log_prefix = f"[Turn {turn}]"
+    log.info(f"{log_prefix} → {request.method} {request.path} (model={model}, stream={is_streaming})")
+
+    # For streaming requests, ask upstream not to compress (we need to parse SSE text)
+    if is_streaming:
+        fwd_headers["Accept-Encoding"] = "identity"
+
+    try:
+        upstream_resp = await session.request(
+            method=request.method,
+            url=upstream_url,
+            headers=fwd_headers,
+            data=body,
+            timeout=aiohttp.ClientTimeout(total=600, sock_read=300),
+        )
+    except Exception as exc:
+        log.error(
+            f"{log_prefix} upstream error while requesting {upstream_url}: {exc}  "
+            f"-- Check that the target ({target}) is reachable."
+        )
+        return web.Response(status=502, text=str(exc))
+
+    if is_streaming and upstream_resp.status == 200:
+        resp_body = await _handle_streaming(request, upstream_resp, req_id, turn, t0, body, req_body, writer, log_prefix)
+        return resp_body
+    else:
+        return await _handle_non_streaming(request, upstream_resp, req_id, turn, t0, body, req_body, writer, log_prefix)
+
+
+async def _handle_streaming(
+    request: web.Request,
+    upstream_resp: aiohttp.ClientResponse,
+    req_id: str, turn: int, t0: float,
+    raw_body: bytes, req_body, writer: TraceWriter, log_prefix: str,
+) -> web.StreamResponse:
+    resp = web.StreamResponse(
+        status=upstream_resp.status,
+        headers={k: v for k, v in upstream_resp.headers.items() if k.lower() not in HOP_BY_HOP},
+    )
+    await resp.prepare(request)
+
+    reassembler = SSEReassembler()
+
+    try:
+        async for chunk in upstream_resp.content.iter_any():
+            await resp.write(chunk)
+            reassembler.feed_bytes(chunk)
+    except (ConnectionError, asyncio.CancelledError):
+        pass
+
+    try:
+        await resp.write_eof()
+    except (ConnectionError, ConnectionResetError, Exception):
+        pass
+
+    duration_ms = int((time.monotonic() - t0) * 1000)
+    reconstructed = reassembler.reconstruct()
+
+    usage = reconstructed.get("usage", {}) if reconstructed else {}
+    in_tok = usage.get("input_tokens", 0)
+    out_tok = usage.get("output_tokens", 0)
+    cache_read = usage.get("cache_read_input_tokens", 0)
+    cache_create = usage.get("cache_creation_input_tokens", 0)
+    log.info(f"{log_prefix} ← 200 stream done ({duration_ms}ms, in={in_tok} out={out_tok} cache_read={cache_read} cache_create={cache_create})")
+
+    record = _build_record(
+        req_id, turn, duration_ms,
+        request.method, request.path_qs, request.headers, req_body,
+        upstream_resp.status, upstream_resp.headers, reconstructed,
+        sse_events=reassembler.events,
+    )
+    await writer.write(record)
+
+    return resp
+
+
+async def _handle_non_streaming(
+    request: web.Request,
+    upstream_resp: aiohttp.ClientResponse,
+    req_id: str, turn: int, t0: float,
+    raw_body: bytes, req_body, writer: TraceWriter, log_prefix: str,
+) -> web.Response:
+    resp_bytes = await upstream_resp.read()
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
+    # Decompress for JSON parsing (raw bytes are forwarded as-is to client)
+    content_encoding = upstream_resp.headers.get("Content-Encoding", "").lower()
+    decode_bytes = resp_bytes
+    if resp_bytes and content_encoding in ("gzip", "deflate"):
+        try:
+            if content_encoding == "gzip":
+                decode_bytes = gzip.decompress(resp_bytes)
+            else:
+                decode_bytes = zlib.decompress(resp_bytes)
+        except Exception:
+            pass
+
+    try:
+        resp_body = json.loads(decode_bytes) if decode_bytes else None
+    except (json.JSONDecodeError, ValueError):
+        resp_body = decode_bytes.decode("utf-8", errors="replace") if decode_bytes else None
+
+    log.info(f"{log_prefix} ← {upstream_resp.status} ({duration_ms}ms, {len(resp_bytes)} bytes)")
+
+    record = _build_record(
+        req_id, turn, duration_ms,
+        request.method, request.path_qs, request.headers, req_body,
+        upstream_resp.status, upstream_resp.headers, resp_body,
+    )
+    await writer.write(record)
+
+    return web.Response(
+        status=upstream_resp.status,
+        headers={k: v for k, v in upstream_resp.headers.items() if k.lower() not in HOP_BY_HOP},
+        body=resp_bytes,
+    )
+
+
+def _build_record(
+    req_id, turn, duration_ms,
+    method, path_qs, req_headers, req_body,
+    status, resp_headers, resp_body,
+    sse_events=None,
+):
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "request_id": req_id,
+        "turn": turn,
+        "duration_ms": duration_ms,
+        "request": {
+            "method": method,
+            "path": path_qs,
+            "headers": filter_headers(req_headers, redact_keys=True),
+            "body": req_body,
+        },
+        "response": {
+            "status": status,
+            "headers": filter_headers(resp_headers),
+            "body": resp_body,
+        },
+    }
+    if sse_events is not None:
+        record["response"]["sse_events"] = sse_events
+    return record
+
+
+# ---------------------------------------------------------------------------
+# Claude launcher
+# ---------------------------------------------------------------------------
+
+async def run_claude(port: int, extra_args: list[str]) -> int:
+    if shutil.which("claude") is None:
+        print(
+            "\nError: 'claude' command not found in PATH.\n"
+            "Please install Claude Code first: "
+            "https://docs.anthropic.com/en/docs/claude-code\n"
+        )
+        return 1
+
+    env = os.environ.copy()
+    env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
+    env["NO_PROXY"] = "127.0.0.1"
+    # Bypass Claude Code nesting detection
+    env.pop("CLAUDECODE", None)
+    env.pop("CLAUDE_CODE_SSE_PORT", None)
+
+    cmd = ["claude"] + extra_args
+    print(f"\n🚀 Starting Claude Code: {' '.join(cmd)}")
+    print(f"   ANTHROPIC_BASE_URL=http://127.0.0.1:{port}\n")
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        env=env,
+        stdin=None,
+        stdout=None,
+        stderr=None,
+    )
+
+    # Forward SIGINT to child
+    loop = asyncio.get_running_loop()
+
+    def _fwd_signal():
+        if proc.returncode is None:
+            proc.send_signal(signal.SIGINT)
+
+    try:
+        loop.add_signal_handler(signal.SIGINT, _fwd_signal)
+    except NotImplementedError:
+        pass
+
+    code = await proc.wait()
+    print(f"\n📋 Claude Code exited with code {code}")
+    return code
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+async def async_main(args: argparse.Namespace):
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    trace_path = output_dir / f"trace_{ts}.jsonl"
+    log_path = output_dir / f"trace_{ts}.log"
+    writer = TraceWriter(trace_path)
+
+    # Proxy logs go to file, not terminal (avoids polluting Claude TUI)
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+    log.addHandler(file_handler)
+    log.setLevel(logging.DEBUG)
+    # Suppress aiohttp access logs
+    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+
+    session = aiohttp.ClientSession(auto_decompress=False)
+
+    app = web.Application()
+    app["trace_ctx"] = {
+        "target_url": args.target,
+        "writer": writer,
+        "session": session,
+        "turn_counter": 0,
+    }
+    app.router.add_route("*", "/{path_info:.*}", proxy_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", args.port)
+    await site.start()
+
+    # Resolve actual port (site._server is a private API; fall back to args.port)
+    try:
+        actual_port = site._server.sockets[0].getsockname()[1]
+    except (AttributeError, IndexError, OSError):
+        actual_port = args.port
+    print(f"🔍 Trace proxy listening on http://127.0.0.1:{actual_port}")
+    print(f"📁 Trace file: {trace_path}")
+
+    exit_code = 0
+    if not args.no_launch:
+        try:
+            exit_code = await run_claude(actual_port, args.claude_args)
+        except asyncio.CancelledError:
+            pass
+    else:
+        print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            pass
+
+    await session.close()
+    await runner.cleanup()
+
+    # Generate self-contained HTML viewer
+    html_path = trace_path.with_suffix(".html")
+    _generate_html_viewer(trace_path, html_path)
+
+    print("\n📊 Trace summary:")
+    print(f"   Recorded {writer.count} API calls")
+    print(f"   Trace: {trace_path}")
+    print(f"   Log:   {log_path}")
+    print(f"   View:  {html_path}")
+
+    return exit_code
+
+
+def _generate_html_viewer(trace_path: Path, html_path: Path):
+    """Read viewer.html template, embed JSONL data, write self-contained HTML."""
+    template = Path(__file__).parent / "viewer.html"
+    if not template.exists():
+        return
+
+    # Read JSONL records
+    records = []
+    if trace_path.exists():
+        with open(trace_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(line)
+
+    # Build embedded data script — each line is already valid JSON
+    data_js = "const EMBEDDED_TRACE_DATA = [\n" + ",\n".join(records) + "\n];\n"
+
+    html = template.read_text(encoding="utf-8")
+    # Inject data script before the main <script> tag
+    html = html.replace(
+        "<script>\nconst $ = s =>",
+        f"<script>\n{data_js}</script>\n<script>\nconst $ = s =>",
+        1,
+    )
+    html_path.write_text(html, encoding="utf-8")
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="claude-tap",
+        description="Trace Claude Code API requests via a local reverse proxy.",
+    )
+    parser.add_argument("-o", "--output-dir", default="./traces",
+                        help="Trace output directory (default: ./traces)")
+    parser.add_argument("-p", "--port", type=int, default=0,
+                        help="Proxy port (default: 0 = auto)")
+    parser.add_argument("-t", "--target", default="https://api.anthropic.com",
+                        help="Upstream API URL (default: https://api.anthropic.com)")
+    parser.add_argument("--no-launch", action="store_true",
+                        help="Only start the proxy, don't launch Claude")
+    parser.add_argument("claude_args", nargs="*", metavar="CLAUDE_ARGS",
+                        help="Extra args passed to claude (after --)")
+    return parser.parse_args(argv)
+
+
+def main_entry():
+    args = parse_args()
+    try:
+        code = asyncio.run(async_main(args))
+    except KeyboardInterrupt:
+        code = 0
+    sys.exit(code)
+
+
+if __name__ == "__main__":
+    # Support `python claude_trace.py -- --help` style invocation
+    argv = sys.argv[1:]
+    if "--" in argv:
+        idx = argv.index("--")
+        our_args = argv[:idx]
+        claude_args = argv[idx + 1:]
+    else:
+        our_args = argv
+        claude_args = []
+
+    args = parse_args(our_args)
+    args.claude_args = claude_args
+    try:
+        code = asyncio.run(async_main(args))
+    except KeyboardInterrupt:
+        code = 0
+    sys.exit(code)
