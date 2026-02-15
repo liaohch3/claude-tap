@@ -23,25 +23,29 @@ claude-tap
 - [uv](https://github.com/astral-sh/uv) (recommended) or pip
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed
 
-### Install & Run
+### Install
 
 ```bash
-# Install from PyPI
+# Install globally with pip
 pip install claude-tap
 
-# Or install from source
-git clone https://github.com/liaohch3/claude-tap.git
-cd claude-tap
-uv sync
+# Or install globally with uv
+uv tool install claude-tap
 
-# Run (launches Claude Code with tracing enabled)
+# Or install from source
+pip install git+https://github.com/liaohch3/claude-tap.git
+```
+
+After installation, the `claude-tap` command is available globally.
+
+### Run
+
+```bash
+# Launch Claude Code with tracing enabled
 claude-tap
 
-# Or with arguments passed to Claude Code
+# Pass arguments to Claude Code
 claude-tap -- --model claude-opus-4-6
-
-# Or run as a Python module
-uv run python -m claude_tap
 ```
 
 ### View the Trace

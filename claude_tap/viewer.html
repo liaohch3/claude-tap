@@ -304,7 +304,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 
 /* ─── Token usage ─── */
-.token-bar { display: flex; gap: 20px; font-size: 13px; padding: 4px 0; flex-wrap: wrap; }
+.token-bar { display: flex; gap: 20px; font-size: 13px; padding: 8px 0 12px; flex-wrap: wrap; border-bottom: 1px solid var(--border-light); margin-bottom: 8px; }
 .tok-item { display: flex; align-items: center; gap: 6px; }
 .tok-dot { width: 8px; height: 8px; border-radius: 50%; }
 .tok-label { color: var(--text-tertiary); font-size: 12px; }
@@ -392,6 +392,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   color: #fff; background: var(--red); padding: 2px 8px;
   border-radius: 0 0 4px 4px;
 }
+.diff-modified-msg {
+  margin-bottom: 8px;
+  border: 2px solid var(--amber); border-radius: var(--radius-sm);
+}
+.diff-modified-msg .sys-diff-view { border: none; border-radius: 0; }
 .diff-field-row {
   display: flex; align-items: baseline; gap: 10px;
   padding: 6px 0; border-bottom: 1px solid var(--border-light);
@@ -591,7 +596,7 @@ const I18N = {
     diff_new: "new", diff_removed: "removed", diff_added: "added", diff_changed: "changed",
     diff_no_change: "no change", diff_unchanged_lbl: "unchanged",
     diff_system: "System Prompt", diff_tools: "Tools", diff_params: "Parameters",
-    diff_chars: "chars", diff_tools_unchanged: "tools, unchanged",
+    diff_chars: "chars", diff_tools_unchanged: "tools, unchanged", diff_trailing: "trailing messages unchanged",
     badge_messages: "messages", badge_tools: "tools", badge_events: "events",
     search_placeholder: "Search messages, tools, prompts...",
     diff_sys_old: "Previous", diff_sys_new: "Current",
@@ -612,7 +617,7 @@ const I18N = {
     diff_new: "新增", diff_removed: "移除", diff_added: "新增", diff_changed: "变化",
     diff_no_change: "无变化", diff_unchanged_lbl: "无变化",
     diff_system: "系统提示词", diff_tools: "工具", diff_params: "参数",
-    diff_chars: "字符", diff_tools_unchanged: "个工具，无变化",
+    diff_chars: "字符", diff_tools_unchanged: "个工具，无变化", diff_trailing: "末尾消息无变化",
     badge_messages: "条消息", badge_tools: "个工具", badge_events: "个事件",
     search_placeholder: "搜索消息、工具、提示词...",
     diff_sys_old: "上次", diff_sys_new: "本次",
@@ -633,7 +638,7 @@ const I18N = {
     diff_new: "新規", diff_removed: "削除", diff_added: "追加", diff_changed: "変更",
     diff_no_change: "変更なし", diff_unchanged_lbl: "変更なし",
     diff_system: "システムプロンプト", diff_tools: "ツール", diff_params: "パラメータ",
-    diff_chars: "文字", diff_tools_unchanged: "個のツール、変更なし",
+    diff_chars: "文字", diff_tools_unchanged: "個のツール、変更なし", diff_trailing: "末尾メッセージ変更なし",
     badge_messages: "件のメッセージ", badge_tools: "個のツール", badge_events: "件のイベント",
     search_placeholder: "メッセージ、ツール、プロンプトを検索...",
     diff_sys_old: "前回", diff_sys_new: "今回",
@@ -654,7 +659,7 @@ const I18N = {
     diff_new: "신규", diff_removed: "삭제", diff_added: "추가", diff_changed: "변경",
     diff_no_change: "변경 없음", diff_unchanged_lbl: "변경 없음",
     diff_system: "시스템 프롬프트", diff_tools: "도구", diff_params: "매개변수",
-    diff_chars: "자", diff_tools_unchanged: "개 도구, 변경 없음",
+    diff_chars: "자", diff_tools_unchanged: "개 도구, 변경 없음", diff_trailing: "마지막 메시지 변경 없음",
     badge_messages: "개 메시지", badge_tools: "개 도구", badge_events: "개 이벤트",
     search_placeholder: "메시지, 도구, 프롬프트 검색...",
     diff_sys_old: "이전", diff_sys_new: "현재",
@@ -675,7 +680,7 @@ const I18N = {
     diff_new: "nouveau", diff_removed: "supprimé", diff_added: "ajouté", diff_changed: "modifié",
     diff_no_change: "aucun changement", diff_unchanged_lbl: "inchangé",
     diff_system: "Prompt système", diff_tools: "Outils", diff_params: "Paramètres",
-    diff_chars: "car.", diff_tools_unchanged: "outils, inchangés",
+    diff_chars: "car.", diff_tools_unchanged: "outils, inchangés", diff_trailing: "messages finaux inchangés",
     badge_messages: "messages", badge_tools: "outils", badge_events: "événements",
     search_placeholder: "Rechercher messages, outils, prompts...",
     diff_sys_old: "Précédent", diff_sys_new: "Actuel",
@@ -696,7 +701,7 @@ const I18N = {
     diff_new: "جديد", diff_removed: "محذوف", diff_added: "مضاف", diff_changed: "معدّل",
     diff_no_change: "بدون تغيير", diff_unchanged_lbl: "بدون تغيير",
     diff_system: "موجه النظام", diff_tools: "الأدوات", diff_params: "المعاملات",
-    diff_chars: "حرف", diff_tools_unchanged: "أداة، بدون تغيير",
+    diff_chars: "حرف", diff_tools_unchanged: "أداة، بدون تغيير", diff_trailing: "الرسائل الأخيرة بدون تغيير",
     badge_messages: "رسالة", badge_tools: "أداة", badge_events: "حدث",
     search_placeholder: "بحث في الرسائل والأدوات والموجهات...",
     diff_sys_old: "السابق", diff_sys_new: "الحالي",
@@ -717,7 +722,7 @@ const I18N = {
     diff_new: "neu", diff_removed: "entfernt", diff_added: "hinzugefügt", diff_changed: "geändert",
     diff_no_change: "keine Änderung", diff_unchanged_lbl: "unverändert",
     diff_system: "System-Prompt", diff_tools: "Werkzeuge", diff_params: "Parameter",
-    diff_chars: "Zeichen", diff_tools_unchanged: "Werkzeuge, unverändert",
+    diff_chars: "Zeichen", diff_tools_unchanged: "Werkzeuge, unverändert", diff_trailing: "letzte Nachrichten unverändert",
     badge_messages: "Nachrichten", badge_tools: "Werkzeuge", badge_events: "Ereignisse",
     search_placeholder: "Nachrichten, Werkzeuge, Prompts suchen...",
     diff_sys_old: "Vorherige", diff_sys_new: "Aktuelle",
@@ -738,13 +743,22 @@ const I18N = {
     diff_new: "новое", diff_removed: "удалено", diff_added: "добавлено", diff_changed: "изменено",
     diff_no_change: "без изменений", diff_unchanged_lbl: "без изменений",
     diff_system: "Системный промпт", diff_tools: "Инструменты", diff_params: "Параметры",
-    diff_chars: "симв.", diff_tools_unchanged: "инструм., без изменений",
+    diff_chars: "симв.", diff_tools_unchanged: "инструм., без изменений", diff_trailing: "последние сообщения без изменений",
     badge_messages: "сообщений", badge_tools: "инструм.", badge_events: "событий",
     search_placeholder: "Поиск сообщений, инструментов, промптов...",
     diff_sys_old: "Предыдущий", diff_sys_new: "Текущий",
   },
 };
-let currentLang = localStorage.getItem('claude-tap-lang') || 'en';
+function detectLang() {
+  const supported = ['en','zh-CN','ja','ko','fr','ar','de','ru'];
+  const nav = navigator.language || navigator.userLanguage || 'en';
+  if (supported.includes(nav)) return nav;
+  const prefix = nav.split('-')[0];
+  if (prefix === 'zh') return 'zh-CN';
+  const match = supported.find(s => s.startsWith(prefix));
+  return match || 'en';
+}
+let currentLang = localStorage.getItem('claude-tap-lang') || detectLang();
 function t(key) { return (I18N[currentLang] || I18N.en)[key] || I18N.en[key] || key; }
 function setLang(lang) {
   currentLang = lang;
@@ -1020,6 +1034,8 @@ function renderDetail(e) {
     <button class="act-btn" onclick="showDiff(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><path d="M3 6h18M3 18h18" opacity=".4"/></svg>${t('btn_diff')}</button>
   </div>`;
 
+  if (usage) html += renderTokenUsage(usage);
+
   const sysPrompt = extractSystem(reqBody);
   if (sysPrompt) html += section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt);
 
@@ -1030,7 +1046,6 @@ function renderDetail(e) {
   if (tools && tools.length) html += section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'));
 
   if (respBody?.content) html += section(t('section_response'), renderResponseContent(respBody), true);
-  if (usage) html += section(t('section_usage'), renderTokenUsage(usage), true);
 
   const sseEvents = e.response?.sse_events;
   if (sseEvents && sseEvents.length) html += section(t('section_sse'), renderSSEEvents(sseEvents), false, null, sseEvents.length + ' ' + t('badge_events'));
@@ -1245,20 +1260,62 @@ function msgContentEqual(a, b) {
   return a.role === b.role && JSON.stringify(a.content) === JSON.stringify(b.content);
 }
 
+function msgToText(m) {
+  const c = m.content;
+  if (typeof c === 'string') return c;
+  if (!Array.isArray(c)) return JSON.stringify(c, null, 2);
+  return c.map(b => {
+    if (b.type === 'text') return b.text || '';
+    if (b.type === 'thinking') return '[thinking]\n' + (b.thinking || '');
+    if (b.type === 'tool_use') return '[tool_use: ' + (b.name || '') + ']\n' + JSON.stringify(b.input, null, 2);
+    if (b.type === 'tool_result') {
+      const rc = b.content;
+      if (typeof rc === 'string') return '[tool_result]\n' + rc;
+      if (Array.isArray(rc)) return '[tool_result]\n' + rc.map(x => x.type === 'text' ? x.text : JSON.stringify(x)).join('\n');
+      return '[tool_result]\n' + JSON.stringify(b, null, 2);
+    }
+    return JSON.stringify(b, null, 2);
+  }).join('\n');
+}
+
 function structuralDiff(oldB, newB) {
-  const d = { unchangedMsgs: 0, newMsgs: [], removedMsgs: [],
+  const d = { unchangedMsgs: 0, newMsgs: [], removedMsgs: [], modifiedMsgs: [],
     systemChanged: false, oldSystemLen: 0, newSystemLen: 0, oldSystemText: '', newSystemText: '',
     toolsChanged: false, oldToolCount: 0, newToolCount: 0,
     addedTools: [], removedTools: [], fieldChanges: [] };
   // Messages — compare by role+content (ignore cache_control etc.)
   const om = oldB.messages || [], nm = newB.messages || [];
+  // Common prefix
   let common = 0;
   for (let i = 0; i < Math.min(om.length, nm.length); i++) {
     if (msgContentEqual(om[i], nm[i])) common++; else break;
   }
   d.unchangedMsgs = common;
-  for (let i = common; i < om.length; i++) d.removedMsgs.push(om[i]);
-  for (let i = common; i < nm.length; i++) d.newMsgs.push(nm[i]);
+  // Common suffix
+  let suffix = 0;
+  for (let i = 0; i < Math.min(om.length - common, nm.length - common); i++) {
+    if (msgContentEqual(om[om.length - 1 - i], nm[nm.length - 1 - i])) suffix++; else break;
+  }
+  const oldTail = om.slice(common, om.length - suffix);
+  const newTail = nm.slice(common, nm.length - suffix);
+  d.suffixMsgs = suffix;
+  // Try to pair changed messages by role
+  let oi = 0, ni = 0;
+  while (oi < oldTail.length && ni < newTail.length) {
+    if (oldTail[oi].role === newTail[ni].role) {
+      d.modifiedMsgs.push({ old: oldTail[oi], new: newTail[ni] });
+      oi++; ni++;
+    } else if (oi + 1 < oldTail.length && oldTail[oi + 1].role === newTail[ni].role) {
+      d.removedMsgs.push(oldTail[oi]); oi++;
+    } else if (ni + 1 < newTail.length && oldTail[oi].role === newTail[ni + 1].role) {
+      d.newMsgs.push(newTail[ni]); ni++;
+    } else {
+      d.removedMsgs.push(oldTail[oi]); d.newMsgs.push(newTail[ni]);
+      oi++; ni++;
+    }
+  }
+  while (oi < oldTail.length) { d.removedMsgs.push(oldTail[oi]); oi++; }
+  while (ni < newTail.length) { d.newMsgs.push(newTail[ni]); ni++; }
   // System
   const oldSys = extractSystem(oldB) || '', newSys = extractSystem(newB) || '';
   d.systemChanged = oldSys !== newSys;
@@ -1289,28 +1346,36 @@ function structuralDiff(oldB, newB) {
 function renderStructuralDiff(d) {
   let html = '';
   // ── Messages ──
-  const totalNew = d.newMsgs.length, totalRm = d.removedMsgs.length;
+  const totalNew = d.newMsgs.length, totalRm = d.removedMsgs.length, totalMod = d.modifiedMsgs.length;
   const badges = [];
   if (totalNew > 0) badges.push(`<span class="ds-badge add">+${totalNew} ${t('diff_new')}</span>`);
   if (totalRm > 0) badges.push(`<span class="ds-badge del">-${totalRm} ${t('diff_removed')}</span>`);
-  if (!totalNew && !totalRm) badges.push(`<span class="ds-badge same">${t('diff_no_change')}</span>`);
+  if (totalMod > 0) badges.push(`<span class="ds-badge change">${totalMod} ${t('diff_changed')}</span>`);
+  if (!totalNew && !totalRm && !totalMod) badges.push(`<span class="ds-badge same">${t('diff_no_change')}</span>`);
   html += `<div class="diff-section"><div class="diff-section-header">${t('section_messages')} ${badges.join(' ')}</div><div class="diff-section-body">`;
   if (d.unchangedMsgs > 0) {
     html += `<div class="diff-unchanged-bar"><span class="dub-dot"></span><strong>${d.unchangedMsgs}</strong> ${t('diff_unchanged')} (${t('diff_msg_range')}${d.unchangedMsgs})</div>`;
   }
-  if (d.removedMsgs.length > 0) {
-    d.removedMsgs.forEach((m, i) => {
-      const role = m.role || 'unknown';
-      const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : 'system';
-      html += `<div class="diff-removed-msg" data-label="${t('diff_removed').toUpperCase()}"><div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${renderContent(m.content, role)}</div></div>`;
-    });
-  }
-  d.newMsgs.forEach((m, i) => {
+  d.removedMsgs.forEach(m => {
+    const role = m.role || 'unknown';
+    const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : 'system';
+    html += `<div class="diff-removed-msg" data-label="${t('diff_removed').toUpperCase()}"><div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${renderContent(m.content, role)}</div></div>`;
+  });
+  d.modifiedMsgs.forEach(pair => {
+    const role = pair.old.role || 'unknown';
+    const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : 'system';
+    const oldText = msgToText(pair.old), newText = msgToText(pair.new);
+    html += `<div class="diff-modified-msg"><div class="msg ${cls}"><div class="msg-role">${esc(role)} <span class="ds-badge change" style="font-size:9px;vertical-align:middle">${t('diff_changed')}</span></div>${renderLineDiff(oldText, newText)}</div></div>`;
+  });
+  d.newMsgs.forEach(m => {
     const role = m.role || 'unknown';
     const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : 'system';
     html += `<div class="diff-new-msg" data-label="${t('diff_new').toUpperCase()}"><div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${renderContent(m.content, role)}</div></div>`;
   });
-  if (totalNew === 0 && totalRm === 0 && d.unchangedMsgs === 0) html += `<div style="color:var(--text-tertiary);font-size:12px">${t('no_messages')}</div>`;
+  if (d.suffixMsgs > 0) {
+    html += `<div class="diff-unchanged-bar"><span class="dub-dot"></span><strong>${d.suffixMsgs}</strong> ${t('diff_unchanged')} (${t('diff_trailing')})</div>`;
+  }
+  if (totalNew === 0 && totalRm === 0 && totalMod === 0 && d.unchangedMsgs === 0) html += `<div style="color:var(--text-tertiary);font-size:12px">${t('no_messages')}</div>`;
   html += `</div></div>`;
 
   // ── Parameters ── (side-by-side)
