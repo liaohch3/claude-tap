@@ -212,8 +212,7 @@ def _run_test():
         )
     except subprocess.TimeoutExpired:
         print("[test] TIMEOUT — claude_tap.py did not exit in 30s")
-        shutil.rmtree(trace_dir, ignore_errors=True)
-        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+        _cleanup(trace_dir, fake_bin_dir, "e2e")
         sys.exit(1)
 
     print(f"[test] Exit code: {proc.returncode}")
@@ -292,7 +291,21 @@ def _run_test():
 
     print("\n✅ E2E test PASSED")
 
-    # Cleanup
+    _cleanup(trace_dir, fake_bin_dir, "e2e")
+
+
+## ---------------------------------------------------------------------------
+## Helper: cleanup (--keep aware)
+## ---------------------------------------------------------------------------
+
+KEEP_DIR = None  # set by __main__ when --keep is passed
+
+def _cleanup(trace_dir, fake_bin_dir, test_name="test"):
+    """Clean up temp dirs. When KEEP_DIR is set, copy trace output there first."""
+    if KEEP_DIR:
+        for f in Path(trace_dir).iterdir():
+            dest = KEEP_DIR / f"{test_name}_{f.name}"
+            shutil.copy2(f, dest)
     shutil.rmtree(trace_dir, ignore_errors=True)
     shutil.rmtree(fake_bin_dir, ignore_errors=True)
 
@@ -482,8 +495,7 @@ def test_upstream_error():
         sys.exit(1)
     finally:
         stop_upstream()
-        shutil.rmtree(trace_dir, ignore_errors=True)
-        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+        _cleanup(trace_dir, fake_bin_dir, "upstream_error")
 
 
 ## ---------------------------------------------------------------------------
@@ -636,8 +648,7 @@ def test_malformed_sse():
         sys.exit(1)
     finally:
         stop_upstream()
-        shutil.rmtree(trace_dir, ignore_errors=True)
-        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+        _cleanup(trace_dir, fake_bin_dir, "malformed_sse")
 
 
 ## ---------------------------------------------------------------------------
@@ -769,8 +780,7 @@ def test_large_payload():
         sys.exit(1)
     finally:
         stop_upstream()
-        shutil.rmtree(trace_dir, ignore_errors=True)
-        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+        _cleanup(trace_dir, fake_bin_dir, "large_payload")
 
 
 ## ---------------------------------------------------------------------------
@@ -931,8 +941,141 @@ def test_concurrent_requests():
         sys.exit(1)
     finally:
         stop_upstream()
-        shutil.rmtree(trace_dir, ignore_errors=True)
-        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+        _cleanup(trace_dir, fake_bin_dir, "concurrent")
+
+
+## ---------------------------------------------------------------------------
+## --preview: regenerate HTML from real .traces files and open
+## ---------------------------------------------------------------------------
+
+def _cmd_preview():
+    """Regenerate HTML viewer from existing .traces data using current viewer.html.
+
+    Usage:
+        uv run python test_e2e.py --preview            # latest trace
+        uv run python test_e2e.py --preview all         # all traces
+        uv run python test_e2e.py --preview 002300      # match by partial name
+    """
+    from claude_tap import _generate_html_viewer
+    import subprocess as sp
+
+    traces_dir = Path(__file__).parent / ".traces"
+    if not traces_dir.exists():
+        print(f"Error: {traces_dir} does not exist"); sys.exit(1)
+
+    target = sys.argv[2] if len(sys.argv) > 2 else "latest"
+    if target == "all":
+        jsonl_files = sorted(traces_dir.glob("*.jsonl"))
+    elif target == "latest":
+        jsonl_files = sorted(traces_dir.glob("*.jsonl"))[-1:]
+    else:
+        jsonl_files = [f for f in traces_dir.glob("*.jsonl") if target in f.name]
+
+    if not jsonl_files:
+        print(f"No matching .jsonl in {traces_dir}"); sys.exit(1)
+
+    for jf in jsonl_files:
+        html = jf.with_suffix(".html")
+        _generate_html_viewer(jf, html)
+        print(f"Generated: {html}")
+
+    sp.run(["open", str(jsonl_files[-1].with_suffix(".html"))])
+
+
+## ---------------------------------------------------------------------------
+## --dev: auto multi-turn via claude -p, then open HTML
+## ---------------------------------------------------------------------------
+
+def _cmd_dev():
+    """Start claude-tap proxy, run multi-turn prompts non-interactively, open HTML.
+
+    Usage:
+        uv run python test_e2e.py --dev                          # default prompts
+        uv run python test_e2e.py --dev "prompt1" "prompt2" ...  # custom prompts
+    """
+    import signal
+    import subprocess as sp
+
+    project_dir = Path(__file__).parent
+    traces_dir = project_dir / ".traces"
+    traces_dir.mkdir(exist_ok=True)
+
+    # Collect prompts: custom or default
+    prompts = [a for a in sys.argv[2:] if not a.startswith("-")]
+    if not prompts:
+        prompts = [
+            "Search the web for the latest Claude model release date and summarize in 2 sentences",
+            "Now search for how it compares to GPT-5.2 and give a short comparison table",
+        ]
+
+    # Start proxy in background via --no-launch
+    # -u: unbuffered stdout so we can read the port line immediately
+    print("Starting claude-tap proxy...")
+    proxy_env = os.environ.copy()
+    proxy_env["PYTHONUNBUFFERED"] = "1"
+    proxy_proc = sp.Popen(
+        [sys.executable, "-u", "-m", "claude_tap", "-o", str(traces_dir), "--no-launch"],
+        cwd=str(project_dir),
+        env=proxy_env,
+        stdout=sp.PIPE, stderr=sp.STDOUT, text=True,
+    )
+
+    # Read proxy output to get the port
+    port = None
+    for line in proxy_proc.stdout:
+        print(line, end="")
+        if "listening on" in line:
+            port = int(line.strip().rsplit(":", 1)[1])
+            break
+
+    if port is None:
+        print("Error: could not determine proxy port")
+        proxy_proc.terminate()
+        sys.exit(1)
+
+    env = os.environ.copy()
+    env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
+    # Remove vars that make claude think it's inside a nested session
+    for k in ["CLAUDECODE", "CLAUDE_CODE_SSE_PORT"]:
+        env.pop(k, None)
+
+    try:
+        for i, prompt in enumerate(prompts):
+            turn = i + 1
+            print(f"\n{'='*50}")
+            print(f"Turn {turn}: {prompt[:70]}{'...' if len(prompt)>70 else ''}")
+            print('='*50)
+
+            cmd = ["claude", "-p", prompt]
+            if i > 0:
+                cmd.insert(2, "-c")  # --continue: resume last conversation
+
+            result = sp.run(cmd, env=env, capture_output=True, text=True, timeout=180)
+            if result.stdout:
+                lines = result.stdout.strip().split("\n")
+                preview = "\n".join(lines[:10])
+                if len(lines) > 10:
+                    preview += f"\n... ({len(lines) - 10} more lines)"
+                print(preview)
+            if result.returncode != 0 and result.stderr:
+                print(f"stderr: {result.stderr[:200]}")
+    except Exception as e:
+        print(f"\nError during prompts: {e}")
+    finally:
+        # Stop proxy
+        proxy_proc.send_signal(signal.SIGINT)
+        remaining = proxy_proc.stdout.read()
+        print(remaining, end="")
+        proxy_proc.wait(timeout=10)
+
+    # Find and open the latest HTML
+    html_files = sorted(traces_dir.glob("*.html"))
+    if html_files:
+        latest = html_files[-1]
+        print(f"\nOpening: {latest}")
+        sp.run(["open", str(latest)])
+    else:
+        print("\nNo HTML generated")
 
 
 ## ---------------------------------------------------------------------------
@@ -940,6 +1083,13 @@ def test_concurrent_requests():
 ## ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    if "--preview" in sys.argv:
+        _cmd_preview()
+        sys.exit(0)
+    if "--dev" in sys.argv:
+        _cmd_dev()
+        sys.exit(0)
+
     test_e2e()
     test_upstream_error()
     test_malformed_sse()

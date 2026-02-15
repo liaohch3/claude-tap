@@ -335,7 +335,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 .diff-modal {
   background: var(--bg); border-radius: 14px;
-  width: 96vw; max-width: 1100px; max-height: 92vh;
+  width: 96vw; max-width: 1400px; max-height: 92vh;
   display: flex; flex-direction: column;
   box-shadow: 0 24px 80px rgba(0,0,0,0.2);
 }
@@ -409,7 +409,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   margin-bottom: 8px;
   border: 2px solid var(--amber); border-radius: var(--radius-sm);
 }
-.diff-modified-msg .sys-diff-view { border: none; border-radius: 0; }
+.diff-modified-msg .sbs-diff { border: none; border-radius: 0; }
 .diff-field-row {
   display: flex; align-items: baseline; gap: 10px;
   padding: 6px 0; border-bottom: 1px solid var(--border-light);
@@ -444,24 +444,37 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--text);
 }
 
-/* ─── System prompt diff ─── */
-.sys-diff-view {
+/* ─── Side-by-side line diff ─── */
+.sbs-diff {
+  display: grid; grid-template-columns: 1fr 1fr;
   font-family: var(--mono); font-size: 12px; line-height: 1.6;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  overflow-x: auto; max-height: 400px; overflow-y: auto;
+  overflow: auto; max-height: 400px;
 }
-.sys-diff-view > div { padding: 1px 12px; white-space: pre-wrap; word-break: break-word; }
-.sys-diff-prefix { display: inline-block; width: 16px; color: var(--text-tertiary); user-select: none; flex-shrink: 0; }
-.sys-diff-ctx { color: var(--text-secondary); }
-.sys-diff-del { background: var(--red-bg); color: var(--red); }
-.sys-diff-add { background: var(--green-bg); color: var(--green); }
+.sbs-diff .sbs-header {
+  padding: 4px 12px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .5px;
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 1; background: var(--bg-card);
+}
+.sbs-diff .sbs-header.old { color: var(--red); }
+.sbs-diff .sbs-header.new { color: var(--green); }
+.sbs-cell {
+  padding: 1px 10px; white-space: pre-wrap; word-break: break-word;
+  border-bottom: 1px solid var(--border-light);
+}
+.sbs-cell.ctx { color: var(--text-tertiary); opacity: 0.5; }
+.sbs-cell.del { background: var(--red-bg); color: var(--red); }
+.sbs-cell.add { background: var(--green-bg); color: var(--green); }
+.sbs-cell.empty { background: var(--bg-code); }
+.sbs-fold {
+  grid-column: 1 / -1; text-align: center;
+  padding: 2px 12px; color: var(--text-tertiary); font-style: italic;
+  background: var(--bg); border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light); font-size: 11px;
+}
 .sys-diff-del-hi { background: var(--red-bg-hi); border-radius: 3px; padding: 1px 1px; }
 .sys-diff-add-hi { background: var(--green-bg-hi); border-radius: 3px; padding: 1px 1px; }
-.sys-diff-fold {
-  padding: 2px 12px; color: var(--text-tertiary); font-style: italic;
-  background: var(--bg); border-top: 1px solid var(--border-light); border-bottom: 1px solid var(--border-light);
-  text-align: center; font-size: 11px;
-}
 
 /* ─── SSE events ─── */
 .sse-event { margin-bottom: 4px; font-family: var(--mono); font-size: 12px; padding: 3px 0; }
@@ -888,6 +901,7 @@ function renderPathFilter(paths, pathCounts) {
 function applyFilter() {
   filtered = entries.filter(e => activePaths.has(getPath(e)));
   if (searchQuery) filtered = filtered.filter(e => matchSearch(e, searchQuery));
+  filtered.sort((a, b) => (a.turn || 0) - (b.turn || 0));
   let totalTokens = 0, totalDuration = 0;
   filtered.forEach(e => {
     totalDuration += e.duration_ms || 0;
@@ -1233,10 +1247,19 @@ function copyCurl(btn) {
 }
 
 /* ─── Diff ─── */
+function isMainTurn(e) {
+  const b = e?.request?.body;
+  if (!b) return false;
+  return (b.system && (typeof b.system === 'string' ? b.system.length > 0 : b.system.length > 0))
+      || (b.messages && b.messages.length > 1);
+}
+
 function findPrevSameModel(idx) {
-  const model = filtered[idx]?.request?.body?.model;
+  const e = filtered[idx];
+  const model = e?.request?.body?.model;
+  const main = isMainTurn(e);
   for (let i = idx - 1; i >= 0; i--) {
-    if (filtered[i]?.request?.body?.model === model) return i;
+    if (filtered[i]?.request?.body?.model === model && isMainTurn(filtered[i]) === main) return i;
   }
   return -1;
 }
@@ -1246,9 +1269,11 @@ function showDiff(btn) {
 }
 
 function findNextSameModel(idx) {
-  const model = filtered[idx]?.request?.body?.model;
+  const e = filtered[idx];
+  const model = e?.request?.body?.model;
+  const main = isMainTurn(e);
   for (let i = idx + 1; i < filtered.length; i++) {
-    if (filtered[i]?.request?.body?.model === model) return i;
+    if (filtered[i]?.request?.body?.model === model && isMainTurn(filtered[i]) === main) return i;
   }
   return -1;
 }
@@ -1354,7 +1379,8 @@ function structuralDiff(oldB, newB) {
   let oi = 0, ni = 0;
   while (oi < oldTail.length && ni < newTail.length) {
     if (oldTail[oi].role === newTail[ni].role) {
-      d.modifiedMsgs.push({ old: oldTail[oi], new: newTail[ni] });
+      if (msgContentEqual(oldTail[oi], newTail[ni])) { d.unchangedMsgs++; }
+      else { d.modifiedMsgs.push({ old: oldTail[oi], new: newTail[ni] }); }
       oi++; ni++;
     } else if (oi + 1 < oldTail.length && oldTail[oi + 1].role === newTail[ni].role) {
       d.removedMsgs.push(oldTail[oi]); oi++;
@@ -1502,22 +1528,31 @@ function charHighlight(text, hiStart, hiEnd, hiClass) {
 
 function renderLineDiff(oldText, newText) {
   const lines = lineDiff(oldText, newText);
-  let html = '<div class="sys-diff-view">';
+  let html = '<div class="sbs-diff">';
+  html += '<div class="sbs-header old">OLD</div><div class="sbs-header new">NEW</div>';
   for (const ln of lines) {
-    if (ln.type === 'fold') { html += `<div class="sys-diff-fold">... ${ln.count} lines ...</div>`; continue; }
-    if (ln.type === 'change') {
+    if (ln.type === 'fold') {
+      html += `<div class="sbs-fold">... ${ln.count} lines ...</div>`;
+      continue;
+    }
+    if (ln.type === 'ctx') {
+      html += `<div class="sbs-cell ctx">${esc(ln.text)}</div>`;
+      html += `<div class="sbs-cell ctx">${esc(ln.text)}</div>`;
+    } else if (ln.type === 'change') {
       const o = ln.oldText, n = ln.newText;
       let cp = 0;
       while (cp < o.length && cp < n.length && o[cp] === n[cp]) cp++;
       let cs = 0;
       while (cs < o.length - cp && cs < n.length - cp && o[o.length - 1 - cs] === n[n.length - 1 - cs]) cs++;
-      html += `<div class="sys-diff-del"><span class="sys-diff-prefix">-</span>${charHighlight(o, cp, o.length - cs, 'sys-diff-del-hi')}</div>`;
-      html += `<div class="sys-diff-add"><span class="sys-diff-prefix">+</span>${charHighlight(n, cp, n.length - cs, 'sys-diff-add-hi')}</div>`;
-      continue;
+      html += `<div class="sbs-cell del">${charHighlight(o, cp, o.length - cs, 'sys-diff-del-hi')}</div>`;
+      html += `<div class="sbs-cell add">${charHighlight(n, cp, n.length - cs, 'sys-diff-add-hi')}</div>`;
+    } else if (ln.type === 'del') {
+      html += `<div class="sbs-cell del">${esc(ln.text)}</div>`;
+      html += `<div class="sbs-cell empty"></div>`;
+    } else if (ln.type === 'add') {
+      html += `<div class="sbs-cell empty"></div>`;
+      html += `<div class="sbs-cell add">${esc(ln.text)}</div>`;
     }
-    const cls = ln.type === 'del' ? 'sys-diff-del' : ln.type === 'add' ? 'sys-diff-add' : 'sys-diff-ctx';
-    const prefix = ln.type === 'del' ? '-' : ln.type === 'add' ? '+' : ' ';
-    html += `<div class="${cls}"><span class="sys-diff-prefix">${prefix}</span>${esc(ln.text)}</div>`;
   }
   html += '</div>';
   return html;
