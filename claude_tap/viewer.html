@@ -410,6 +410,21 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   background: var(--green-bg); padding: 1px 6px; border-radius: 3px; max-width: 300px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* ─── Side-by-side JSON diff ─── */
+.diff-side-by-side { display: flex; gap: 2px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.diff-side-by-side .diff-panel { flex: 1; min-width: 0; overflow: auto; }
+.diff-side-by-side .diff-panel-header {
+  padding: 6px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px;
+  border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1;
+}
+.diff-side-by-side .diff-panel.old { background: var(--red-bg); }
+.diff-side-by-side .diff-panel.old .diff-panel-header { background: var(--red-bg); color: var(--red); }
+.diff-side-by-side .diff-panel.new { background: var(--green-bg); }
+.diff-side-by-side .diff-panel.new .diff-panel-header { background: var(--green-bg); color: var(--green); }
+.diff-side-by-side pre {
+  margin: 0; padding: 10px 12px; font-family: var(--mono); font-size: 11px;
+  line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--text);
+}
 
 /* ─── System prompt diff ─── */
 .sys-diff-view {
@@ -1298,21 +1313,18 @@ function renderStructuralDiff(d) {
   if (totalNew === 0 && totalRm === 0 && d.unchangedMsgs === 0) html += `<div style="color:var(--text-tertiary);font-size:12px">${t('no_messages')}</div>`;
   html += `</div></div>`;
 
-  // ── Parameters ──
+  // ── Parameters ── (side-by-side)
   if (d.fieldChanges.length > 0) {
-    html += `<div class="diff-section"><div class="diff-section-header">${t('diff_params')} <span class="ds-badge change">${d.fieldChanges.length} ${t('diff_changed')}</span></div><div class="diff-section-body">`;
+    const oldObj = {}, newObj = {};
     d.fieldChanges.forEach(f => {
-      const ov = f.oldVal !== undefined ? truncJson(f.oldVal) : '';
-      const nv = f.newVal !== undefined ? truncJson(f.newVal) : '';
-      if (f.added) {
-        html += `<div class="diff-field-row"><span class="diff-field-key">${esc(f.key)}</span><span class="diff-field-new">${esc(nv)}</span><span class="ds-badge add" style="font-size:9px">${t('diff_added')}</span></div>`;
-      } else if (f.removed) {
-        html += `<div class="diff-field-row"><span class="diff-field-key">${esc(f.key)}</span><span class="diff-field-old">${esc(ov)}</span><span class="ds-badge del" style="font-size:9px">${t('diff_removed')}</span></div>`;
-      } else {
-        html += `<div class="diff-field-row"><span class="diff-field-key">${esc(f.key)}</span><span class="diff-field-old">${esc(ov)}</span><span class="diff-field-arrow">&rarr;</span><span class="diff-field-new">${esc(nv)}</span></div>`;
-      }
+      if (f.oldVal !== undefined) oldObj[f.key] = f.oldVal;
+      if (f.newVal !== undefined) newObj[f.key] = f.newVal;
     });
-    html += `</div></div>`;
+    html += `<div class="diff-section"><div class="diff-section-header">${t('diff_params')} <span class="ds-badge change">${d.fieldChanges.length} ${t('diff_changed')}</span></div><div class="diff-section-body">`;
+    html += `<div class="diff-side-by-side">`;
+    html += `<div class="diff-panel old"><div class="diff-panel-header">${t('diff_sys_old')}</div><pre>${esc(JSON.stringify(oldObj, null, 2))}</pre></div>`;
+    html += `<div class="diff-panel new"><div class="diff-panel-header">${t('diff_sys_new')}</div><pre>${esc(JSON.stringify(newObj, null, 2))}</pre></div>`;
+    html += `</div></div></div>`;
   }
 
   // ── System Prompt ──

@@ -46,7 +46,7 @@ uv run python -m claude_tap
 
 ### View the Trace
 
-After Claude Code exits, the tool outputs three files in `./traces/`:
+After Claude Code exits, the tool outputs three files in `./.traces/`:
 
 | File | Description |
 |------|-------------|
@@ -55,7 +55,7 @@ After Claude Code exits, the tool outputs three files in `./traces/`:
 | `trace_YYYYMMDD_HHMMSS.html` | Self-contained HTML viewer (open in any browser) |
 
 ```bash
-open traces/trace_*.html
+open .traces/trace_*.html
 ```
 
 ## CLI Options
@@ -64,7 +64,7 @@ open traces/trace_*.html
 usage: claude-tap [OPTIONS] [-- CLAUDE_ARGS...]
 
 Options:
-  -o, --output-dir DIR   Trace output directory (default: ./traces)
+  -o, --output-dir DIR   Trace output directory (default: ./.traces)
   -p, --port PORT        Proxy port (default: 0 = auto-assign)
   -t, --target URL       Upstream API URL (default: https://api.anthropic.com)
   --no-launch            Only start the proxy, don't launch Claude Code
@@ -138,7 +138,7 @@ claude-tap/
 ├── test_e2e.py           # End-to-end tests (5 test scenarios)
 ├── pyproject.toml        # Project metadata & dependencies
 ├── LICENSE               # MIT
-└── traces/               # Output directory (auto-created)
+└── .traces/              # Output directory (auto-created)
 ```
 
 ### Key Components

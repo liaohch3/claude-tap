@@ -19,7 +19,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Lint with ruff
-        run: uv run ruff check .
+        run: uv run --with ruff ruff check .
 
   test:
     runs-on: ubuntu-latest

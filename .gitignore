@@ -10,4 +10,4 @@ wheels/
 .venv
 
 # Trace output
-traces/
+.traces/

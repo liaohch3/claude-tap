@@ -462,8 +462,8 @@ def parse_args(argv=None):
         prog="claude-tap",
         description="Trace Claude Code API requests via a local reverse proxy.",
     )
-    parser.add_argument("-o", "--output-dir", default="./traces",
-                        help="Trace output directory (default: ./traces)")
+    parser.add_argument("-o", "--output-dir", default="./.traces",
+                        help="Trace output directory (default: ./.traces)")
     parser.add_argument("-p", "--port", type=int, default=0,
                         help="Proxy port (default: 0 = auto)")
     parser.add_argument("-t", "--target", default="https://api.anthropic.com",
