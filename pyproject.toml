@@ -1,6 +1,6 @@
 [project]
 name = "claude-tap"
-version = "0.1.0"
+version = "0.1.1"
 description = "Trace Claude Code API requests via a local reverse proxy. Inspect system prompts, messages, tools, and token usage."
 requires-python = ">=3.11"
 license = "MIT"

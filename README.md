@@ -26,17 +26,21 @@ claude-tap
 ### Install
 
 ```bash
-# Install globally with pip
-pip install claude-tap
-
-# Or install globally with uv
+# Install globally with uv (recommended)
 uv tool install claude-tap
 
-# Or install from source
-pip install git+https://github.com/liaohch3/claude-tap.git
+# Or with pip
+pip install claude-tap
 ```
 
 After installation, the `claude-tap` command is available globally.
+
+### Upgrade
+
+```bash
+uv tool upgrade claude-tap
+# or: pip install --upgrade claude-tap
+```
 
 ### Run
 
@@ -91,9 +95,10 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 ![Dark Mode](docs/viewer-dark.png)
 
 ### Structural Diff
-Compare consecutive API requests to see exactly what changed — messages added/removed, system prompt diffs, parameter changes:
+Compare consecutive API requests to see exactly what changed — messages added/removed, system prompt diffs, parameter changes. Character-level highlighting pinpoints the exact characters that differ:
 
 ![Structural Diff](docs/diff-modal.png)
+![Character-level Diff](docs/billing-header-diff.png)
 
 ### i18n (Chinese)
 ![Chinese i18n](docs/viewer-zh.png)
@@ -108,8 +113,9 @@ The viewer is a single self-contained HTML file (no external dependencies) with:
 - **Tool inspector** — expandable cards showing tool name, description, and parameter schema
 - **Token usage breakdown** — input / output / cache read / cache creation
 - **Structural diff** — compare consecutive same-model requests to see what changed:
-  - New/removed messages highlighted
+  - New/removed/modified messages highlighted
   - System prompt text diff with line-by-line changes
+  - Character-level highlighting for inline changes (e.g. `cch=bea5f` → `cch=5406b`)
   - Tools and parameter-level field diff
 - **Search & filter** — full-text search across messages, tools, prompts, and responses
 - **Dark mode** — toggle between light/dark themes (respects system preference)

@@ -30,6 +30,8 @@
   --amber-bg: #fffbeb;
   --red: #ef4444;
   --red-bg: #fef2f2;
+  --red-bg-hi: #fecaca;
+  --green-bg-hi: #bbf7d0;
   --purple: #8b5cf6;
   --purple-bg: #f5f3ff;
   --cyan: #06b6d4;
@@ -62,6 +64,8 @@
   --amber-bg: #2d2200;
   --red: #f85149;
   --red-bg: #3d1117;
+  --red-bg-hi: #6b2020;
+  --green-bg-hi: #1a5c33;
   --purple: #bc8cff;
   --purple-bg: #1f1338;
   --cyan: #39d2c0;
@@ -442,6 +446,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .sys-diff-ctx { color: var(--text-secondary); }
 .sys-diff-del { background: var(--red-bg); color: var(--red); }
 .sys-diff-add { background: var(--green-bg); color: var(--green); }
+.sys-diff-del-hi { background: var(--red-bg-hi); border-radius: 3px; padding: 1px 1px; }
+.sys-diff-add-hi { background: var(--green-bg-hi); border-radius: 3px; padding: 1px 1px; }
 .sys-diff-fold {
   padding: 2px 12px; color: var(--text-tertiary); font-style: italic;
   background: var(--bg); border-top: 1px solid var(--border-light); border-bottom: 1px solid var(--border-light);
@@ -1036,14 +1042,14 @@ function renderDetail(e) {
 
   if (usage) html += renderTokenUsage(usage);
 
+  const tools = reqBody?.tools;
+  if (tools && tools.length) html += section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'));
+
   const sysPrompt = extractSystem(reqBody);
   if (sysPrompt) html += section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt);
 
   const msgs = reqBody?.messages;
   if (msgs && msgs.length) html += section(t('section_messages'), renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'));
-
-  const tools = reqBody?.tools;
-  if (tools && tools.length) html += section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'));
 
   if (respBody?.content) html += section(t('section_response'), renderResponseContent(respBody), true);
 
@@ -1433,10 +1439,20 @@ function lineDiff(oldText, newText) {
   };
   addCtx(0, pre, ol);
   const oldEnd = ol.length - suf, newEnd = nl.length - suf;
-  for (let i = pre; i < oldEnd; i++) result.push({ type: 'del', text: ol[i] });
-  for (let i = pre; i < newEnd; i++) result.push({ type: 'add', text: nl[i] });
+  const dels = [], adds = [];
+  for (let i = pre; i < oldEnd; i++) dels.push(ol[i]);
+  for (let i = pre; i < newEnd; i++) adds.push(nl[i]);
+  const paired = Math.min(dels.length, adds.length);
+  for (let i = 0; i < paired; i++) result.push({ type: 'change', oldText: dels[i], newText: adds[i] });
+  for (let i = paired; i < dels.length; i++) result.push({ type: 'del', text: dels[i] });
+  for (let i = paired; i < adds.length; i++) result.push({ type: 'add', text: adds[i] });
   addCtx(ol.length - suf, ol.length, ol);
   return result;
+}
+
+function charHighlight(text, hiStart, hiEnd, hiClass) {
+  if (hiStart >= hiEnd || hiStart >= text.length) return esc(text);
+  return esc(text.substring(0, hiStart)) + `<span class="${hiClass}">${esc(text.substring(hiStart, hiEnd))}</span>` + esc(text.substring(hiEnd));
 }
 
 function renderLineDiff(oldText, newText) {
@@ -1444,6 +1460,16 @@ function renderLineDiff(oldText, newText) {
   let html = '<div class="sys-diff-view">';
   for (const ln of lines) {
     if (ln.type === 'fold') { html += `<div class="sys-diff-fold">... ${ln.count} lines ...</div>`; continue; }
+    if (ln.type === 'change') {
+      const o = ln.oldText, n = ln.newText;
+      let cp = 0;
+      while (cp < o.length && cp < n.length && o[cp] === n[cp]) cp++;
+      let cs = 0;
+      while (cs < o.length - cp && cs < n.length - cp && o[o.length - 1 - cs] === n[n.length - 1 - cs]) cs++;
+      html += `<div class="sys-diff-del"><span class="sys-diff-prefix">-</span>${charHighlight(o, cp, o.length - cs, 'sys-diff-del-hi')}</div>`;
+      html += `<div class="sys-diff-add"><span class="sys-diff-prefix">+</span>${charHighlight(n, cp, n.length - cs, 'sys-diff-add-hi')}</div>`;
+      continue;
+    }
     const cls = ln.type === 'del' ? 'sys-diff-del' : ln.type === 'add' ? 'sys-diff-add' : 'sys-diff-ctx';
     const prefix = ln.type === 'del' ? '-' : ln.type === 'add' ? '+' : ' ';
     html += `<div class="${cls}"><span class="sys-diff-prefix">${prefix}</span>${esc(ln.text)}</div>`;
