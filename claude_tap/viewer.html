@@ -345,8 +345,16 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   border-radius: 14px 14px 0 0;
 }
 .diff-header .diff-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.diff-nav { margin-left: auto; display: flex; align-items: center; gap: 4px; margin-right: 12px; }
+.diff-nav-btn {
+  background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 14px; color: var(--text-secondary); cursor: pointer;
+  padding: 2px 8px; line-height: 1.2;
+}
+.diff-nav-btn:hover { background: var(--bg-active); color: var(--text); }
+.diff-nav-pos { font-size: 11px; color: var(--text-tertiary); min-width: 30px; text-align: center; font-variant-numeric: tabular-nums; }
 .diff-header .diff-close {
-  margin-left: auto; background: none; border: none;
+  background: none; border: none;
   font-size: 18px; color: var(--text-tertiary); cursor: pointer;
   padding: 4px 10px; border-radius: var(--radius-sm); line-height: 1;
 }
@@ -1250,6 +1258,11 @@ function showDiff(btn) {
   overlay.innerHTML = `<div class="diff-modal">
     <div class="diff-header">
       <span class="diff-title">${t('turn')} ${filtered[prevIdx].turn || '?'} &rarr; ${t('turn')} ${filtered[activeIdx].turn || '?'}</span>
+      <span class="diff-nav">
+        <button class="diff-nav-btn" data-dir="-1" title="Previous change">&uarr;</button>
+        <span class="diff-nav-pos"></span>
+        <button class="diff-nav-btn" data-dir="1" title="Next change">&darr;</button>
+      </span>
       <button class="diff-close">&#10005;</button>
     </div>
     <div class="diff-body">${html}</div>
@@ -1257,13 +1270,31 @@ function showDiff(btn) {
   overlay.querySelector('.diff-close').onclick = () => overlay.remove();
   overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
   document.body.appendChild(overlay);
-  const escHandler = e => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); } };
+  // Diff change navigation
+  const body = overlay.querySelector('.diff-body');
+  const markers = body.querySelectorAll('.diff-modified-msg, .diff-new-msg, .diff-removed-msg, .diff-section-body .sys-diff-del, .diff-side-by-side');
+  let navIdx = -1;
+  const posEl = overlay.querySelector('.diff-nav-pos');
+  function updatePos() { posEl.textContent = markers.length > 0 ? `${navIdx + 1}/${markers.length}` : '0/0'; }
+  function navTo(dir) {
+    if (markers.length === 0) return;
+    navIdx = Math.max(0, Math.min(markers.length - 1, navIdx + dir));
+    markers[navIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    updatePos();
+  }
+  updatePos();
+  overlay.querySelectorAll('.diff-nav-btn').forEach(b => b.onclick = () => navTo(parseInt(b.dataset.dir)));
+  const escHandler = e => {
+    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); }
+    if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); navTo(1); }
+    if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); navTo(-1); }
+  };
   document.addEventListener('keydown', escHandler);
 }
 
 function msgContentEqual(a, b) {
-  // Compare by role + content only, ignore cache_control and other metadata
-  return a.role === b.role && JSON.stringify(a.content) === JSON.stringify(b.content);
+  // Compare by role + text representation, ignoring metadata like cache_control
+  return a.role === b.role && msgToText(a) === msgToText(b);
 }
 
 function msgToText(m) {
