@@ -38,7 +38,7 @@ uv sync
 claude-tap
 
 # Or with arguments passed to Claude Code
-claude-tap -- --model claude-sonnet-4-5-20250929
+claude-tap -- --model claude-opus-4-6
 
 # Or run as a Python module
 uv run python -m claude_tap
@@ -77,6 +77,22 @@ claude-tap --no-launch -p 8080
 # In another terminal:
 ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 ```
+
+## Screenshots
+
+### Light Mode
+![Light Mode](docs/viewer-light.png)
+
+### Dark Mode
+![Dark Mode](docs/viewer-dark.png)
+
+### Structural Diff
+Compare consecutive API requests to see exactly what changed — messages added/removed, system prompt diffs, parameter changes:
+
+![Structural Diff](docs/diff-modal.png)
+
+### i18n (Chinese)
+![Chinese i18n](docs/viewer-zh.png)
 
 ## HTML Viewer Features
 
