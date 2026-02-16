@@ -297,7 +297,7 @@ def _run_test():
 
     # ── Terminal output is clean ──
     assert "Trace summary" in proc.stdout
-    assert "Recorded 2 API calls" in proc.stdout
+    assert "API calls: 2" in proc.stdout
     assert "[Turn" not in proc.stdout, "Proxy logs leaked to stdout!"
     print("  ✅ Terminal output: clean")
 
@@ -521,7 +521,7 @@ def test_upstream_error():
 
         # The proxy should still produce summary output
         assert "Trace summary" in proc.stdout
-        assert "Recorded 1 API calls" in proc.stdout
+        assert "API calls: 1" in proc.stdout
         print("  OK: proxy summary output present")
 
         print("\n  test_upstream_error PASSED")
@@ -807,7 +807,7 @@ def test_large_payload():
         print(f"  OK: upstream received full payload ({reported_len} chars)")
 
         assert "Trace summary" in proc.stdout
-        assert "Recorded 1 API calls" in proc.stdout
+        assert "API calls: 1" in proc.stdout
         print("  OK: summary present")
 
         # Verify the JSONL trace file is large (should contain the 100KB+ prompt)
@@ -977,7 +977,7 @@ def test_concurrent_requests():
         print("  OK: all request IDs are unique")
 
         assert "Trace summary" in proc.stdout
-        assert "Recorded 5 API calls" in proc.stdout
+        assert "API calls: 5" in proc.stdout
         print("  OK: summary present")
 
         print("\n  test_concurrent_requests PASSED")
@@ -1434,3 +1434,63 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("  ALL TESTS PASSED")
     print("=" * 60)
+
+
+## ---------------------------------------------------------------------------
+## Test: cost calculation
+## ---------------------------------------------------------------------------
+
+
+def test_cost_calculation():
+    """Test that cost calculation works correctly for different models."""
+    from claude_tap import _calculate_cost, _get_model_pricing
+
+    print("\n  test_cost_calculation")
+
+    # Test pricing lookup
+    opus_pricing = _get_model_pricing("claude-opus-4-6")
+    assert opus_pricing["input"] == 15.0, f"Expected 15.0, got {opus_pricing['input']}"
+    print("  OK: opus pricing lookup")
+
+    sonnet_pricing = _get_model_pricing("claude-sonnet-4-5-20250929")
+    assert sonnet_pricing["input"] == 3.0, f"Expected 3.0, got {sonnet_pricing['input']}"
+    print("  OK: sonnet pricing lookup (with date suffix)")
+
+    haiku_pricing = _get_model_pricing("claude-haiku-4-5-20251001")
+    assert haiku_pricing["input"] == 0.8, f"Expected 0.8, got {haiku_pricing['input']}"
+    print("  OK: haiku pricing lookup")
+
+    # Unknown model should fall back to sonnet
+    unknown_pricing = _get_model_pricing("some-unknown-model")
+    assert unknown_pricing["input"] == 3.0, f"Expected sonnet fallback, got {unknown_pricing['input']}"
+    print("  OK: unknown model falls back to sonnet")
+
+    # Test cost calculation
+    # 1M input tokens at $15/1M = $15
+    cost = _calculate_cost("claude-opus-4-6", input_tokens=1_000_000, output_tokens=0)
+    assert abs(cost - 15.0) < 0.001, f"Expected $15.0, got ${cost}"
+    print("  OK: opus input cost calculation")
+
+    # 1M output tokens at $75/1M = $75
+    cost = _calculate_cost("claude-opus-4-6", input_tokens=0, output_tokens=1_000_000)
+    assert abs(cost - 75.0) < 0.001, f"Expected $75.0, got ${cost}"
+    print("  OK: opus output cost calculation")
+
+    # Cache read: 1M tokens at $1.5/1M = $1.5
+    cost = _calculate_cost("claude-opus-4-6", input_tokens=0, output_tokens=0, cache_read_tokens=1_000_000)
+    assert abs(cost - 1.5) < 0.001, f"Expected $1.5, got ${cost}"
+    print("  OK: cache read cost calculation")
+
+    # Combined: 10K input + 1K output + 100K cache_read for haiku
+    # = (10000 * 0.8 + 1000 * 4.0 + 100000 * 0.08) / 1_000_000
+    # = (8000 + 4000 + 8000) / 1_000_000 = 0.02
+    cost = _calculate_cost(
+        "claude-haiku-4-5",
+        input_tokens=10_000,
+        output_tokens=1_000,
+        cache_read_tokens=100_000,
+    )
+    assert abs(cost - 0.02) < 0.001, f"Expected $0.02, got ${cost}"
+    print("  OK: combined cost calculation for haiku")
+
+    print("\n  test_cost_calculation PASSED")

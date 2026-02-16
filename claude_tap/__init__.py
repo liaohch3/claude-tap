@@ -17,6 +17,9 @@ __all__ = [
     "SSEReassembler",
     "TraceWriter",
     "filter_headers",
+    "MODEL_PRICING",
+    "_get_model_pricing",
+    "_calculate_cost",
 ]
 
 import argparse
@@ -109,22 +112,120 @@ class SSEReassembler:
 
 
 # ---------------------------------------------------------------------------
-# TraceWriter – async JSONL writer
+# ---------------------------------------------------------------------------
+# Pricing (USD per 1M tokens) - as of 2025
+# ---------------------------------------------------------------------------
+
+MODEL_PRICING: dict[str, dict[str, float]] = {
+    # Claude 4.x models
+    "claude-opus-4": {"input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75},
+    "claude-sonnet-4": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75},
+    "claude-haiku-4": {"input": 0.8, "output": 4.0, "cache_read": 0.08, "cache_write": 1.0},
+    # Aliases
+    "claude-opus-4-5": {"input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75},
+    "claude-opus-4-6": {"input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75},
+    "claude-sonnet-4-5": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75},
+    "claude-haiku-4-5": {"input": 0.8, "output": 4.0, "cache_read": 0.08, "cache_write": 1.0},
+}
+
+
+def _get_model_pricing(model: str) -> dict[str, float]:
+    """Get pricing for a model, falling back to sonnet pricing if unknown."""
+    # Normalize model name (remove date suffixes like -20250514)
+    base_model = model.rsplit("-", 1)[0] if model and "-20" in model else model
+    for key in MODEL_PRICING:
+        if key in (base_model or ""):
+            return MODEL_PRICING[key]
+    # Default to sonnet pricing
+    return MODEL_PRICING["claude-sonnet-4"]
+
+
+def _calculate_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_create_tokens: int = 0,
+) -> float:
+    """Calculate cost in USD for a single API call."""
+    pricing = _get_model_pricing(model)
+    cost = (
+        (input_tokens * pricing["input"] / 1_000_000)
+        + (output_tokens * pricing["output"] / 1_000_000)
+        + (cache_read_tokens * pricing["cache_read"] / 1_000_000)
+        + (cache_create_tokens * pricing["cache_write"] / 1_000_000)
+    )
+    return cost
+
+
+# ---------------------------------------------------------------------------
+# TraceWriter – async JSONL writer with stats
 # ---------------------------------------------------------------------------
 
 
 class TraceWriter:
+    """Writes trace records to a JSONL file and accumulates statistics."""
+
     def __init__(self, path: Path):
         self.path = path
         self._lock = asyncio.Lock()
         self.count = 0
+        # Token statistics
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cache_read_tokens = 0
+        self.total_cache_create_tokens = 0
+        self.total_cost = 0.0
+        self.models_used: dict[str, int] = {}
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    async def write(self, record: dict):
+    async def write(self, record: dict) -> None:
+        """Write a record and update statistics."""
         async with self._lock:
             with open(self.path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
             self.count += 1
+            self._update_stats(record)
+
+    def _update_stats(self, record: dict) -> None:
+        """Extract token usage from record and update totals."""
+        # Get model from request body
+        req_body = record.get("request", {}).get("body", {})
+        model = req_body.get("model", "unknown")
+
+        # Track model usage
+        self.models_used[model] = self.models_used.get(model, 0) + 1
+
+        # Get usage from response body (works for both streaming and non-streaming)
+        resp_body = record.get("response", {}).get("body", {})
+        usage = resp_body.get("usage", {})
+
+        # For streaming responses, usage might be in the reconstructed message
+        if not usage and isinstance(resp_body, dict):
+            usage = resp_body
+
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+        cache_create = usage.get("cache_creation_input_tokens", 0)
+
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.total_cache_read_tokens += cache_read
+        self.total_cache_create_tokens += cache_create
+        self.total_cost += _calculate_cost(model, input_tokens, output_tokens, cache_read, cache_create)
+
+    def get_summary(self) -> dict:
+        """Return a summary of the trace statistics."""
+        return {
+            "api_calls": self.count,
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
+            "cache_read_tokens": self.total_cache_read_tokens,
+            "cache_create_tokens": self.total_cache_create_tokens,
+            "total_cost_usd": round(self.total_cost, 4),
+            "models_used": self.models_used,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -492,8 +593,26 @@ async def async_main(args: argparse.Namespace):
     html_path = trace_path.with_suffix(".html")
     _generate_html_viewer(trace_path, html_path)
 
+    # Print summary with cost estimation
+    stats = writer.get_summary()
     print("\n📊 Trace summary:")
-    print(f"   Recorded {writer.count} API calls")
+    print(f"   API calls: {stats['api_calls']}")
+
+    # Token breakdown
+    total_tokens = stats["input_tokens"] + stats["output_tokens"]
+    if total_tokens > 0:
+        print(f"   Tokens: {stats['input_tokens']:,} in / {stats['output_tokens']:,} out", end="")
+        if stats["cache_read_tokens"] > 0:
+            print(f" / {stats['cache_read_tokens']:,} cache_read", end="")
+        if stats["cache_create_tokens"] > 0:
+            print(f" / {stats['cache_create_tokens']:,} cache_write", end="")
+        print()
+
+        # Cost estimation
+        if stats["total_cost_usd"] > 0:
+            print(f"   Est. cost: ${stats['total_cost_usd']:.4f}")
+
+    # Output files
     print(f"   Trace: {trace_path}")
     print(f"   Log:   {log_path}")
     print(f"   View:  {html_path}")
