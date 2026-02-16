@@ -74,9 +74,11 @@ open .traces/trace_*.html
 ## CLI Options
 
 ```
-usage: claude-tap [--tap-*] [CLAUDE_ARGS...]
+usage: claude-tap [-h] [-v] [--tap-*] [CLAUDE_ARGS...]
 
 All flags are forwarded to claude, except these tap-specific ones:
+  -h, --help             Show help message and exit
+  -v, --version          Show version number and exit
   --tap-output-dir DIR   Trace output directory (default: ./.traces)
   --tap-port PORT        Proxy port (default: 0 = auto-assign)
   --tap-target URL       Upstream API URL (default: https://api.anthropic.com)

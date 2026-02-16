@@ -71,3 +71,16 @@ markers = [
     "integration: marks tests as integration tests",
 ]
 timeout = 60
+
+[tool.coverage.run]
+source = ["claude_tap"]
+branch = true
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+show_missing = true

@@ -1,7 +1,23 @@
 #!/usr/bin/env python3
-"""claude-tap: Reverse proxy to trace Claude Code API requests."""
+"""claude-tap: Reverse proxy to trace Claude Code API requests.
+
+A CLI tool that wraps Claude Code with a local reverse proxy to intercept
+and record all API requests. Useful for studying Claude Code's Context
+Engineering.
+"""
+
+from __future__ import annotations
 
 __version__ = "0.1.3"
+__all__ = [
+    "__version__",
+    "main_entry",
+    "parse_args",
+    "async_main",
+    "SSEReassembler",
+    "TraceWriter",
+    "filter_headers",
+]
 
 import argparse
 import asyncio
@@ -129,8 +145,9 @@ HOP_BY_HOP = frozenset(
 )
 
 
-def filter_headers(headers, *, redact_keys=False):
-    out = {}
+def filter_headers(headers: dict[str, str], *, redact_keys: bool = False) -> dict[str, str]:
+    """Filter hop-by-hop headers and optionally redact sensitive values."""
+    out: dict[str, str] = {}
     for k, v in headers.items():
         if k.lower() in HOP_BY_HOP:
             continue
@@ -323,19 +340,20 @@ async def _handle_non_streaming(
 
 
 def _build_record(
-    req_id,
-    turn,
-    duration_ms,
-    method,
-    path_qs,
-    req_headers,
-    req_body,
-    status,
-    resp_headers,
-    resp_body,
-    sse_events=None,
-):
-    record = {
+    req_id: str,
+    turn: int,
+    duration_ms: int,
+    method: str,
+    path_qs: str,
+    req_headers: dict,
+    req_body: dict | None,
+    status: int,
+    resp_headers: dict,
+    resp_body: dict | None,
+    sse_events: list[dict] | None = None,
+) -> dict:
+    """Build a trace record for a single API call."""
+    record: dict = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "request_id": req_id,
         "turn": turn,
@@ -483,7 +501,7 @@ async def async_main(args: argparse.Namespace):
     return exit_code
 
 
-def _generate_html_viewer(trace_path: Path, html_path: Path):
+def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
     """Read viewer.html template, embed JSONL data, write self-contained HTML."""
     template = Path(__file__).parent / "viewer.html"
     if not template.exists():
@@ -511,7 +529,7 @@ def _generate_html_viewer(trace_path: Path, html_path: Path):
     html_path.write_text(html, encoding="utf-8")
 
 
-def parse_args(argv=None):
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse argv, extracting ``--tap-*`` flags for ourselves and forwarding
     everything else to ``claude``.
     """
@@ -542,7 +560,8 @@ def parse_args(argv=None):
     return args
 
 
-def main_entry():
+def main_entry() -> None:
+    """Entry point for the claude-tap CLI."""
     args = parse_args()
     try:
         code = asyncio.run(async_main(args))
