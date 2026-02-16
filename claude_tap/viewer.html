@@ -838,7 +838,89 @@ function initLang() {
   $('#lang-select').value = currentLang;
   updateStaticTexts();
 }
-if (typeof EMBEDDED_TRACE_DATA !== 'undefined' && EMBEDDED_TRACE_DATA.length) {
+/* ─── Live Mode SSE Support ─── */
+let liveEventSource = null;
+let liveConnected = false;
+
+function initLiveMode() {
+  const statusEl = document.createElement('div');
+  statusEl.id = 'live-status';
+  statusEl.style.cssText = 'position:fixed;top:8px;right:140px;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:500;z-index:1000;display:flex;align-items:center;gap:6px;';
+  document.body.appendChild(statusEl);
+  updateLiveStatus('connecting');
+
+  liveEventSource = new EventSource('/events');
+
+  liveEventSource.onopen = () => {
+    liveConnected = true;
+    updateLiveStatus('connected');
+  };
+
+  liveEventSource.onmessage = (event) => {
+    try {
+      const record = JSON.parse(event.data);
+      entries.push(record);
+      // Re-render if app is already initialized
+      if ($('#sidebar-wrap').style.display !== 'none') {
+        const currentIdx = activeIdx;
+        renderApp();
+        // Restore selection or select new entry
+        if (currentIdx >= 0) selectEntry(currentIdx);
+      } else {
+        // First entry, initialize the app
+        renderApp();
+      }
+      updateLiveStatus('connected', entries.length);
+    } catch (e) {
+      console.error('Failed to parse SSE data:', e);
+    }
+  };
+
+  liveEventSource.onerror = () => {
+    liveConnected = false;
+    updateLiveStatus('disconnected');
+    // Attempt reconnect after 3 seconds
+    setTimeout(() => {
+      if (!liveConnected && liveEventSource.readyState === EventSource.CLOSED) {
+        initLiveMode();
+      }
+    }, 3000);
+  };
+}
+
+function updateLiveStatus(status, count) {
+  const el = $('#live-status');
+  if (!el) return;
+  const colors = {
+    connecting: { bg: 'var(--amber-bg)', color: 'var(--amber)', dot: 'var(--amber)' },
+    connected: { bg: 'var(--green-bg)', color: 'var(--green)', dot: 'var(--green)' },
+    disconnected: { bg: 'var(--red-bg)', color: 'var(--red)', dot: 'var(--red)' }
+  };
+  const c = colors[status] || colors.connecting;
+  const labels = { connecting: 'Connecting...', connected: 'Live', disconnected: 'Disconnected' };
+  const countText = count !== undefined ? ` (${count})` : '';
+  el.style.background = c.bg;
+  el.style.color = c.color;
+  el.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:${c.dot};${status === 'connected' ? 'animation:pulse 2s infinite;' : ''}"></span>${labels[status]}${countText}`;
+}
+
+// Add pulse animation for live indicator
+const pulseStyle = document.createElement('style');
+pulseStyle.textContent = '@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }';
+document.head.appendChild(pulseStyle);
+
+if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
+  entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? EMBEDDED_TRACE_DATA : [];
+  document.addEventListener('DOMContentLoaded', () => {
+    initTheme(); initLang();
+    initLiveMode();
+    if (entries.length) renderApp();
+    else {
+      // Show waiting state
+      $('#drop-zone').innerHTML = '<div style="text-align:center;padding:60px 20px;"><div style="font-size:48px;margin-bottom:16px;">📡</div><h2 style="margin-bottom:8px;">Waiting for API calls...</h2><p style="color:var(--text-secondary);">Start using Claude Code to see traces here in real-time</p></div>';
+    }
+  });
+} else if (typeof EMBEDDED_TRACE_DATA !== 'undefined' && EMBEDDED_TRACE_DATA.length) {
   entries = EMBEDDED_TRACE_DATA;
   document.addEventListener('DOMContentLoaded', () => { initTheme(); initLang(); renderApp(); });
 } else {

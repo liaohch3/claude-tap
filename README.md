@@ -5,6 +5,8 @@
 [![Python version](https://img.shields.io/pypi/pyversions/claude-tap.svg)](https://pypi.org/project/claude-tap/)
 [![License](https://img.shields.io/github/license/liaohch3/claude-tap.svg)](https://github.com/liaohch3/claude-tap/blob/main/LICENSE)
 
+[中文文档](README_zh.md)
+
 A CLI tool that wraps [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with a local reverse proxy to intercept and record all API requests. Useful for studying Claude Code's **Context Engineering** — how it constructs system prompts, manages conversation history, selects tools, and optimizes token usage across turns.
 
 ## How It Works
@@ -84,9 +86,19 @@ All flags are forwarded to claude, except these tap-specific ones:
   --tap-target URL       Upstream API URL (default: https://api.anthropic.com)
   --tap-no-launch        Only start the proxy, don't launch Claude Code
   --tap-open             Open HTML viewer in browser after exit
+  --tap-live             Start real-time viewer (auto-opens browser)
+  --tap-live-port PORT   Port for live viewer server (default: auto)
 ```
 
 For example, `claude-tap -c` continues the last conversation (the `-c` is forwarded to claude).
+
+**Live Mode** — watch API calls in real-time:
+
+```bash
+claude-tap --tap-live
+```
+
+Opens a browser with a live-updating viewer. See requests appear as Claude makes them!
 
 **Proxy-only mode** (useful for custom setups):
 
@@ -147,13 +159,13 @@ Each line in the `.jsonl` file is a JSON object:
     "method": "POST",
     "path": "/v1/messages",
     "headers": { "x-api-key": "sk-ant-api03-..." },
-    "body": { "model": "...", "system": "...", "messages": [...], "tools": [...] }
+    "body": { "model": "...", "system": "...", "messages": ["..."], "tools": ["..."] }
   },
   "response": {
     "status": 200,
-    "headers": { ... },
-    "body": { "id": "msg_...", "content": [...], "usage": { ... } },
-    "sse_events": [ { "event": "message_start", "data": { ... } }, ... ]
+    "headers": { "..." : "..." },
+    "body": { "id": "msg_...", "content": ["..."], "usage": { "..." : "..." } },
+    "sse_events": [ { "event": "message_start", "data": { "..." : "..." } } ]
   }
 }
 ```
@@ -168,10 +180,11 @@ claude-tap/
 │   ├── __init__.py       # Core CLI: reverse proxy + Claude launcher
 │   ├── __main__.py       # python -m claude_tap entry point
 │   └── viewer.html       # Self-contained HTML viewer template
+├── tests/
+│   └── test_e2e.py       # End-to-end + unit tests (10 test cases)
 ├── .github/workflows/
 │   ├── ci.yml            # Lint + test on push/PR
 │   └── publish.yml       # PyPI publish on tag
-├── test_e2e.py           # End-to-end tests (5 test scenarios)
 ├── pyproject.toml        # Project metadata & dependencies
 ├── LICENSE               # MIT
 └── .traces/              # Output directory (auto-created)
@@ -182,7 +195,8 @@ claude-tap/
 | Component | Description |
 |-----------|-------------|
 | `SSEReassembler` | Parses raw SSE byte stream and uses Anthropic SDK's `accumulate_event()` to reconstruct the full Message object |
-| `TraceWriter` | Async-safe JSONL writer with `asyncio.Lock` |
+| `TraceWriter` | Async-safe JSONL writer with `asyncio.Lock`, tracks token statistics |
+| `LiveViewerServer` | HTTP server for real-time trace viewing via SSE |
 | `proxy_handler` | aiohttp catch-all route that forwards requests and records responses |
 | `run_claude` | Spawns Claude Code subprocess with correct env vars, forwards SIGINT |
 
@@ -196,11 +210,14 @@ claude-tap/
 ## Testing
 
 ```bash
-# Run all E2E tests (uses fake Claude + fake upstream, no real API calls)
-uv run python test_e2e.py
+# Run all tests
+uv run pytest
+
+# Run with verbose output
+uv run pytest -v
 ```
 
-Tests cover: basic streaming/non-streaming, upstream errors (5xx), malformed SSE, large payloads (100KB+), and concurrent requests.
+Tests cover: basic streaming/non-streaming, upstream errors (5xx), malformed SSE, large payloads (100KB+), concurrent requests, argument parsing, header filtering, SSE reassembly edge cases, upstream unreachable, and live viewer server.
 
 ## License
 

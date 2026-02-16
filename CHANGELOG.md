@@ -8,8 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`--tap-live` flag**: Real-time trace viewer with SSE-based live updates
+  - Auto-opens browser with live viewer on startup
+  - Shows connection status (connecting/connected/disconnected)
+  - Updates viewer in real-time as API calls are made
+  - Includes waiting state UI before first API call
+- **`--tap-live-port` flag**: Specify port for live viewer server (default: auto)
 - **`--tap-open` flag**: Automatically open HTML viewer in browser after exit
 - **Token statistics**: Summary now shows detailed token breakdown (input/output/cache_read/cache_write)
+- `LiveViewerServer` class for SSE-based real-time viewing
 - Type annotations for all public functions
 - `__all__` export declaration
 - Coverage configuration in pyproject.toml
