@@ -9,7 +9,7 @@
 
 拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 的所有 API 流量。看清它如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
 
-![亮色模式](docs/viewer-light.png)
+![亮色模式](docs/viewer-zh.png)
 
 <details>
 <summary>暗色模式 / Diff 视图</summary>
