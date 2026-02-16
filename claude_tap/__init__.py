@@ -264,8 +264,15 @@ class LiveViewerServer:
             return web.Response(status=404, text="viewer.html not found")
 
         html = template.read_text(encoding="utf-8")
-        # Inject live mode flag before the main script
-        live_js = "const LIVE_MODE = true;\nconst EMBEDDED_TRACE_DATA = [];\n"
+        # Inject live mode flag and trace path before the main script
+        jsonl_path_js = json.dumps(str(self.trace_path.absolute()))
+        html_path = self.trace_path.with_suffix(".html")
+        html_path_js = json.dumps(str(html_path.absolute()))
+        live_js = (
+            "const LIVE_MODE = true;\nconst EMBEDDED_TRACE_DATA = [];\n"
+            f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
+            f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
+        )
         html = html.replace(
             "<script>\nconst $ = s =>",
             f"<script>\n{live_js}</script>\n<script>\nconst $ = s =>",
@@ -740,7 +747,13 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
                     records.append(line)
 
     # Build embedded data script — each line is already valid JSON
-    data_js = "const EMBEDDED_TRACE_DATA = [\n" + ",\n".join(records) + "\n];\n"
+    jsonl_path_js = json.dumps(str(trace_path.absolute()))
+    html_path_js = json.dumps(str(html_path.absolute()))
+    data_js = (
+        "const EMBEDDED_TRACE_DATA = [\n" + ",\n".join(records) + "\n];\n"
+        f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
+        f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
+    )
 
     html = template.read_text(encoding="utf-8")
     # Inject data script before the main <script> tag
