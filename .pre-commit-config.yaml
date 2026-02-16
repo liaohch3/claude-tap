@@ -8,9 +8,10 @@ repos:
 
   - repo: local
     hooks:
-      - id: tests
-        name: Run tests
-        entry: uv run python test_e2e.py
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -x -q
         language: system
         pass_filenames: false
         always_run: true
+        stages: [pre-commit]

@@ -21,6 +21,9 @@ jobs:
       - name: Lint with ruff
         run: uv run --with ruff ruff check .
 
+      - name: Check formatting
+        run: uv run --with ruff ruff format --check .
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -35,5 +38,8 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
+      - name: Install dependencies
+        run: uv sync --extra dev
+
       - name: Run tests
-        run: uv run python test_e2e.py
+        run: uv run pytest -v --timeout=120
