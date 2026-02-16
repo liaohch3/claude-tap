@@ -94,23 +94,41 @@ def run_fake_upstream_in_thread():
             )
             await resp.prepare(request)
             events = [
-                ("message_start", {"type": "message_start", "message": {
-                    "id": "msg_stream_1", "type": "message", "role": "assistant",
-                    "content": [], "model": req.get("model", "test"),
-                    "usage": {"input_tokens": 20, "output_tokens": 0}
-                }}),
-                ("content_block_start", {"type": "content_block_start", "index": 0,
-                    "content_block": {"type": "text", "text": ""}}),
-                ("content_block_delta", {"type": "content_block_delta", "index": 0,
-                    "delta": {"type": "text_delta", "text": "1, "}}),
-                ("content_block_delta", {"type": "content_block_delta", "index": 0,
-                    "delta": {"type": "text_delta", "text": "2, "}}),
-                ("content_block_delta", {"type": "content_block_delta", "index": 0,
-                    "delta": {"type": "text_delta", "text": "3"}}),
+                (
+                    "message_start",
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_stream_1",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [],
+                            "model": req.get("model", "test"),
+                            "usage": {"input_tokens": 20, "output_tokens": 0},
+                        },
+                    },
+                ),
+                (
+                    "content_block_start",
+                    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                ),
+                (
+                    "content_block_delta",
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "1, "}},
+                ),
+                (
+                    "content_block_delta",
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "2, "}},
+                ),
+                (
+                    "content_block_delta",
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "3"}},
+                ),
                 ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-                ("message_delta", {"type": "message_delta",
-                    "delta": {"stop_reason": "end_turn"},
-                    "usage": {"output_tokens": 8}}),
+                (
+                    "message_delta",
+                    {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 8}},
+                ),
                 ("message_stop", {"type": "message_stop"}),
             ]
             for evt, data in events:
@@ -118,16 +136,21 @@ def run_fake_upstream_in_thread():
             await resp.write_eof()
             return resp
         else:
-            payload = json.dumps({
-                "id": "msg_nonstream_1", "type": "message", "role": "assistant",
-                "content": [{"type": "text", "text": "Hello!"}],
-                "model": req.get("model", "test"),
-                "usage": {"input_tokens": 15, "output_tokens": 3},
-                "stop_reason": "end_turn",
-            }).encode()
+            payload = json.dumps(
+                {
+                    "id": "msg_nonstream_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hello!"}],
+                    "model": req.get("model", "test"),
+                    "usage": {"input_tokens": 15, "output_tokens": 3},
+                    "stop_reason": "end_turn",
+                }
+            ).encode()
             compressed = gzip.compress(payload)
             return web.Response(
-                status=200, body=compressed,
+                status=200,
+                body=compressed,
                 headers={"Content-Type": "application/json", "Content-Encoding": "gzip"},
             )
 
@@ -200,9 +223,13 @@ def _run_test():
     try:
         proc = subprocess.run(
             [
-                sys.executable, "-m", "claude_tap",
-                "--tap-output-dir", trace_dir,
-                "--tap-target", f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                sys.executable,
+                "-m",
+                "claude_tap",
+                "--tap-output-dir",
+                trace_dir,
+                "--tap-target",
+                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
             ],
             cwd=str(project_dir),
             env=env,
@@ -300,6 +327,7 @@ def _run_test():
 
 KEEP_DIR = None  # set by __main__ when --keep is passed
 
+
 def _cleanup(trace_dir, fake_bin_dir, test_name="test"):
     """Clean up temp dirs. When KEEP_DIR is set, copy trace output there first."""
     if KEEP_DIR:
@@ -313,6 +341,7 @@ def _cleanup(trace_dir, fake_bin_dir, test_name="test"):
 ## ---------------------------------------------------------------------------
 ## Helper: generic fake upstream starter (reusable across tests)
 ## ---------------------------------------------------------------------------
+
 
 def _start_fake_upstream(port, handler_fn):
     """Start a fake upstream server on `port` using `handler_fn` as the aiohttp handler.
@@ -370,9 +399,13 @@ def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout
 
     return subprocess.run(
         [
-            sys.executable, "-m", "claude_tap",
-            "--tap-output-dir", trace_dir,
-            "--tap-target", f"http://127.0.0.1:{upstream_port}",
+            sys.executable,
+            "-m",
+            "claude_tap",
+            "--tap-output-dir",
+            trace_dir,
+            "--tap-target",
+            f"http://127.0.0.1:{upstream_port}",
         ],
         cwd=str(project_dir),
         env=env,
@@ -438,12 +471,15 @@ def test_upstream_error():
 
     async def error_handler(request):
         await request.read()
-        error_payload = json.dumps({
-            "type": "error",
-            "error": {"type": "internal_server_error", "message": "Something went wrong"},
-        }).encode()
+        error_payload = json.dumps(
+            {
+                "type": "error",
+                "error": {"type": "internal_server_error", "message": "Something went wrong"},
+            }
+        ).encode()
         return web.Response(
-            status=500, body=error_payload,
+            status=500,
+            body=error_payload,
             headers={"Content-Type": "application/json"},
         )
 
@@ -554,18 +590,21 @@ def test_malformed_sse():
         valid_start = {
             "type": "message_start",
             "message": {
-                "id": "msg_malformed_1", "type": "message", "role": "assistant",
-                "content": [], "model": req.get("model", "test"),
+                "id": "msg_malformed_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": req.get("model", "test"),
                 "usage": {"input_tokens": 10, "output_tokens": 0},
             },
         }
         await resp.write(f"event: message_start\ndata: {json.dumps(valid_start)}\n\n".encode())
 
         # 2. Data line without a preceding event: line — should be ignored
-        await resp.write(b"data: {\"orphan\": true}\n\n")
+        await resp.write(b'data: {"orphan": true}\n\n')
 
         # 3. Event with truncated/invalid JSON
-        await resp.write(b"event: content_block_delta\ndata: {\"broken json\n\n")
+        await resp.write(b'event: content_block_delta\ndata: {"broken json\n\n')
 
         # 4. Random garbage line
         await resp.write(b"this is not SSE at all\n\n")
@@ -585,9 +624,7 @@ def test_malformed_sse():
         await resp.write(
             f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}, 'usage': {'output_tokens': 2}})}\n\n".encode()
         )
-        await resp.write(
-            f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode()
-        )
+        await resp.write(f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode())
 
         await resp.write_eof()
         return resp
@@ -707,16 +744,21 @@ def test_large_payload():
 
         # Verify we received the large system prompt
         system = req.get("system", "")
-        payload = json.dumps({
-            "id": "msg_large_1", "type": "message", "role": "assistant",
-            "content": [{"type": "text", "text": f"Received system prompt of {len(system)} chars"}],
-            "model": req.get("model", "test"),
-            "usage": {"input_tokens": 50000, "output_tokens": 10},
-            "stop_reason": "end_turn",
-        }).encode()
+        payload = json.dumps(
+            {
+                "id": "msg_large_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"Received system prompt of {len(system)} chars"}],
+                "model": req.get("model", "test"),
+                "usage": {"input_tokens": 50000, "output_tokens": 10},
+                "stop_reason": "end_turn",
+            }
+        ).encode()
         compressed = gzip.compress(payload)
         return web.Response(
-            status=200, body=compressed,
+            status=200,
+            body=compressed,
             headers={"Content-Type": "application/json", "Content-Encoding": "gzip"},
         )
 
@@ -865,16 +907,21 @@ def test_concurrent_requests():
         if isinstance(req.get("messages"), list) and req["messages"]:
             user_msg = req["messages"][0].get("content", "")
 
-        payload = json.dumps({
-            "id": f"msg_concurrent_{n}", "type": "message", "role": "assistant",
-            "content": [{"type": "text", "text": f"Reply to: {user_msg}"}],
-            "model": req.get("model", "test"),
-            "usage": {"input_tokens": 10, "output_tokens": 5},
-            "stop_reason": "end_turn",
-        }).encode()
+        payload = json.dumps(
+            {
+                "id": f"msg_concurrent_{n}",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"Reply to: {user_msg}"}],
+                "model": req.get("model", "test"),
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "stop_reason": "end_turn",
+            }
+        ).encode()
         compressed = gzip.compress(payload)
         return web.Response(
-            status=200, body=compressed,
+            status=200,
+            body=compressed,
             headers={"Content-Type": "application/json", "Content-Encoding": "gzip"},
         )
 
@@ -921,8 +968,7 @@ def test_concurrent_requests():
         for r in records:
             req_content = r["request"]["body"]["messages"][0]["content"]
             resp_text = r["response"]["body"]["content"][0]["text"]
-            assert req_content in resp_text, \
-                f"Response '{resp_text}' does not contain request content '{req_content}'"
+            assert req_content in resp_text, f"Response '{resp_text}' does not contain request content '{req_content}'"
         print("  OK: each response correctly matches its request")
 
         # All request IDs should be unique
@@ -947,6 +993,7 @@ def test_concurrent_requests():
 ## ---------------------------------------------------------------------------
 ## --preview: regenerate HTML from real .traces files and open
 ## ---------------------------------------------------------------------------
+
 
 def _cmd_preview():
     """Regenerate HTML viewer from existing .traces data using current viewer.html.
@@ -989,6 +1036,7 @@ def _cmd_preview():
 ## --dev: auto multi-turn via claude -p, then open HTML
 ## ---------------------------------------------------------------------------
 
+
 def _cmd_dev():
     """Start claude-tap proxy, run multi-turn prompts non-interactively, open HTML.
 
@@ -1020,7 +1068,9 @@ def _cmd_dev():
         [sys.executable, "-u", "-m", "claude_tap", "--tap-output-dir", str(traces_dir), "--tap-no-launch"],
         cwd=str(project_dir),
         env=proxy_env,
-        stdout=sp.PIPE, stderr=sp.STDOUT, text=True,
+        stdout=sp.PIPE,
+        stderr=sp.STDOUT,
+        text=True,
     )
 
     # Read proxy output to get the port
@@ -1045,9 +1095,9 @@ def _cmd_dev():
     try:
         for i, prompt in enumerate(prompts):
             turn = i + 1
-            print(f"\n{'='*50}")
-            print(f"Turn {turn}: {prompt[:70]}{'...' if len(prompt)>70 else ''}")
-            print('='*50)
+            print(f"\n{'=' * 50}")
+            print(f"Turn {turn}: {prompt[:70]}{'...' if len(prompt) > 70 else ''}")
+            print("=" * 50)
 
             cmd = ["claude", "-p", prompt]
             if i > 0:
@@ -1084,6 +1134,7 @@ def _cmd_dev():
 ## ---------------------------------------------------------------------------
 ## Test 6: test_parse_args — argument passthrough with --tap-* prefix
 ## ---------------------------------------------------------------------------
+
 
 def test_parse_args():
     """Test that --tap-* flags are consumed by claude-tap and everything else
@@ -1147,6 +1198,7 @@ def test_parse_args():
 ## Test 7: test_filter_headers — header redaction and hop-by-hop filtering
 ## ---------------------------------------------------------------------------
 
+
 def test_filter_headers():
     """Test filter_headers strips hop-by-hop headers and optionally redacts secrets."""
     from claude_tap import filter_headers
@@ -1191,17 +1243,26 @@ def test_filter_headers():
 ## Test 8: test_sse_reassembler — unit test SSE parsing edge cases
 ## ---------------------------------------------------------------------------
 
+
 def test_sse_reassembler():
     """Test SSEReassembler handles various edge cases correctly."""
     from claude_tap import SSEReassembler
 
     # Basic: valid events
     r = SSEReassembler()
-    r.feed_bytes(b'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n')
-    r.feed_bytes(b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n')
-    r.feed_bytes(b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}\n\n')
+    r.feed_bytes(
+        b'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n'
+    )
+    r.feed_bytes(
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
+    )
+    r.feed_bytes(
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}\n\n'
+    )
     r.feed_bytes(b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n')
-    r.feed_bytes(b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n')
+    r.feed_bytes(
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n'
+    )
     r.feed_bytes(b'event: message_stop\ndata: {"type":"message_stop"}\n\n')
     body = r.reconstruct()
     assert body is not None
@@ -1218,23 +1279,25 @@ def test_sse_reassembler():
 
     # Partial chunks (data split across feed_bytes calls)
     r3 = SSEReassembler()
-    r3.feed_bytes(b'event: message_st')
+    r3.feed_bytes(b"event: message_st")
     r3.feed_bytes(b'art\ndata: {"type":"mess')
-    r3.feed_bytes(b'age_start","message":{"id":"m2","type":"message","role":"assistant","content":[],"model":"t","usage":{"input_tokens":1,"output_tokens":0}}}\n\n')
+    r3.feed_bytes(
+        b'age_start","message":{"id":"m2","type":"message","role":"assistant","content":[],"model":"t","usage":{"input_tokens":1,"output_tokens":0}}}\n\n'
+    )
     assert len(r3.events) == 1
     assert r3.events[0]["event"] == "message_start"
     print("  OK: chunked data reassembly")
 
     # Invalid JSON in data — stored as string
     r4 = SSEReassembler()
-    r4.feed_bytes(b'event: bad_event\ndata: {broken json\n\n')
+    r4.feed_bytes(b"event: bad_event\ndata: {broken json\n\n")
     assert len(r4.events) == 1
     assert r4.events[0]["data"] == "{broken json"
     print("  OK: invalid JSON stored as string")
 
     # Empty stream
     r5 = SSEReassembler()
-    r5.feed_bytes(b'')
+    r5.feed_bytes(b"")
     assert len(r5.events) == 0
     assert r5.reconstruct() is None
     print("  OK: empty stream")
@@ -1293,9 +1356,13 @@ def test_upstream_unreachable():
     try:
         proc = subprocess.run(
             [
-                sys.executable, "-m", "claude_tap",
-                "--tap-output-dir", trace_dir,
-                "--tap-target", f"http://127.0.0.1:{FAKE_UPSTREAM_UNREACHABLE_PORT}",
+                sys.executable,
+                "-m",
+                "claude_tap",
+                "--tap-output-dir",
+                trace_dir,
+                "--tap-target",
+                f"http://127.0.0.1:{FAKE_UPSTREAM_UNREACHABLE_PORT}",
             ],
             cwd=str(project_dir),
             env=env,
@@ -1326,8 +1393,9 @@ def test_upstream_unreachable():
         log_files = list(Path(trace_dir).glob("*.log"))
         assert len(log_files) == 1
         log_content = log_files[0].read_text()
-        assert "upstream error" in log_content.lower() or "connect" in log_content.lower(), \
+        assert "upstream error" in log_content.lower() or "connect" in log_content.lower(), (
             f"Expected upstream error in log, got: {log_content[:200]}"
+        )
         print("  OK: upstream error logged")
 
         print("\n  test_upstream_unreachable PASSED")

@@ -36,6 +36,7 @@ _sse_event_adapter = TypeAdapter(RawMessageStreamEvent)
 # SSEReassembler – parse SSE bytes, use Anthropic SDK to rebuild Message
 # ---------------------------------------------------------------------------
 
+
 class SSEReassembler:
     """Parse raw SSE bytes and use the Anthropic SDK's accumulate_event()
     to reconstruct the full API response object."""
@@ -56,10 +57,10 @@ class SSEReassembler:
     def _feed_line(self, line: str):
         line = line.rstrip("\r")
         if line.startswith("event:"):
-            self._current_event = line[len("event:"):].strip()
+            self._current_event = line[len("event:") :].strip()
             self._current_data_lines = []
         elif line.startswith("data:"):
-            self._current_data_lines.append(line[len("data:"):].strip())
+            self._current_data_lines.append(line[len("data:") :].strip())
         elif line == "":
             if self._current_event is not None:
                 raw_data = "\n".join(self._current_data_lines)
@@ -79,7 +80,8 @@ class SSEReassembler:
         try:
             event = _sse_event_adapter.validate_python(data)
             self._snapshot = accumulate_event(
-                event=event, current_snapshot=self._snapshot,
+                event=event,
+                current_snapshot=self._snapshot,
             )
         except Exception:
             pass
@@ -93,6 +95,7 @@ class SSEReassembler:
 # ---------------------------------------------------------------------------
 # TraceWriter – async JSONL writer
 # ---------------------------------------------------------------------------
+
 
 class TraceWriter:
     def __init__(self, path: Path):
@@ -112,10 +115,18 @@ class TraceWriter:
 # Header helpers
 # ---------------------------------------------------------------------------
 
-HOP_BY_HOP = frozenset({
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailers", "transfer-encoding", "upgrade",
-})
+HOP_BY_HOP = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
 
 
 def filter_headers(headers, *, redact_keys=False):
@@ -133,6 +144,7 @@ def filter_headers(headers, *, redact_keys=False):
 # ---------------------------------------------------------------------------
 # Proxy handler
 # ---------------------------------------------------------------------------
+
 
 async def proxy_handler(request: web.Request) -> web.StreamResponse:
     ctx: dict = request.app["trace_ctx"]
@@ -187,7 +199,9 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         return web.Response(status=502, text=str(exc))
 
     if is_streaming and upstream_resp.status == 200:
-        resp_body = await _handle_streaming(request, upstream_resp, req_id, turn, t0, body, req_body, writer, log_prefix)
+        resp_body = await _handle_streaming(
+            request, upstream_resp, req_id, turn, t0, body, req_body, writer, log_prefix
+        )
         return resp_body
     else:
         return await _handle_non_streaming(request, upstream_resp, req_id, turn, t0, body, req_body, writer, log_prefix)
@@ -196,8 +210,13 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
 async def _handle_streaming(
     request: web.Request,
     upstream_resp: aiohttp.ClientResponse,
-    req_id: str, turn: int, t0: float,
-    raw_body: bytes, req_body, writer: TraceWriter, log_prefix: str,
+    req_id: str,
+    turn: int,
+    t0: float,
+    raw_body: bytes,
+    req_body,
+    writer: TraceWriter,
+    log_prefix: str,
 ) -> web.StreamResponse:
     resp = web.StreamResponse(
         status=upstream_resp.status,
@@ -227,12 +246,21 @@ async def _handle_streaming(
     out_tok = usage.get("output_tokens", 0)
     cache_read = usage.get("cache_read_input_tokens", 0)
     cache_create = usage.get("cache_creation_input_tokens", 0)
-    log.info(f"{log_prefix} ← 200 stream done ({duration_ms}ms, in={in_tok} out={out_tok} cache_read={cache_read} cache_create={cache_create})")
+    log.info(
+        f"{log_prefix} ← 200 stream done ({duration_ms}ms, in={in_tok} out={out_tok} cache_read={cache_read} cache_create={cache_create})"
+    )
 
     record = _build_record(
-        req_id, turn, duration_ms,
-        request.method, request.path_qs, request.headers, req_body,
-        upstream_resp.status, upstream_resp.headers, reconstructed,
+        req_id,
+        turn,
+        duration_ms,
+        request.method,
+        request.path_qs,
+        request.headers,
+        req_body,
+        upstream_resp.status,
+        upstream_resp.headers,
+        reconstructed,
         sse_events=reassembler.events,
     )
     await writer.write(record)
@@ -243,8 +271,13 @@ async def _handle_streaming(
 async def _handle_non_streaming(
     request: web.Request,
     upstream_resp: aiohttp.ClientResponse,
-    req_id: str, turn: int, t0: float,
-    raw_body: bytes, req_body, writer: TraceWriter, log_prefix: str,
+    req_id: str,
+    turn: int,
+    t0: float,
+    raw_body: bytes,
+    req_body,
+    writer: TraceWriter,
+    log_prefix: str,
 ) -> web.Response:
     resp_bytes = await upstream_resp.read()
     duration_ms = int((time.monotonic() - t0) * 1000)
@@ -269,9 +302,16 @@ async def _handle_non_streaming(
     log.info(f"{log_prefix} ← {upstream_resp.status} ({duration_ms}ms, {len(resp_bytes)} bytes)")
 
     record = _build_record(
-        req_id, turn, duration_ms,
-        request.method, request.path_qs, request.headers, req_body,
-        upstream_resp.status, upstream_resp.headers, resp_body,
+        req_id,
+        turn,
+        duration_ms,
+        request.method,
+        request.path_qs,
+        request.headers,
+        req_body,
+        upstream_resp.status,
+        upstream_resp.headers,
+        resp_body,
     )
     await writer.write(record)
 
@@ -283,9 +323,16 @@ async def _handle_non_streaming(
 
 
 def _build_record(
-    req_id, turn, duration_ms,
-    method, path_qs, req_headers, req_body,
-    status, resp_headers, resp_body,
+    req_id,
+    turn,
+    duration_ms,
+    method,
+    path_qs,
+    req_headers,
+    req_body,
+    status,
+    resp_headers,
+    resp_body,
     sse_events=None,
 ):
     record = {
@@ -313,6 +360,7 @@ def _build_record(
 # ---------------------------------------------------------------------------
 # Claude launcher
 # ---------------------------------------------------------------------------
+
 
 async def run_claude(port: int, extra_args: list[str]) -> int:
     if shutil.which("claude") is None:
@@ -362,6 +410,7 @@ async def run_claude(port: int, extra_args: list[str]) -> int:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 async def async_main(args: argparse.Namespace):
     output_dir = Path(args.output_dir)
@@ -472,18 +521,22 @@ def parse_args(argv=None):
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
         description="Trace Claude Code API requests via a local reverse proxy. "
-                    "All flags not listed below are forwarded to claude.",
+        "All flags not listed below are forwarded to claude.",
     )
-    tap_parser.add_argument("-v", "--version", action="version", 
-                            version=f"%(prog)s {__version__}")
-    tap_parser.add_argument("--tap-output-dir", default="./.traces", dest="output_dir",
-                            help="Trace output directory (default: ./.traces)")
-    tap_parser.add_argument("--tap-port", type=int, default=0, dest="port",
-                            help="Proxy port (default: 0 = auto)")
-    tap_parser.add_argument("--tap-target", default="https://api.anthropic.com", dest="target",
-                            help="Upstream API URL (default: https://api.anthropic.com)")
-    tap_parser.add_argument("--tap-no-launch", action="store_true", dest="no_launch",
-                            help="Only start the proxy, don't launch Claude")
+    tap_parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
+    tap_parser.add_argument(
+        "--tap-output-dir", default="./.traces", dest="output_dir", help="Trace output directory (default: ./.traces)"
+    )
+    tap_parser.add_argument("--tap-port", type=int, default=0, dest="port", help="Proxy port (default: 0 = auto)")
+    tap_parser.add_argument(
+        "--tap-target",
+        default="https://api.anthropic.com",
+        dest="target",
+        help="Upstream API URL (default: https://api.anthropic.com)",
+    )
+    tap_parser.add_argument(
+        "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch Claude"
+    )
     args, claude_args = tap_parser.parse_known_args(argv)
     args.claude_args = claude_args
     return args

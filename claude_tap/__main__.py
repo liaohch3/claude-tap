@@ -1,4 +1,5 @@
 """Allow running as `python -m claude_tap`."""
+
 import asyncio
 import sys
 
@@ -10,7 +11,7 @@ def main():
     if "--" in argv:
         idx = argv.index("--")
         our_args = argv[:idx]
-        claude_args = argv[idx + 1:]
+        claude_args = argv[idx + 1 :]
     else:
         our_args = argv
         claude_args = []
