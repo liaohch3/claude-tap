@@ -12,3 +12,23 @@ wheels/
 # Trace output
 .traces/
 .test_output/
+
+# Test artifacts
+test-traces/
+*.cast
+timing.txt
+typescript.txt
+
+# Demo files (too large for git)
+*.mp4
+*.webm
+*.gif
+demo-*.png
+demo-*.tape
+demo_commands.sh
+real_demo.sh
+real-demo-*
+terminal-*.png
+record_*.py
+record_*.sh
+script-*
