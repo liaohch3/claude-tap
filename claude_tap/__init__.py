@@ -17,9 +17,6 @@ __all__ = [
     "SSEReassembler",
     "TraceWriter",
     "filter_headers",
-    "MODEL_PRICING",
-    "_get_model_pricing",
-    "_calculate_cost",
 ]
 
 import argparse
@@ -115,57 +112,6 @@ class SSEReassembler:
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Pricing (USD per 1M tokens) - from platform.claude.com/docs/en/about-claude/pricing
-# Last updated: 2026-02
-# ---------------------------------------------------------------------------
-
-MODEL_PRICING: dict[str, dict[str, float]] = {
-    # Claude Opus 4.5/4.6 (latest, cheaper than 4.0/4.1)
-    "claude-opus-4-6": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25},
-    "claude-opus-4-5": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25},
-    # Claude Opus 4.0/4.1 (older, more expensive)
-    "claude-opus-4-1": {"input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75},
-    "claude-opus-4": {"input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75},
-    # Claude Sonnet 4.x
-    "claude-sonnet-4-5": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75},
-    "claude-sonnet-4": {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75},
-    # Claude Haiku 4.5 (more expensive than 3.5)
-    "claude-haiku-4-5": {"input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write": 1.25},
-    # Claude Haiku 3.5
-    "claude-haiku-3-5": {"input": 0.8, "output": 4.0, "cache_read": 0.08, "cache_write": 1.0},
-    # Claude Haiku 3
-    "claude-haiku-3": {"input": 0.25, "output": 1.25, "cache_read": 0.03, "cache_write": 0.3},
-}
-
-
-def _get_model_pricing(model: str) -> dict[str, float]:
-    """Get pricing for a model, falling back to sonnet pricing if unknown."""
-    # Normalize model name (remove date suffixes like -20250514)
-    base_model = model.rsplit("-", 1)[0] if model and "-20" in model else model
-    for key in MODEL_PRICING:
-        if key in (base_model or ""):
-            return MODEL_PRICING[key]
-    # Default to sonnet pricing
-    return MODEL_PRICING["claude-sonnet-4"]
-
-
-def _calculate_cost(
-    model: str,
-    input_tokens: int,
-    output_tokens: int,
-    cache_read_tokens: int = 0,
-    cache_create_tokens: int = 0,
-) -> float:
-    """Calculate cost in USD for a single API call."""
-    pricing = _get_model_pricing(model)
-    cost = (
-        (input_tokens * pricing["input"] / 1_000_000)
-        + (output_tokens * pricing["output"] / 1_000_000)
-        + (cache_read_tokens * pricing["cache_read"] / 1_000_000)
-        + (cache_create_tokens * pricing["cache_write"] / 1_000_000)
-    )
-    return cost
-
-
 # ---------------------------------------------------------------------------
 # TraceWriter – async JSONL writer with stats
 # ---------------------------------------------------------------------------
@@ -183,7 +129,6 @@ class TraceWriter:
         self.total_output_tokens = 0
         self.total_cache_read_tokens = 0
         self.total_cache_create_tokens = 0
-        self.total_cost = 0.0
         self.models_used: dict[str, int] = {}
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -221,7 +166,6 @@ class TraceWriter:
         self.total_output_tokens += output_tokens
         self.total_cache_read_tokens += cache_read
         self.total_cache_create_tokens += cache_create
-        self.total_cost += _calculate_cost(model, input_tokens, output_tokens, cache_read, cache_create)
 
     def get_summary(self) -> dict:
         """Return a summary of the trace statistics."""
@@ -231,7 +175,6 @@ class TraceWriter:
             "output_tokens": self.total_output_tokens,
             "cache_read_tokens": self.total_cache_read_tokens,
             "cache_create_tokens": self.total_cache_create_tokens,
-            "total_cost_usd": round(self.total_cost, 4),
             "models_used": self.models_used,
         }
 
@@ -615,10 +558,6 @@ async def async_main(args: argparse.Namespace):
         if stats["cache_create_tokens"] > 0:
             print(f" / {stats['cache_create_tokens']:,} cache_write", end="")
         print()
-
-        # Cost estimation
-        if stats["total_cost_usd"] > 0:
-            print(f"   Est. cost: ${stats['total_cost_usd']:.4f}")
 
     # Output files
     print(f"   Trace: {trace_path}")
