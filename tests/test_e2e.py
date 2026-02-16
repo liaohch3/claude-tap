@@ -1442,23 +1442,28 @@ if __name__ == "__main__":
 
 
 def test_cost_calculation():
-    """Test that cost calculation works correctly for different models."""
+    """Test that cost calculation works correctly for different models.
+
+    Pricing from: platform.claude.com/docs/en/about-claude/pricing
+    """
     from claude_tap import _calculate_cost, _get_model_pricing
 
     print("\n  test_cost_calculation")
 
-    # Test pricing lookup
+    # Test pricing lookup - Opus 4.6 is $5/$25 (newer, cheaper)
     opus_pricing = _get_model_pricing("claude-opus-4-6")
-    assert opus_pricing["input"] == 15.0, f"Expected 15.0, got {opus_pricing['input']}"
-    print("  OK: opus pricing lookup")
+    assert opus_pricing["input"] == 5.0, f"Expected 5.0, got {opus_pricing['input']}"
+    print("  OK: opus 4.6 pricing lookup ($5 input)")
 
+    # Sonnet pricing
     sonnet_pricing = _get_model_pricing("claude-sonnet-4-5-20250929")
     assert sonnet_pricing["input"] == 3.0, f"Expected 3.0, got {sonnet_pricing['input']}"
     print("  OK: sonnet pricing lookup (with date suffix)")
 
+    # Haiku 4.5 is $1/$5 (not $0.8/$4 which is Haiku 3.5)
     haiku_pricing = _get_model_pricing("claude-haiku-4-5-20251001")
-    assert haiku_pricing["input"] == 0.8, f"Expected 0.8, got {haiku_pricing['input']}"
-    print("  OK: haiku pricing lookup")
+    assert haiku_pricing["input"] == 1.0, f"Expected 1.0, got {haiku_pricing['input']}"
+    print("  OK: haiku 4.5 pricing lookup ($1 input)")
 
     # Unknown model should fall back to sonnet
     unknown_pricing = _get_model_pricing("some-unknown-model")
@@ -1466,31 +1471,31 @@ def test_cost_calculation():
     print("  OK: unknown model falls back to sonnet")
 
     # Test cost calculation
-    # 1M input tokens at $15/1M = $15
+    # Opus 4.6: 1M input tokens at $5/1M = $5
     cost = _calculate_cost("claude-opus-4-6", input_tokens=1_000_000, output_tokens=0)
-    assert abs(cost - 15.0) < 0.001, f"Expected $15.0, got ${cost}"
-    print("  OK: opus input cost calculation")
+    assert abs(cost - 5.0) < 0.001, f"Expected $5.0, got ${cost}"
+    print("  OK: opus 4.6 input cost calculation")
 
-    # 1M output tokens at $75/1M = $75
+    # Opus 4.6: 1M output tokens at $25/1M = $25
     cost = _calculate_cost("claude-opus-4-6", input_tokens=0, output_tokens=1_000_000)
-    assert abs(cost - 75.0) < 0.001, f"Expected $75.0, got ${cost}"
-    print("  OK: opus output cost calculation")
+    assert abs(cost - 25.0) < 0.001, f"Expected $25.0, got ${cost}"
+    print("  OK: opus 4.6 output cost calculation")
 
-    # Cache read: 1M tokens at $1.5/1M = $1.5
+    # Opus 4.6 cache read: 1M tokens at $0.5/1M = $0.5
     cost = _calculate_cost("claude-opus-4-6", input_tokens=0, output_tokens=0, cache_read_tokens=1_000_000)
-    assert abs(cost - 1.5) < 0.001, f"Expected $1.5, got ${cost}"
-    print("  OK: cache read cost calculation")
+    assert abs(cost - 0.5) < 0.001, f"Expected $0.5, got ${cost}"
+    print("  OK: opus 4.6 cache read cost calculation")
 
-    # Combined: 10K input + 1K output + 100K cache_read for haiku
-    # = (10000 * 0.8 + 1000 * 4.0 + 100000 * 0.08) / 1_000_000
-    # = (8000 + 4000 + 8000) / 1_000_000 = 0.02
+    # Combined: 10K input + 1K output + 100K cache_read for haiku 4.5
+    # = (10000 * 1.0 + 1000 * 5.0 + 100000 * 0.1) / 1_000_000
+    # = (10000 + 5000 + 10000) / 1_000_000 = 0.025
     cost = _calculate_cost(
         "claude-haiku-4-5",
         input_tokens=10_000,
         output_tokens=1_000,
         cache_read_tokens=100_000,
     )
-    assert abs(cost - 0.02) < 0.001, f"Expected $0.02, got ${cost}"
-    print("  OK: combined cost calculation for haiku")
+    assert abs(cost - 0.025) < 0.001, f"Expected $0.025, got ${cost}"
+    print("  OK: combined cost calculation for haiku 4.5")
 
     print("\n  test_cost_calculation PASSED")
