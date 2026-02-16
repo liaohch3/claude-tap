@@ -251,7 +251,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   border-radius: var(--radius-sm); margin-top: 8px; max-height: 400px;
   overflow-y: auto; border: 1px solid rgba(0,0,0,0.06); line-height: 1.5;
 }
-.content-block { margin-top: 8px; }
+.content-block { margin-top: 8px; white-space: pre-wrap; word-break: break-word; }
 .content-block:first-child { margin-top: 0; }
 .tool-use-label {
   display: inline-flex; align-items: center; gap: 4px;
@@ -1103,7 +1103,7 @@ function renderMessages(msgs) {
 }
 
 function renderContent(content, role) {
-  if (typeof content === 'string') return `<div>${esc(content)}</div>`;
+  if (typeof content === 'string') return `<div class="content-block">${esc(content)}</div>`;
   if (!Array.isArray(content)) return `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
   return content.map(block => {
     if (block.type === 'text') return `<div class="content-block">${esc(block.text || '')}</div>`;

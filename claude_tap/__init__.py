@@ -22,6 +22,9 @@ from anthropic.lib.streaming._messages import accumulate_event
 from anthropic.types import RawMessageStreamEvent
 from pydantic import TypeAdapter
 
+# Ensure print output is visible immediately (uv tool pipes stdout with full buffering)
+sys.stdout.reconfigure(line_buffering=True)
+
 log = logging.getLogger("claude-tap")
 
 _sse_event_adapter = TypeAdapter(RawMessageStreamEvent)
@@ -458,21 +461,28 @@ def _generate_html_viewer(trace_path: Path, html_path: Path):
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(
+    """Parse argv, extracting ``--tap-*`` flags for ourselves and forwarding
+    everything else to ``claude``.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+
+    tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
-        description="Trace Claude Code API requests via a local reverse proxy.",
+        description="Trace Claude Code API requests via a local reverse proxy. "
+                    "All flags not listed below are forwarded to claude.",
     )
-    parser.add_argument("-o", "--output-dir", default="./.traces",
-                        help="Trace output directory (default: ./.traces)")
-    parser.add_argument("-p", "--port", type=int, default=0,
-                        help="Proxy port (default: 0 = auto)")
-    parser.add_argument("-t", "--target", default="https://api.anthropic.com",
-                        help="Upstream API URL (default: https://api.anthropic.com)")
-    parser.add_argument("--no-launch", action="store_true",
-                        help="Only start the proxy, don't launch Claude")
-    parser.add_argument("claude_args", nargs="*", metavar="CLAUDE_ARGS",
-                        help="Extra args passed to claude (after --)")
-    return parser.parse_args(argv)
+    tap_parser.add_argument("--tap-output-dir", default="./.traces", dest="output_dir",
+                            help="Trace output directory (default: ./.traces)")
+    tap_parser.add_argument("--tap-port", type=int, default=0, dest="port",
+                            help="Proxy port (default: 0 = auto)")
+    tap_parser.add_argument("--tap-target", default="https://api.anthropic.com", dest="target",
+                            help="Upstream API URL (default: https://api.anthropic.com)")
+    tap_parser.add_argument("--tap-no-launch", action="store_true", dest="no_launch",
+                            help="Only start the proxy, don't launch Claude")
+    args, claude_args = tap_parser.parse_known_args(argv)
+    args.claude_args = claude_args
+    return args
 
 
 def main_entry():
@@ -485,18 +495,7 @@ def main_entry():
 
 
 if __name__ == "__main__":
-    # Support `python claude_trace.py -- --help` style invocation
-    argv = sys.argv[1:]
-    if "--" in argv:
-        idx = argv.index("--")
-        our_args = argv[:idx]
-        claude_args = argv[idx + 1:]
-    else:
-        our_args = argv
-        claude_args = []
-
-    args = parse_args(our_args)
-    args.claude_args = claude_args
+    args = parse_args()
     try:
         code = asyncio.run(async_main(args))
     except KeyboardInterrupt:

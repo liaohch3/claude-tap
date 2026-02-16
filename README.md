@@ -69,19 +69,21 @@ open .traces/trace_*.html
 ## CLI Options
 
 ```
-usage: claude-tap [OPTIONS] [-- CLAUDE_ARGS...]
+usage: claude-tap [--tap-*] [CLAUDE_ARGS...]
 
-Options:
-  -o, --output-dir DIR   Trace output directory (default: ./.traces)
-  -p, --port PORT        Proxy port (default: 0 = auto-assign)
-  -t, --target URL       Upstream API URL (default: https://api.anthropic.com)
-  --no-launch            Only start the proxy, don't launch Claude Code
+All flags are forwarded to claude, except these tap-specific ones:
+  --tap-output-dir DIR   Trace output directory (default: ./.traces)
+  --tap-port PORT        Proxy port (default: 0 = auto-assign)
+  --tap-target URL       Upstream API URL (default: https://api.anthropic.com)
+  --tap-no-launch        Only start the proxy, don't launch Claude Code
 ```
+
+For example, `claude-tap -c` continues the last conversation (the `-c` is forwarded to claude).
 
 **Proxy-only mode** (useful for custom setups):
 
 ```bash
-claude-tap --no-launch -p 8080
+claude-tap --tap-no-launch --tap-port 8080
 # In another terminal:
 ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 ```

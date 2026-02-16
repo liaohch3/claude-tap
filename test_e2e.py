@@ -201,8 +201,8 @@ def _run_test():
         proc = subprocess.run(
             [
                 sys.executable, "-m", "claude_tap",
-                "-o", trace_dir,
-                "-t", f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                "--tap-output-dir", trace_dir,
+                "--tap-target", f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
             ],
             cwd=str(project_dir),
             env=env,
@@ -371,8 +371,8 @@ def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout
     return subprocess.run(
         [
             sys.executable, "-m", "claude_tap",
-            "-o", trace_dir,
-            "-t", f"http://127.0.0.1:{upstream_port}",
+            "--tap-output-dir", trace_dir,
+            "--tap-target", f"http://127.0.0.1:{upstream_port}",
         ],
         cwd=str(project_dir),
         env=env,
@@ -956,12 +956,14 @@ def _cmd_preview():
         uv run python test_e2e.py --preview all         # all traces
         uv run python test_e2e.py --preview 002300      # match by partial name
     """
-    from claude_tap import _generate_html_viewer
     import subprocess as sp
+
+    from claude_tap import _generate_html_viewer
 
     traces_dir = Path(__file__).parent / ".traces"
     if not traces_dir.exists():
-        print(f"Error: {traces_dir} does not exist"); sys.exit(1)
+        print(f"Error: {traces_dir} does not exist")
+        sys.exit(1)
 
     target = sys.argv[2] if len(sys.argv) > 2 else "latest"
     if target == "all":
@@ -972,7 +974,8 @@ def _cmd_preview():
         jsonl_files = [f for f in traces_dir.glob("*.jsonl") if target in f.name]
 
     if not jsonl_files:
-        print(f"No matching .jsonl in {traces_dir}"); sys.exit(1)
+        print(f"No matching .jsonl in {traces_dir}")
+        sys.exit(1)
 
     for jf in jsonl_files:
         html = jf.with_suffix(".html")
@@ -1014,7 +1017,7 @@ def _cmd_dev():
     proxy_env = os.environ.copy()
     proxy_env["PYTHONUNBUFFERED"] = "1"
     proxy_proc = sp.Popen(
-        [sys.executable, "-u", "-m", "claude_tap", "-o", str(traces_dir), "--no-launch"],
+        [sys.executable, "-u", "-m", "claude_tap", "--tap-output-dir", str(traces_dir), "--tap-no-launch"],
         cwd=str(project_dir),
         env=proxy_env,
         stdout=sp.PIPE, stderr=sp.STDOUT, text=True,
@@ -1079,6 +1082,264 @@ def _cmd_dev():
 
 
 ## ---------------------------------------------------------------------------
+## Test 6: test_parse_args — argument passthrough with --tap-* prefix
+## ---------------------------------------------------------------------------
+
+def test_parse_args():
+    """Test that --tap-* flags are consumed by claude-tap and everything else
+    is forwarded to claude via claude_args."""
+    from claude_tap import parse_args
+
+    # Basic: no args
+    a = parse_args([])
+    assert a.claude_args == []
+    assert a.port == 0
+    assert a.output_dir == "./.traces"
+    assert a.target == "https://api.anthropic.com"
+    assert a.no_launch is False
+    print("  OK: defaults")
+
+    # Claude flags pass through
+    a = parse_args(["-c"])
+    assert a.claude_args == ["-c"]
+    print("  OK: -c forwarded")
+
+    a = parse_args(["--model", "opus", "-c"])
+    assert a.claude_args == ["--model", "opus", "-c"]
+    print("  OK: --model opus -c forwarded")
+
+    # -p (claude's --print) should NOT be consumed by tap
+    a = parse_args(["-p"])
+    assert a.claude_args == ["-p"]
+    assert a.port == 0
+    print("  OK: -p forwarded (no conflict with old --port)")
+
+    # Tap-specific flags consumed
+    a = parse_args(["--tap-port", "8080", "--tap-output-dir", "/tmp/t", "--tap-target", "http://x"])
+    assert a.port == 8080
+    assert a.output_dir == "/tmp/t"
+    assert a.target == "http://x"
+    assert a.claude_args == []
+    print("  OK: --tap-* flags consumed")
+
+    # Mix: tap flags + claude flags
+    a = parse_args(["--tap-port", "9999", "-c", "--model", "sonnet"])
+    assert a.port == 9999
+    assert a.claude_args == ["-c", "--model", "sonnet"]
+    print("  OK: mixed tap + claude flags")
+
+    # --tap-no-launch
+    a = parse_args(["--tap-no-launch"])
+    assert a.no_launch is True
+    assert a.claude_args == []
+    print("  OK: --tap-no-launch")
+
+    # Complex claude flags
+    a = parse_args(["--tap-port", "0", "-p", "--model", "opus", "--system-prompt", "be brief", "-d"])
+    assert a.port == 0
+    assert a.claude_args == ["-p", "--model", "opus", "--system-prompt", "be brief", "-d"]
+    print("  OK: complex claude flags forwarded")
+
+    print("\n  test_parse_args PASSED")
+
+
+## ---------------------------------------------------------------------------
+## Test 7: test_filter_headers — header redaction and hop-by-hop filtering
+## ---------------------------------------------------------------------------
+
+def test_filter_headers():
+    """Test filter_headers strips hop-by-hop headers and optionally redacts secrets."""
+    from claude_tap import filter_headers
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": "sk-ant-api03-very-long-secret-key-12345678",
+        "Authorization": "Bearer sk-ant-secret-token-abcdef",
+        "Transfer-Encoding": "chunked",
+        "Connection": "keep-alive",
+        "X-Custom": "custom-value",
+    }
+
+    # Without redaction
+    out = filter_headers(headers, redact_keys=False)
+    assert "Transfer-Encoding" not in out, "hop-by-hop not filtered"
+    assert "Connection" not in out, "hop-by-hop not filtered"
+    assert out["x-api-key"] == headers["x-api-key"], "should not redact without flag"
+    assert out["X-Custom"] == "custom-value"
+    print("  OK: hop-by-hop filtered, no redaction")
+
+    # With redaction
+    out = filter_headers(headers, redact_keys=True)
+    assert out["x-api-key"].endswith("...")
+    assert "very-long-secret" not in out["x-api-key"]
+    assert out["Authorization"].endswith("...")
+    assert "secret-token" not in out["Authorization"]
+    assert out["Content-Type"] == "application/json"
+    assert out["X-Custom"] == "custom-value"
+    print("  OK: secrets redacted")
+
+    # Short key gets fully masked
+    short_headers = {"x-api-key": "short"}
+    out = filter_headers(short_headers, redact_keys=True)
+    assert out["x-api-key"] == "***"
+    print("  OK: short key masked")
+
+    print("\n  test_filter_headers PASSED")
+
+
+## ---------------------------------------------------------------------------
+## Test 8: test_sse_reassembler — unit test SSE parsing edge cases
+## ---------------------------------------------------------------------------
+
+def test_sse_reassembler():
+    """Test SSEReassembler handles various edge cases correctly."""
+    from claude_tap import SSEReassembler
+
+    # Basic: valid events
+    r = SSEReassembler()
+    r.feed_bytes(b'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n')
+    r.feed_bytes(b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n')
+    r.feed_bytes(b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}\n\n')
+    r.feed_bytes(b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n')
+    r.feed_bytes(b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n')
+    r.feed_bytes(b'event: message_stop\ndata: {"type":"message_stop"}\n\n')
+    body = r.reconstruct()
+    assert body is not None
+    assert body["content"][0]["text"] == "hello"
+    assert len(r.events) == 6
+    print("  OK: basic SSE parsing")
+
+    # Orphan data line (no event: prefix) — should be ignored
+    r2 = SSEReassembler()
+    r2.feed_bytes(b'data: {"orphan": true}\n\n')
+    assert len(r2.events) == 0
+    assert r2.reconstruct() is None
+    print("  OK: orphan data ignored")
+
+    # Partial chunks (data split across feed_bytes calls)
+    r3 = SSEReassembler()
+    r3.feed_bytes(b'event: message_st')
+    r3.feed_bytes(b'art\ndata: {"type":"mess')
+    r3.feed_bytes(b'age_start","message":{"id":"m2","type":"message","role":"assistant","content":[],"model":"t","usage":{"input_tokens":1,"output_tokens":0}}}\n\n')
+    assert len(r3.events) == 1
+    assert r3.events[0]["event"] == "message_start"
+    print("  OK: chunked data reassembly")
+
+    # Invalid JSON in data — stored as string
+    r4 = SSEReassembler()
+    r4.feed_bytes(b'event: bad_event\ndata: {broken json\n\n')
+    assert len(r4.events) == 1
+    assert r4.events[0]["data"] == "{broken json"
+    print("  OK: invalid JSON stored as string")
+
+    # Empty stream
+    r5 = SSEReassembler()
+    r5.feed_bytes(b'')
+    assert len(r5.events) == 0
+    assert r5.reconstruct() is None
+    print("  OK: empty stream")
+
+    print("\n  test_sse_reassembler PASSED")
+
+
+## ---------------------------------------------------------------------------
+## Test 9: test_upstream_unreachable — proxy returns 502
+## ---------------------------------------------------------------------------
+
+FAKE_UPSTREAM_UNREACHABLE_PORT = 19204
+
+FAKE_CLAUDE_UNREACHABLE_SCRIPT = r'''#!/usr/bin/env python3
+"""Fake claude CLI — sends a request to a dead upstream."""
+import json, os, sys, urllib.request, urllib.error
+
+base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+url = f"{base}/v1/messages"
+
+req_body = json.dumps({
+    "model": "claude-test-model",
+    "max_tokens": 100,
+    "messages": [{"role": "user", "content": "hello"}],
+}).encode()
+req = urllib.request.Request(url, data=req_body, headers={
+    "Content-Type": "application/json",
+    "x-api-key": "sk-ant-test-key-12345678",
+    "anthropic-version": "2023-06-01",
+})
+try:
+    with urllib.request.urlopen(req) as resp:
+        print(f"[fake-claude] Got response: {resp.status}")
+except urllib.error.HTTPError as e:
+    print(f"[fake-claude] HTTP {e.code}: {e.read().decode()}")
+except Exception as e:
+    print(f"[fake-claude] Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("[fake-claude] Done.")
+'''
+
+
+def test_upstream_unreachable():
+    """Test that when upstream is unreachable (connection refused), the proxy
+    returns 502 and the trace contains no records (since we can't reach upstream)."""
+
+    project_dir = Path(__file__).parent
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_unreachable_")
+    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_UNREACHABLE_SCRIPT)
+
+    # Point --tap-target at a port that nothing is listening on
+    env = os.environ.copy()
+    env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable, "-m", "claude_tap",
+                "--tap-output-dir", trace_dir,
+                "--tap-target", f"http://127.0.0.1:{FAKE_UPSTREAM_UNREACHABLE_PORT}",
+            ],
+            cwd=str(project_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        print(f"[test_upstream_unreachable] Exit code: {proc.returncode}")
+        if proc.stdout.strip():
+            print(f"[test_upstream_unreachable] stdout:\n{proc.stdout.rstrip()}")
+        if proc.stderr.strip():
+            print(f"[test_upstream_unreachable] stderr:\n{proc.stderr.rstrip()}")
+
+        # The proxy should still produce summary output
+        assert "Trace summary" in proc.stdout
+        print("  OK: proxy did not crash")
+
+        # No trace records (502 returned in-process, not from upstream)
+        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        if trace_files:
+            with open(trace_files[0]) as f:
+                records = [json.loads(line) for line in f if line.strip()]
+            assert len(records) == 0, f"Expected 0 records, got {len(records)}"
+        print("  OK: no trace records (upstream unreachable, 502 returned)")
+
+        # Log should contain error info
+        log_files = list(Path(trace_dir).glob("*.log"))
+        assert len(log_files) == 1
+        log_content = log_files[0].read_text()
+        assert "upstream error" in log_content.lower() or "connect" in log_content.lower(), \
+            f"Expected upstream error in log, got: {log_content[:200]}"
+        print("  OK: upstream error logged")
+
+        print("\n  test_upstream_unreachable PASSED")
+
+    except subprocess.TimeoutExpired:
+        print("[test_upstream_unreachable] TIMEOUT")
+        sys.exit(1)
+    finally:
+        _cleanup(trace_dir, fake_bin_dir, "unreachable")
+
+
+## ---------------------------------------------------------------------------
 ## Run all tests
 ## ---------------------------------------------------------------------------
 
@@ -1090,11 +1351,18 @@ if __name__ == "__main__":
         _cmd_dev()
         sys.exit(0)
 
+    # Unit tests (fast, no subprocesses)
+    test_parse_args()
+    test_filter_headers()
+    test_sse_reassembler()
+
+    # E2E tests (subprocess-based)
     test_e2e()
     test_upstream_error()
     test_malformed_sse()
     test_large_payload()
     test_concurrent_requests()
+    test_upstream_unreachable()
     print("\n" + "=" * 60)
-    print("  ALL E2E TESTS PASSED")
+    print("  ALL TESTS PASSED")
     print("=" * 60)
