@@ -8,12 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Token cost estimation**: Summary now shows estimated cost in USD
+- **`--tap-open` flag**: Automatically open HTML viewer in browser after exit
 - Type annotations for all public functions
 - `__all__` export declaration
 - Coverage configuration in pyproject.toml
 - This CHANGELOG.md file
+- `MODEL_PRICING` with Claude 4.x model pricing data
+- `test_cost_calculation` unit test
 
 ### Changed
+- Summary output now shows detailed token breakdown (input/output/cache_read/cache_write)
 - Migrated tests to pytest with proper structure (`tests/` directory)
 - Updated CLI options documentation in README
 

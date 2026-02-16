@@ -33,6 +33,7 @@ import signal
 import sys
 import time
 import uuid
+import webbrowser
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -617,6 +618,11 @@ async def async_main(args: argparse.Namespace):
     print(f"   Log:   {log_path}")
     print(f"   View:  {html_path}")
 
+    # Open viewer in browser if requested
+    if args.open_viewer and html_path.exists():
+        print("\n🌐 Opening viewer in browser...")
+        webbrowser.open(f"file://{html_path.absolute()}")
+
     return exit_code
 
 
@@ -673,6 +679,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     tap_parser.add_argument(
         "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch Claude"
+    )
+    tap_parser.add_argument(
+        "--tap-open", action="store_true", dest="open_viewer", help="Open HTML viewer in browser after exit"
     )
     args, claude_args = tap_parser.parse_known_args(argv)
     args.claude_args = claude_args

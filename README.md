@@ -83,6 +83,7 @@ All flags are forwarded to claude, except these tap-specific ones:
   --tap-port PORT        Proxy port (default: 0 = auto-assign)
   --tap-target URL       Upstream API URL (default: https://api.anthropic.com)
   --tap-no-launch        Only start the proxy, don't launch Claude Code
+  --tap-open             Open HTML viewer in browser after exit
 ```
 
 For example, `claude-tap -c` continues the last conversation (the `-c` is forwarded to claude).
