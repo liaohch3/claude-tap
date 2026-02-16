@@ -8,7 +8,7 @@ Engineering.
 
 from __future__ import annotations
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 __all__ = [
     "__version__",
     "main_entry",
@@ -16,6 +16,7 @@ __all__ = [
     "async_main",
     "SSEReassembler",
     "TraceWriter",
+    "LiveViewerServer",
     "filter_headers",
 ]
 
@@ -120,7 +121,7 @@ class SSEReassembler:
 class TraceWriter:
     """Writes trace records to a JSONL file and accumulates statistics."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, live_server: "LiveViewerServer | None" = None):
         self.path = path
         self._lock = asyncio.Lock()
         self.count = 0
@@ -130,6 +131,7 @@ class TraceWriter:
         self.total_cache_read_tokens = 0
         self.total_cache_create_tokens = 0
         self.models_used: dict[str, int] = {}
+        self._live_server = live_server
         path.parent.mkdir(parents=True, exist_ok=True)
 
     async def write(self, record: dict) -> None:
@@ -139,6 +141,10 @@ class TraceWriter:
                 f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
             self.count += 1
             self._update_stats(record)
+
+        # Broadcast to live viewer if enabled
+        if self._live_server:
+            await self._live_server.broadcast(record)
 
     def _update_stats(self, record: dict) -> None:
         """Extract token usage from record and update totals."""
@@ -177,6 +183,139 @@ class TraceWriter:
             "cache_create_tokens": self.total_cache_create_tokens,
             "models_used": self.models_used,
         }
+
+
+# ---------------------------------------------------------------------------
+# LiveViewerServer - SSE-based real-time trace viewer
+# ---------------------------------------------------------------------------
+
+
+class LiveViewerServer:
+    """HTTP server for real-time trace viewing via SSE."""
+
+    def __init__(self, trace_path: Path, port: int = 0):
+        self.trace_path = trace_path
+        self.port = port
+        self._sse_clients: list[web.StreamResponse] = []
+        self._records: list[dict] = []
+        self._lock = asyncio.Lock()
+        self._runner: web.AppRunner | None = None
+        self._actual_port: int = 0
+
+    async def start(self) -> int:
+        """Start the viewer server and return the actual port."""
+        app = web.Application()
+        app.router.add_get("/", self._handle_index)
+        app.router.add_get("/events", self._handle_sse)
+        app.router.add_get("/records", self._handle_records)
+
+        self._runner = web.AppRunner(app)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner, "127.0.0.1", self.port)
+        await site.start()
+
+        try:
+            self._actual_port = site._server.sockets[0].getsockname()[1]
+        except (AttributeError, IndexError, OSError):
+            self._actual_port = self.port
+
+        return self._actual_port
+
+    async def stop(self) -> None:
+        """Stop the viewer server."""
+        # Close all SSE connections
+        for client in self._sse_clients:
+            try:
+                await client.write_eof()
+            except Exception:
+                pass
+        self._sse_clients.clear()
+
+        if self._runner:
+            await self._runner.cleanup()
+
+    async def broadcast(self, record: dict) -> None:
+        """Broadcast a new record to all connected SSE clients."""
+        async with self._lock:
+            self._records.append(record)
+
+        data = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+        message = f"data: {data}\n\n"
+
+        disconnected = []
+        for client in self._sse_clients:
+            try:
+                await client.write(message.encode("utf-8"))
+            except (ConnectionError, ConnectionResetError, Exception):
+                disconnected.append(client)
+
+        for client in disconnected:
+            self._sse_clients.remove(client)
+
+    @property
+    def url(self) -> str:
+        """Return the viewer URL."""
+        return f"http://127.0.0.1:{self._actual_port}"
+
+    async def _handle_index(self, request: web.Request) -> web.Response:
+        """Serve the viewer HTML with live mode enabled."""
+        template = Path(__file__).parent / "viewer.html"
+        if not template.exists():
+            return web.Response(status=404, text="viewer.html not found")
+
+        html = template.read_text(encoding="utf-8")
+        # Inject live mode flag before the main script
+        live_js = "const LIVE_MODE = true;\nconst EMBEDDED_TRACE_DATA = [];\n"
+        html = html.replace(
+            "<script>\nconst $ = s =>",
+            f"<script>\n{live_js}</script>\n<script>\nconst $ = s =>",
+            1,
+        )
+        return web.Response(text=html, content_type="text/html")
+
+    async def _handle_sse(self, request: web.Request) -> web.StreamResponse:
+        """SSE endpoint for live trace updates."""
+        resp = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+        await resp.prepare(request)
+
+        # Send all existing records first
+        async with self._lock:
+            for record in self._records:
+                data = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+                await resp.write(f"data: {data}\n\n".encode("utf-8"))
+
+        # Add to clients list for future broadcasts
+        self._sse_clients.append(resp)
+
+        # Keep connection alive
+        try:
+            while True:
+                await asyncio.sleep(30)
+                # Send keepalive comment
+                try:
+                    await resp.write(b": keepalive\n\n")
+                except (ConnectionError, ConnectionResetError):
+                    break
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if resp in self._sse_clients:
+                self._sse_clients.remove(resp)
+
+        return resp
+
+    async def _handle_records(self, request: web.Request) -> web.Response:
+        """Return all records as JSON array."""
+        async with self._lock:
+            return web.json_response(self._records)
 
 
 # ---------------------------------------------------------------------------
@@ -489,7 +628,16 @@ async def async_main(args: argparse.Namespace):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     trace_path = output_dir / f"trace_{ts}.jsonl"
     log_path = output_dir / f"trace_{ts}.log"
-    writer = TraceWriter(trace_path)
+
+    # Start live viewer server if requested
+    live_server: LiveViewerServer | None = None
+    if args.live_viewer:
+        live_server = LiveViewerServer(trace_path, port=args.live_port)
+        await live_server.start()
+        print(f"🌐 Live viewer: {live_server.url}")
+        webbrowser.open(live_server.url)
+
+    writer = TraceWriter(trace_path, live_server=live_server)
 
     # Proxy logs go to file, not terminal (avoids polluting Claude TUI)
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
@@ -539,6 +687,10 @@ async def async_main(args: argparse.Namespace):
 
     await session.close()
     await runner.cleanup()
+
+    # Stop live viewer server if running
+    if live_server:
+        await live_server.stop()
 
     # Generate self-contained HTML viewer
     html_path = trace_path.with_suffix(".html")
@@ -628,6 +780,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     tap_parser.add_argument(
         "--tap-open", action="store_true", dest="open_viewer", help="Open HTML viewer in browser after exit"
+    )
+    tap_parser.add_argument(
+        "--tap-live",
+        action="store_true",
+        dest="live_viewer",
+        help="Start real-time viewer server (auto-opens browser)",
+    )
+    tap_parser.add_argument(
+        "--tap-live-port",
+        type=int,
+        default=0,
+        dest="live_port",
+        help="Port for live viewer server (default: auto)",
     )
     args, claude_args = tap_parser.parse_known_args(argv)
     args.claude_args = claude_args

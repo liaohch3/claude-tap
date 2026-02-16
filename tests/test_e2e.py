@@ -19,6 +19,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+import pytest
+
 FAKE_UPSTREAM_PORT = 19199
 
 FAKE_CLAUDE_SCRIPT = r'''#!/usr/bin/env python3
@@ -1434,3 +1436,54 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("  ALL TESTS PASSED")
     print("=" * 60)
+
+
+## ---------------------------------------------------------------------------
+## LiveViewerServer tests
+## ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_live_viewer_server():
+    """Test LiveViewerServer SSE functionality."""
+    import aiohttp
+
+    from claude_tap import LiveViewerServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        trace_path = Path(tmpdir) / "test.jsonl"
+
+        # Start server
+        server = LiveViewerServer(trace_path, port=0)
+        port = await server.start()
+        assert port > 0
+        print(f"  LiveViewerServer started on port {port}")
+
+        async with aiohttp.ClientSession() as session:
+            # Test index page
+            async with session.get(f"http://127.0.0.1:{port}/") as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert "LIVE_MODE = true" in html
+                print("  OK: index returns live mode HTML")
+
+            # Test records endpoint (empty initially)
+            async with session.get(f"http://127.0.0.1:{port}/records") as resp:
+                assert resp.status == 200
+                records = await resp.json()
+                assert records == []
+                print("  OK: /records returns empty list")
+
+            # Broadcast a record
+            test_record = {"turn": 1, "request": {"method": "POST"}}
+            await server.broadcast(test_record)
+
+            # Verify record is stored
+            async with session.get(f"http://127.0.0.1:{port}/records") as resp:
+                records = await resp.json()
+                assert len(records) == 1
+                assert records[0]["turn"] == 1
+                print("  OK: broadcast adds record to /records")
+
+        await server.stop()
+        print("  test_live_viewer_server PASSED")
