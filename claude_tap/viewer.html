@@ -112,6 +112,20 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 .stats .stat-group { display: flex; align-items: center; gap: 4px; }
 .stats .stat-val { font-weight: 600; color: var(--text-secondary); font-family: var(--mono); }
+.trace-path-bar {
+  display: none; align-items: center; gap: 6px; padding: 4px 12px;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--text-tertiary); font-family: var(--mono);
+  flex-shrink: 0;
+}
+.trace-path-bar .tp-label { font-family: var(--sans); font-weight: 500; color: var(--text-secondary); flex-shrink: 0; }
+.trace-path-bar .tp-val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.trace-path-bar .tp-copy {
+  flex-shrink: 0; cursor: pointer; border: none; background: none;
+  color: var(--text-tertiary); padding: 2px 4px; border-radius: 3px; line-height: 1;
+}
+.trace-path-bar .tp-copy:hover { color: var(--blue); background: var(--blue-bg); }
+.trace-path-bar .tp-sep { width: 1px; height: 14px; background: var(--border); flex-shrink: 0; }
 
 /* ─── Layout ─── */
 .main { display: flex; flex: 1; overflow: hidden; }
@@ -568,6 +582,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div class="stat-group"><span id="label-turns">Turns</span> <span class="stat-val" id="stat-turns">0</span></div>
     <div class="stat-group"><span id="label-tokens">Tokens</span> <span class="stat-val" id="stat-tokens">0</span></div>
     <div class="stat-group"><span id="label-time">Time</span> <span class="stat-val" id="stat-duration">0s</span></div>
+    <div id="live-status" style="display:none;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:500;align-items:center;gap:6px;"></div>
   </div>
   <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode">&#9790;</button>
   <select class="lang-select" id="lang-select" onchange="setLang(this.value)">
@@ -581,6 +596,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <option value="ru">Русский</option>
   </select>
 </div>
+
+<div class="trace-path-bar" id="trace-path-bar"></div>
 
 <div class="main" id="main-area">
   <div class="drop-zone" id="drop-zone">
@@ -605,6 +622,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script>
 const $ = s => document.querySelector(s);
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '';
+const TRACE_JSONL_PATH = typeof __TRACE_JSONL_PATH__ !== 'undefined' ? __TRACE_JSONL_PATH__ : '';
+const TRACE_HTML_PATH = typeof __TRACE_HTML_PATH__ !== 'undefined' ? __TRACE_HTML_PATH__ : '';
 
 /* ─── i18n ─── */
 const I18N = {
@@ -843,11 +862,11 @@ let liveEventSource = null;
 let liveConnected = false;
 
 function initLiveMode() {
-  const statusEl = document.createElement('div');
-  statusEl.id = 'live-status';
-  statusEl.style.cssText = 'position:fixed;top:8px;right:140px;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:500;z-index:1000;display:flex;align-items:center;gap:6px;';
-  document.body.appendChild(statusEl);
+  const statusEl = $('#live-status');
+  statusEl.style.display = 'flex';
   updateLiveStatus('connecting');
+
+  let renderTimer = null;
 
   liveEventSource = new EventSource('/events');
 
@@ -860,17 +879,10 @@ function initLiveMode() {
     try {
       const record = JSON.parse(event.data);
       entries.push(record);
-      // Re-render if app is already initialized
-      if ($('#sidebar-wrap').style.display !== 'none') {
-        const currentIdx = activeIdx;
-        renderApp();
-        // Restore selection or select new entry
-        if (currentIdx >= 0) selectEntry(currentIdx);
-      } else {
-        // First entry, initialize the app
-        renderApp();
-      }
       updateLiveStatus('connected', entries.length);
+      // Debounce rendering so initial batch of history records renders once
+      clearTimeout(renderTimer);
+      renderTimer = setTimeout(() => renderApp(), 50);
     } catch (e) {
       console.error('Failed to parse SSE data:', e);
     }
@@ -961,7 +973,31 @@ function renderApp() {
     else paths.forEach(p => activePaths.add(p));
   }
   renderPathFilter(paths, pathCounts);
+  renderTracePathBar();
   applyFilter();
+}
+
+function renderTracePathBar() {
+  const bar = $('#trace-path-bar');
+  if (!TRACE_JSONL_PATH && !TRACE_HTML_PATH) return;
+  const copyIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`;
+  let html = '';
+  if (TRACE_JSONL_PATH) {
+    html += `<span class="tp-label">JSONL</span><span class="tp-val" title="${esc(TRACE_JSONL_PATH)}">${esc(TRACE_JSONL_PATH)}</span><button class="tp-copy" title="Copy path" onclick="copyPath('${esc(TRACE_JSONL_PATH)}',this)">${copyIcon}</button>`;
+  }
+  if (TRACE_JSONL_PATH && TRACE_HTML_PATH) html += '<span class="tp-sep"></span>';
+  if (TRACE_HTML_PATH) {
+    html += `<span class="tp-label">HTML</span><span class="tp-val" title="${esc(TRACE_HTML_PATH)}">${esc(TRACE_HTML_PATH)}</span><button class="tp-copy" title="Copy path" onclick="copyPath('${esc(TRACE_HTML_PATH)}',this)">${copyIcon}</button>`;
+  }
+  bar.innerHTML = html;
+  bar.style.display = 'flex';
+}
+function copyPath(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.innerHTML;
+    btn.textContent = '✓';
+    setTimeout(() => btn.innerHTML = orig, 1200);
+  });
 }
 
 function renderPathFilter(paths, pathCounts) {
@@ -1056,6 +1092,8 @@ function modelBadge(m) {
 }
 
 /* ─── Sidebar ─── */
+const collapsedGroups = new Set(); // Track collapsed model groups
+
 function createSidebarItem(e, i) {
   const item = document.createElement('div');
   item.className = 'sidebar-item';
@@ -1098,27 +1136,37 @@ function renderSidebar() {
       const items = groups.get(model);
       const shortModel = model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
       const color = modelColor(model);
+      const isCollapsed = collapsedGroups.has(model);
       const header = document.createElement('div');
       header.className = 'sidebar-group-header';
-      header.innerHTML = `<span class="group-dot" style="background:${color}"></span><span class="group-name">${esc(shortModel)}</span><span class="group-count">${items.length}</span><span class="group-chevron open">&#9654;</span>`;
+      header.innerHTML = `<span class="group-dot" style="background:${color}"></span><span class="group-name">${esc(shortModel)}</span><span class="group-count">${items.length}</span><span class="group-chevron${isCollapsed ? '' : ' open'}">&#9654;</span>`;
       const content = document.createElement('div');
+      if (isCollapsed) content.style.display = 'none';
       items.forEach(({ entry: e, idx: i }) => content.appendChild(createSidebarItem(e, i)));
       header.onclick = () => {
-        content.style.display = content.style.display === 'none' ? '' : 'none';
+        const nowCollapsed = content.style.display !== 'none';
+        content.style.display = nowCollapsed ? 'none' : '';
         header.querySelector('.group-chevron').classList.toggle('open');
+        if (nowCollapsed) collapsedGroups.add(model); else collapsedGroups.delete(model);
       };
       sb.appendChild(header);
       sb.appendChild(content);
     });
   }
-  // Default select first opus/sonnet entry, fall back to first entry
-  let defaultIdx = 0;
-  for (let i = 0; i < filtered.length; i++) {
-    const m = (filtered[i].request?.body?.model || '').toLowerCase();
-    if (m.includes('opus') || m.includes('sonnet')) { defaultIdx = i; break; }
+  // Restore current selection if still valid, otherwise pick default
+  if (activeIdx >= 0 && activeIdx < filtered.length) {
+    selectEntry(activeIdx);
+  } else if (filtered.length) {
+    // Default select first opus/sonnet entry, fall back to first entry
+    let defaultIdx = 0;
+    for (let i = 0; i < filtered.length; i++) {
+      const m = (filtered[i].request?.body?.model || '').toLowerCase();
+      if (m.includes('opus') || m.includes('sonnet')) { defaultIdx = i; break; }
+    }
+    selectEntry(defaultIdx);
+  } else {
+    activeIdx = -1; $('#detail').innerHTML = `<div class="empty-state">${t('empty_state')}</div>`;
   }
-  if (filtered.length) selectEntry(defaultIdx);
-  else { activeIdx = -1; $('#detail').innerHTML = `<div class="empty-state">${t('empty_state')}</div>`; }
 }
 
 function selectEntry(idx) {
@@ -1188,16 +1236,36 @@ function renderContent(content, role) {
   if (typeof content === 'string') return `<div class="content-block">${esc(content)}</div>`;
   if (!Array.isArray(content)) return `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
   return content.map(block => {
-    if (block.type === 'text') return `<div class="content-block">${esc(block.text || '')}</div>`;
+    if (block.type === 'text') { if (!(block.text || '').trim()) return ''; return `<div class="content-block">${esc(block.text)}</div>`; }
     if (block.type === 'thinking') return `<div class="content-block"><span class="thinking-label">thinking</span><pre>${esc(block.thinking || '')}</pre></div>`;
     if (block.type === 'tool_use') return `<div class="content-block"><span class="tool-use-label">${esc(block.name || 'tool_use')}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre></div>`;
     if (block.type === 'tool_result') {
       const rc = block.content;
       if (typeof rc === 'string') return `<div class="content-block"><span class="tool-use-label">result (${esc(block.tool_use_id || '')})</span><pre>${esc(rc)}</pre></div>`;
-      if (Array.isArray(rc)) { const txt = rc.map(c => c.type === 'text' ? c.text : JSON.stringify(c)).join('\n'); return `<div class="content-block"><span class="tool-use-label">result</span><pre>${esc(txt)}</pre></div>`; }
+      if (Array.isArray(rc)) {
+        const parts = rc.map(c => {
+          if (c.type === 'text') return `<pre>${esc(c.text)}</pre>`;
+          if (c.type === 'image') {
+            const s = c.source || {};
+            if (s.type === 'base64' && s.data) return `<img src="data:${esc(s.media_type || 'image/png')};base64,${s.data}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" />`;
+            if (s.type === 'url' && s.url) return `<img src="${esc(s.url)}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" />`;
+          }
+          return `<pre>${esc(JSON.stringify(c))}</pre>`;
+        }).join('');
+        return `<div class="content-block"><span class="tool-use-label">result</span>${parts}</div>`;
+      }
       return `<div class="content-block"><pre>${esc(JSON.stringify(block, null, 2))}</pre></div>`;
     }
-    if (block.type === 'image') return `<div class="content-block"><em>[image: ${esc(block.source?.media_type || 'unknown')}]</em></div>`;
+    if (block.type === 'image') {
+      const src = block.source || {};
+      if (src.type === 'base64' && src.data) {
+        return `<div class="content-block"><img src="data:${esc(src.media_type || 'image/png')};base64,${src.data}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" /></div>`;
+      }
+      if (src.type === 'url' && src.url) {
+        return `<div class="content-block"><img src="${esc(src.url)}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" /></div>`;
+      }
+      return `<div class="content-block"><em>[image: ${esc(src.media_type || 'unknown')}]</em></div>`;
+    }
     return `<div class="content-block"><pre>${esc(JSON.stringify(block, null, 2))}</pre></div>`;
   }).join('');
 }
