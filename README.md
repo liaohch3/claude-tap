@@ -1,5 +1,10 @@
 # claude-tap
 
+[![PyPI version](https://img.shields.io/pypi/v/claude-tap.svg)](https://pypi.org/project/claude-tap/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/claude-tap.svg)](https://pypi.org/project/claude-tap/)
+[![Python version](https://img.shields.io/pypi/pyversions/claude-tap.svg)](https://pypi.org/project/claude-tap/)
+[![License](https://img.shields.io/github/license/liaohch3/claude-tap.svg)](https://github.com/liaohch3/claude-tap/blob/main/LICENSE)
+
 A CLI tool that wraps [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with a local reverse proxy to intercept and record all API requests. Useful for studying Claude Code's **Context Engineering** — how it constructs system prompts, manages conversation history, selects tools, and optimizes token usage across turns.
 
 ## How It Works

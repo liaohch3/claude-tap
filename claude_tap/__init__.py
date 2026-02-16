@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """claude-tap: Reverse proxy to trace Claude Code API requests."""
 
+__version__ = "0.1.3"
+
 import argparse
 import asyncio
 import gzip
@@ -472,6 +474,8 @@ def parse_args(argv=None):
         description="Trace Claude Code API requests via a local reverse proxy. "
                     "All flags not listed below are forwarded to claude.",
     )
+    tap_parser.add_argument("-v", "--version", action="version", 
+                            version=f"%(prog)s {__version__}")
     tap_parser.add_argument("--tap-output-dir", default="./.traces", dest="output_dir",
                             help="Trace output directory (default: ./.traces)")
     tap_parser.add_argument("--tap-port", type=int, default=0, dest="port",
