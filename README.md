@@ -93,58 +93,18 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 
 ## Architecture
 
-```mermaid
-flowchart TB
-    subgraph Terminal["🖥️ Terminal"]
-        CT["claude-tap"]
-        CC["Claude Code"]
-    end
+![Architecture](docs/architecture.png)
 
-    subgraph Proxy["🔀 Reverse Proxy (aiohttp)"]
-        PH["Proxy Handler"]
-        SSE["SSE Reassembler"]
-    end
+**How it works:**
 
-    subgraph Storage["💾 Storage"]
-        TW["Trace Writer"]
-        JSONL[("trace.jsonl")]
-        HTML["trace.html"]
-    end
+1. `claude-tap` starts a reverse proxy and spawns Claude Code with `ANTHROPIC_BASE_URL` pointing to it
+2. All API requests flow through the proxy → Anthropic API → back through proxy
+3. SSE streaming responses are forwarded in real-time (zero added latency)
+4. Each request-response pair is recorded to `trace.jsonl`
+5. On exit, a self-contained HTML viewer is generated
+6. Live mode (optional) broadcasts updates to browser via SSE
 
-    subgraph Live["🌐 Live Mode (optional)"]
-        LVS["Live Viewer Server"]
-        Browser["Browser (SSE)"]
-    end
-
-    API["☁️ api.anthropic.com"]
-
-    CT -->|"1. Starts"| PH
-    CT -->|"2. Spawns with<br/>ANTHROPIC_BASE_URL"| CC
-    CC -->|"3. API Request"| PH
-    PH -->|"4. Forward"| API
-    API -->|"5. SSE Stream"| PH
-    PH --> SSE
-    SSE -->|"6. Reconstruct<br/>Response"| TW
-    TW -->|"7. Write"| JSONL
-    JSONL -->|"8. On Exit:<br/>Generate"| HTML
-
-    TW -.->|"Broadcast"| LVS
-    LVS -.->|"Push Updates"| Browser
-
-    style CT fill:#d4a5ff,stroke:#8b5cf6,color:#1a1a2e
-    style CC fill:#a5d4ff,stroke:#3b82f6,color:#1a1a2e
-    style API fill:#ffa5a5,stroke:#ef4444,color:#1a1a2e
-    style JSONL fill:#a5ffd4,stroke:#10b981,color:#1a1a2e
-    style HTML fill:#ffd4a5,stroke:#f59e0b,color:#1a1a2e
-    style Browser fill:#a5ffd4,stroke:#10b981,color:#1a1a2e
-```
-
-**Key Points:**
-
-- 🔒 API keys are automatically redacted in traces
-- ⚡ Zero added latency — SSE streams are forwarded in real-time
-- 📦 Self-contained HTML viewer with no external dependencies
-- 🔄 Live mode enables real-time inspection via Server-Sent Events
+**Key features:** 🔒 API keys auto-redacted · ⚡ Zero latency · 📦 Self-contained viewer · 🔄 Real-time live mode
 
 ## License
 

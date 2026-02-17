@@ -93,58 +93,18 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 
 ## 架构
 
-```mermaid
-flowchart TB
-    subgraph Terminal["🖥️ 终端"]
-        CT["claude-tap"]
-        CC["Claude Code"]
-    end
+![架构图](docs/architecture.png)
 
-    subgraph Proxy["🔀 反向代理 (aiohttp)"]
-        PH["代理处理器"]
-        SSE["SSE 重组器"]
-    end
+**工作原理:**
 
-    subgraph Storage["💾 存储"]
-        TW["Trace 写入器"]
-        JSONL[("trace.jsonl")]
-        HTML["trace.html"]
-    end
+1. `claude-tap` 启动反向代理，并以 `ANTHROPIC_BASE_URL` 指向代理来启动 Claude Code
+2. 所有 API 请求流经: 代理 → Anthropic API → 代理返回
+3. SSE 流式响应实时转发（零额外延迟）
+4. 每个请求-响应对记录到 `trace.jsonl`
+5. 退出时生成自包含的 HTML 查看器
+6. 实时模式（可选）通过 SSE 向浏览器广播更新
 
-    subgraph Live["🌐 实时模式 (可选)"]
-        LVS["实时查看器服务"]
-        Browser["浏览器 (SSE)"]
-    end
-
-    API["☁️ api.anthropic.com"]
-
-    CT -->|"1. 启动"| PH
-    CT -->|"2. 带 ANTHROPIC_BASE_URL<br/>启动"| CC
-    CC -->|"3. API 请求"| PH
-    PH -->|"4. 转发"| API
-    API -->|"5. SSE 流"| PH
-    PH --> SSE
-    SSE -->|"6. 重组<br/>响应"| TW
-    TW -->|"7. 写入"| JSONL
-    JSONL -->|"8. 退出时:<br/>生成"| HTML
-
-    TW -.->|"广播"| LVS
-    LVS -.->|"推送更新"| Browser
-
-    style CT fill:#d4a5ff,stroke:#8b5cf6,color:#1a1a2e
-    style CC fill:#a5d4ff,stroke:#3b82f6,color:#1a1a2e
-    style API fill:#ffa5a5,stroke:#ef4444,color:#1a1a2e
-    style JSONL fill:#a5ffd4,stroke:#10b981,color:#1a1a2e
-    style HTML fill:#ffd4a5,stroke:#f59e0b,color:#1a1a2e
-    style Browser fill:#a5ffd4,stroke:#10b981,color:#1a1a2e
-```
-
-**要点:**
-
-- 🔒 API key 在 trace 中自动脱敏
-- ⚡ 零额外延迟 — SSE 流实时转发
-- 📦 自包含 HTML 查看器，无外部依赖
-- 🔄 实时模式通过 Server-Sent Events 实现即时检查
+**核心特性:** 🔒 API key 自动脱敏 · ⚡ 零延迟 · 📦 自包含查看器 · 🔄 实时模式
 
 ## 许可证
 
