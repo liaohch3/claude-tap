@@ -133,18 +133,26 @@ class TraceWriter:
         self.models_used: dict[str, int] = {}
         self._live_server = live_server
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Keep file handle open for real-time append + flush
+        self._file = open(path, "a", encoding="utf-8")
 
     async def write(self, record: dict) -> None:
         """Write a record and update statistics."""
         async with self._lock:
-            with open(self.path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+            self._file.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+            self._file.flush()
             self.count += 1
             self._update_stats(record)
 
         # Broadcast to live viewer if enabled
         if self._live_server:
             await self._live_server.broadcast(record)
+
+    def close(self) -> None:
+        """Flush and close the JSONL file."""
+        if self._file and not self._file.closed:
+            self._file.flush()
+            self._file.close()
 
     def _update_stats(self, record: dict) -> None:
         """Extract token usage from record and update totals."""
@@ -201,6 +209,7 @@ class LiveViewerServer:
         self._lock = asyncio.Lock()
         self._runner: web.AppRunner | None = None
         self._actual_port: int = 0
+        self._shutdown_event = asyncio.Event()
 
     async def start(self) -> int:
         """Start the viewer server and return the actual port."""
@@ -223,6 +232,8 @@ class LiveViewerServer:
 
     async def stop(self) -> None:
         """Stop the viewer server."""
+        # Signal all SSE handlers to exit immediately
+        self._shutdown_event.set()
         # Close all SSE connections
         for client in self._sse_clients:
             try:
@@ -302,14 +313,18 @@ class LiveViewerServer:
         # Add to clients list for future broadcasts
         self._sse_clients.append(resp)
 
-        # Keep connection alive
+        # Keep connection alive until shutdown
         try:
-            while True:
-                await asyncio.sleep(30)
-                # Send keepalive comment
+            while not self._shutdown_event.is_set():
+                try:
+                    await asyncio.wait_for(self._shutdown_event.wait(), timeout=30)
+                except asyncio.TimeoutError:
+                    pass
+                if self._shutdown_event.is_set():
+                    break
                 try:
                     await resp.write(b": keepalive\n\n")
-                except (ConnectionError, ConnectionResetError):
+                except (ConnectionError, ConnectionResetError, RuntimeError):
                     break
         except asyncio.CancelledError:
             pass
@@ -619,6 +634,13 @@ async def run_claude(port: int, extra_args: list[str]) -> int:
         pass
 
     code = await proc.wait()
+
+    # Remove signal handler so Ctrl+C works normally during cleanup
+    try:
+        loop.remove_signal_handler(signal.SIGINT)
+    except (NotImplementedError, OSError):
+        pass
+
     print(f"\n📋 Claude Code exited with code {code}")
     return code
 
@@ -679,54 +701,67 @@ async def async_main(args: argparse.Namespace):
     print(f"📁 Trace file: {trace_path}")
 
     exit_code = 0
-    if not args.no_launch:
+    try:
+        if not args.no_launch:
+            try:
+                exit_code = await run_claude(actual_port, args.claude_args)
+            except asyncio.CancelledError:
+                pass
+        else:
+            print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
+            try:
+                while True:
+                    await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                pass
+    finally:
         try:
-            exit_code = await run_claude(actual_port, args.claude_args)
-        except asyncio.CancelledError:
+            await session.close()
+        except Exception:
             pass
-    else:
-        print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
         try:
-            while True:
-                await asyncio.sleep(3600)
-        except asyncio.CancelledError:
+            await runner.cleanup()
+        except Exception:
             pass
 
-    await session.close()
-    await runner.cleanup()
+        # Stop live viewer server if running
+        if live_server:
+            try:
+                await live_server.stop()
+            except Exception:
+                pass
 
-    # Stop live viewer server if running
-    if live_server:
-        await live_server.stop()
+        # Close writer before generating HTML
+        writer.close()
 
-    # Generate self-contained HTML viewer
-    html_path = trace_path.with_suffix(".html")
-    _generate_html_viewer(trace_path, html_path)
+        # Generate self-contained HTML viewer
+        html_path = trace_path.with_suffix(".html")
+        _generate_html_viewer(trace_path, html_path)
 
-    # Print summary with cost estimation
-    stats = writer.get_summary()
-    print("\n📊 Trace summary:")
-    print(f"   API calls: {stats['api_calls']}")
+        # Print summary with cost estimation
+        stats = writer.get_summary()
+        print("\n📊 Trace summary:")
+        print(f"   API calls: {stats['api_calls']}")
 
-    # Token breakdown
-    total_tokens = stats["input_tokens"] + stats["output_tokens"]
-    if total_tokens > 0:
-        print(f"   Tokens: {stats['input_tokens']:,} in / {stats['output_tokens']:,} out", end="")
-        if stats["cache_read_tokens"] > 0:
-            print(f" / {stats['cache_read_tokens']:,} cache_read", end="")
-        if stats["cache_create_tokens"] > 0:
-            print(f" / {stats['cache_create_tokens']:,} cache_write", end="")
-        print()
+        # Token breakdown
+        total_tokens = stats["input_tokens"] + stats["output_tokens"]
+        if total_tokens > 0:
+            print(f"   Tokens: {stats['input_tokens']:,} in / {stats['output_tokens']:,} out", end="")
+            if stats["cache_read_tokens"] > 0:
+                print(f" / {stats['cache_read_tokens']:,} cache_read", end="")
+            if stats["cache_create_tokens"] > 0:
+                print(f" / {stats['cache_create_tokens']:,} cache_write", end="")
+            print()
 
-    # Output files
-    print(f"   Trace: {trace_path}")
-    print(f"   Log:   {log_path}")
-    print(f"   View:  {html_path}")
+        # Output files
+        print(f"   Trace: {trace_path}")
+        print(f"   Log:   {log_path}")
+        print(f"   View:  {html_path}")
 
-    # Open viewer in browser if requested
-    if args.open_viewer and html_path.exists():
-        print("\n🌐 Opening viewer in browser...")
-        webbrowser.open(f"file://{html_path.absolute()}")
+        # Open viewer in browser if requested
+        if args.open_viewer and html_path.exists():
+            print("\n🌐 Opening viewer in browser...")
+            webbrowser.open(f"file://{html_path.absolute()}")
 
     return exit_code
 

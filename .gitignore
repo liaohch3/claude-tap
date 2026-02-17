@@ -12,6 +12,7 @@ wheels/
 # Trace output
 .traces/
 .test_output/
+test-results/
 
 # Test artifacts
 test-traces/
