@@ -1126,6 +1126,7 @@ function initLang() {
 /* ─── Live Mode SSE Support ─── */
 let liveEventSource = null;
 let liveConnected = false;
+let currentDetailRequestId = null;
 
 function initLiveMode() {
   const statusEl = $('#live-status');
@@ -1148,7 +1149,7 @@ function initLiveMode() {
       updateLiveStatus('connected', entries.length);
       // Debounce rendering so initial batch of history records renders once
       clearTimeout(renderTimer);
-      renderTimer = setTimeout(() => renderApp(), 50);
+      renderTimer = setTimeout(() => renderApp(true), 50);
     } catch (e) {
       console.error('Failed to parse SSE data:', e);
     }
@@ -1225,7 +1226,7 @@ function loadFile(file) {
 /* ─── Path & filter ─── */
 function getPath(e) { return (e.request?.path || '/unknown').replace(/\?.*$/, ''); }
 
-function renderApp() {
+function renderApp(preserveDetail) {
   $('#drop-zone').style.display = 'none';
   $('#sidebar-wrap').style.display = 'flex';
   $('#detail').style.display = '';
@@ -1240,7 +1241,7 @@ function renderApp() {
   }
   renderPathFilter(paths, pathCounts);
   renderTracePathBar();
-  applyFilter();
+  applyFilter(preserveDetail);
 }
 
 function renderTracePathBar() {
@@ -1282,7 +1283,7 @@ function renderPathFilter(paths, pathCounts) {
   });
 }
 
-function applyFilter() {
+function applyFilter(preserveDetail) {
   filtered = entries.filter(e => activePaths.has(getPath(e)));
   if (searchQuery) filtered = filtered.filter(e => matchSearch(e, searchQuery));
   if (activeTools) {
@@ -1325,7 +1326,7 @@ function applyFilter() {
     tsb.style.display = 'none';
   }
   renderToolFilter();
-  renderSidebar();
+  renderSidebar(preserveDetail);
 }
 
 function renderToolFilter() {
@@ -1457,7 +1458,7 @@ function createSidebarItem(e, i) {
   return item;
 }
 
-function renderSidebar() {
+function renderSidebar(preserveDetail) {
   const sb = $('#sidebar'); sb.innerHTML = '';
   const groups = new Map();
   filtered.forEach((e, i) => {
@@ -1498,7 +1499,7 @@ function renderSidebar() {
   buildVisualOrder();
   // Restore current selection if still valid, otherwise pick default
   if (activeIdx >= 0 && activeIdx < filtered.length) {
-    selectEntry(activeIdx);
+    selectEntry(activeIdx, { force: !preserveDetail });
   } else if (filtered.length) {
     // Default select first opus/sonnet entry, fall back to first entry
     let defaultIdx = 0;
@@ -1512,13 +1513,19 @@ function renderSidebar() {
   }
 }
 
-function selectEntry(idx) {
+function selectEntry(idx, opts) {
   if (idx < 0 || idx >= filtered.length) return;
+  const force = !opts || opts.force !== false;
   activeIdx = idx;
   document.querySelectorAll('.sidebar-item').forEach(el => {
     el.classList.toggle('active', parseInt(el.dataset.idx) === idx);
   });
-  renderDetail(filtered[idx]);
+  // Skip re-render if same entry and force=false (preserves scroll position in live mode)
+  if (!force && currentDetailRequestId === filtered[idx].request_id) {
+    // Just update sidebar highlight, keep detail as-is
+  } else {
+    renderDetail(filtered[idx]);
+  }
   const active = document.querySelector('.sidebar-item.active');
   if (active) active.scrollIntoView({ block: 'nearest' });
   mobileShowDetail();
@@ -1527,6 +1534,7 @@ function selectEntry(idx) {
 
 /* ─── Detail ─── */
 function renderDetail(e) {
+  currentDetailRequestId = e.request_id;
   const d = $('#detail'); d.scrollTop = 0;
   const reqBody = e.request?.body, respBody = e.response?.body, usage = respBody?.usage;
   let html = '';
@@ -1913,7 +1921,7 @@ function showDiffForIdx(curIdx, triggerBtn, manualPrevIdx) {
   overlay.className = 'diff-overlay';
   overlay.innerHTML = `<div class="diff-modal">
     <div class="diff-header">
-      <button class="diff-nav-btn diff-nav-prev" ${hasPrev ? '' : 'disabled'}>&#9664;</button>
+      <button class="diff-nav-btn diff-nav-prev">&#9664;</button>
       <span class="diff-title">${t('turn')} ${filtered[prevIdx].turn || '?'} &rarr; ${t('turn')} ${filtered[curIdx].turn || '?'}</span>
       <button class="diff-nav-btn diff-nav-next" ${hasNext ? '' : 'disabled'}>&#9654;</button>
       ${selectHtml}
@@ -1922,16 +1930,48 @@ function showDiffForIdx(curIdx, triggerBtn, manualPrevIdx) {
     ${warningHtml}
     <div class="diff-body">${html}</div>
   </div>`;
-  const close = () => { overlay.remove(); document.removeEventListener('keydown', escHandler); };
+
+  // Dynamic nav button updater — recalculates from current filtered state
+  function updateNavButtons() {
+    const prevBtn = overlay.querySelector('.diff-nav-prev');
+    const nextBtn = overlay.querySelector('.diff-nav-next');
+    if (!prevBtn || !nextBtn) return;
+    prevBtn.disabled = findPrevSameModel(prevIdx) < 0;
+    const ni = findNextSameModel(curIdx);
+    nextBtn.disabled = !(ni >= 0 && findPrevSameModel(ni) >= 0);
+  }
+  updateNavButtons();
+
+  // In live mode, periodically refresh button state as filtered[] changes
+  let navInterval = null;
+  if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
+    navInterval = setInterval(updateNavButtons, 500);
+  }
+
+  const close = () => {
+    if (navInterval) clearInterval(navInterval);
+    overlay.remove();
+    document.removeEventListener('keydown', escHandler);
+  };
   overlay.querySelector('.diff-close').onclick = close;
   overlay.onclick = e => { if (e.target === overlay) close(); };
   // Navigate to prev/next diff pair
   overlay.querySelector('.diff-nav-prev').onclick = () => {
-    if (hasPrev) { selectEntry(filtered.indexOf(filtered[prevIdx])); showDiffForIdx(prevIdx); }
+    updateNavButtons();
+    if (!overlay.querySelector('.diff-nav-prev').disabled) {
+      close();
+      selectEntry(filtered.indexOf(filtered[prevIdx]));
+      showDiffForIdx(prevIdx);
+    }
   };
   overlay.querySelector('.diff-nav-next').onclick = () => {
+    updateNavButtons();
     const nextIdx = findNextSameModel(curIdx);
-    if (nextIdx >= 0 && hasNext) { selectEntry(filtered.indexOf(filtered[nextIdx])); showDiffForIdx(nextIdx); }
+    if (nextIdx >= 0 && !overlay.querySelector('.diff-nav-next').disabled) {
+      close();
+      selectEntry(filtered.indexOf(filtered[nextIdx]));
+      showDiffForIdx(nextIdx);
+    }
   };
   // Manual target selection dropdown
   const dropdown = overlay.querySelector('.diff-target-dropdown');

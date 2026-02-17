@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import shutil
 import signal
+import subprocess
 import sys
+import urllib.error
+import urllib.request
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
@@ -132,6 +136,19 @@ async def async_main(args: argparse.Namespace):
     print(f"🔍 claude-tap v{__version__} listening on http://127.0.0.1:{actual_port}")
     print(f"📁 Trace file: {trace_path}")
 
+    # Background update check
+    if not args.no_update_check:
+        try:
+            latest = await _check_pypi_version()
+            if latest and _version_tuple(latest) > _version_tuple(__version__):
+                print(f"⬆️  Update available: {__version__} → {latest}")
+                if not args.no_auto_update:
+                    installer = _detect_installer()
+                    _start_background_update(installer)
+                    print(f"   Downloading update in background ({installer})...")
+        except Exception:
+            pass
+
     exit_code = 0
     try:
         if not args.no_launch:
@@ -169,6 +186,16 @@ async def async_main(args: argparse.Namespace):
         # Generate self-contained HTML viewer
         html_path = trace_path.with_suffix(".html")
         _generate_html_viewer(trace_path, html_path)
+
+        # Register trace and cleanup old ones
+        trace_files = [trace_path.name, log_path.name]
+        if html_path.exists():
+            trace_files.append(html_path.name)
+        _register_trace(output_dir, ts, trace_files)
+        if args.max_traces > 0:
+            cleaned = _cleanup_traces(output_dir, args.max_traces)
+            if cleaned:
+                print(f"\n🧹 Cleaned up {cleaned} old trace(s)")
 
         # Print summary with cost estimation
         stats = writer.get_summary()
@@ -240,12 +267,169 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="live_port",
         help="Port for live viewer server (default: auto)",
     )
+    tap_parser.add_argument(
+        "--tap-max-traces",
+        type=int,
+        default=50,
+        dest="max_traces",
+        help="Max trace sessions to keep (default: 50, 0 = unlimited)",
+    )
+    tap_parser.add_argument(
+        "--tap-no-update-check",
+        action="store_true",
+        dest="no_update_check",
+        help="Disable PyPI update check on startup",
+    )
+    tap_parser.add_argument(
+        "--tap-no-auto-update",
+        action="store_true",
+        dest="no_auto_update",
+        help="Check for updates but don't auto-download",
+    )
     args, claude_args = tap_parser.parse_known_args(argv)
     # Strip leading "--" separator if present (argparse leaves it in remainder)
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
     args.claude_args = claude_args
     return args
+
+
+# ---------------------------------------------------------------------------
+# Smart update check
+# ---------------------------------------------------------------------------
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """Parse '0.1.4' into (0, 1, 4) for comparison."""
+    return tuple(int(x) for x in v.strip().split(".") if x.isdigit())
+
+
+async def _check_pypi_version(timeout: float = 3.0) -> str | None:
+    """Check PyPI for the latest version. Returns version string or None."""
+    url = os.environ.get("CLAUDE_TAP_PYPI_URL", "https://pypi.org/pypi/claude-tap/json")
+
+    def _fetch() -> str | None:
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+                return data.get("info", {}).get("version")
+        except Exception:
+            return None
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _fetch)
+
+
+def _detect_installer() -> str:
+    """Detect whether claude-tap was installed via uv or pip."""
+    exe = sys.executable or ""
+    if "uv" in exe.lower() or shutil.which("uv"):
+        return "uv"
+    return "pip"
+
+
+def _start_background_update(installer: str) -> subprocess.Popen | None:
+    """Start a background process to upgrade claude-tap."""
+    try:
+        if installer == "uv":
+            cmd = ["uv", "tool", "upgrade", "claude-tap"]
+        else:
+            cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
+        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Trace cleanup – manifest-based
+# ---------------------------------------------------------------------------
+
+_MANIFEST_FILE = ".cloudtap-manifest.json"
+
+
+def _load_manifest(output_dir: Path) -> dict:
+    """Load or create the manifest file."""
+    manifest_path = output_dir / _MANIFEST_FILE
+    if manifest_path.exists():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if data.get("_cloudtap"):
+                return data
+        except (json.JSONDecodeError, OSError):
+            pass
+    manifest = {"_cloudtap": True, "version": __version__, "traces": []}
+    _maybe_migrate_existing(output_dir, manifest)
+    _save_manifest(output_dir, manifest)
+    return manifest
+
+
+def _save_manifest(output_dir: Path, manifest: dict) -> None:
+    """Save manifest to disk."""
+    manifest_path = output_dir / _MANIFEST_FILE
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _register_trace(output_dir: Path, ts: str, trace_files: list[str]) -> dict:
+    """Register a new trace session in the manifest."""
+    manifest = _load_manifest(output_dir)
+    entry = {
+        "timestamp": ts,
+        "files": trace_files,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    manifest["traces"].append(entry)
+    _save_manifest(output_dir, manifest)
+    return manifest
+
+
+def _cleanup_traces(output_dir: Path, max_traces: int) -> int:
+    """Remove oldest traces exceeding max_traces. Returns count of deleted sessions."""
+    if max_traces <= 0:
+        return 0
+    manifest = _load_manifest(output_dir)
+    traces = manifest.get("traces", [])
+    if len(traces) <= max_traces:
+        return 0
+    traces.sort(key=lambda t: t.get("timestamp", ""))
+    to_remove = traces[: len(traces) - max_traces]
+    removed = 0
+    for entry in to_remove:
+        for fname in entry.get("files", []):
+            fpath = output_dir / fname
+            if fpath.exists():
+                try:
+                    fpath.unlink()
+                except OSError:
+                    pass
+        traces.remove(entry)
+        removed += 1
+    manifest["traces"] = traces
+    _save_manifest(output_dir, manifest)
+    return removed
+
+
+def _maybe_migrate_existing(output_dir: Path, manifest: dict) -> None:
+    """Auto-register existing trace_*.jsonl files that are not yet in the manifest."""
+    known_files: set[str] = set()
+    for entry in manifest.get("traces", []):
+        known_files.update(entry.get("files", []))
+
+    for jsonl in sorted(output_dir.glob("trace_*.jsonl")):
+        if jsonl.name in known_files:
+            continue
+        stem = jsonl.stem
+        ts = stem.replace("trace_", "", 1)
+        files = [jsonl.name]
+        for suffix in [".log", ".html"]:
+            companion = jsonl.with_suffix(suffix)
+            if companion.exists():
+                files.append(companion.name)
+        manifest["traces"].append({
+            "timestamp": ts,
+            "files": files,
+            "created_at": datetime.fromtimestamp(jsonl.stat().st_mtime, tz=timezone.utc).isoformat(),
+        })
 
 
 def main_entry() -> None:

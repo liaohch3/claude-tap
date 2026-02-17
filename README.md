@@ -61,13 +61,16 @@ open .traces/trace_*.html
 All flags are forwarded to Claude Code, except these `--tap-*` ones:
 
 ```
---tap-live             Start real-time viewer (auto-opens browser)
---tap-live-port PORT   Port for live viewer server (default: auto)
---tap-open             Open HTML viewer in browser after exit
---tap-output-dir DIR   Trace output directory (default: ./.traces)
---tap-port PORT        Proxy port (default: auto)
---tap-target URL       Upstream API URL (default: https://api.anthropic.com)
---tap-no-launch        Only start the proxy, don't launch Claude Code
+--tap-live               Start real-time viewer (auto-opens browser)
+--tap-live-port PORT     Port for live viewer server (default: auto)
+--tap-open               Open HTML viewer in browser after exit
+--tap-output-dir DIR     Trace output directory (default: ./.traces)
+--tap-port PORT          Proxy port (default: auto)
+--tap-target URL         Upstream API URL (default: https://api.anthropic.com)
+--tap-no-launch          Only start the proxy, don't launch Claude Code
+--tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
+--tap-no-update-check    Disable PyPI update check on startup
+--tap-no-auto-update     Check for updates but don't auto-download
 ```
 
 **Proxy-only mode** (useful for custom setups):

@@ -13,6 +13,7 @@ wheels/
 .traces/
 .test_output/
 test-results/
+.cloudtap-manifest.json
 
 # Test artifacts
 test-traces/
@@ -20,7 +21,15 @@ test-traces/
 timing.txt
 typescript.txt
 
-# Demo files (too large for git)
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Demo / recording files
 *.mp4
 *.webm
 *.gif
@@ -29,8 +38,8 @@ typescript.txt
 !docs/demo_zh.gif
 !docs/demo.mp4
 !docs/demo_zh.mp4
+*.tape
 demo-*.png
-demo-*.tape
 demo_commands.sh
 real_demo.sh
 real-demo-*
@@ -73,3 +82,10 @@ docs/architecture_v3.*
 # SVG demo files
 demo-cli.svg
 demo-tui*.svg
+
+# Dev-only scripts (kept locally, not in repo)
+test_and_view.sh
+test_e2e_tap.sh
+
+# Ruff / lint cache
+.ruff_cache/

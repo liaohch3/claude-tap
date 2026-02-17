@@ -61,13 +61,16 @@ open .traces/trace_*.html
 除以下 `--tap-*` 参数外，所有参数均透传给 Claude Code：
 
 ```
---tap-live             启动实时查看器（自动打开浏览器）
---tap-live-port PORT   实时查看器端口（默认: 自动分配）
---tap-open             退出后自动在浏览器中打开 HTML 查看器
---tap-output-dir DIR   Trace 输出目录（默认: ./.traces）
---tap-port PORT        代理端口（默认: 自动分配）
---tap-target URL       上游 API 地址（默认: https://api.anthropic.com）
---tap-no-launch        仅启动代理，不启动 Claude Code
+--tap-live               启动实时查看器（自动打开浏览器）
+--tap-live-port PORT     实时查看器端口（默认: 自动分配）
+--tap-open               退出后自动在浏览器中打开 HTML 查看器
+--tap-output-dir DIR     Trace 输出目录（默认: ./.traces）
+--tap-port PORT          代理端口（默认: 自动分配）
+--tap-target URL         上游 API 地址（默认: https://api.anthropic.com）
+--tap-no-launch          仅启动代理，不启动 Claude Code
+--tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
+--tap-no-update-check    禁用启动时的 PyPI 更新检查
+--tap-no-auto-update     仅检查更新，不自动下载
 ```
 
 **纯代理模式**（适用于自定义场景）：

@@ -1410,6 +1410,459 @@ def test_upstream_unreachable():
 
 
 ## ---------------------------------------------------------------------------
+## Test: version check helpers
+## ---------------------------------------------------------------------------
+
+
+def test_version_tuple():
+    """Test _version_tuple parsing."""
+    from claude_tap import _version_tuple
+
+    assert _version_tuple("0.1.4") == (0, 1, 4)
+    assert _version_tuple("1.0.0") == (1, 0, 0)
+    assert _version_tuple("10.20.30") == (10, 20, 30)
+    assert _version_tuple("0.1.4") < _version_tuple("0.2.0")
+    assert _version_tuple("1.0.0") > _version_tuple("0.99.99")
+    print("  test_version_tuple PASSED")
+
+
+def test_detect_installer():
+    """Test _detect_installer returns 'uv' or 'pip'."""
+    from claude_tap import _detect_installer
+
+    result = _detect_installer()
+    assert result in ("uv", "pip"), f"Unexpected installer: {result}"
+    print(f"  test_detect_installer: detected '{result}' — PASSED")
+
+
+## ---------------------------------------------------------------------------
+## Test: version check with fake PyPI
+## ---------------------------------------------------------------------------
+
+FAKE_PYPI_PORT = 19210
+
+
+def test_version_check_with_fake_pypi():
+    """Test that update check detects a newer version from a fake PyPI server."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class FakePyPI(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"info": {"version": "99.0.0"}}).encode())
+
+        def log_message(self, format, *args):
+            pass  # silence logs
+
+    server = HTTPServer(("127.0.0.1", FAKE_PYPI_PORT), FakePyPI)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+    project_dir = Path(__file__).parent
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_update_")
+    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_SCRIPT)
+
+    try:
+        env = os.environ.copy()
+        env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{FAKE_PYPI_PORT}/pypi/claude-tap/json"
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_tap",
+                "--tap-output-dir",
+                trace_dir,
+                "--tap-target",
+                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                "--tap-no-auto-update",
+            ],
+            cwd=str(project_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert "Update available" in proc.stdout, f"Expected 'Update available' in stdout:\n{proc.stdout}"
+        assert "99.0.0" in proc.stdout
+        print("  OK: update available detected")
+        print("  test_version_check_with_fake_pypi PASSED")
+    except subprocess.TimeoutExpired:
+        print("  TIMEOUT")
+    finally:
+        server.shutdown()
+        _cleanup(trace_dir, fake_bin_dir, "update_check")
+
+
+FAKE_PYPI_NOCHECK_PORT = 19211
+
+
+def test_version_check_no_update():
+    """Test that no update message when current version matches PyPI."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from claude_tap import __version__
+
+    class FakePyPICurrent(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"info": {"version": __version__}}).encode())
+
+        def log_message(self, format, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", FAKE_PYPI_NOCHECK_PORT), FakePyPICurrent)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+    project_dir = Path(__file__).parent
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_noupdate_")
+    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_SCRIPT)
+
+    try:
+        env = os.environ.copy()
+        env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{FAKE_PYPI_NOCHECK_PORT}/pypi/claude-tap/json"
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_tap",
+                "--tap-output-dir",
+                trace_dir,
+                "--tap-target",
+                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+            ],
+            cwd=str(project_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert "Update available" not in proc.stdout, f"Unexpected 'Update available' in stdout:\n{proc.stdout}"
+        print("  OK: no update message when version matches")
+        print("  test_version_check_no_update PASSED")
+    except subprocess.TimeoutExpired:
+        print("  TIMEOUT")
+    finally:
+        server.shutdown()
+        _cleanup(trace_dir, fake_bin_dir, "no_update")
+
+
+## ---------------------------------------------------------------------------
+## Test: trace cleanup
+## ---------------------------------------------------------------------------
+
+
+def test_trace_cleanup():
+    """Test _cleanup_traces removes oldest traces while keeping newest."""
+    from claude_tap import _cleanup_traces, _load_manifest, _register_trace, _save_manifest
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir)
+
+        # Initialize empty manifest first to prevent auto-migration
+        _save_manifest(output_dir, {"_cloudtap": True, "version": "test", "traces": []})
+
+        # Create 5 trace sessions
+        for i in range(5):
+            ts = f"20260218_00000{i}"
+            files = [f"trace_{ts}.jsonl", f"trace_{ts}.log", f"trace_{ts}.html"]
+            for f in files:
+                (output_dir / f).write_text(f"data for {f}")
+            _register_trace(output_dir, ts, files)
+
+        manifest = _load_manifest(output_dir)
+        assert len(manifest["traces"]) == 5
+
+        # Cleanup to keep 3
+        removed = _cleanup_traces(output_dir, 3)
+        assert removed == 2, f"Expected 2 removed, got {removed}"
+
+        # Verify oldest 2 deleted
+        assert not (output_dir / "trace_20260218_000000.jsonl").exists()
+        assert not (output_dir / "trace_20260218_000001.jsonl").exists()
+        # Newest 3 preserved
+        assert (output_dir / "trace_20260218_000002.jsonl").exists()
+        assert (output_dir / "trace_20260218_000003.jsonl").exists()
+        assert (output_dir / "trace_20260218_000004.jsonl").exists()
+
+        # Manifest updated
+        manifest = _load_manifest(output_dir)
+        assert len(manifest["traces"]) == 3
+        timestamps = [t["timestamp"] for t in manifest["traces"]]
+        assert "20260218_000000" not in timestamps
+        assert "20260218_000001" not in timestamps
+
+        print("  test_trace_cleanup PASSED")
+
+
+def test_trace_tagging_safety():
+    """Test that cleanup never deletes files not registered in the manifest."""
+    from claude_tap import _cleanup_traces, _register_trace, _save_manifest
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir)
+
+        # Initialize empty manifest first to prevent auto-migration
+        _save_manifest(output_dir, {"_cloudtap": True, "version": "test", "traces": []})
+
+        # Create non-CloudTap files
+        (output_dir / "important_data.jsonl").write_text("do not delete")
+        (output_dir / "my_notes.txt").write_text("also important")
+        (output_dir / "trace_manual_export.jsonl").write_text("user file")
+
+        # Register 5 CloudTap traces
+        for i in range(5):
+            ts = f"20260218_01000{i}"
+            files = [f"trace_{ts}.jsonl"]
+            (output_dir / files[0]).write_text(f"trace data {i}")
+            _register_trace(output_dir, ts, files)
+
+        # Cleanup to keep 2
+        removed = _cleanup_traces(output_dir, 2)
+        assert removed == 3
+
+        # Non-CloudTap files must be untouched
+        assert (output_dir / "important_data.jsonl").exists()
+        assert (output_dir / "my_notes.txt").exists()
+        assert (output_dir / "trace_manual_export.jsonl").exists()
+        assert (output_dir / "important_data.jsonl").read_text() == "do not delete"
+
+        print("  test_trace_tagging_safety PASSED")
+
+
+def test_manifest_migration():
+    """Test that existing trace files without manifest are auto-migrated."""
+    from claude_tap import _cleanup_traces, _load_manifest
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir)
+
+        # Create old-format trace files (no manifest)
+        for i in range(4):
+            ts = f"20260218_02000{i}"
+            (output_dir / f"trace_{ts}.jsonl").write_text(f"old data {i}")
+            (output_dir / f"trace_{ts}.log").write_text(f"old log {i}")
+
+        # Load manifest — should trigger migration
+        manifest = _load_manifest(output_dir)
+        assert len(manifest["traces"]) == 4, f"Expected 4 migrated traces, got {len(manifest['traces'])}"
+
+        # Verify all timestamps present
+        timestamps = sorted(t["timestamp"] for t in manifest["traces"])
+        assert timestamps == ["20260218_020000", "20260218_020001", "20260218_020002", "20260218_020003"]
+
+        # Verify companion files detected
+        for entry in manifest["traces"]:
+            assert len(entry["files"]) == 2  # .jsonl + .log
+
+        # Now cleanup should work on migrated entries
+        removed = _cleanup_traces(output_dir, 2)
+        assert removed == 2
+        assert not (output_dir / "trace_20260218_020000.jsonl").exists()
+        assert (output_dir / "trace_20260218_020003.jsonl").exists()
+
+        print("  test_manifest_migration PASSED")
+
+
+def test_e2e_with_cleanup():
+    """E2E test: pre-fill traces, run claude-tap with --tap-max-traces, verify cleanup."""
+    from claude_tap import _register_trace
+
+    stop_upstream = run_fake_upstream_in_thread()
+
+    project_dir = Path(__file__).parent
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_cleanup_")
+    output_dir = Path(trace_dir)
+    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_SCRIPT)
+
+    try:
+        # Pre-create 4 old trace sessions with very old timestamps (well before current time)
+        for i in range(4):
+            ts = f"20250101_00000{i}"
+            files = [f"trace_{ts}.jsonl", f"trace_{ts}.log"]
+            for f in files:
+                (output_dir / f).write_text(f"old data {f}")
+            _register_trace(output_dir, ts, files)
+
+        env = os.environ.copy()
+        env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+        env["CLAUDE_TAP_PYPI_URL"] = "http://127.0.0.1:1/invalid"  # disable update check
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_tap",
+                "--tap-output-dir",
+                trace_dir,
+                "--tap-target",
+                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                "--tap-max-traces",
+                "3",
+                "--tap-no-update-check",
+            ],
+            cwd=str(project_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        print(f"[test_e2e_with_cleanup] Exit code: {proc.returncode}")
+        if proc.stdout.strip():
+            print(f"[test_e2e_with_cleanup] stdout:\n{proc.stdout.rstrip()}")
+
+        assert proc.returncode == 0
+        assert "Cleaned up" in proc.stdout, f"Expected cleanup message in stdout:\n{proc.stdout}"
+
+        # Should have 3 traces remaining (newest)
+        from claude_tap import _load_manifest
+
+        manifest = _load_manifest(output_dir)
+        assert len(manifest["traces"]) == 3, f"Expected 3 traces, got {len(manifest['traces'])}"
+
+        # Oldest 2 should be gone
+        assert not (output_dir / "trace_20250101_000000.jsonl").exists()
+        assert not (output_dir / "trace_20250101_000001.jsonl").exists()
+
+        print("  test_e2e_with_cleanup PASSED")
+
+    except subprocess.TimeoutExpired:
+        print("  TIMEOUT")
+    finally:
+        stop_upstream()
+        _cleanup(trace_dir, fake_bin_dir, "e2e_cleanup")
+
+
+## ---------------------------------------------------------------------------
+## Test: viewer bug fixes (HTML content verification)
+## ---------------------------------------------------------------------------
+
+
+def test_live_viewer_scroll_preservation():
+    """Verify viewer.html contains preserveDetail parameter chain for scroll fix."""
+    viewer_path = Path(__file__).parent.parent / "claude_tap" / "viewer.html"
+    html = viewer_path.read_text(encoding="utf-8")
+
+    # selectEntry should accept opts parameter
+    assert "function selectEntry(idx, opts)" in html, "selectEntry should accept opts parameter"
+    # renderApp should accept preserveDetail
+    assert "function renderApp(preserveDetail)" in html, "renderApp should accept preserveDetail"
+    # applyFilter should accept preserveDetail
+    assert "function applyFilter(preserveDetail)" in html, "applyFilter should accept preserveDetail"
+    # renderSidebar should accept preserveDetail
+    assert "function renderSidebar(preserveDetail)" in html, "renderSidebar should accept preserveDetail"
+    # currentDetailRequestId tracking
+    assert "currentDetailRequestId" in html, "Should track currentDetailRequestId"
+    # SSE handler should pass true to renderApp
+    assert "renderApp(true)" in html, "SSE handler should call renderApp(true)"
+
+    print("  test_live_viewer_scroll_preservation PASSED")
+
+
+def test_live_viewer_diff_nav_update():
+    """Verify viewer.html contains dynamic diff nav button update logic."""
+    viewer_path = Path(__file__).parent.parent / "claude_tap" / "viewer.html"
+    html = viewer_path.read_text(encoding="utf-8")
+
+    # updateNavButtons function should exist
+    assert "function updateNavButtons()" in html, "Should have updateNavButtons function"
+    # setInterval for live mode
+    assert "setInterval(updateNavButtons" in html, "Should have setInterval for updateNavButtons in live mode"
+    # clearInterval on close
+    assert "clearInterval(navInterval)" in html, "Should clear interval on close"
+
+    print("  test_live_viewer_diff_nav_update PASSED")
+
+
+@pytest.mark.asyncio
+async def test_live_viewer_sse_incremental():
+    """Test that LiveViewerServer correctly handles incremental SSE broadcasts."""
+    import aiohttp
+
+    from claude_tap import LiveViewerServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        trace_path = Path(tmpdir) / "test.jsonl"
+        server = LiveViewerServer(trace_path, port=0)
+        port = await server.start()
+
+        try:
+            # Broadcast multiple records
+            for i in range(5):
+                await server.broadcast({"turn": i + 1, "request_id": f"req_{i}", "request": {"method": "POST"}})
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"http://127.0.0.1:{port}/records") as resp:
+                    records = await resp.json()
+                    assert len(records) == 5, f"Expected 5 records, got {len(records)}"
+                    assert records[0]["turn"] == 1
+                    assert records[4]["turn"] == 5
+                    print("  OK: 5 incremental records via /records")
+
+        finally:
+            await server.stop()
+
+        print("  test_live_viewer_sse_incremental PASSED")
+
+
+## ---------------------------------------------------------------------------
+## Test: parse_args with new flags
+## ---------------------------------------------------------------------------
+
+
+def test_parse_args_new_flags():
+    """Test --tap-max-traces, --tap-no-update-check, --tap-no-auto-update flags."""
+    from claude_tap import parse_args
+
+    # Defaults
+    a = parse_args([])
+    assert a.max_traces == 50
+    assert a.no_update_check is False
+    assert a.no_auto_update is False
+    print("  OK: new flag defaults")
+
+    # Set max traces
+    a = parse_args(["--tap-max-traces", "100"])
+    assert a.max_traces == 100
+    print("  OK: --tap-max-traces 100")
+
+    # Unlimited traces
+    a = parse_args(["--tap-max-traces", "0"])
+    assert a.max_traces == 0
+    print("  OK: --tap-max-traces 0")
+
+    # Disable update check
+    a = parse_args(["--tap-no-update-check"])
+    assert a.no_update_check is True
+    print("  OK: --tap-no-update-check")
+
+    # Only check, no auto-update
+    a = parse_args(["--tap-no-auto-update"])
+    assert a.no_auto_update is True
+    print("  OK: --tap-no-auto-update")
+
+    # Mix with claude args
+    a = parse_args(["--tap-max-traces", "20", "--tap-no-update-check", "-c", "--model", "opus"])
+    assert a.max_traces == 20
+    assert a.no_update_check is True
+    assert a.claude_args == ["-c", "--model", "opus"]
+    print("  OK: mixed new + claude flags")
+
+    print("  test_parse_args_new_flags PASSED")
+
+
+## ---------------------------------------------------------------------------
 ## Run all tests
 ## ---------------------------------------------------------------------------
 
@@ -1423,8 +1876,16 @@ if __name__ == "__main__":
 
     # Unit tests (fast, no subprocesses)
     test_parse_args()
+    test_parse_args_new_flags()
     test_filter_headers()
     test_sse_reassembler()
+    test_version_tuple()
+    test_detect_installer()
+    test_trace_cleanup()
+    test_trace_tagging_safety()
+    test_manifest_migration()
+    test_live_viewer_scroll_preservation()
+    test_live_viewer_diff_nav_update()
 
     # E2E tests (subprocess-based)
     test_e2e()
@@ -1433,6 +1894,9 @@ if __name__ == "__main__":
     test_large_payload()
     test_concurrent_requests()
     test_upstream_unreachable()
+    test_version_check_with_fake_pypi()
+    test_version_check_no_update()
+    test_e2e_with_cleanup()
     print("\n" + "=" * 60)
     print("  ALL TESTS PASSED")
     print("=" * 60)
