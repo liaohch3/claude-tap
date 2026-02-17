@@ -91,19 +91,60 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 - **复制助手** — 一键复制请求 JSON 或 cURL 命令
 - **多语言** — English, 简体中文, 日本語, 한국어, Français, العربية, Deutsch, Русский
 
-## 工作原理
+## 架构
 
-```
-claude-tap
-  ├─ 启动本地 HTTP 反向代理 (127.0.0.1:PORT)
-  ├─ 以 ANTHROPIC_BASE_URL 指向代理启动 Claude Code
-  ├─ 代理通过 HTTPS 将请求转发到 api.anthropic.com
-  ├─ SSE 流式响应实时转发（零额外延迟）
-  ├─ 每个请求-响应对记录到 JSONL trace 文件
-  └─ 退出时生成自包含的 HTML 查看器
+```mermaid
+flowchart TB
+    subgraph Terminal["🖥️ 终端"]
+        CT["claude-tap"]
+        CC["Claude Code"]
+    end
+
+    subgraph Proxy["🔀 反向代理 (aiohttp)"]
+        PH["代理处理器"]
+        SSE["SSE 重组器"]
+    end
+
+    subgraph Storage["💾 存储"]
+        TW["Trace 写入器"]
+        JSONL[("trace.jsonl")]
+        HTML["trace.html"]
+    end
+
+    subgraph Live["🌐 实时模式 (可选)"]
+        LVS["实时查看器服务"]
+        Browser["浏览器 (SSE)"]
+    end
+
+    API["☁️ api.anthropic.com"]
+
+    CT -->|"1. 启动"| PH
+    CT -->|"2. 带 ANTHROPIC_BASE_URL<br/>启动"| CC
+    CC -->|"3. API 请求"| PH
+    PH -->|"4. 转发"| API
+    API -->|"5. SSE 流"| PH
+    PH --> SSE
+    SSE -->|"6. 重组<br/>响应"| TW
+    TW -->|"7. 写入"| JSONL
+    JSONL -->|"8. 退出时:<br/>生成"| HTML
+
+    TW -.->|"广播"| LVS
+    LVS -.->|"推送更新"| Browser
+
+    style CT fill:#d4a5ff,stroke:#8b5cf6,color:#1a1a2e
+    style CC fill:#a5d4ff,stroke:#3b82f6,color:#1a1a2e
+    style API fill:#ffa5a5,stroke:#ef4444,color:#1a1a2e
+    style JSONL fill:#a5ffd4,stroke:#10b981,color:#1a1a2e
+    style HTML fill:#ffd4a5,stroke:#f59e0b,color:#1a1a2e
+    style Browser fill:#a5ffd4,stroke:#10b981,color:#1a1a2e
 ```
 
-API key 在 trace 中会自动脱敏。
+**要点:**
+
+- 🔒 API key 在 trace 中自动脱敏
+- ⚡ 零额外延迟 — SSE 流实时转发
+- 📦 自包含 HTML 查看器，无外部依赖
+- 🔄 实时模式通过 Server-Sent Events 实现即时检查
 
 ## 许可证
 

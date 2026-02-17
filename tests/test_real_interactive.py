@@ -33,7 +33,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-import pexpect
+import pytest
+
+try:
+    import pexpect
+except ImportError:
+    pexpect = None
+    pytestmark = pytest.mark.skip(reason="pexpect not installed")
 
 
 @dataclass
