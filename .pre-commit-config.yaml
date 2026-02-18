@@ -10,7 +10,7 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: uv run pytest -x -q
+        entry: uv run pytest -x -q --timeout=30
         language: system
         pass_filenames: false
         always_run: true
