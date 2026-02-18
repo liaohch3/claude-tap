@@ -38,3 +38,38 @@ terminal-*.png
 record_*.py
 record_*.sh
 script-*
+
+# Frame directories (demo generation artifacts)
+*_frames/
+*_frames_*/
+frames/
+
+# Demo generation scripts
+cast_to_gif*.py
+svg_to_gif*.py
+make_demo_gifs.py
+make_final_demo*.py
+render_excalidraw.*
+render_node.mjs
+concat*.txt
+tui_cmd.sh
+split-preview.png
+
+# Node.js (excalidraw rendering)
+package.json
+package-lock.json
+node_modules/
+
+# Architecture diagram variants (keep only final)
+docs/architecture_v*.svg
+docs/architecture_v*.png
+docs/architecture_excalidraw*
+docs/architecture_kroki*
+docs/architecture.excalidraw
+docs/gen_architecture*.py
+docs/architecture_v2.png
+docs/architecture_v3.*
+
+# SVG demo files
+demo-cli.svg
+demo-tui*.svg

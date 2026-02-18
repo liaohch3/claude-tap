@@ -43,7 +43,7 @@ except ImportError:
 
 
 @dataclass
-class TestResult:
+class InteractiveTestResult:
     """Result of an interactive test run."""
 
     success: bool
@@ -191,9 +191,9 @@ class InteractiveCLIDriver:
         self.child.terminate(force=True)
         return False
 
-    def get_results(self) -> TestResult:
+    def get_results(self) -> InteractiveTestResult:
         """Parse results from output directory."""
-        result = TestResult(
+        result = InteractiveTestResult(
             success=False,
             turns=0,
             api_calls=0,
@@ -246,8 +246,8 @@ def run_interactive_test(
     output_dir: Path | None = None,
     timeout: int = 120,
     response_timeout: int = 60,
-    assertions: list[Callable[[TestResult], bool]] | None = None,
-) -> TestResult:
+    assertions: list[Callable[[InteractiveTestResult], bool]] | None = None,
+) -> InteractiveTestResult:
     """Run an interactive test with the given prompts.
 
     Args:
@@ -266,7 +266,7 @@ def run_interactive_test(
     try:
         # Start claude-tap
         if not driver.start():
-            result = TestResult(
+            result = InteractiveTestResult(
                 success=False,
                 turns=0,
                 api_calls=0,
@@ -323,7 +323,7 @@ def run_print_mode_test(
     prompt: str,
     output_dir: Path | None = None,
     timeout: int = 120,
-) -> TestResult:
+) -> InteractiveTestResult:
     """Run a test in print mode (-p flag, non-interactive)."""
     start_time = time.time()
     output_dir = output_dir or Path(tempfile.mkdtemp(prefix="claude-tap-test-"))
@@ -365,7 +365,7 @@ def run_print_mode_test(
     child.close()
 
     # Parse results
-    result = TestResult(
+    result = InteractiveTestResult(
         success=False,
         turns=1,
         api_calls=0,
@@ -400,17 +400,17 @@ def run_print_mode_test(
 # ---------------------------------------------------------------------------
 
 
-def assert_has_traces(result: TestResult) -> bool:
+def assert_has_traces(result: InteractiveTestResult) -> bool:
     """Assert that traces were recorded."""
     return len(result.traces) > 0
 
 
-def assert_has_html(result: TestResult) -> bool:
+def assert_has_html(result: InteractiveTestResult) -> bool:
     """Assert that HTML viewer was generated."""
     return result.html_file is not None and result.html_file.exists()
 
 
-def assert_trace_structure(result: TestResult) -> bool:
+def assert_trace_structure(result: InteractiveTestResult) -> bool:
     """Assert that traces have correct structure."""
     for trace in result.traces:
         if "turn" not in trace or "request" not in trace or "response" not in trace:
@@ -418,20 +418,20 @@ def assert_trace_structure(result: TestResult) -> bool:
     return True
 
 
-def assert_min_turns(n: int) -> Callable[[TestResult], bool]:
+def assert_min_turns(n: int) -> Callable[[InteractiveTestResult], bool]:
     """Create assertion for minimum number of turns."""
 
-    def check(result: TestResult) -> bool:
+    def check(result: InteractiveTestResult) -> bool:
         return result.api_calls >= n
 
     check.__name__ = f"assert_min_turns({n})"
     return check
 
 
-def assert_response_contains(pattern: str) -> Callable[[TestResult], bool]:
+def assert_response_contains(pattern: str) -> Callable[[InteractiveTestResult], bool]:
     """Create assertion that response contains pattern."""
 
-    def check(result: TestResult) -> bool:
+    def check(result: InteractiveTestResult) -> bool:
         for trace in result.traces:
             resp_body = trace.get("response", {}).get("body", {})
             content = resp_body.get("content", [])

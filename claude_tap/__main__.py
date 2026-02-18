@@ -3,10 +3,16 @@
 import asyncio
 import sys
 
-from claude_tap import async_main, parse_args
+from claude_tap.cli import async_main, parse_args
 
 
 def main():
+    # Check if first argument is "export" subcommand
+    if len(sys.argv) > 1 and sys.argv[1] == "export":
+        from claude_tap.export import export_main
+
+        sys.exit(export_main(sys.argv[2:]))
+
     argv = sys.argv[1:]
     if "--" in argv:
         # Explicit separator: everything after "--" goes to claude

@@ -598,6 +598,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 </div>
 
 <div class="trace-path-bar" id="trace-path-bar"></div>
+<div id="token-summary-bar" style="display:none;padding:6px 16px;background:var(--bg-card);border-bottom:1px solid var(--border);font-size:12px;font-family:var(--mono);display:none;gap:16px;align-items:center;flex-wrap:wrap"></div>
 
 <div class="main" id="main-area">
   <div class="drop-zone" id="drop-zone">
@@ -614,6 +615,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <input type="text" id="search-input" placeholder="Search messages, tools, prompts..." oninput="onSearch(this.value)">
       <button class="search-clear" id="search-clear" onclick="clearSearch()">&#10005;</button>
     </div>
+    <div id="tool-filter" style="display:none;padding:4px 8px;border-bottom:1px solid var(--border);font-size:11px;max-height:120px;overflow-y:auto"></div>
     <div class="sidebar" id="sidebar" style="flex:1;overflow-y:auto"></div>
   </div>
   <div class="detail" id="detail" style="display:none"></div>
@@ -621,7 +623,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 <script>
 const $ = s => document.querySelector(s);
-let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '';
+let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
 const TRACE_JSONL_PATH = typeof __TRACE_JSONL_PATH__ !== 'undefined' ? __TRACE_JSONL_PATH__ : '';
 const TRACE_HTML_PATH = typeof __TRACE_HTML_PATH__ !== 'undefined' ? __TRACE_HTML_PATH__ : '';
 
@@ -1019,18 +1021,74 @@ function renderPathFilter(paths, pathCounts) {
 function applyFilter() {
   filtered = entries.filter(e => activePaths.has(getPath(e)));
   if (searchQuery) filtered = filtered.filter(e => matchSearch(e, searchQuery));
+  if (activeTools) {
+    filtered = filtered.filter(e => {
+      const rc = e.response?.body?.content;
+      if (!Array.isArray(rc)) return false;
+      return rc.some(b => b.type === 'tool_use' && activeTools.has(b.name));
+    });
+  }
   filtered.sort((a, b) => (a.turn || 0) - (b.turn || 0));
   let totalTokens = 0, totalDuration = 0;
+  let sumInput = 0, sumOutput = 0, sumCacheRead = 0, sumCacheCreate = 0;
   filtered.forEach(e => {
     totalDuration += e.duration_ms || 0;
     const u = e.response?.body?.usage;
-    if (u) totalTokens += (u.input_tokens || 0) + (u.output_tokens || 0);
+    if (u) {
+      totalTokens += (u.input_tokens || 0) + (u.output_tokens || 0);
+      sumInput += u.input_tokens || 0;
+      sumOutput += u.output_tokens || 0;
+      sumCacheRead += u.cache_read_input_tokens || 0;
+      sumCacheCreate += u.cache_creation_input_tokens || 0;
+    }
   });
   $('#stat-turns').textContent = filtered.length;
   $('#stat-tokens').textContent = totalTokens.toLocaleString();
   $('#stat-duration').textContent = fmtDuration(totalDuration);
+  // Token summary bar
+  const tsb = $('#token-summary-bar');
+  if (totalTokens > 0) {
+    let parts = [
+      `<span style="color:var(--blue)">⬤</span> Input: <b>${sumInput.toLocaleString()}</b>`,
+      `<span style="color:var(--green)">⬤</span> Output: <b>${sumOutput.toLocaleString()}</b>`,
+    ];
+    if (sumCacheRead) parts.push(`<span style="color:var(--cyan)">⬤</span> Cache Read: <b>${sumCacheRead.toLocaleString()}</b>`);
+    if (sumCacheCreate) parts.push(`<span style="color:var(--amber)">⬤</span> Cache Write: <b>${sumCacheCreate.toLocaleString()}</b>`);
+    parts.push(`Total: <b>${totalTokens.toLocaleString()}</b>`);
+    tsb.innerHTML = parts.join('<span style="color:var(--border);margin:0 4px">|</span>');
+    tsb.style.display = 'flex';
+  } else {
+    tsb.style.display = 'none';
+  }
+  renderToolFilter();
   renderSidebar();
 }
+
+function renderToolFilter() {
+  const tf = $('#tool-filter');
+  // Collect all tool names from all entries (not just filtered)
+  const toolSet = new Set();
+  entries.forEach(e => {
+    const rc = e.response?.body?.content;
+    if (Array.isArray(rc)) rc.forEach(b => { if (b.type === 'tool_use' && b.name) toolSet.add(b.name); });
+  });
+  if (toolSet.size === 0) { tf.style.display = 'none'; return; }
+  tf.style.display = '';
+  const tools = [...toolSet].sort();
+  tf.innerHTML = '<div style="margin-bottom:3px;font-weight:600;color:var(--text-secondary)">Tools</div>' +
+    tools.map(name => {
+      const active = activeTools ? activeTools.has(name) : false;
+      return `<button class="filter-chip${active ? ' active' : ''}" style="font-size:10px;padding:2px 6px;margin:1px" onclick="toggleToolFilter('${name.replace(/'/g, "\\'")}')">${name}</button>`;
+    }).join('') +
+    (activeTools ? `<button class="filter-chip" style="font-size:10px;padding:2px 6px;margin:1px;color:var(--red)" onclick="clearToolFilter()">✕ Clear</button>` : '');
+}
+function toggleToolFilter(name) {
+  if (!activeTools) activeTools = new Set();
+  if (activeTools.has(name)) { activeTools.delete(name); if (activeTools.size === 0) activeTools = null; }
+  else activeTools.add(name);
+  applyFilter();
+}
+function clearToolFilter() { activeTools = null; applyFilter(); }
 
 /* ─── Search ─── */
 function onSearch(value) {

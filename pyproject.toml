@@ -1,6 +1,6 @@
 [project]
 name = "claude-tap"
-version = "0.1.4"
+version = "0.1.5"
 description = "Trace Claude Code API requests via a local reverse proxy. Inspect system prompts, messages, tools, and token usage."
 requires-python = ">=3.11"
 license = "MIT"
@@ -20,7 +20,6 @@ classifiers = [
 ]
 dependencies = [
     "aiohttp>=3.9,<4",
-    "anthropic>=0.79.0",
 ]
 
 [project.urls]
@@ -29,7 +28,7 @@ Repository = "https://github.com/liaohch3/claude-tap"
 Issues = "https://github.com/liaohch3/claude-tap/issues"
 
 [project.scripts]
-claude-tap = "claude_tap:main_entry"
+claude-tap = "claude_tap.cli:main_entry"
 
 [build-system]
 requires = ["setuptools>=68.0"]
@@ -59,6 +58,7 @@ select = ["E", "F", "W", "I"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]

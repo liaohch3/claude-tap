@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-02-18
+
+### Added
+- **`claude-tap export` command**: Export trace JSONL to Markdown or JSON format
+- **Token summary bar**: Top-level display of total input/output/cache_read/cache_write tokens in viewer
+- **Tool filter**: Filter trace entries by tool_use in the sidebar
+- **GitHub Actions CI**: Lint (ruff) + test (pytest) on push/PR
+- `py.typed` marker file for PEP 561 support
+
+### Changed
+- **Module split**: Refactored monolithic `__init__.py` into `sse.py`, `trace.py`, `live.py`, `proxy.py`, `viewer.py`, `cli.py`
+- **Removed `anthropic` dependency**: SSE reassembly now uses a lightweight built-in implementation
+- Renamed `TestResult` to `InteractiveTestResult` to avoid pytest collection warnings
+- Entry point changed to `claude_tap.cli:main_entry` (public API unchanged)
+
 ## [Unreleased]
 
 ### Added
