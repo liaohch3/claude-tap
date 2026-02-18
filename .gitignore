@@ -24,6 +24,11 @@ typescript.txt
 *.mp4
 *.webm
 *.gif
+# But keep docs/ demo assets
+!docs/demo.gif
+!docs/demo_zh.gif
+!docs/demo.mp4
+!docs/demo_zh.mp4
 demo-*.png
 demo-*.tape
 demo_commands.sh

@@ -9,6 +9,8 @@
 
 Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code). See exactly how it constructs system prompts, manages conversation history, selects tools, and uses tokens — in a beautiful trace viewer.
 
+![Demo](docs/demo.gif)
+
 ![Light Mode](docs/viewer-light.png)
 
 <details>
