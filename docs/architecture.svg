@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" font-family="Inter, -apple-system, BlinkMacSystemFont, sans-serif">
+  <defs>
+    <!-- Background gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#faf5ff"/>
+      <stop offset="50%" style="stop-color:#f0f9ff"/>
+      <stop offset="100%" style="stop-color:#f0fdf4"/>
+    </linearGradient>
+    
+    <!-- Card gradients -->
+    <linearGradient id="cardWhite" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff"/>
+      <stop offset="100%" style="stop-color:#f8fafc"/>
+    </linearGradient>
+    
+    <!-- Accent gradients -->
+    <linearGradient id="violet" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6"/>
+      <stop offset="100%" style="stop-color:#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="100%" style="stop-color:#60a5fa"/>
+    </linearGradient>
+    <linearGradient id="emerald" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#10b981"/>
+      <stop offset="100%" style="stop-color:#34d399"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#fbbf24"/>
+    </linearGradient>
+    <linearGradient id="rose" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f43f5e"/>
+      <stop offset="100%" style="stop-color:#fb7185"/>
+    </linearGradient>
+    
+    <!-- Soft shadow -->
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-opacity="0.1"/>
+    </filter>
+    
+    <!-- Connection glow -->
+    <filter id="lineGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="900" height="400" fill="url(#bgGrad)"/>
+  
+  <!-- Decorative circles -->
+  <circle cx="100" cy="50" r="150" fill="#8b5cf6" opacity="0.03"/>
+  <circle cx="800" cy="350" r="200" fill="#3b82f6" opacity="0.03"/>
+  <circle cx="450" cy="200" r="250" fill="#10b981" opacity="0.02"/>
+  
+  <!-- Title -->
+  <text x="450" y="38" text-anchor="middle" font-size="22" font-weight="700" fill="#1e293b">claude-tap</text>
+  <text x="450" y="58" text-anchor="middle" font-size="12" fill="#64748b">Transparent API Proxy for Claude Code</text>
+  
+  <!-- ===== COMPONENTS ===== -->
+  
+  <!-- Developer -->
+  <g transform="translate(40, 125)">
+    <rect width="90" height="100" rx="16" fill="url(#cardWhite)" filter="url(#softShadow)"/>
+    <circle cx="45" cy="38" r="22" fill="url(#violet)"/>
+    <circle cx="45" cy="33" r="9" fill="white" opacity="0.9"/>
+    <path d="M30,52 Q45,68 60,52" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" opacity="0.9"/>
+    <text x="45" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#475569">Developer</text>
+  </g>
+  
+  <!-- claude-tap CLI -->
+  <g transform="translate(175, 125)">
+    <rect width="110" height="100" rx="16" fill="url(#cardWhite)" filter="url(#softShadow)"/>
+    <rect x="18" y="16" width="74" height="45" rx="8" fill="#1e293b"/>
+    <text x="55" y="35" text-anchor="middle" font-size="10" fill="#4ade80" font-family="monospace">$ tap</text>
+    <rect x="25" y="43" width="40" height="12" rx="2" fill="#4ade80" opacity="0.3"/>
+    <text x="55" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#475569">claude-tap</text>
+  </g>
+  
+  <!-- Claude Code -->
+  <g transform="translate(330, 125)">
+    <rect width="110" height="100" rx="16" fill="url(#cardWhite)" filter="url(#softShadow)"/>
+    <rect x="18" y="16" width="74" height="45" rx="8" fill="#0f172a"/>
+    <rect x="23" y="21" width="64" height="35" rx="4" fill="#1e293b"/>
+    <text x="55" y="38" text-anchor="middle" font-size="11" fill="#fb923c" font-weight="700">claude</text>
+    <text x="55" y="51" text-anchor="middle" font-size="10" fill="#94a3b8">code</text>
+    <text x="55" y="82" text-anchor="middle" font-size="12" font-weight="600" fill="#475569">Claude Code</text>
+  </g>
+  
+  <!-- Proxy (center, highlighted) -->
+  <g transform="translate(485, 105)">
+    <rect width="135" height="125" rx="20" fill="url(#cardWhite)" stroke="url(#blue)" stroke-width="3" filter="url(#softShadow)"/>
+    <rect x="18" y="16" width="99" height="58" rx="12" fill="url(#blue)"/>
+    <text x="67" y="42" text-anchor="middle" font-size="15" fill="white" font-weight="700">PROXY</text>
+    <text x="67" y="60" text-anchor="middle" font-size="10" fill="white" opacity="0.8">aiohttp</text>
+    <text x="67" y="95" text-anchor="middle" font-size="12" font-weight="600" fill="#1e40af">Reverse Proxy</text>
+    <text x="67" y="112" text-anchor="middle" font-size="10" fill="#64748b">intercept + record</text>
+  </g>
+  
+  <!-- Anthropic API -->
+  <g transform="translate(665, 70)">
+    <rect width="120" height="90" rx="16" fill="url(#cardWhite)" filter="url(#softShadow)"/>
+    <rect x="25" y="14" width="70" height="42" rx="10" fill="url(#amber)"/>
+    <text x="60" y="40" text-anchor="middle" font-size="18" fill="white">☁️</text>
+    <text x="60" y="75" text-anchor="middle" font-size="11" font-weight="600" fill="#92400e">Anthropic API</text>
+  </g>
+  
+  <!-- Output: JSONL -->
+  <g transform="translate(665, 180)">
+    <rect width="105" height="80" rx="16" fill="url(#cardWhite)" filter="url(#softShadow)"/>
+    <rect x="25" y="14" width="55" height="35" rx="8" fill="url(#violet)"/>
+    <text x="52" y="36" text-anchor="middle" font-size="12" fill="white" font-family="monospace">{...}</text>
+    <text x="52" y="64" text-anchor="middle" font-size="11" font-weight="600" fill="#475569">trace.jsonl</text>
+  </g>
+  
+  <!-- Output: HTML -->
+  <g transform="translate(795, 180)">
+    <rect width="90" height="80" rx="16" fill="url(#cardWhite)" filter="url(#softShadow)"/>
+    <rect x="18" y="14" width="54" height="35" rx="8" fill="url(#emerald)"/>
+    <text x="45" y="36" text-anchor="middle" font-size="12" fill="white" font-family="monospace">&lt;/&gt;</text>
+    <text x="45" y="64" text-anchor="middle" font-size="11" font-weight="600" fill="#475569">trace.html</text>
+  </g>
+  
+  <!-- Live Viewer -->
+  <g transform="translate(665, 280)">
+    <rect width="120" height="80" rx="16" fill="url(#cardWhite)" filter="url(#softShadow)"/>
+    <rect x="20" y="12" width="80" height="38" rx="8" fill="white" stroke="url(#amber)" stroke-width="2"/>
+    <rect x="25" y="17" width="70" height="28" rx="5" fill="#fef9c3"/>
+    <circle cx="88" cy="22" r="5" fill="#22c55e"/>
+    <text x="60" y="65" text-anchor="middle" font-size="11" font-weight="600" fill="#475569">Live Viewer</text>
+  </g>
+  
+  <!-- ===== ARROWS ===== -->
+  
+  <!-- Developer -> claude-tap -->
+  <path d="M130,175 C150,175 155,175 170,175" fill="none" stroke="url(#blue)" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="170,175 163,170 163,180" fill="#3b82f6"/>
+  
+  <!-- claude-tap -> Claude Code -->
+  <path d="M285,175 C305,175 310,175 325,175" fill="none" stroke="url(#blue)" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="325,175 318,170 318,180" fill="#3b82f6"/>
+  
+  <!-- Claude Code -> Proxy -->
+  <path d="M440,175 C460,175 465,175 480,175" fill="none" stroke="url(#blue)" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="480,175 473,170 473,180" fill="#3b82f6"/>
+  
+  <!-- Proxy -> API -->
+  <path d="M620,140 C640,130 650,120 660,115" fill="none" stroke="url(#blue)" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="660,115 651,115 655,123" fill="#3b82f6"/>
+  
+  <!-- API -> Proxy (SSE) -->
+  <path d="M665,135 C645,150 635,160 625,167" fill="none" stroke="url(#emerald)" stroke-width="3" stroke-dasharray="8,5" stroke-linecap="round"/>
+  <polygon points="625,167 634,165 630,173" fill="#10b981"/>
+  
+  <!-- Proxy -> JSONL -->
+  <path d="M620,195 C640,200 650,205 660,208" fill="none" stroke="url(#violet)" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="660,208 652,204 654,213" fill="#8b5cf6"/>
+  
+  <!-- JSONL -> HTML -->
+  <path d="M770,220 C780,220 785,220 790,220" fill="none" stroke="url(#violet)" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="790,220 783,215 783,225" fill="#8b5cf6"/>
+  
+  <!-- Proxy -> Live Viewer -->
+  <path d="M575,230 C575,270 600,310 660,320" fill="none" stroke="url(#amber)" stroke-width="3" stroke-dasharray="8,5" stroke-linecap="round"/>
+  <polygon points="660,320 652,316 654,324" fill="#f59e0b"/>
+  
+  <!-- Labels on arrows -->
+  <text x="150" y="167" text-anchor="middle" font-size="9" fill="#64748b">run</text>
+  <text x="305" y="167" text-anchor="middle" font-size="9" fill="#64748b">spawn</text>
+  <text x="460" y="167" text-anchor="middle" font-size="9" fill="#64748b">POST</text>
+  <text x="650" y="108" text-anchor="middle" font-size="9" fill="#3b82f6">forward</text>
+  <text x="658" y="157" text-anchor="middle" font-size="9" fill="#10b981">SSE</text>
+  <text x="650" y="198" text-anchor="middle" font-size="9" fill="#8b5cf6">record</text>
+  <text x="610" y="280" text-anchor="middle" font-size="9" fill="#f59e0b">broadcast</text>
+  
+  <!-- ===== LEGEND ===== -->
+  <g transform="translate(50, 370)">
+    <rect width="800" height="25" rx="12" fill="white" opacity="0.7"/>
+    <text x="20" y="17" font-size="11" font-weight="600" fill="#475569">Data Flow:</text>
+    
+    <circle cx="115" cy="12" r="6" fill="url(#blue)"/>
+    <text x="130" y="16" font-size="10" fill="#64748b">Request</text>
+    
+    <circle cx="215" cy="12" r="6" fill="url(#emerald)"/>
+    <text x="230" y="16" font-size="10" fill="#64748b">SSE Response</text>
+    
+    <circle cx="345" cy="12" r="6" fill="url(#violet)"/>
+    <text x="360" y="16" font-size="10" fill="#64748b">Output</text>
+    
+    <circle cx="435" cy="12" r="6" fill="url(#amber)"/>
+    <text x="450" y="16" font-size="10" fill="#64748b">Live Stream</text>
+  </g>
+</svg>
