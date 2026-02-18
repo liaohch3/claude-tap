@@ -843,6 +843,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Port for live viewer server (default: auto)",
     )
     args, claude_args = tap_parser.parse_known_args(argv)
+    # Strip leading "--" separator if present (argparse leaves it in remainder)
+    if claude_args and claude_args[0] == "--":
+        claude_args = claude_args[1:]
     args.claude_args = claude_args
     return args
 
