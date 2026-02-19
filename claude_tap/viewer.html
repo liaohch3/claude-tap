@@ -590,6 +590,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 /* Mobile back button hidden by default on desktop */
 #mobile-back-btn { display: none; }
 
+/* Mobile prev/next nav bar — hidden on desktop */
+#mobile-nav-bar { display: none; }
+
 /* ─── Mobile responsive (≤ 768px) ─── */
 @media (max-width: 768px) {
 
@@ -633,6 +636,42 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     min-height: 44px;
   }
   #mobile-back-btn:active { background: var(--bg-hover); }
+
+  /* Mobile prev/next nav bar */
+  #mobile-nav-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    min-height: 44px;
+    gap: 8px;
+  }
+  #mobile-nav-bar button {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--blue);
+    font-size: 18px;
+    line-height: 1;
+    padding: 6px 14px;
+    min-width: 44px;
+    min-height: 36px;
+    cursor: pointer;
+  }
+  #mobile-nav-bar button:disabled {
+    color: var(--text-muted);
+    border-color: var(--border);
+    cursor: default;
+  }
+  #mobile-nav-bar button:not(:disabled):active { background: var(--bg-hover); }
+  #mobile-nav-pos {
+    font-size: 13px;
+    color: var(--text-secondary);
+    flex: 1;
+    text-align: center;
+  }
 
   /* R2: Header — stack logo + stats vertically; path-filter scrollable */
   .header {
@@ -821,6 +860,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div class="sidebar" id="sidebar" style="flex:1;overflow-y:auto"></div>
   </div>
   <button id="mobile-back-btn" onclick="mobileShowSidebar()" style="display:none">&#8592; Back to list</button>
+  <div id="mobile-nav-bar" style="display:none">
+    <button id="mobile-prev-btn" onclick="mobilePrev()" aria-label="Previous entry">&#8592;</button>
+    <span id="mobile-nav-pos"></span>
+    <button id="mobile-next-btn" onclick="mobileNext()" aria-label="Next entry">&#8594;</button>
+  </div>
   <div class="detail" id="detail" style="display:none"></div>
 </div>
 
@@ -1456,6 +1500,7 @@ function selectEntry(idx) {
   const active = document.querySelector('.sidebar-item.active');
   if (active) active.scrollIntoView({ block: 'nearest' });
   mobileShowDetail();
+  updateMobileNav();
 }
 
 /* ─── Detail ─── */
@@ -2125,18 +2170,48 @@ function mobileShowDetail() {
   const sidebarWrap = document.getElementById('sidebar-wrap');
   const detail = document.getElementById('detail');
   const backBtn = document.getElementById('mobile-back-btn');
+  const navBar = document.getElementById('mobile-nav-bar');
   if (sidebarWrap) sidebarWrap.classList.add('mobile-hidden');
   if (detail) detail.classList.add('mobile-fullwidth');
   if (backBtn) backBtn.style.display = '';
+  if (navBar) navBar.style.display = '';
+  updateMobileNav();
 }
 
 function mobileShowSidebar() {
   const sidebarWrap = document.getElementById('sidebar-wrap');
   const detail = document.getElementById('detail');
   const backBtn = document.getElementById('mobile-back-btn');
+  const navBar = document.getElementById('mobile-nav-bar');
   if (sidebarWrap) sidebarWrap.classList.remove('mobile-hidden');
   if (detail) detail.classList.remove('mobile-fullwidth');
   if (backBtn) backBtn.style.display = 'none';
+  if (navBar) navBar.style.display = 'none';
+}
+
+function updateMobileNav() {
+  const prevBtn = document.getElementById('mobile-prev-btn');
+  const nextBtn = document.getElementById('mobile-next-btn');
+  const pos = document.getElementById('mobile-nav-pos');
+  if (!prevBtn || !nextBtn || !pos) return;
+  const total = filtered.length;
+  if (total === 0) {
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    pos.textContent = '';
+    return;
+  }
+  prevBtn.disabled = activeIdx <= 0;
+  nextBtn.disabled = activeIdx >= total - 1;
+  pos.textContent = (activeIdx + 1) + ' / ' + total;
+}
+
+function mobilePrev() {
+  if (activeIdx > 0) selectEntry(activeIdx - 1);
+}
+
+function mobileNext() {
+  if (activeIdx < filtered.length - 1) selectEntry(activeIdx + 1);
 }
 </script>
 </body>

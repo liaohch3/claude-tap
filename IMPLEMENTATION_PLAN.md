@@ -1,21 +1,22 @@
-# Implementation Plan: Mobile Responsive Viewer
+# Implementation Plan: Mobile Detail Navigation
 
-Spec: `specs/mobile-responsive.md`
-Target file: `claude_tap/viewer.html`
+Spec: `specs/mobile-nav.md`
 
 ## Tasks
 
-- [x] **R1**: Responsive stacked layout — sidebar collapsible/toggleable; detail full-width on mobile; "← Back" button to return to sidebar; CSS `@media (max-width: 768px)`
-- [x] **R2**: Header & stats bar — token stats wrap to 2 rows or compact grid; path-filter chips horizontally scrollable; top bar stacks vertically; file paths truncate with ellipsis
-- [x] **R3**: Action buttons — stack vertically on mobile; touch targets ≥ 44px (min-height: 44px)
-- [x] **R4**: Detail panel — no horizontal overflow; code blocks `overflow-x: auto`; long text word-wraps
-- [x] **R5**: Diff modal — full-screen on mobile; side-by-side diff switches to block layout; dropdown full-width; nav/close buttons ≥ 44px touch target
-- [x] **R6**: Search bar — inherits full width from sidebar; larger font-size on mobile for readability
+### R1: Previous/Next Navigation in Detail View
+- [ ] Add `#mobile-nav-bar` div with prev/next arrow buttons and position indicator
+- [ ] CSS: hidden on desktop, visible as sticky bar on mobile (≤768px)
+- [ ] JS: `updateMobileNav()` — sets button disabled states and position text
+- [ ] Call `updateMobileNav()` from `selectEntry()` and `mobileShowDetail()`
 
-## Constraints
-- All changes in `claude_tap/viewer.html` only
-- Prefer CSS-only `@media` solutions
-- Do NOT break desktop layout
-- All 22 tests must pass
+### R3: Keyboard Navigation Still Works
+- Already implemented via keydown handler (j/k/ArrowUp/ArrowDown)
+- No changes needed
+
+### R2: Swipe Gesture (Optional)
+- [ ] Touch swipe support on detail area (nice-to-have)
+
+---
 
 ALL TASKS COMPLETE
