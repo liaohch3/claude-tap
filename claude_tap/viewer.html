@@ -586,6 +586,189 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   .sidebar { width: 240px; min-width: 200px; }
   .detail { padding: 16px; }
 }
+
+/* Mobile back button hidden by default on desktop */
+#mobile-back-btn { display: none; }
+
+/* ─── Mobile responsive (≤ 768px) ─── */
+@media (max-width: 768px) {
+
+  /* R1: Stacked layout — sidebar + detail stack vertically */
+  body { overflow: auto; }
+  .main { flex-direction: column; overflow: visible; }
+
+  #sidebar-wrap {
+    width: 100% !important;
+    min-width: 0 !important;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .detail {
+    flex: none;
+    padding: 12px;
+    overflow: visible;
+    min-height: 0;
+  }
+
+  /* Mobile sidebar toggle: hide/show sidebar */
+  #sidebar-wrap.mobile-hidden { display: none !important; }
+  #detail.mobile-fullwidth { display: block !important; width: 100%; }
+
+  /* Back button shown only on mobile */
+  #mobile-back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 10px 14px;
+    background: var(--bg-card);
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--blue);
+    cursor: pointer;
+    width: 100%;
+    min-height: 44px;
+  }
+  #mobile-back-btn:active { background: var(--bg-hover); }
+
+  /* R2: Header — stack logo + stats vertically; path-filter scrollable */
+  .header {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .header .logo span { font-size: 13px; }
+  .header .divider { display: none; }
+  .path-filter {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+    scrollbar-width: none;
+  }
+  .path-filter::-webkit-scrollbar { display: none; }
+  .stats {
+    margin-left: 0;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+  }
+  .stats .stat-group { font-size: 11px; }
+  .trace-path-bar {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 10px;
+  }
+  .trace-path-bar .tp-val {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #token-summary-bar {
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 11px;
+    padding: 6px 10px;
+  }
+
+  /* R3: Action buttons — stack vertically, min 44px touch target */
+  .action-bar { flex-direction: column; gap: 6px; }
+  .act-btn {
+    min-height: 44px;
+    justify-content: center;
+    font-size: 13px;
+    padding: 10px 16px;
+  }
+
+  /* R4: Detail panel — prevent horizontal overflow */
+  .section-body { overflow-x: auto; }
+  .section-body pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .msg pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .content-block { overflow-wrap: break-word; word-break: break-word; max-width: 100%; }
+  .json-view { overflow-x: auto; max-width: 100%; }
+  .token-bar { gap: 10px; }
+
+  /* R5: Diff modal — full-screen */
+  .diff-overlay {
+    align-items: flex-start;
+    padding: 0;
+  }
+  .diff-modal {
+    width: 100vw;
+    max-width: 100vw;
+    max-height: 100vh;
+    height: 100vh;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .diff-header {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 0;
+    min-height: 52px;
+  }
+  .diff-header .diff-title { font-size: 13px; order: 1; flex: 1; }
+  .diff-nav-btn { min-height: 44px; min-width: 44px; padding: 8px 12px; order: 0; }
+  .diff-nav-prev { order: 0; }
+  .diff-nav-next { order: 2; }
+  .diff-header .diff-close { min-height: 44px; min-width: 44px; padding: 8px 12px; order: 3; font-size: 20px; }
+  .diff-target-select {
+    width: 100%;
+    order: 10;
+    margin-left: 0;
+    margin-top: 4px;
+  }
+  .diff-target-select select { max-width: 100%; width: 100%; }
+  .diff-body { flex: 1; overflow-y: auto; padding: 12px; }
+
+  /* R5: Side-by-side diff → each pair stacked on mobile */
+  .sbs-diff {
+    display: block;
+    overflow-x: auto;
+    max-height: none;
+  }
+  /* Hide the sticky headers; we show per-cell context via border colors */
+  .sbs-diff .sbs-header { display: none; }
+  /* Each pair of cells becomes a mini block */
+  .sbs-cell {
+    display: block;
+    border-left: 3px solid transparent;
+    border-bottom: 1px solid var(--border-light);
+  }
+  .sbs-cell.del { border-left-color: var(--red); }
+  .sbs-cell.add { border-left-color: var(--green); }
+  .sbs-cell.ctx { opacity: 0.5; }
+  .sbs-cell.empty { display: none; }
+  .sbs-fold { display: block; }
+
+  /* R5: diff-side-by-side (parameters panel) → stacked */
+  .diff-side-by-side { flex-direction: column; }
+  .diff-side-by-side .diff-panel { min-width: 0; }
+
+  /* R6: Search bar full-width */
+  .search-bar input { font-size: 14px; }
+
+  /* Sidebar items: larger touch targets */
+  .sidebar-item { min-height: 44px; padding: 12px 16px; }
+  .sidebar-group-header { min-height: 44px; }
+}
 </style>
 </head>
 <body>
@@ -637,6 +820,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div id="tool-filter" style="display:none;padding:4px 8px;border-bottom:1px solid var(--border);font-size:11px;max-height:120px;overflow-y:auto"></div>
     <div class="sidebar" id="sidebar" style="flex:1;overflow-y:auto"></div>
   </div>
+  <button id="mobile-back-btn" onclick="mobileShowSidebar()" style="display:none">&#8592; Back to list</button>
   <div class="detail" id="detail" style="display:none"></div>
 </div>
 
@@ -1271,6 +1455,7 @@ function selectEntry(idx) {
   renderDetail(filtered[idx]);
   const active = document.querySelector('.sidebar-item.active');
   if (active) active.scrollIntoView({ block: 'nearest' });
+  mobileShowDetail();
 }
 
 /* ─── Detail ─── */
@@ -1931,6 +2116,28 @@ document.addEventListener('keydown', ev => {
   if (ev.key === 'ArrowDown' || ev.key === 'j') { ev.preventDefault(); selectEntry(Math.min(activeIdx + 1, filtered.length - 1)); }
   if (ev.key === 'ArrowUp' || ev.key === 'k') { ev.preventDefault(); selectEntry(Math.max(activeIdx - 1, 0)); }
 });
+
+/* ─── Mobile sidebar toggle (R1) ─── */
+function isMobile() { return window.matchMedia('(max-width: 768px)').matches; }
+
+function mobileShowDetail() {
+  if (!isMobile()) return;
+  const sidebarWrap = document.getElementById('sidebar-wrap');
+  const detail = document.getElementById('detail');
+  const backBtn = document.getElementById('mobile-back-btn');
+  if (sidebarWrap) sidebarWrap.classList.add('mobile-hidden');
+  if (detail) detail.classList.add('mobile-fullwidth');
+  if (backBtn) backBtn.style.display = '';
+}
+
+function mobileShowSidebar() {
+  const sidebarWrap = document.getElementById('sidebar-wrap');
+  const detail = document.getElementById('detail');
+  const backBtn = document.getElementById('mobile-back-btn');
+  if (sidebarWrap) sidebarWrap.classList.remove('mobile-hidden');
+  if (detail) detail.classList.remove('mobile-fullwidth');
+  if (backBtn) backBtn.style.display = 'none';
+}
 </script>
 </body>
 </html>

@@ -1,29 +1,21 @@
-# Implementation Plan: Improved Diff Matching
+# Implementation Plan: Mobile Responsive Viewer
 
-Based on `specs/diff-matching.md`.
+Spec: `specs/mobile-responsive.md`
+Target file: `claude_tap/viewer.html`
 
 ## Tasks
 
-### R1: Message Prefix Matching (Primary Strategy)
-- [x] **DONE** — `findPrevSameModel` and `findNextSameModel` already use prefix matching with model-based fallback.
+- [x] **R1**: Responsive stacked layout — sidebar collapsible/toggleable; detail full-width on mobile; "← Back" button to return to sidebar; CSS `@media (max-width: 768px)`
+- [x] **R2**: Header & stats bar — token stats wrap to 2 rows or compact grid; path-filter chips horizontally scrollable; top bar stacks vertically; file paths truncate with ellipsis
+- [x] **R3**: Action buttons — stack vertically on mobile; touch targets ≥ 44px (min-height: 44px)
+- [x] **R4**: Detail panel — no horizontal overflow; code blocks `overflow-x: auto`; long text word-wraps
+- [x] **R5**: Diff modal — full-screen on mobile; side-by-side diff switches to block layout; dropdown full-width; nav/close buttons ≥ 44px touch target
+- [x] **R6**: Search bar — inherits full width from sidebar; larger font-size on mobile for readability
 
-### R2: Fallback Visual Indicator
-- [x] **DONE** — `findPrevSameModel` now returns `{idx, isFallback}`. When `isFallback=true`, a ⚠️ amber banner shows in the diff modal with the text "No exact thread match found — showing closest same-model request". All 8 i18n locales updated.
-
-### R3: Manual Diff Target Selection
-- [x] **DONE** — Added a dropdown in the diff modal header listing all previous entries grouped by model. When user selects a different entry, the diff re-renders immediately. Added `_buildDiffTargetOptions()` helper and `showDiffForIdx(curIdx, triggerBtn, manualPrevIdx)` signature.
-
-### R4: "Next" Navigation Consistency
-- [x] **DONE** — `findNextSameModel` already uses prefix-matching logic identical to `findPrevSameModel`.
-
-## Priority Order
-1. R2 (simpler, adds warning indicator)
-2. R3 (more complex, adds dropdown)
-
-## Acceptance Criteria
-1. Prefix-matched diffs show normally (no indicator)
-2. Fallback diffs show a visible warning indicator
-3. A dropdown allows manual selection of diff target
-4. All 22 existing tests pass
+## Constraints
+- All changes in `claude_tap/viewer.html` only
+- Prefer CSS-only `@media` solutions
+- Do NOT break desktop layout
+- All 22 tests must pass
 
 ALL TASKS COMPLETE
