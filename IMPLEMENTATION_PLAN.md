@@ -25,3 +25,5 @@ Based on `specs/diff-matching.md`.
 2. Fallback diffs show a visible warning indicator
 3. A dropdown allows manual selection of diff target
 4. All 22 existing tests pass
+
+ALL TASKS COMPLETE
