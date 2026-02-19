@@ -375,6 +375,25 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 .diff-header .diff-close:hover { background: var(--bg-hover); color: var(--text); }
 .diff-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+.diff-fallback-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px; margin: 8px 20px 0;
+  background: var(--amber-bg); border: 1px solid var(--amber);
+  border-radius: var(--radius-sm); font-size: 12px; color: var(--amber);
+  font-weight: 500;
+}
+.diff-fallback-banner .dfb-icon { font-size: 14px; flex-shrink: 0; }
+.diff-target-select {
+  margin-left: auto; display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-secondary);
+}
+.diff-target-select select {
+  font-size: 11px; color: var(--text); background: var(--bg-hover);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 2px 6px; cursor: pointer; max-width: 200px;
+}
+.diff-target-select select:hover { border-color: var(--text-tertiary); }
+.diff-target-select select:focus { outline: none; border-color: var(--accent, #6c8ebf); }
 .diff-section {
   margin-bottom: 14px; background: var(--bg-card);
   border: 1px solid var(--border); border-radius: var(--radius);
@@ -649,6 +668,8 @@ const I18N = {
     badge_messages: "messages", badge_tools: "tools", badge_events: "events",
     search_placeholder: "Search messages, tools, prompts...",
     diff_sys_old: "Previous", diff_sys_new: "Current",
+    diff_fallback_warning: "No exact thread match found — showing closest same-model request",
+    diff_select_target: "Compare against:", diff_select_auto: "Auto",
   },
   "zh-CN": {
     title: "Claude Trace", stats_turns: "轮次", stats_tokens: "Token", stats_time: "耗时",
@@ -670,6 +691,8 @@ const I18N = {
     badge_messages: "条消息", badge_tools: "个工具", badge_events: "个事件",
     search_placeholder: "搜索消息、工具、提示词...",
     diff_sys_old: "上次", diff_sys_new: "本次",
+    diff_fallback_warning: "未找到精确线程匹配 — 显示最近的同模型请求",
+    diff_select_target: "对比对象：", diff_select_auto: "自动",
   },
   ja: {
     title: "Claude Trace", stats_turns: "ターン", stats_tokens: "トークン", stats_time: "時間",
@@ -691,6 +714,8 @@ const I18N = {
     badge_messages: "件のメッセージ", badge_tools: "個のツール", badge_events: "件のイベント",
     search_placeholder: "メッセージ、ツール、プロンプトを検索...",
     diff_sys_old: "前回", diff_sys_new: "今回",
+    diff_fallback_warning: "正確なスレッド一致が見つかりません — 同モデルの直近のリクエストを表示",
+    diff_select_target: "比較対象：", diff_select_auto: "自動",
   },
   ko: {
     title: "Claude Trace", stats_turns: "턴", stats_tokens: "토큰", stats_time: "시간",
@@ -712,6 +737,8 @@ const I18N = {
     badge_messages: "개 메시지", badge_tools: "개 도구", badge_events: "개 이벤트",
     search_placeholder: "메시지, 도구, 프롬프트 검색...",
     diff_sys_old: "이전", diff_sys_new: "현재",
+    diff_fallback_warning: "정확한 스레드 일치를 찾을 수 없습니다 — 가장 가까운 동일 모델 요청을 표시",
+    diff_select_target: "비교 대상：", diff_select_auto: "자동",
   },
   fr: {
     title: "Claude Trace", stats_turns: "Tours", stats_tokens: "Tokens", stats_time: "Durée",
@@ -733,6 +760,8 @@ const I18N = {
     badge_messages: "messages", badge_tools: "outils", badge_events: "événements",
     search_placeholder: "Rechercher messages, outils, prompts...",
     diff_sys_old: "Précédent", diff_sys_new: "Actuel",
+    diff_fallback_warning: "Aucune correspondance de fil exacte trouvée — affichage de la requête du même modèle la plus proche",
+    diff_select_target: "Comparer avec :", diff_select_auto: "Auto",
   },
   ar: {
     title: "Claude Trace", stats_turns: "الأدوار", stats_tokens: "الرموز", stats_time: "المدة",
@@ -754,6 +783,8 @@ const I18N = {
     badge_messages: "رسالة", badge_tools: "أداة", badge_events: "حدث",
     search_placeholder: "بحث في الرسائل والأدوات والموجهات...",
     diff_sys_old: "السابق", diff_sys_new: "الحالي",
+    diff_fallback_warning: "لم يتم العثور على تطابق دقيق للخيط — عرض أقرب طلب لنفس النموذج",
+    diff_select_target: "مقارنة مع:", diff_select_auto: "تلقائي",
   },
   de: {
     title: "Claude Trace", stats_turns: "Runden", stats_tokens: "Token", stats_time: "Dauer",
@@ -775,6 +806,8 @@ const I18N = {
     badge_messages: "Nachrichten", badge_tools: "Werkzeuge", badge_events: "Ereignisse",
     search_placeholder: "Nachrichten, Werkzeuge, Prompts suchen...",
     diff_sys_old: "Vorherige", diff_sys_new: "Aktuelle",
+    diff_fallback_warning: "Keine exakte Thread-Übereinstimmung gefunden — zeige nächste Anfrage desselben Modells",
+    diff_select_target: "Vergleichen mit:", diff_select_auto: "Auto",
   },
   ru: {
     title: "Claude Trace", stats_turns: "Ходы", stats_tokens: "Токены", stats_time: "Время",
@@ -796,6 +829,8 @@ const I18N = {
     badge_messages: "сообщений", badge_tools: "инструм.", badge_events: "событий",
     search_placeholder: "Поиск сообщений, инструментов, промптов...",
     diff_sys_old: "Предыдущий", diff_sys_new: "Текущий",
+    diff_fallback_warning: "Точное совпадение потока не найдено — показан ближайший запрос той же модели",
+    diff_select_target: "Сравнить с:", diff_select_auto: "Авто",
   },
 };
 function detectLang() {
@@ -1462,14 +1497,52 @@ function isMainTurn(e) {
       || (b.messages && b.messages.length > 1);
 }
 
-function findPrevSameModel(idx) {
-  const e = filtered[idx];
-  const model = e?.request?.body?.model;
-  const main = isMainTurn(e);
-  for (let i = idx - 1; i >= 0; i--) {
-    if (filtered[i]?.request?.body?.model === model && isMainTurn(filtered[i]) === main) return i;
+function _msgHash(msg) {
+  const c = msg?.content;
+  const text = typeof c === 'string' ? c : JSON.stringify(c || '');
+  // Simple hash: role + first 200 chars of content
+  return (msg?.role || '') + ':' + text.slice(0, 200);
+}
+
+function _getMsgHashes(entry) {
+  const msgs = entry?.request?.body?.messages || [];
+  return msgs.map(_msgHash);
+}
+
+function _isPrefixOf(shorter, longer) {
+  if (shorter.length === 0 || longer.length < shorter.length) return false;
+  for (let i = 0; i < shorter.length; i++) {
+    if (shorter[i] !== longer[i]) return false;
   }
-  return -1;
+  return true;
+}
+
+function findPrevSameModel(idx) {
+  const target = filtered[idx];
+  const targetHashes = _getMsgHashes(target);
+
+  // Strategy 1: find the best prefix match (longest prefix)
+  let bestIdx = -1;
+  let bestLen = 0;
+  for (let i = idx - 1; i >= 0; i--) {
+    const candidateHashes = _getMsgHashes(filtered[i]);
+    if (candidateHashes.length > 0 && _isPrefixOf(candidateHashes, targetHashes)) {
+      if (candidateHashes.length > bestLen) {
+        bestLen = candidateHashes.length;
+        bestIdx = i;
+      }
+    }
+  }
+  if (bestIdx >= 0) return { idx: bestIdx, isFallback: false };
+
+  // Strategy 2: fallback to same model + isMainTurn (original behavior)
+  const model = target?.request?.body?.model;
+  const main = isMainTurn(target);
+  for (let i = idx - 1; i >= 0; i--) {
+    if (filtered[i]?.request?.body?.model === model && isMainTurn(filtered[i]) === main)
+      return { idx: i, isFallback: true };
+  }
+  return { idx: -1, isFallback: false };
 }
 
 function showDiff(btn) {
@@ -1477,17 +1550,65 @@ function showDiff(btn) {
 }
 
 function findNextSameModel(idx) {
-  const e = filtered[idx];
-  const model = e?.request?.body?.model;
-  const main = isMainTurn(e);
+  const current = filtered[idx];
+  const currentHashes = _getMsgHashes(current);
+
+  // Strategy 1: find the next entry whose messages start with current's messages as prefix
+  let bestIdx = -1;
+  let bestLen = Infinity;
+  for (let i = idx + 1; i < filtered.length; i++) {
+    const candidateHashes = _getMsgHashes(filtered[i]);
+    if (currentHashes.length > 0 && _isPrefixOf(currentHashes, candidateHashes)) {
+      // Pick the closest (smallest) extension
+      if (candidateHashes.length < bestLen) {
+        bestLen = candidateHashes.length;
+        bestIdx = i;
+      }
+    }
+  }
+  if (bestIdx >= 0) return bestIdx;
+
+  // Strategy 2: fallback to same model + isMainTurn
+  const model = current?.request?.body?.model;
+  const main = isMainTurn(current);
   for (let i = idx + 1; i < filtered.length; i++) {
     if (filtered[i]?.request?.body?.model === model && isMainTurn(filtered[i]) === main) return i;
   }
   return -1;
 }
 
-function showDiffForIdx(curIdx, triggerBtn) {
-  const prevIdx = findPrevSameModel(curIdx);
+function _buildDiffTargetOptions(curIdx) {
+  // Collect all previous entries grouped by model for the dropdown
+  const options = []; // { label, filteredIdx }
+  const modelGroups = {}; // model -> [{label, filteredIdx}]
+  for (let i = curIdx - 1; i >= 0; i--) {
+    const e = filtered[i];
+    const model = e?.request?.body?.model || 'unknown';
+    const turn = e.turn || (i + 1);
+    if (!modelGroups[model]) modelGroups[model] = [];
+    modelGroups[model].push({ label: `${t('turn')} ${turn}`, filteredIdx: i, model });
+  }
+  // Flatten: for each model group (sorted by first appearance), add entries
+  const seenModels = [];
+  for (let i = curIdx - 1; i >= 0; i--) {
+    const model = filtered[i]?.request?.body?.model || 'unknown';
+    if (!seenModels.includes(model)) seenModels.push(model);
+  }
+  for (const model of seenModels) {
+    for (const item of modelGroups[model] || []) {
+      options.push(item);
+    }
+  }
+  return options;
+}
+
+function showDiffForIdx(curIdx, triggerBtn, manualPrevIdx) {
+  const prevResult = manualPrevIdx !== undefined
+    ? { idx: manualPrevIdx, isFallback: false }
+    : findPrevSameModel(curIdx);
+  const prevIdx = prevResult.idx;
+  const isFallback = prevResult.isFallback;
+
   if (prevIdx < 0) {
     if (triggerBtn) {
       const orig = triggerBtn.innerHTML;
@@ -1505,8 +1626,25 @@ function showDiffForIdx(curIdx, triggerBtn) {
   const html = renderStructuralDiff(diff);
 
   // Check if prev/next diff pairs exist
-  const hasPrev = findPrevSameModel(prevIdx) >= 0;
-  const hasNext = findPrevSameModel(findNextSameModel(curIdx)) >= 0;
+  const hasPrev = findPrevSameModel(prevIdx).idx >= 0;
+  const nextChainIdx = findNextSameModel(curIdx);
+  const hasNext = nextChainIdx >= 0 && findPrevSameModel(nextChainIdx).idx >= 0;
+
+  // Build dropdown options for manual selection
+  const targetOptions = _buildDiffTargetOptions(curIdx);
+  const optionsHtml = targetOptions.map(opt => {
+    const selected = opt.filteredIdx === prevIdx ? ' selected' : '';
+    const modelShort = (opt.model || '').replace('claude-', '').replace(/-\d{8}$/, '');
+    return `<option value="${opt.filteredIdx}"${selected}>${opt.label} (${modelShort})</option>`;
+  }).join('');
+  const autoMark = manualPrevIdx === undefined && !isFallback ? ` [${t('diff_select_auto')}]` : '';
+  const selectHtml = targetOptions.length > 0
+    ? `<div class="diff-target-select"><span>${t('diff_select_target')}</span><select class="diff-target-dropdown">${optionsHtml}</select></div>`
+    : '';
+
+  const warningHtml = isFallback
+    ? `<div class="diff-fallback-banner"><span class="dfb-icon">⚠️</span><span>${t('diff_fallback_warning')}</span></div>`
+    : '';
 
   const overlay = document.createElement('div');
   overlay.className = 'diff-overlay';
@@ -1515,8 +1653,10 @@ function showDiffForIdx(curIdx, triggerBtn) {
       <button class="diff-nav-btn diff-nav-prev" ${hasPrev ? '' : 'disabled'}>&#9664;</button>
       <span class="diff-title">${t('turn')} ${filtered[prevIdx].turn || '?'} &rarr; ${t('turn')} ${filtered[curIdx].turn || '?'}</span>
       <button class="diff-nav-btn diff-nav-next" ${hasNext ? '' : 'disabled'}>&#9654;</button>
+      ${selectHtml}
       <button class="diff-close">&#10005;</button>
     </div>
+    ${warningHtml}
     <div class="diff-body">${html}</div>
   </div>`;
   const close = () => { overlay.remove(); document.removeEventListener('keydown', escHandler); };
@@ -1530,6 +1670,14 @@ function showDiffForIdx(curIdx, triggerBtn) {
     const nextIdx = findNextSameModel(curIdx);
     if (nextIdx >= 0 && hasNext) { selectEntry(filtered.indexOf(filtered[nextIdx])); showDiffForIdx(nextIdx); }
   };
+  // Manual target selection dropdown
+  const dropdown = overlay.querySelector('.diff-target-dropdown');
+  if (dropdown) {
+    dropdown.onchange = () => {
+      const selectedIdx = parseInt(dropdown.value, 10);
+      showDiffForIdx(curIdx, null, selectedIdx);
+    };
+  }
   document.body.appendChild(overlay);
   const escHandler = e => {
     if (e.key === 'Escape') close();
