@@ -1,22 +1,15 @@
-# Implementation Plan: Mobile Detail Navigation
+# Implementation Plan: Fix Keyboard Navigation Order
 
-Spec: `specs/mobile-nav.md`
+Spec: `specs/keyboard-nav-order.md`
 
 ## Tasks
 
-### R1: Previous/Next Navigation in Detail View
-- [ ] Add `#mobile-nav-bar` div with prev/next arrow buttons and position indicator
-- [ ] CSS: hidden on desktop, visible as sticky bar on mobile (≤768px)
-- [ ] JS: `updateMobileNav()` — sets button disabled states and position text
-- [ ] Call `updateMobileNav()` from `selectEntry()` and `mobileShowDetail()`
+- [ ] **T1**: Build `visualOrder` array in `renderSidebar()` that reflects DOM order of visible `.sidebar-item` elements; update keyboard nav (j/k/↑/↓) and mobile prev/next to follow visual order; skip collapsed group entries; rebuild after group toggle.
 
-### R3: Keyboard Navigation Still Works
-- Already implemented via keydown handler (j/k/ArrowUp/ArrowDown)
-- No changes needed
+## Notes
 
-### R2: Swipe Gesture (Optional)
-- [ ] Touch swipe support on detail area (nice-to-have)
-
----
-
-ALL TASKS COMPLETE
+- All changes in `claude_tap/viewer.html` only
+- `visualOrder` is an array of `filtered` indices in DOM/visual order, excluding items inside collapsed groups
+- `buildVisualOrder()` reads `.sidebar-item` elements from DOM and filters by parent visibility
+- `visualNavigate(delta)` looks up current position in `visualOrder` and steps by `delta`
+- `updateMobileNav()` uses `visualOrder.length` and visual position for prev/next disabled state

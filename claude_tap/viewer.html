@@ -871,6 +871,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script>
 const $ = s => document.querySelector(s);
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
+let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
 const TRACE_JSONL_PATH = typeof __TRACE_JSONL_PATH__ !== 'undefined' ? __TRACE_JSONL_PATH__ : '';
 const TRACE_HTML_PATH = typeof __TRACE_HTML_PATH__ !== 'undefined' ? __TRACE_HTML_PATH__ : '';
 
@@ -1412,6 +1413,24 @@ function modelBadge(m) {
   return { bg: 'var(--bg)', fg: 'var(--text-tertiary)' };
 }
 
+/* ─── Visual order helpers ─── */
+function buildVisualOrder() {
+  visualOrder = [];
+  document.querySelectorAll('.sidebar-item').forEach(el => {
+    // Skip items whose parent container is collapsed (display: none)
+    if (el.parentElement && el.parentElement.style.display === 'none') return;
+    visualOrder.push(parseInt(el.dataset.idx));
+  });
+}
+
+function visualNavigate(delta) {
+  if (!visualOrder.length) return;
+  const pos = visualOrder.indexOf(activeIdx);
+  if (pos === -1) { selectEntry(visualOrder[0]); return; }
+  const next = Math.max(0, Math.min(pos + delta, visualOrder.length - 1));
+  selectEntry(visualOrder[next]);
+}
+
 /* ─── Sidebar ─── */
 const collapsedGroups = new Set(); // Track collapsed model groups
 
@@ -1469,11 +1488,14 @@ function renderSidebar() {
         content.style.display = nowCollapsed ? 'none' : '';
         header.querySelector('.group-chevron').classList.toggle('open');
         if (nowCollapsed) collapsedGroups.add(model); else collapsedGroups.delete(model);
+        buildVisualOrder();
+        updateMobileNav();
       };
       sb.appendChild(header);
       sb.appendChild(content);
     });
   }
+  buildVisualOrder();
   // Restore current selection if still valid, otherwise pick default
   if (activeIdx >= 0 && activeIdx < filtered.length) {
     selectEntry(activeIdx);
@@ -2157,9 +2179,9 @@ function fmtChars(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n
 
 /* ─── Keyboard nav ─── */
 document.addEventListener('keydown', ev => {
-  if (!filtered.length) return;
-  if (ev.key === 'ArrowDown' || ev.key === 'j') { ev.preventDefault(); selectEntry(Math.min(activeIdx + 1, filtered.length - 1)); }
-  if (ev.key === 'ArrowUp' || ev.key === 'k') { ev.preventDefault(); selectEntry(Math.max(activeIdx - 1, 0)); }
+  if (!visualOrder.length) return;
+  if (ev.key === 'ArrowDown' || ev.key === 'j') { ev.preventDefault(); visualNavigate(1); }
+  if (ev.key === 'ArrowUp' || ev.key === 'k') { ev.preventDefault(); visualNavigate(-1); }
 });
 
 /* ─── Mobile sidebar toggle (R1) ─── */
@@ -2194,24 +2216,25 @@ function updateMobileNav() {
   const nextBtn = document.getElementById('mobile-next-btn');
   const pos = document.getElementById('mobile-nav-pos');
   if (!prevBtn || !nextBtn || !pos) return;
-  const total = filtered.length;
+  const total = visualOrder.length;
   if (total === 0) {
     prevBtn.disabled = true;
     nextBtn.disabled = true;
     pos.textContent = '';
     return;
   }
-  prevBtn.disabled = activeIdx <= 0;
-  nextBtn.disabled = activeIdx >= total - 1;
-  pos.textContent = (activeIdx + 1) + ' / ' + total;
+  const vPos = visualOrder.indexOf(activeIdx);
+  prevBtn.disabled = vPos <= 0;
+  nextBtn.disabled = vPos >= total - 1;
+  pos.textContent = (vPos + 1) + ' / ' + total;
 }
 
 function mobilePrev() {
-  if (activeIdx > 0) selectEntry(activeIdx - 1);
+  visualNavigate(-1);
 }
 
 function mobileNext() {
-  if (activeIdx < filtered.length - 1) selectEntry(activeIdx + 1);
+  visualNavigate(1);
 }
 </script>
 </body>
