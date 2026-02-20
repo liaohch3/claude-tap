@@ -1762,8 +1762,9 @@ function _msgHash(msg) {
     });
   }
   const text = typeof c === 'string' ? c : JSON.stringify(c || '');
-  // Simple hash: role + first 200 chars of content
-  return (msg?.role || '') + ':' + text.slice(0, 200);
+  // Simple hash: role + first 500 chars of content (200 was too short for Claude Code
+  // subagents that share long system-reminder prefixes but differ in task content)
+  return (msg?.role || '') + ':' + text.slice(0, 500);
 }
 
 function _getMsgHashes(entry) {
