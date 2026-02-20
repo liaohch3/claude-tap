@@ -1750,7 +1750,17 @@ function isMainTurn(e) {
 }
 
 function _msgHash(msg) {
-  const c = msg?.content;
+  let c = msg?.content;
+  // Strip cache_control from content items (Claude Code adds/removes these between turns)
+  if (Array.isArray(c)) {
+    c = c.map(item => {
+      if (item && typeof item === 'object' && 'cache_control' in item) {
+        const { cache_control, ...rest } = item;
+        return rest;
+      }
+      return item;
+    });
+  }
   const text = typeof c === 'string' ? c : JSON.stringify(c || '');
   // Simple hash: role + first 200 chars of content
   return (msg?.role || '') + ':' + text.slice(0, 200);
