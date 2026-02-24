@@ -78,7 +78,7 @@
 [data-theme="dark"] .msg.assistant { border-color: #1a3a26; }
 [data-theme="dark"] .msg.system { border-color: #3d3000; }
 [data-theme="dark"] .msg.tool_result { border-color: #2a1f48; }
-[data-theme="dark"] .msg pre { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.06); }
+[data-theme="dark"] .msg pre, [data-theme="dark"] .msg .pre-text { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.06); }
 [data-theme="dark"] .json-view .jk { color: #bc8cff; }
 [data-theme="dark"] .json-view .js { color: #3fb950; }
 [data-theme="dark"] .json-view .jn { color: #d29922; }
@@ -234,7 +234,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .section-header .copy-btn:hover { color: var(--blue); border-color: var(--blue); }
 .section-body { padding: 0 16px 16px; display: none; overflow-x: auto; }
 .section-body.open { display: block; }
-.section-body pre {
+.section-body pre, .section-body .pre-text {
   white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
   font-size: 12px; background: var(--bg-code); padding: 12px 14px;
   border-radius: var(--radius-sm); line-height: 1.6; border: 1px solid var(--border-light);
@@ -259,7 +259,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.assistant .msg-role { background: var(--green); color: #fff; }
 .msg.system .msg-role { background: var(--amber); color: #fff; }
 .msg.tool_result .msg-role { background: var(--purple); color: #fff; }
-.msg pre {
+.msg pre, .msg .pre-text {
   white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
   font-size: 12px; background: rgba(0,0,0,0.04); padding: 10px 12px;
   border-radius: var(--radius-sm); margin-top: 8px; max-height: 400px;
@@ -726,13 +726,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
   /* R4: Detail panel — prevent horizontal overflow */
   .section-body { overflow-x: auto; }
-  .section-body pre {
+  .section-body pre, .section-body .pre-text {
     white-space: pre-wrap;
     word-break: break-word;
     overflow-x: auto;
     max-width: 100%;
   }
-  .msg pre {
+  .msg pre, .msg .pre-text {
     white-space: pre-wrap;
     word-break: break-word;
     overflow-x: auto;
@@ -1575,7 +1575,7 @@ function extractSystem(body) {
   if (Array.isArray(body.system)) return body.system.map(b => typeof b === 'string' ? b : b.type === 'text' ? (b.text || '') : JSON.stringify(b)).join('\n\n');
   return null;
 }
-function renderSystemPrompt(text) { return `<pre>${esc(text)}</pre>`; }
+function renderSystemPrompt(text) { return `<div class="pre-text">${esc(text)}</div>`; }
 
 function renderMessages(msgs) {
   return msgs.map(m => {
@@ -1590,14 +1590,14 @@ function renderContent(content, role) {
   if (!Array.isArray(content)) return `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
   return content.map(block => {
     if (block.type === 'text') { if (!(block.text || '').trim()) return ''; return `<div class="content-block">${esc(block.text)}</div>`; }
-    if (block.type === 'thinking') return `<div class="content-block"><span class="thinking-label">thinking</span><pre>${esc(block.thinking || '')}</pre></div>`;
+    if (block.type === 'thinking') return `<div class="content-block"><span class="thinking-label">thinking</span><div class="pre-text">${esc(block.thinking || '')}</div></div>`;
     if (block.type === 'tool_use') return `<div class="content-block"><span class="tool-use-label">${esc(block.name || 'tool_use')}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre></div>`;
     if (block.type === 'tool_result') {
       const rc = block.content;
-      if (typeof rc === 'string') return `<div class="content-block"><span class="tool-use-label">result (${esc(block.tool_use_id || '')})</span><pre>${esc(rc)}</pre></div>`;
+      if (typeof rc === 'string') return `<div class="content-block"><span class="tool-use-label">result (${esc(block.tool_use_id || '')})</span><div class="pre-text">${esc(rc)}</div></div>`;
       if (Array.isArray(rc)) {
         const parts = rc.map(c => {
-          if (c.type === 'text') return `<pre>${esc(c.text)}</pre>`;
+          if (c.type === 'text') return `<div class="pre-text">${esc(c.text)}</div>`;
           if (c.type === 'image') {
             const s = c.source || {};
             if (s.type === 'base64' && s.data) return `<img src="data:${esc(s.media_type || 'image/png')};base64,${s.data}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" />`;
