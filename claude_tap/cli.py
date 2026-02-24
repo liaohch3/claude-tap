@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 log = logging.getLogger("claude-tap")
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 
 async def run_claude(port: int, extra_args: list[str]) -> int:
@@ -54,33 +54,53 @@ async def run_claude(port: int, extra_args: list[str]) -> int:
     print(f"\n🚀 Starting Claude Code: {' '.join(cmd)}")
     print(f"   ANTHROPIC_BASE_URL=http://127.0.0.1:{port}\n")
 
+    # Give child its own process group and make it the foreground group
+    # so the TUI app has full terminal control (e.g. Cmd+Delete, Ctrl+U).
+    use_fg = hasattr(os, "tcsetpgrp") and sys.stdin.isatty()
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         env=env,
         stdin=None,
         stdout=None,
         stderr=None,
+        **({"process_group": 0} if use_fg else {}),
     )
 
-    # Forward SIGINT to child
+    if use_fg:
+        try:
+            os.tcsetpgrp(sys.stdin.fileno(), proc.pid)
+        except OSError:
+            pass
+
+    # Forward SIGINT to child (needed when child is NOT the foreground group)
     loop = asyncio.get_running_loop()
 
     def _fwd_signal():
         if proc.returncode is None:
             proc.send_signal(signal.SIGINT)
 
-    try:
-        loop.add_signal_handler(signal.SIGINT, _fwd_signal)
-    except NotImplementedError:
-        pass
+    if not use_fg:
+        try:
+            loop.add_signal_handler(signal.SIGINT, _fwd_signal)
+        except NotImplementedError:
+            pass
 
     code = await proc.wait()
 
+    # Restore parent as foreground process group
+    if use_fg:
+        try:
+            os.tcsetpgrp(sys.stdin.fileno(), os.getpgrp())
+        except OSError:
+            pass
+
     # Remove signal handler so Ctrl+C works normally during cleanup
-    try:
-        loop.remove_signal_handler(signal.SIGINT)
-    except (NotImplementedError, OSError):
-        pass
+    if not use_fg:
+        try:
+            loop.remove_signal_handler(signal.SIGINT)
+        except (NotImplementedError, OSError):
+            pass
 
     print(f"\n📋 Claude Code exited with code {code}")
     return code
@@ -109,8 +129,12 @@ async def async_main(args: argparse.Namespace):
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
     log.addHandler(file_handler)
     log.setLevel(logging.DEBUG)
-    # Suppress aiohttp access logs
+    # Suppress aiohttp logs from polluting the terminal
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+    # Redirect aiohttp.server errors (e.g. broken connections) to log file only
+    aiohttp_server_log = logging.getLogger("aiohttp.server")
+    aiohttp_server_log.addHandler(file_handler)
+    aiohttp_server_log.propagate = False
 
     session = aiohttp.ClientSession(auto_decompress=False)
 
@@ -425,11 +449,13 @@ def _maybe_migrate_existing(output_dir: Path, manifest: dict) -> None:
             companion = jsonl.with_suffix(suffix)
             if companion.exists():
                 files.append(companion.name)
-        manifest["traces"].append({
-            "timestamp": ts,
-            "files": files,
-            "created_at": datetime.fromtimestamp(jsonl.stat().st_mtime, tz=timezone.utc).isoformat(),
-        })
+        manifest["traces"].append(
+            {
+                "timestamp": ts,
+                "files": files,
+                "created_at": datetime.fromtimestamp(jsonl.stat().st_mtime, tz=timezone.utc).isoformat(),
+            }
+        )
 
 
 def main_entry() -> None:

@@ -7,7 +7,18 @@ Engineering.
 
 from __future__ import annotations
 
-from claude_tap.cli import __version__, async_main, main_entry, parse_args
+from claude_tap.cli import (
+    __version__,
+    _cleanup_traces,
+    _detect_installer,
+    _load_manifest,
+    _register_trace,
+    _save_manifest,
+    _version_tuple,
+    async_main,
+    main_entry,
+    parse_args,
+)
 from claude_tap.live import LiveViewerServer
 from claude_tap.proxy import filter_headers
 from claude_tap.sse import SSEReassembler
@@ -16,6 +27,12 @@ from claude_tap.viewer import _generate_html_viewer
 
 __all__ = [
     "__version__",
+    "_cleanup_traces",
+    "_detect_installer",
+    "_load_manifest",
+    "_register_trace",
+    "_save_manifest",
+    "_version_tuple",
     "main_entry",
     "parse_args",
     "async_main",
