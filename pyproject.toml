@@ -71,6 +71,7 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
     "asyncio: marks tests as async (run by pytest-asyncio)",
+    "real_e2e: marks tests as real E2E tests requiring claude CLI (use --run-real-e2e)",
 ]
 timeout = 60
 
