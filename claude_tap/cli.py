@@ -11,9 +11,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
-import threading
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
