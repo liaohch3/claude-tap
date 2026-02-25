@@ -138,7 +138,7 @@ async def async_main(args: argparse.Namespace):
 
     session = aiohttp.ClientSession(auto_decompress=False)
 
-    app = web.Application()
+    app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
     app["trace_ctx"] = {
         "target_url": args.target,
         "writer": writer,
