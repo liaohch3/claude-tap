@@ -12,9 +12,10 @@ from aiohttp import web
 class LiveViewerServer:
     """HTTP server for real-time trace viewing via SSE."""
 
-    def __init__(self, trace_path: Path, port: int = 0):
+    def __init__(self, trace_path: Path, port: int = 0, host: str = "127.0.0.1"):
         self.trace_path = trace_path
         self.port = port
+        self.host = host
         self._sse_clients: list[web.StreamResponse] = []
         self._records: list[dict] = []
         self._lock = asyncio.Lock()
@@ -31,7 +32,7 @@ class LiveViewerServer:
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
-        site = web.TCPSite(self._runner, "127.0.0.1", self.port)
+        site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()
 
         try:
@@ -75,7 +76,7 @@ class LiveViewerServer:
     @property
     def url(self) -> str:
         """Return the viewer URL."""
-        return f"http://127.0.0.1:{self._actual_port}"
+        return f"http://{self.host}:{self._actual_port}"
 
     async def _handle_index(self, request: web.Request) -> web.Response:
         """Serve the viewer HTML with live mode enabled."""

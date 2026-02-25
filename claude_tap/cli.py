@@ -117,7 +117,7 @@ async def async_main(args: argparse.Namespace):
     # Start live viewer server if requested
     live_server: LiveViewerServer | None = None
     if args.live_viewer:
-        live_server = LiveViewerServer(trace_path, port=args.live_port)
+        live_server = LiveViewerServer(trace_path, port=args.live_port, host=args.host)
         await live_server.start()
         print(f"🌐 Live viewer: {live_server.url}")
         webbrowser.open(live_server.url)
@@ -149,7 +149,7 @@ async def async_main(args: argparse.Namespace):
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", args.port)
+    site = web.TCPSite(runner, args.host, args.port)
     await site.start()
 
     # Resolve actual port (site._server is a private API; fall back to args.port)
@@ -157,7 +157,7 @@ async def async_main(args: argparse.Namespace):
         actual_port = site._server.sockets[0].getsockname()[1]
     except (AttributeError, IndexError, OSError):
         actual_port = args.port
-    print(f"🔍 claude-tap v{__version__} listening on http://127.0.0.1:{actual_port}")
+    print(f"🔍 claude-tap v{__version__} listening on http://{args.host}:{actual_port}")
     print(f"📁 Trace file: {trace_path}")
 
     # Background update check
@@ -267,6 +267,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     tap_parser.add_argument("--tap-port", type=int, default=0, dest="port", help="Proxy port (default: 0 = auto)")
     tap_parser.add_argument(
+        "--tap-host",
+        default=None,
+        dest="host",
+        help="Bind address for proxy and live viewer (default: 0.0.0.0 in --tap-no-launch mode, 127.0.0.1 otherwise)",
+    )
+    tap_parser.add_argument(
         "--tap-target",
         default="https://api.anthropic.com",
         dest="target",
@@ -315,6 +321,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
     args.claude_args = claude_args
+    # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
+    # 127.0.0.1 otherwise (launching Claude Code locally).
+    if args.host is None:
+        args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
     return args
 
 
