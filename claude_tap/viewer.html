@@ -1455,36 +1455,32 @@ function getTaskFingerprint(e) {
   if (taskFingerprintCache.has(rid)) return taskFingerprintCache.get(rid);
   const body = e.request?.body;
   if (!body) { taskFingerprintCache.set(rid, null); return null; }
-  // Extract system prompt signature (first meaningful line)
+  // Extract full system prompt text
   let sysText = '';
   if (typeof body.system === 'string') sysText = body.system;
   else if (Array.isArray(body.system)) {
-    for (const s of body.system) {
-      if (typeof s === 'string') { sysText = s; break; }
-      if (s.text) { sysText = s.text; break; }
-    }
+    sysText = body.system.map(s => typeof s === 'string' ? s : (s.text || '')).join('\n');
   }
-  const sysFirstLine = sysText.split('\n').find(l => l.trim()) || '';
   // Tool names sorted for stable fingerprint
   const tools = body.tools || [];
   const toolKey = tools.map(t => t.name).sort().join(',');
-  // Build fingerprint from system prompt identity + tool set
-  const fp = sysFirstLine.slice(0, 100) + '|' + toolKey;
-  // Derive a short label
+  // Build fingerprint from full system prompt + tool set
+  const fp = sysText + '|' + toolKey;
+  // Derive a short label from system prompt content
+  const lower = sysText.toLowerCase();
   let label = '';
   if (!sysText && !tools.length) label = 'simple';
-  else {
-    // Try to extract identity from system prompt patterns
-    const lower = sysFirstLine.toLowerCase();
-    if (lower.includes('claude code')) label = 'Claude Code';
-    else if (lower.includes('openclaw')) label = 'OpenClaw';
-    else if (lower.includes('subagent') || lower.includes('sub-agent')) label = 'Subagent';
-    else if (lower.includes('bash')) label = 'Bash';
-    else if (lower.includes('explore')) label = 'Explore';
-    else if (lower.includes('plan')) label = 'Plan';
-    else if (lower.includes('assistant')) label = sysFirstLine.match(/(?:inside|for|as)\s+(\w+)/i)?.[1] || 'Assistant';
-    else if (sysFirstLine.length > 0) label = sysFirstLine.slice(0, 20).trim();
-    else label = tools.length + ' tools';
+  else if (lower.includes('claude code')) label = 'Claude Code';
+  else if (lower.includes('openclaw')) label = 'OpenClaw';
+  else if (lower.includes('subagent') || lower.includes('sub-agent')) label = 'Subagent';
+  else if (lower.includes('bash')) label = 'Bash';
+  else if (lower.includes('explore')) label = 'Explore';
+  else if (lower.includes('plan')) label = 'Plan';
+  else if (sysText) {
+    const firstLine = sysText.split('\n').find(l => l.trim()) || '';
+    label = firstLine.slice(0, 20).trim() || (tools.length + ' tools');
+  } else {
+    label = tools.length + ' tools';
   }
   const result = { fp, label };
   taskFingerprintCache.set(rid, result);
@@ -1493,8 +1489,11 @@ function getTaskFingerprint(e) {
 
 function getTaskColor(fp) {
   if (!fp) return TASK_COLORS[0];
+  // Hash with sampling for long strings (system prompts can be very large)
   let hash = 0;
-  for (let i = 0; i < fp.length; i++) hash = ((hash << 5) - hash + fp.charCodeAt(i)) | 0;
+  const step = fp.length > 1000 ? Math.floor(fp.length / 500) : 1;
+  for (let i = 0; i < fp.length; i += step) hash = ((hash << 5) - hash + fp.charCodeAt(i)) | 0;
+  hash = ((hash << 5) - hash + fp.length) | 0; // include length for extra differentiation
   return TASK_COLORS[Math.abs(hash) % TASK_COLORS.length];
 }
 
