@@ -16,6 +16,7 @@ test-results/
 .cloudtap-manifest.json
 
 # Test artifacts
+.coverage
 test-traces/
 *.cast
 timing.txt
