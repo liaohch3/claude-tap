@@ -183,6 +183,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .sidebar-item .si-row2 { display: flex; gap: 10px; font-size: 11px; }
 .sidebar-item .si-tok { color: var(--green); font-family: var(--mono); font-weight: 500; }
 .sidebar-item .si-dur { color: var(--amber); font-family: var(--mono); font-weight: 500; }
+.sidebar-item .si-time { color: var(--text-tertiary); font-family: var(--mono); font-weight: 500; margin-left: auto; }
 .sidebar-item .si-path {
   font-size: 10px; color: var(--text-tertiary); font-family: var(--mono);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px;
@@ -1444,6 +1445,7 @@ function createSidebarItem(e, i) {
   const model = e.request?.body?.model || '';
   const shortModel = model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
   const badge = modelBadge(model);
+  const timeStr = e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '';
   item.innerHTML = `
     <div class="si-row1">
       <span class="si-turn">${t('turn')} ${e.turn || '?'}</span>
@@ -1452,6 +1454,7 @@ function createSidebarItem(e, i) {
     <div class="si-row2">
       <span class="si-tok">${(inTok + outTok).toLocaleString()} ${t('tok')}</span>
       <span class="si-dur">${fmtDuration(e.duration_ms || 0)}</span>
+      <span class="si-time">${esc(timeStr)}</span>
     </div>
     <div class="si-path">${esc((e.request?.method || '') + ' ' + (e.request?.path || ''))}</div>`;
   item.onclick = () => selectEntry(i);
@@ -1459,7 +1462,9 @@ function createSidebarItem(e, i) {
 }
 
 function renderSidebar(preserveDetail) {
-  const sb = $('#sidebar'); sb.innerHTML = '';
+  const sb = $('#sidebar');
+  const prevScrollTop = sb.scrollTop;
+  sb.innerHTML = '';
   const groups = new Map();
   filtered.forEach((e, i) => {
     const model = e.request?.body?.model || 'unknown';
@@ -1511,6 +1516,8 @@ function renderSidebar(preserveDetail) {
   } else {
     activeIdx = -1; $('#detail').innerHTML = `<div class="empty-state">${t('empty_state')}</div>`;
   }
+  // Restore sidebar scroll position after rebuild (e.g. during live updates)
+  if (preserveDetail) sb.scrollTop = prevScrollTop;
 }
 
 function selectEntry(idx, opts) {

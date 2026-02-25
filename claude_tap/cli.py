@@ -13,6 +13,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+import threading
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,11 @@ if hasattr(sys.stdout, "reconfigure"):
 log = logging.getLogger("claude-tap")
 
 __version__ = "0.1.7"
+
+
+def _open_browser(url: str) -> None:
+    """Open URL in browser without blocking. Silently ignores failures in headless environments."""
+    threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
 
 
 async def run_claude(port: int, extra_args: list[str]) -> int:
@@ -120,7 +126,7 @@ async def async_main(args: argparse.Namespace):
         live_server = LiveViewerServer(trace_path, port=args.live_port, host=args.host)
         await live_server.start()
         print(f"🌐 Live viewer: {live_server.url}")
-        webbrowser.open(live_server.url)
+        _open_browser(live_server.url)
 
     writer = TraceWriter(trace_path, live_server=live_server)
 
@@ -244,7 +250,7 @@ async def async_main(args: argparse.Namespace):
         # Open viewer in browser if requested
         if args.open_viewer and html_path.exists():
             print("\n🌐 Opening viewer in browser...")
-            webbrowser.open(f"file://{html_path.absolute()}")
+            _open_browser(f"file://{html_path.absolute()}")
 
     return exit_code
 
