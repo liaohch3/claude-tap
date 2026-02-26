@@ -102,3 +102,36 @@ Before every commit:
 
 Never delegate architecture decisions to execution tools. The brain decides *what* and *why*;
 the hands do *how*.
+
+## Codex Sandbox Limitations
+
+The Codex `--full-auto` sandbox has known restrictions:
+
+| Blocked | Workaround |
+|---------|------------|
+| `git commit` / `git fetch` (`.git/` writes) | Commit outside sandbox after Codex finishes |
+| `tmux` / `screen` (`/private/tmp` socket) | Run terminal multiplexer tasks via external exec |
+| `rg` / non-POSIX tools may be absent | Use `grep -F`, `sed`, `awk` in scripts |
+
+**Rule:** Never include `git commit` in a Codex task prompt. Always plan a post-Codex
+commit step.
+
+## Shell Script Portability
+
+Prefer POSIX-standard utilities in all shell scripts:
+
+- ✅ `grep -F`, `sed`, `awk`, `find`, `cut`, `sort`, `wc`
+- ❌ `rg`, `fd`, `bat`, `delta` (may not exist on CI/sandbox)
+
+Reserve non-POSIX tools for interactive use or explicitly declared dependencies.
+
+## Repo Cleanup Rules
+
+When removing stale files:
+
+1. **Migrate before delete**: Extract valuable content (design rationale, decisions)
+   into `docs/guides/` before removing source files.
+2. **Never silently drop**: If a file had useful context, create a guide or add to
+   existing docs.
+3. **Keep CHANGELOG aligned**: When versions advance, ensure CHANGELOG covers every
+   release (reconstruct from `git log` if needed).
