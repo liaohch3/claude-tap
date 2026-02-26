@@ -163,12 +163,16 @@ async def run_claude(
 
     code = await proc.wait()
 
-    # Restore parent as foreground process group
+    # Restore parent as foreground process group.
+    # Ignore SIGTTOU first — the parent is still in the background group
+    # and any terminal write (including tcsetpgrp) would suspend it.
     if use_fg:
+        old_sigttou = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
         try:
             os.tcsetpgrp(sys.stdin.fileno(), os.getpgrp())
         except OSError:
             pass
+        signal.signal(signal.SIGTTOU, old_sigttou)
 
     # Restore original SIGTSTP handler and remove async signal handlers
     signal.signal(signal.SIGTSTP, old_sigtstp)
