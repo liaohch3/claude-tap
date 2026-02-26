@@ -96,76 +96,9 @@ Before every commit:
 
 ## Brain + Hands Protocol
 
-- **Orchestrator (OpenClaw)** = brain. Makes architecture decisions, writes prompts,
-  validates results, handles git commit/push.
-- **Codex** = hands. **All code changes go through Codex.** It reads AGENTS.md,
-  follows project conventions, and avoids repeating past mistakes.
+- **Claude Code (Opus)** = planning brain. Makes architecture decisions, designs APIs,
+  chooses patterns, reviews code.
+- **Codex** = execution hands. Writes boilerplate, runs commands, applies mechanical changes.
 
-Never hand-write code patches directly. Always delegate to Codex.
-
-### Why Codex
-
-1. **Specialized coding model** — `gpt-5.2-codex` is purpose-built for code.
-2. **Reads AGENTS.md** — automatically picks up project conventions, coding standards,
-   and lessons from error-experience/good-experience docs.
-3. **Compounds learning** — mistakes documented in `docs/error-experience/` are
-   avoided in future runs because Codex reads them.
-
-### tmux Launch Pattern
-
-Launch Codex in a tmux session for monitoring and mid-task steering:
-
-```bash
-# Start Codex in tmux
-tmux new-session -d -s codex-<task> -x 200 -y 50 \
-  -c /path/to/claude-tap \
-  "codex --dangerously-bypass-approvals-and-sandbox 'Read AGENTS.md first. <task description>'"
-
-# Monitor output
-tmux capture-pane -t codex-<task> -p | tail -30
-
-# Mid-task steering (if agent goes wrong direction)
-tmux send-keys -t codex-<task> "Focus on X, not Y." Enter
-
-# Exit
-tmux send-keys -t codex-<task> C-c
-```
-
-Benefits over direct exec:
-- `tmux attach` for real-time output
-- `tmux send-keys` for mid-task correction
-- SSH disconnect doesn't kill the agent
-- Multiple agents can run in parallel sessions
-
-## Codex Sandbox Limitations
-
-The Codex `--full-auto` sandbox has known restrictions:
-
-| Blocked | Workaround |
-|---------|------------|
-| `git commit` / `git fetch` (`.git/` writes) | Commit outside sandbox after Codex finishes |
-| `tmux` / `screen` (`/private/tmp` socket) | Run terminal multiplexer tasks via external exec |
-| `rg` / non-POSIX tools may be absent | Use `grep -F`, `sed`, `awk` in scripts |
-
-**Rule:** Never include `git commit` in a Codex task prompt. Always plan a post-Codex
-commit step.
-
-## Shell Script Portability
-
-Prefer POSIX-standard utilities in all shell scripts:
-
-- ✅ `grep -F`, `sed`, `awk`, `find`, `cut`, `sort`, `wc`
-- ❌ `rg`, `fd`, `bat`, `delta` (may not exist on CI/sandbox)
-
-Reserve non-POSIX tools for interactive use or explicitly declared dependencies.
-
-## Repo Cleanup Rules
-
-When removing stale files:
-
-1. **Migrate before delete**: Extract valuable content (design rationale, decisions)
-   into `docs/guides/` before removing source files.
-2. **Never silently drop**: If a file had useful context, create a guide or add to
-   existing docs.
-3. **Keep CHANGELOG aligned**: When versions advance, ensure CHANGELOG covers every
-   release (reconstruct from `git log` if needed).
+Never delegate architecture decisions to execution tools. The brain decides *what* and *why*;
+the hands do *how*.
