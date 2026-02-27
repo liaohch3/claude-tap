@@ -61,12 +61,27 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     writer: TraceWriter = ctx["writer"]
     session: aiohttp.ClientSession = ctx["session"]
 
-    upstream_url = target.rstrip("/") + "/" + request.path_qs.lstrip("/")
+    # Strip path prefix (e.g. /v1) for codex client so that
+    # /v1/responses -> target + /responses
+    strip_prefix: str = ctx.get("strip_path_prefix", "")
+    fwd_path = request.path_qs
+    if strip_prefix and fwd_path.startswith(strip_prefix):
+        fwd_path = fwd_path[len(strip_prefix) :] or "/"
+    upstream_url = target.rstrip("/") + "/" + fwd_path.lstrip("/")
 
+    # aiohttp auto-decompresses request bodies (gzip/deflate/zstd), so
+    # request.read() returns plain bytes even when Content-Encoding is set.
     body = await request.read()
 
     fwd_headers = filter_headers(request.headers)
     fwd_headers.pop("Host", None)
+    # Strip Content-Encoding since aiohttp already decompressed the body;
+    # also remove stale Content-Length (aiohttp client will recompute it).
+    req_content_encoding = request.headers.get("Content-Encoding", "").lower()
+    if req_content_encoding in ("zstd", "gzip", "deflate", "br"):
+        for key in list(fwd_headers.keys()):
+            if key.lower() in ("content-encoding", "content-length"):
+                del fwd_headers[key]
 
     req_id = f"req_{uuid.uuid4().hex[:12]}"
     t0 = time.monotonic()

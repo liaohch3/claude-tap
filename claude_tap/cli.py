@@ -273,6 +273,7 @@ async def async_main(args: argparse.Namespace):
             "writer": writer,
             "session": session,
             "turn_counter": 0,
+            "strip_path_prefix": "/v1" if args.client == "codex" else "",
         }
         app.router.add_route("*", "/{path_info:.*}", proxy_handler)
 
@@ -493,7 +494,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.host is None:
         args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
     if args.target is None:
-        args.target = "https://api.anthropic.com" if args.client == "claude" else "https://api.openai.com"
+        args.target = (
+            "https://api.anthropic.com" if args.client == "claude" else "https://chatgpt.com/backend-api/codex"
+        )
     return args
 
 

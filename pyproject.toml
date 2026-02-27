@@ -20,6 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "aiohttp>=3.9,<4",
+    "backports-zstd>=1.0",
     "cryptography>=42.0",
 ]
 
