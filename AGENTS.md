@@ -18,6 +18,9 @@ All code, comments, commit messages, docs, and skill files in this project must 
 
 When running E2E tests, complete at least one full conversation (multi-turn) in every run.
 
+For conversation validation and screenshot evidence, use tmux interactive flow (`scripts/run_real_e2e_tmux.sh`).
+Do not use `claude -p` one-shot runs as proof of conversation completeness.
+
 ## Pre-work Checklist
 
 Before any code change, run:
