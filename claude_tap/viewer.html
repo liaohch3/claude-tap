@@ -1327,7 +1327,8 @@ function applyFilter(preserveDetail) {
   if (searchQuery) filtered = filtered.filter(e => matchSearch(e, searchQuery));
   if (activeTools) {
     filtered = filtered.filter(e => {
-      const rc = e.response?.body?.content;
+      const ro = getResponseOutput(e);
+      const rc = ro?.content;
       if (!Array.isArray(rc)) return false;
       return rc.some(b => b.type === 'tool_use' && activeTools.has(b.name));
     });
@@ -1337,7 +1338,7 @@ function applyFilter(preserveDetail) {
   let sumInput = 0, sumOutput = 0, sumCacheRead = 0, sumCacheCreate = 0;
   filtered.forEach(e => {
     totalDuration += e.duration_ms || 0;
-    const u = e.response?.body?.usage;
+    const u = getUsage(e);
     if (u) {
       totalTokens += (u.input_tokens || 0) + (u.output_tokens || 0);
       sumInput += u.input_tokens || 0;
@@ -1373,7 +1374,8 @@ function renderToolFilter() {
   // Collect all tool names from all entries (not just filtered)
   const toolSet = new Set();
   entries.forEach(e => {
-    const rc = e.response?.body?.content;
+    const ro = getResponseOutput(e);
+    const rc = ro?.content;
     if (Array.isArray(rc)) rc.forEach(b => { if (b.type === 'tool_use' && b.name) toolSet.add(b.name); });
   });
   if (toolSet.size === 0) { tf.style.display = 'none'; return; }
@@ -1411,7 +1413,7 @@ function matchSearch(e, q) {
   if ((body?.model || '').toLowerCase().includes(q)) return true;
   const sys = extractSystem(body) || '';
   if (sys.toLowerCase().includes(q)) return true;
-  const msgs = body?.messages || [];
+  const msgs = getMessages(body);
   for (const m of msgs) {
     const mc = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
     if (mc.toLowerCase().includes(q)) return true;
@@ -1421,7 +1423,8 @@ function matchSearch(e, q) {
     if ((td.name || '').toLowerCase().includes(q)) return true;
     if ((td.description || '').toLowerCase().includes(q)) return true;
   }
-  const rc = e.response?.body?.content;
+  const ro = getResponseOutput(e);
+  const rc = ro?.content;
   if (Array.isArray(rc)) {
     for (const block of rc) {
       if ((block.text || block.name || '').toLowerCase().includes(q)) return true;
@@ -1497,6 +1500,8 @@ function getTaskFingerprint(e) {
   if (typeof body.system === 'string') sysText = body.system;
   else if (Array.isArray(body.system)) {
     sysText = body.system.map(s => typeof s === 'string' ? s : (s.text || '')).join('\n');
+  } else if (typeof body.instructions === 'string') {
+    sysText = body.instructions;
   }
   // Tool names sorted for stable fingerprint
   const tools = body.tools || [];
@@ -1508,6 +1513,7 @@ function getTaskFingerprint(e) {
   let label = '';
   if (!sysText && !tools.length) label = 'simple';
   else if (lower.includes('claude code')) label = 'Claude Code';
+  else if (lower.includes('you are codex')) label = 'Codex';
   else if (lower.includes('openclaw')) label = 'OpenClaw';
   else if (lower.includes('subagent') || lower.includes('sub-agent')) label = 'Subagent';
   else if (lower.includes('bash')) label = 'Bash';
@@ -1538,7 +1544,7 @@ function createSidebarItem(e, i) {
   const item = document.createElement('div');
   item.className = 'sidebar-item';
   item.dataset.idx = i;
-  const u = e.response?.body?.usage;
+  const u = getUsage(e);
   const inTok = u?.input_tokens || 0, outTok = u?.output_tokens || 0;
   const model = e.request?.body?.model || '';
   const shortModel = model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
@@ -1654,7 +1660,7 @@ function selectEntry(idx, opts) {
 function renderDetail(e) {
   currentDetailRequestId = e.request_id;
   const d = $('#detail'); d.scrollTop = 0;
-  const reqBody = e.request?.body, respBody = e.response?.body, usage = respBody?.usage;
+  const reqBody = e.request?.body, respBody = e.response?.body, usage = getUsage(e);
   let html = '';
 
   // Action bar
@@ -1672,10 +1678,11 @@ function renderDetail(e) {
   const sysPrompt = extractSystem(reqBody);
   if (sysPrompt) html += section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt);
 
-  const msgs = reqBody?.messages;
+  const msgs = getMessages(reqBody);
   if (msgs && msgs.length) html += section(t('section_messages'), renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'));
 
-  if (respBody?.content) html += section(t('section_response'), renderResponseContent(respBody), true);
+  const respOutput = respBody?.content ? respBody : getResponseOutput(e);
+  if (respOutput?.content) html += section(t('section_response'), renderResponseContent(respOutput), true);
 
   const sseEvents = e.response?.sse_events;
   if (sseEvents && sseEvents.length) html += section(t('section_sse'), renderSSEEvents(sseEvents), false, null, sseEvents.length + ' ' + t('badge_events'));
@@ -1691,6 +1698,77 @@ function extractSystem(body) {
   if (!body) return null;
   if (typeof body.system === 'string') return body.system;
   if (Array.isArray(body.system)) return body.system.map(b => typeof b === 'string' ? b : b.type === 'text' ? (b.text || '') : JSON.stringify(b)).join('\n\n');
+  // Responses API: instructions field holds the system prompt
+  if (typeof body.instructions === 'string') return body.instructions;
+  return null;
+}
+
+// Normalize messages from Chat Completions (body.messages) or Responses API (body.input)
+function getMessages(body) {
+  if (!body) return [];
+  if (Array.isArray(body.messages) && body.messages.length > 0) return body.messages;
+  if (Array.isArray(body.input)) {
+    return body.input.filter(item => item.type === 'message').map(item => ({
+      role: item.role || 'user',
+      content: Array.isArray(item.content)
+        ? item.content.map(c => c.type === 'input_text' ? { type: 'text', text: c.text } : c)
+        : item.content
+    }));
+  }
+  return [];
+}
+
+// Extract token usage from response.body.usage or SSE response.completed event
+function getUsage(entry) {
+  const u = entry?.response?.body?.usage;
+  if (u) return u;
+  const sse = entry?.response?.sse_events;
+  if (Array.isArray(sse)) {
+    for (let i = sse.length - 1; i >= 0; i--) {
+      if (sse[i].event === 'response.completed') {
+        let data = sse[i].data;
+        if (typeof data === 'string') { try { data = JSON.parse(data); } catch(e) { continue; } }
+        if (data?.response?.usage) return data.response.usage;
+      }
+    }
+  }
+  return null;
+}
+
+// Extract response output from response.body.content or SSE response.completed event
+function getResponseOutput(entry) {
+  const body = entry?.response?.body;
+  if (body?.content) return body;
+  const sse = entry?.response?.sse_events;
+  if (Array.isArray(sse)) {
+    for (let i = sse.length - 1; i >= 0; i--) {
+      if (sse[i].event === 'response.completed') {
+        let data = sse[i].data;
+        if (typeof data === 'string') { try { data = JSON.parse(data); } catch(e) { continue; } }
+        const output = data?.response?.output;
+        if (Array.isArray(output) && output.length > 0) {
+          // Convert Responses API output to content blocks for rendering
+          const content = [];
+          for (const item of output) {
+            if (item.type === 'message' && Array.isArray(item.content)) {
+              for (const c of item.content) {
+                if (c.type === 'output_text') content.push({ type: 'text', text: c.text });
+                else content.push(c);
+              }
+            } else if (item.type === 'function_call') {
+              content.push({ type: 'tool_use', name: item.name, input: item.arguments ? (typeof item.arguments === 'string' ? (() => { try { return JSON.parse(item.arguments); } catch(e) { return item.arguments; } })() : item.arguments) : {} });
+            } else if (item.type === 'reasoning') {
+              if (item.summary) {
+                const summaryText = Array.isArray(item.summary) ? item.summary.map(s => s.text || '').join('\n') : (item.summary.text || JSON.stringify(item.summary));
+                content.push({ type: 'thinking', thinking: summaryText });
+              }
+            }
+          }
+          if (content.length > 0) return { content };
+        }
+      }
+    }
+  }
   return null;
 }
 function renderSystemPrompt(text) { return `<div class="pre-text">${esc(text)}</div>`; }
@@ -1698,7 +1776,7 @@ function renderSystemPrompt(text) { return `<div class="pre-text">${esc(text)}</
 function renderMessages(msgs) {
   return msgs.map(m => {
     const role = m.role || 'unknown';
-    const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : 'system';
+    const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : (role === 'developer' || role === 'system') ? 'system' : 'system';
     return `<div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${renderContent(m.content, role)}</div>`;
   }).join('');
 }
@@ -1707,7 +1785,7 @@ function renderContent(content, role) {
   if (typeof content === 'string') return `<div class="content-block">${esc(content)}</div>`;
   if (!Array.isArray(content)) return `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
   return content.map(block => {
-    if (block.type === 'text') { if (!(block.text || '').trim()) return ''; return `<div class="content-block">${esc(block.text)}</div>`; }
+    if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') { const txt = block.text || ''; if (!txt.trim()) return ''; return `<div class="content-block">${esc(txt)}</div>`; }
     if (block.type === 'thinking') return `<div class="content-block"><span class="thinking-label">thinking</span><div class="pre-text">${esc(block.thinking || '')}</div></div>`;
     if (block.type === 'tool_use') return `<div class="content-block"><span class="tool-use-label">${esc(block.name || 'tool_use')}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre></div>`;
     if (block.type === 'tool_result') {
@@ -1745,8 +1823,9 @@ function renderTools(tools) {
   return tools.map(td => {
     const name = td.name || 'unknown', desc = td.description || '';
     const shortDesc = desc.split('\n')[0].substring(0, 120);
-    const props = td.input_schema?.properties || {};
-    const required = new Set(td.input_schema?.required || []);
+    const schema = td.input_schema || td.parameters || {};
+    const props = schema.properties || {};
+    const required = new Set(schema.required || []);
     let paramsHtml = '';
     const keys = Object.keys(props);
     if (keys.length) {
@@ -1872,8 +1951,10 @@ function copyCurl(btn) {
 function isMainTurn(e) {
   const b = e?.request?.body;
   if (!b) return false;
-  return (b.system && (typeof b.system === 'string' ? b.system.length > 0 : b.system.length > 0))
-      || (b.messages && b.messages.length > 1);
+  const hasSys = (b.system && (typeof b.system === 'string' ? b.system.length > 0 : b.system.length > 0))
+      || (typeof b.instructions === 'string' && b.instructions.length > 0);
+  const msgs = getMessages(b);
+  return hasSys || msgs.length > 1;
 }
 
 function _msgHash(msg) {
@@ -1895,7 +1976,7 @@ function _msgHash(msg) {
 }
 
 function _getMsgHashes(entry) {
-  const msgs = entry?.request?.body?.messages || [];
+  const msgs = getMessages(entry?.request?.body);
   return msgs.map(_msgHash);
 }
 
@@ -2119,7 +2200,7 @@ function msgToText(m) {
   if (typeof c === 'string') return c;
   if (!Array.isArray(c)) return JSON.stringify(c, null, 2);
   return c.map(b => {
-    if (b.type === 'text') return b.text || '';
+    if (b.type === 'text' || b.type === 'input_text' || b.type === 'output_text') return b.text || '';
     if (b.type === 'thinking') return '[thinking]\n' + (b.thinking || '');
     if (b.type === 'tool_use') return '[tool_use: ' + (b.name || '') + ']\n' + JSON.stringify(b.input, null, 2);
     if (b.type === 'tool_result') {
@@ -2138,7 +2219,7 @@ function structuralDiff(oldB, newB) {
     toolsChanged: false, oldToolCount: 0, newToolCount: 0,
     addedTools: [], removedTools: [], fieldChanges: [] };
   // Messages — compare by role+content (ignore cache_control etc.)
-  const om = oldB.messages || [], nm = newB.messages || [];
+  const om = getMessages(oldB), nm = getMessages(newB);
   // Common prefix
   let common = 0;
   for (let i = 0; i < Math.min(om.length, nm.length); i++) {
@@ -2188,7 +2269,7 @@ function structuralDiff(oldB, newB) {
   d.oldToolCount = oldTools.length;
   d.newToolCount = newTools.length;
   // Other fields
-  const skip = new Set(['messages', 'system', 'tools']);
+  const skip = new Set(['messages', 'system', 'tools', 'input', 'instructions']);
   const allKeys = new Set([...Object.keys(oldB), ...Object.keys(newB)]);
   for (const k of allKeys) {
     if (skip.has(k)) continue;
