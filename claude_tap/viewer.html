@@ -1857,7 +1857,8 @@ function copyCurl(btn) {
   const e = filtered[activeIdx]; if (!e) return;
   const method = e.request?.method || 'POST', path = e.request?.path || '/v1/messages';
   const headers = e.request?.headers || {}, body = e.request?.body;
-  let cmd = `curl -X ${method} 'https://api.anthropic.com${path}'`;
+  const base = e.upstream_base_url || 'https://api.anthropic.com';
+  let cmd = `curl -X ${method} '${base}${path}'`;
   for (const [k, v] of Object.entries(headers)) {
     const kl = k.toLowerCase();
     if (kl === 'host' || kl === 'content-length' || kl === 'accept-encoding') continue;

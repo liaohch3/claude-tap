@@ -294,8 +294,9 @@ class ForwardProxyServer:
         fwd_headers = filter_headers(headers)
         fwd_headers.pop("Host", None)
         fwd_headers.pop("host", None)
-        if is_streaming:
-            fwd_headers["Accept-Encoding"] = "identity"
+        # Request identity encoding from upstream to avoid client-side zstd decode issues
+        # and to simplify SSE/text reconstruction.
+        fwd_headers["Accept-Encoding"] = "identity"
 
         try:
             upstream_resp = await self._session.request(

@@ -50,15 +50,29 @@ def _open_browser(url: str) -> None:
 async def run_claude(
     port: int,
     extra_args: list[str],
+    client: str = "claude",
     proxy_mode: str = "reverse",
     ca_cert_path: Path | None = None,
 ) -> int:
-    if shutil.which("claude") is None:
-        print(
+    if client == "claude":
+        client_cmd = "claude"
+        client_label = "Claude Code"
+        missing_help = (
             "\nError: 'claude' command not found in PATH.\n"
             "Please install Claude Code first: "
             "https://docs.anthropic.com/en/docs/claude-code\n"
         )
+    else:
+        client_cmd = "codex"
+        client_label = "Codex CLI"
+        missing_help = (
+            "\nError: 'codex' command not found in PATH.\n"
+            "Please install Codex CLI first: "
+            "https://github.com/openai/codex\n"
+        )
+
+    if shutil.which(client_cmd) is None:
+        print(missing_help)
         return 1
 
     env = os.environ.copy()
@@ -76,40 +90,49 @@ async def run_claude(
         env["all_proxy"] = proxy_url
         if ca_cert_path:
             env["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
-        # Claude Code may source proxy env from settings rather than process env.
-        # Inject equivalent settings unless user already provided --settings.
-        has_settings_arg = any(arg == "--settings" or arg.startswith("--settings=") for arg in cmd_args)
-        if not has_settings_arg:
-            settings_payload: dict[str, dict[str, str]] = {
-                "env": {
-                    "HTTP_PROXY": proxy_url,
-                    "HTTPS_PROXY": proxy_url,
-                    "ALL_PROXY": proxy_url,
-                    "http_proxy": proxy_url,
-                    "https_proxy": proxy_url,
-                    "all_proxy": proxy_url,
+
+        if client == "claude":
+            # Claude Code may source proxy env from settings rather than process env.
+            # Inject equivalent settings unless user already provided --settings.
+            has_settings_arg = any(arg == "--settings" or arg.startswith("--settings=") for arg in cmd_args)
+            if not has_settings_arg:
+                settings_payload: dict[str, dict[str, str]] = {
+                    "env": {
+                        "HTTP_PROXY": proxy_url,
+                        "HTTPS_PROXY": proxy_url,
+                        "ALL_PROXY": proxy_url,
+                        "http_proxy": proxy_url,
+                        "https_proxy": proxy_url,
+                        "all_proxy": proxy_url,
+                    }
                 }
-            }
-            if ca_cert_path:
-                settings_payload["env"]["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
-            cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
-        # Don't set ANTHROPIC_BASE_URL in forward mode
+                if ca_cert_path:
+                    settings_payload["env"]["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
+                cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
+        # Don't set provider-specific base URL in forward mode
     else:
-        env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
+        if client == "claude":
+            env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
+        else:
+            env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
         env["NO_PROXY"] = "127.0.0.1"
 
-    # Bypass Claude Code nesting detection
-    env.pop("CLAUDECODE", None)
-    env.pop("CLAUDE_CODE_SSE_PORT", None)
+    if client == "claude":
+        # Bypass Claude Code nesting detection
+        env.pop("CLAUDECODE", None)
+        env.pop("CLAUDE_CODE_SSE_PORT", None)
 
-    cmd = ["claude"] + cmd_args
-    print(f"\n🚀 Starting Claude Code: {' '.join(cmd)}")
+    cmd = [client_cmd] + cmd_args
+    print(f"\n🚀 Starting {client_label}: {' '.join(cmd)}")
     if proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     else:
-        print(f"   ANTHROPIC_BASE_URL=http://127.0.0.1:{port}")
+        if client == "claude":
+            print(f"   ANTHROPIC_BASE_URL=http://127.0.0.1:{port}")
+        else:
+            print(f"   OPENAI_BASE_URL=http://127.0.0.1:{port}/v1")
     print()
 
     # Give child its own process group and make it the foreground group
@@ -145,7 +168,7 @@ async def run_claude(
         if sigint_count == 1:
             if proc.returncode is None:
                 proc.terminate()
-                print("\n⏳ Shutting down Claude Code... (Ctrl+C again to force)")
+                print(f"\n⏳ Shutting down {client_label}... (Ctrl+C again to force)")
         else:
             if proc.returncode is None:
                 proc.kill()
@@ -153,7 +176,7 @@ async def run_claude(
     def _handle_sigtstp():
         if proc.returncode is None:
             proc.terminate()
-            print("\n⏳ Shutting down Claude Code...")
+            print(f"\n⏳ Shutting down {client_label}...")
 
     try:
         loop.add_signal_handler(signal.SIGINT, _handle_sigint)
@@ -185,7 +208,7 @@ async def run_claude(
     except (NotImplementedError, OSError):
         pass
 
-    print(f"\n📋 Claude Code exited with code {code}")
+    print(f"\n📋 {client_label} exited with code {code}")
     return code
 
 
@@ -287,6 +310,7 @@ async def async_main(args: argparse.Namespace):
                 exit_code = await run_claude(
                     actual_port,
                     args.claude_args,
+                    client=args.client,
                     proxy_mode=args.proxy_mode,
                     ca_cert_path=ca_cert_path,
                 )
@@ -369,15 +393,15 @@ async def async_main(args: argparse.Namespace):
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse argv, extracting ``--tap-*`` flags for ourselves and forwarding
-    everything else to ``claude``.
+    everything else to the selected client.
     """
     if argv is None:
         argv = sys.argv[1:]
 
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
-        description="Trace Claude Code API requests via a local reverse proxy. "
-        "All flags not listed below are forwarded to claude.",
+        description="Trace Claude Code or Codex API requests via a local proxy. "
+        "All flags not listed below are forwarded to the selected client.",
     )
     tap_parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     tap_parser.add_argument(
@@ -391,21 +415,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Bind address for proxy and live viewer (default: 0.0.0.0 in --tap-no-launch mode, 127.0.0.1 otherwise)",
     )
     tap_parser.add_argument(
+        "--tap-client",
+        choices=["claude", "codex"],
+        default="claude",
+        dest="client",
+        help="Client to launch (default: claude)",
+    )
+    tap_parser.add_argument(
         "--tap-target",
-        default="https://api.anthropic.com",
+        default=None,
         dest="target",
-        help="Upstream API URL (default: https://api.anthropic.com)",
+        help="Upstream API URL (default: provider-specific)",
     )
     tap_parser.add_argument(
         "--tap-proxy-mode",
         choices=["reverse", "forward"],
         default="reverse",
         dest="proxy_mode",
-        help="Proxy mode: 'reverse' sets ANTHROPIC_BASE_URL (default), "
+        help="Proxy mode: 'reverse' sets provider base URL (default), "
         "'forward' sets HTTPS_PROXY with CONNECT/TLS termination",
     )
     tap_parser.add_argument(
-        "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch Claude"
+        "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
     )
     tap_parser.add_argument(
         "--tap-open",
@@ -458,9 +489,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         claude_args = claude_args[1:]
     args.claude_args = claude_args
     # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
-    # 127.0.0.1 otherwise (launching Claude Code locally).
+    # 127.0.0.1 otherwise (launching the client locally).
     if args.host is None:
         args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
+    if args.target is None:
+        args.target = "https://api.anthropic.com" if args.client == "claude" else "https://api.openai.com"
     return args
 
 

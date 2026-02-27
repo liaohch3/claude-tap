@@ -88,9 +88,9 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     log_prefix = f"[Turn {turn}]"
     log.info(f"{log_prefix} → {request.method} {request.path} (model={model}, stream={is_streaming})")
 
-    # For streaming requests, ask upstream not to compress (we need to parse SSE text)
-    if is_streaming:
-        fwd_headers["Accept-Encoding"] = "identity"
+    # Request identity encoding from upstream to avoid client-side zstd decode issues
+    # and to simplify SSE/text reconstruction.
+    fwd_headers["Accept-Encoding"] = "identity"
 
     try:
         upstream_resp = await session.request(
@@ -109,11 +109,29 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
 
     if is_streaming and upstream_resp.status == 200:
         resp_body = await _handle_streaming(
-            request, upstream_resp, req_id, turn, t0, body, req_body, writer, log_prefix
+            request,
+            upstream_resp,
+            req_id,
+            turn,
+            t0,
+            req_body,
+            writer,
+            log_prefix,
+            upstream_base_url=target,
         )
         return resp_body
-    else:
-        return await _handle_non_streaming(request, upstream_resp, req_id, turn, t0, body, req_body, writer, log_prefix)
+
+    return await _handle_non_streaming(
+        request,
+        upstream_resp,
+        req_id,
+        turn,
+        t0,
+        req_body,
+        writer,
+        log_prefix,
+        upstream_base_url=target,
+    )
 
 
 async def _handle_streaming(
@@ -122,10 +140,10 @@ async def _handle_streaming(
     req_id: str,
     turn: int,
     t0: float,
-    raw_body: bytes,
     req_body,
     writer: TraceWriter,
     log_prefix: str,
+    upstream_base_url: str,
 ) -> web.StreamResponse:
     resp = web.StreamResponse(
         status=upstream_resp.status,
@@ -156,7 +174,8 @@ async def _handle_streaming(
     cache_read = usage.get("cache_read_input_tokens", 0)
     cache_create = usage.get("cache_creation_input_tokens", 0)
     log.info(
-        f"{log_prefix} ← 200 stream done ({duration_ms}ms, in={in_tok} out={out_tok} cache_read={cache_read} cache_create={cache_create})"
+        f"{log_prefix} ← 200 stream done ({duration_ms}ms, "
+        f"in={in_tok} out={out_tok} cache_read={cache_read} cache_create={cache_create})"
     )
 
     record = _build_record(
@@ -171,6 +190,7 @@ async def _handle_streaming(
         upstream_resp.headers,
         reconstructed,
         sse_events=reassembler.events,
+        upstream_base_url=upstream_base_url,
     )
     await writer.write(record)
 
@@ -183,10 +203,10 @@ async def _handle_non_streaming(
     req_id: str,
     turn: int,
     t0: float,
-    raw_body: bytes,
     req_body,
     writer: TraceWriter,
     log_prefix: str,
+    upstream_base_url: str,
 ) -> web.Response:
     resp_bytes = await upstream_resp.read()
     duration_ms = int((time.monotonic() - t0) * 1000)
@@ -221,6 +241,7 @@ async def _handle_non_streaming(
         upstream_resp.status,
         upstream_resp.headers,
         resp_body,
+        upstream_base_url=upstream_base_url,
     )
     await writer.write(record)
 
@@ -243,6 +264,7 @@ def _build_record(
     resp_headers: dict,
     resp_body: dict | None,
     sse_events: list[dict] | None = None,
+    upstream_base_url: str | None = None,
 ) -> dict:
     """Build a trace record for a single API call."""
     record: dict = {
@@ -262,6 +284,8 @@ def _build_record(
             "body": resp_body,
         },
     }
-    if sse_events is not None:
+    if sse_events:
         record["response"]["sse_events"] = sse_events
+    if upstream_base_url:
+        record["upstream_base_url"] = upstream_base_url
     return record

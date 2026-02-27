@@ -394,22 +394,26 @@ def _start_fake_upstream(port, handler_fn):
     return stop
 
 
-def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout=30):
+def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout=30, tap_client="claude"):
     """Run claude_tap as a subprocess pointing at `upstream_port`.
     Returns the CompletedProcess."""
     env = os.environ.copy()
     env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
 
+    cmd = [
+        sys.executable,
+        "-m",
+        "claude_tap",
+        "--tap-output-dir",
+        trace_dir,
+        "--tap-target",
+        f"http://127.0.0.1:{upstream_port}",
+    ]
+    if tap_client != "claude":
+        cmd.extend(["--tap-client", tap_client])
+
     return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "claude_tap",
-            "--tap-output-dir",
-            trace_dir,
-            "--tap-target",
-            f"http://127.0.0.1:{upstream_port}",
-        ],
+        cmd,
         cwd=str(project_dir),
         env=env,
         capture_output=True,
@@ -1149,9 +1153,17 @@ def test_parse_args():
     assert a.claude_args == []
     assert a.port == 0
     assert a.output_dir == "./.traces"
+    assert a.client == "claude"
     assert a.target == "https://api.anthropic.com"
     assert a.no_launch is False
     print("  OK: defaults")
+
+    # Codex defaults
+    a = parse_args(["--tap-client", "codex"])
+    assert a.client == "codex"
+    assert a.target == "https://api.openai.com"
+    assert a.claude_args == []
+    print("  OK: codex defaults")
 
     # Claude flags pass through
     a = parse_args(["-c"])
@@ -1195,6 +1207,81 @@ def test_parse_args():
     print("  OK: complex claude flags forwarded")
 
     print("\n  test_parse_args PASSED")
+
+
+FAKE_CODEX_SCRIPT = r"""#!/usr/bin/env python3
+# Fake codex CLI that sends one request via OPENAI_BASE_URL
+import json, os, sys, urllib.request
+
+base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+url = f"{base}/messages"
+
+req_body = json.dumps({
+    "model": "gpt-5-codex",
+    "input": "Reply with exactly: HELLO_CODEX",
+}).encode()
+req = urllib.request.Request(url, data=req_body, headers={
+    "Content-Type": "application/json",
+    "Authorization": "Bearer sk-openai-test-key-12345678",
+})
+try:
+    with urllib.request.urlopen(req) as resp:
+        body = json.loads(resp.read())
+        print(f"[fake-codex] status={resp.status} id={body.get('id', '?')}")
+except Exception as e:
+    print(f"[fake-codex] Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("[fake-codex] Done.")
+"""
+
+
+def test_codex_client_reverse_proxy():
+    """Test --tap-client codex in reverse mode using OPENAI_BASE_URL."""
+
+    async def handler(request):
+        body = await request.json()
+        assert request.path == "/v1/messages"
+        from aiohttp import web
+
+        return web.json_response(
+            {
+                "id": "resp_codex_1",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "HELLO_CODEX"}]}],
+                "usage": {"input_tokens": 11, "output_tokens": 7},
+                "model": body.get("model", "gpt-5-codex"),
+            }
+        )
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_codex_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_codex_")
+    fake_codex = Path(fake_bin_dir) / "codex"
+    fake_codex.write_text(FAKE_CODEX_SCRIPT)
+    fake_codex.chmod(fake_codex.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19242, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19242,
+            tap_client="codex",
+        )
+
+        assert proc.returncode == 0, f"codex mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        assert len(trace_files) == 1
+        records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
+        assert len(records) == 1
+        record = records[0]
+        assert record["request"]["path"] == "/v1/messages"
+        assert record["upstream_base_url"] == "http://127.0.0.1:19242"
+        assert record["request"]["body"]["model"] == "gpt-5-codex"
+        assert "OPENAI_BASE_URL=http://127.0.0.1:" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "codex")
 
 
 ## ---------------------------------------------------------------------------
