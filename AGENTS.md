@@ -143,6 +143,8 @@ If a PR changes UI layout, styles, interaction flow, or rendered content, includ
 - Provide at least one screenshot per changed screen/state.
 - For visual diffs, include before/after screenshots when possible.
 - Include mobile screenshots when mobile behavior is affected.
+- Screenshot evidence must use real trace artifacts from `.traces/trace_*.jsonl` or real run outputs.
+- Do not use synthetic/mock request data for PR screenshots.
 
 ## Brain + Hands Protocol
 
