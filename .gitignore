@@ -38,6 +38,9 @@ typescript.txt
 !docs/demo_zh.gif
 !docs/demo.mp4
 !docs/demo_zh.mp4
+!docs/recordings/codex-demo.gif
+!docs/recordings/codex-demo.cast
+!docs/recordings/viewer-demo.mp4
 *.tape
 demo-*.png
 demo_commands.sh
@@ -45,6 +48,7 @@ real_demo.sh
 real-demo-*
 terminal-*.png
 record_*.py
+!docs/recordings/record_viewer.py
 record_*.sh
 script-*
 
