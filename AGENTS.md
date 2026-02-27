@@ -113,6 +113,15 @@ Before every commit:
 4. `git diff` — review every changed line before staging
 5. Verify scope: only files relevant to the task were modified
 
+## PR Requirements for UI Changes
+
+If a PR changes UI layout, styles, interaction flow, or rendered content, include screenshots in the PR description.
+
+- Provide at least one screenshot per changed screen/state.
+- For visual diffs, include before/after screenshots when possible.
+- Screenshot evidence must use real trace artifacts from `.traces/trace_*.jsonl` or real run outputs.
+- Do not use synthetic/mock request data for PR screenshots.
+
 ## Brain + Hands Protocol
 
 - **Claude Code (Opus)** = planning brain. Makes architecture decisions, designs APIs,
