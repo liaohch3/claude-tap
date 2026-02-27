@@ -3,7 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude Trace Viewer</title>
+<meta name="description" content="Self-contained claude-tap trace viewer for inspecting requests, prompts, tools, and token usage.">
+<meta name="application-name" content="claude-tap">
+<meta name="theme-color" content="#3b82f6">
+<meta name="color-scheme" content="light dark">
+<meta property="og:title" content="claude-tap Viewer">
+<meta property="og:description" content="Inspect Claude API traces, system prompts, tools, and token usage with claude-tap.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Cdefs%3E%3ClinearGradient id=%27g%27 x1=%270%27 y1=%270%27 x2=%271%27 y2=%271%27%3E%3Cstop offset=%270%25%27 stop-color=%27%233b82f6%27/%3E%3Cstop offset=%27100%25%27 stop-color=%27%2310b981%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x=%274%27 y=%274%27 width=%2756%27 height=%2756%27 rx=%2716%27 fill=%27url(%23g)%27/%3E%3Cpath d=%27M32 16v16l10 6%27 stroke=%27white%27 stroke-width=%275%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27 fill=%27none%27/%3E%3C/svg%3E">
+<title>claude-tap Viewer</title>
 <style>
 :root {
   --bg: #f4f5f7;
@@ -844,7 +853,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <div class="header">
   <div class="logo">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-    <span id="logo-text">Claude Trace</span>
+    <span id="logo-text">claude-tap</span>
   </div>
   <div class="divider"></div>
   <div class="path-filter" id="path-filter" style="display:none"></div>
@@ -907,7 +916,7 @@ const TRACE_HTML_PATH = typeof __TRACE_HTML_PATH__ !== 'undefined' ? __TRACE_HTM
 /* ─── i18n ─── */
 const I18N = {
   en: {
-    title: "Claude Trace", stats_turns: "Turns", stats_tokens: "Tokens", stats_time: "Time",
+    title: "claude-tap", stats_turns: "Turns", stats_tokens: "Tokens", stats_time: "Time",
     drop_title: "Load Trace File", drop_desc: "Drag & drop a .jsonl trace file, or click to browse", drop_btn: "Choose File",
     turn: "Turn", tok: "tok",
     btn_request_json: "Request JSON", btn_curl: "cURL", btn_diff: "Diff with Prev",
@@ -930,7 +939,7 @@ const I18N = {
     diff_select_target: "Compare against:", diff_select_auto: "Auto",
   },
   "zh-CN": {
-    title: "Claude Trace", stats_turns: "轮次", stats_tokens: "Token", stats_time: "耗时",
+    title: "claude-tap", stats_turns: "轮次", stats_tokens: "Token", stats_time: "耗时",
     drop_title: "加载 Trace 文件", drop_desc: "拖放 .jsonl 文件到此处，或点击选择文件", drop_btn: "选择文件",
     turn: "轮次", tok: "tok",
     btn_request_json: "请求 JSON", btn_curl: "cURL", btn_diff: "对比上次",
@@ -953,7 +962,7 @@ const I18N = {
     diff_select_target: "对比对象：", diff_select_auto: "自动",
   },
   ja: {
-    title: "Claude Trace", stats_turns: "ターン", stats_tokens: "トークン", stats_time: "時間",
+    title: "claude-tap", stats_turns: "ターン", stats_tokens: "トークン", stats_time: "時間",
     drop_title: "トレースファイルを読み込む", drop_desc: ".jsonl ファイルをドラッグ＆ドロップ、またはクリックして選択", drop_btn: "ファイル選択",
     turn: "ターン", tok: "tok",
     btn_request_json: "リクエスト JSON", btn_curl: "cURL", btn_diff: "前回と比較",
@@ -976,7 +985,7 @@ const I18N = {
     diff_select_target: "比較対象：", diff_select_auto: "自動",
   },
   ko: {
-    title: "Claude Trace", stats_turns: "턴", stats_tokens: "토큰", stats_time: "시간",
+    title: "claude-tap", stats_turns: "턴", stats_tokens: "토큰", stats_time: "시간",
     drop_title: "트레이스 파일 로드", drop_desc: ".jsonl 파일을 드래그 앤 드롭하거나 클릭하여 선택", drop_btn: "파일 선택",
     turn: "턴", tok: "tok",
     btn_request_json: "요청 JSON", btn_curl: "cURL", btn_diff: "이전과 비교",
@@ -999,7 +1008,7 @@ const I18N = {
     diff_select_target: "비교 대상：", diff_select_auto: "자동",
   },
   fr: {
-    title: "Claude Trace", stats_turns: "Tours", stats_tokens: "Tokens", stats_time: "Durée",
+    title: "claude-tap", stats_turns: "Tours", stats_tokens: "Tokens", stats_time: "Durée",
     drop_title: "Charger un fichier trace", drop_desc: "Glissez-déposez un fichier .jsonl, ou cliquez pour parcourir", drop_btn: "Choisir un fichier",
     turn: "Tour", tok: "tok",
     btn_request_json: "JSON Requête", btn_curl: "cURL", btn_diff: "Comparer avec préc.",
@@ -1022,7 +1031,7 @@ const I18N = {
     diff_select_target: "Comparer avec :", diff_select_auto: "Auto",
   },
   ar: {
-    title: "Claude Trace", stats_turns: "الأدوار", stats_tokens: "الرموز", stats_time: "المدة",
+    title: "claude-tap", stats_turns: "الأدوار", stats_tokens: "الرموز", stats_time: "المدة",
     drop_title: "تحميل ملف التتبع", drop_desc: "اسحب وأفلت ملف .jsonl هنا، أو انقر للاستعراض", drop_btn: "اختر ملفاً",
     turn: "دور", tok: "رمز",
     btn_request_json: "JSON الطلب", btn_curl: "cURL", btn_diff: "مقارنة مع السابق",
@@ -1045,7 +1054,7 @@ const I18N = {
     diff_select_target: "مقارنة مع:", diff_select_auto: "تلقائي",
   },
   de: {
-    title: "Claude Trace", stats_turns: "Runden", stats_tokens: "Token", stats_time: "Dauer",
+    title: "claude-tap", stats_turns: "Runden", stats_tokens: "Token", stats_time: "Dauer",
     drop_title: "Trace-Datei laden", drop_desc: "Ziehen Sie eine .jsonl-Datei hierher, oder klicken Sie zum Auswählen", drop_btn: "Datei wählen",
     turn: "Runde", tok: "Tok",
     btn_request_json: "Anfrage-JSON", btn_curl: "cURL", btn_diff: "Mit vorh. vergleichen",
@@ -1068,7 +1077,7 @@ const I18N = {
     diff_select_target: "Vergleichen mit:", diff_select_auto: "Auto",
   },
   ru: {
-    title: "Claude Trace", stats_turns: "Ходы", stats_tokens: "Токены", stats_time: "Время",
+    title: "claude-tap", stats_turns: "Ходы", stats_tokens: "Токены", stats_time: "Время",
     drop_title: "Загрузить файл трассировки", drop_desc: "Перетащите .jsonl файл сюда или нажмите для выбора", drop_btn: "Выбрать файл",
     turn: "Ход", tok: "ток",
     btn_request_json: "JSON запроса", btn_curl: "cURL", btn_diff: "Сравнить с пред.",
@@ -1114,6 +1123,7 @@ function setLang(lang) {
 function updateStaticTexts() {
   const e = id => document.getElementById(id);
   if (e('logo-text')) e('logo-text').textContent = t('title');
+  document.title = t('title') + ' Viewer';
   if (e('label-turns')) e('label-turns').textContent = t('stats_turns');
   if (e('label-tokens')) e('label-tokens').textContent = t('stats_tokens');
   if (e('label-time')) e('label-time').textContent = t('stats_time');
