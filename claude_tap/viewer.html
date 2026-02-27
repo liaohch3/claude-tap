@@ -197,19 +197,33 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 /* ─── Action bar ─── */
 .action-bar {
-  display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap;
-  position: sticky; top: 0; z-index: 3;
-  background: var(--bg); padding: 4px 0 8px;
+  display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  position: sticky; top: 10px; z-index: 6;
+  width: fit-content; max-width: 100%;
+  margin: 0 0 14px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08), var(--shadow-sm);
 }
 .act-btn {
   display: inline-flex; align-items: center; gap: 5px;
-  font-size: 12px; padding: 6px 12px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border); background: var(--bg-card);
+  font-size: 12px; padding: 7px 10px; border-radius: 8px;
+  border: none; background: transparent;
   color: var(--text-secondary); cursor: pointer; font-family: var(--sans);
-  transition: all .15s; box-shadow: var(--shadow-sm);
+  transition: all .15s;
 }
-.act-btn:hover { border-color: var(--blue); color: var(--blue); }
+.act-btn:hover { background: var(--bg-hover); color: var(--blue); }
+.act-btn:active { transform: translateY(1px); }
 .act-btn svg { width: 14px; height: 14px; }
+[data-theme="dark"] .action-bar {
+  background: rgba(22, 27, 34, 0.78);
+  border-color: #3a4048;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4), var(--shadow-sm);
+}
 
 /* ─── Section ─── */
 .section {
@@ -722,8 +736,17 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   }
 
   /* R3: Action buttons — stack vertically, min 44px touch target */
-  .action-bar { flex-direction: column; gap: 6px; }
+  .action-bar {
+    display: flex;
+    width: 100%;
+    top: 0;
+    padding: 8px;
+    gap: 6px;
+    border-radius: 10px;
+    flex-direction: column;
+  }
   .act-btn {
+    width: 100%;
     min-height: 44px;
     justify-content: center;
     font-size: 13px;
