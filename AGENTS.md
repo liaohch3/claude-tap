@@ -10,6 +10,29 @@ uv run pytest tests/ -x --timeout=60
 
 All three must pass before committing. If format fails, run `uv run ruff format .` first.
 
+## E2E Validation Requirements
+
+If a change affects proxying, trace capture, CLI session flow, auth handling, or other end-to-end behavior, run real E2E validation before opening a PR.
+
+Preferred commands:
+
+```bash
+# Full real E2E suite (requires Claude CLI auth)
+uv run pytest tests/e2e/ --run-real-e2e --timeout=300
+
+# Targeted real E2E case
+uv run pytest tests/e2e/test_real_proxy.py::TestRealProxy::test_single_turn --run-real-e2e --timeout=180
+```
+
+Pragmatic manual alternatives:
+
+```bash
+scripts/run_real_e2e.sh
+scripts/run_real_e2e_tmux.sh
+```
+
+If real E2E cannot run (for example due missing auth/token), explicitly document the reason and residual risk in the PR description.
+
 ## Language
 
 All code, comments, commit messages, docs, and skill files in this project must be in English. The only exceptions are `README_zh.md` and other explicitly Chinese README files.
@@ -112,6 +135,14 @@ Before every commit:
 3. `uv run pytest tests/ -x --timeout=60` — tests pass
 4. `git diff` — review every changed line before staging
 5. Verify scope: only files relevant to the task were modified
+
+## PR Requirements for UI Changes
+
+If a PR changes UI layout, styles, interaction flow, or rendered content, include screenshots in the PR description.
+
+- Provide at least one screenshot per changed screen/state.
+- For visual diffs, include before/after screenshots when possible.
+- Include mobile screenshots when mobile behavior is affected.
 
 ## Brain + Hands Protocol
 

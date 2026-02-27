@@ -196,7 +196,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .detail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
 /* ─── Action bar ─── */
-.action-bar { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+.action-bar {
+  display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap;
+  position: sticky; top: 0; z-index: 3;
+  background: var(--bg); padding: 4px 0 8px;
+}
 .act-btn {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 12px; padding: 6px 12px; border-radius: var(--radius-sm);
