@@ -1,18 +1,30 @@
 name: Publish to PyPI
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
+  push:
+    tags:
+      - "v*"
 
 jobs:
-  publish:
+  ci:
     runs-on: ubuntu-latest
-    if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      !contains(github.event.workflow_run.head_commit.message, '[skip publish]')
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest tests/ -x --timeout=60
+
+  publish:
+    needs: ci
+    runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write
@@ -20,7 +32,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
 
       - name: Install uv
@@ -29,28 +40,19 @@ jobs:
       - name: Set up Python
         run: uv python install 3.13
 
-      - name: Bump patch version
-        id: bump
+      - name: Verify version matches tag
         run: |
-          current=$(python3 -c "
+          tag="${GITHUB_REF#refs/tags/v}"
+          pkg_version=$(python3 -c "
           import re
           m = re.search(r'version = \"(.+?)\"', open('pyproject.toml').read())
           print(m.group(1))
           ")
-          IFS='.' read -r major minor patch <<< "$current"
-          new_version="$major.$minor.$((patch + 1))"
-          sed -i "s/version = \"$current\"/version = \"$new_version\"/" pyproject.toml
-          echo "version=$new_version" >> "$GITHUB_OUTPUT"
-          echo "Bumped $current -> $new_version"
-
-      - name: Commit and tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml
-          git commit -m "chore: release v${{ steps.bump.outputs.version }} [skip publish]"
-          git tag -f "v${{ steps.bump.outputs.version }}"
-          git push origin main --tags --force
+          if [ "$tag" != "$pkg_version" ]; then
+            echo "::error::Tag v$tag does not match pyproject.toml version $pkg_version"
+            exit 1
+          fi
+          echo "Publishing version $pkg_version"
 
       - name: Build package
         run: uv build
@@ -62,28 +64,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          version="${{ steps.bump.outputs.version }}"
-          notes="$(git log -n 20 --pretty=format:'- %h %s')"
-          gh release create "v${version}" \
-            --title "v${version}" \
-            --notes "${notes}"
-
-      - name: Verify PyPI install
-        run: |
-          version="${{ steps.bump.outputs.version }}"
-          for attempt in 1 2 3 4 5; do
-            python3 -m venv .venv-pypi-check
-            . .venv-pypi-check/bin/activate
-            python -m pip install --upgrade pip
-            if python -m pip install "claude-tap==${version}"; then
-              deactivate
-              rm -rf .venv-pypi-check
-              exit 0
-            fi
-            deactivate
-            rm -rf .venv-pypi-check
-            echo "PyPI package not ready yet (attempt ${attempt}/5), retrying in 30s..."
-            sleep 30
-          done
-          echo "Failed to install claude-tap==${version} from PyPI."
-          exit 1
+          tag="${GITHUB_REF#refs/tags/}"
+          prev_tag=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || echo "")
+          if [ -n "$prev_tag" ]; then
+            notes="$(git log "${prev_tag}..${tag}" --pretty=format:'- %h %s')"
+          else
+            notes="$(git log --pretty=format:'- %h %s' -n 20)"
+          fi
+          gh release create "$tag" \
+            --title "$tag" \
+            --notes "$notes"

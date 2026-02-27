@@ -15,6 +15,7 @@ import threading
 import urllib.error
 import urllib.request
 import webbrowser
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -47,32 +48,60 @@ def _open_browser(url: str) -> None:
     threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
 
 
-async def run_claude(
+@dataclass(frozen=True)
+class ClientConfig:
+    """Per-client configuration for supported AI CLI tools."""
+
+    cmd: str
+    label: str
+    install_url: str
+    base_url_env: str
+    base_url_suffix: str  # appended to http://127.0.0.1:{port}
+    default_target: str
+    nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
+
+    @property
+    def missing_help(self) -> str:
+        return (
+            f"\nError: '{self.cmd}' command not found in PATH.\nPlease install {self.label} first: {self.install_url}\n"
+        )
+
+    def reverse_base_url(self, port: int) -> str:
+        return f"http://127.0.0.1:{port}{self.base_url_suffix}"
+
+
+CLIENT_CONFIGS: dict[str, ClientConfig] = {
+    "claude": ClientConfig(
+        cmd="claude",
+        label="Claude Code",
+        install_url="https://docs.anthropic.com/en/docs/claude-code",
+        base_url_env="ANTHROPIC_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.anthropic.com",
+        nesting_env_keys=("CLAUDECODE", "CLAUDE_CODE_SSE_PORT"),
+    ),
+    "codex": ClientConfig(
+        cmd="codex",
+        label="Codex CLI",
+        install_url="https://github.com/openai/codex",
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+    ),
+}
+
+
+async def run_client(
     port: int,
     extra_args: list[str],
     client: str = "claude",
     proxy_mode: str = "reverse",
     ca_cert_path: Path | None = None,
 ) -> int:
-    if client == "claude":
-        client_cmd = "claude"
-        client_label = "Claude Code"
-        missing_help = (
-            "\nError: 'claude' command not found in PATH.\n"
-            "Please install Claude Code first: "
-            "https://docs.anthropic.com/en/docs/claude-code\n"
-        )
-    else:
-        client_cmd = "codex"
-        client_label = "Codex CLI"
-        missing_help = (
-            "\nError: 'codex' command not found in PATH.\n"
-            "Please install Codex CLI first: "
-            "https://github.com/openai/codex\n"
-        )
+    cfg = CLIENT_CONFIGS[client]
 
-    if shutil.which(client_cmd) is None:
-        print(missing_help)
+    if shutil.which(cfg.cmd) is None:
+        print(cfg.missing_help)
         return 1
 
     env = os.environ.copy()
@@ -111,28 +140,21 @@ async def run_claude(
                 cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
         # Don't set provider-specific base URL in forward mode
     else:
-        if client == "claude":
-            env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
-        else:
-            env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
+        base_url = cfg.reverse_base_url(port)
+        env[cfg.base_url_env] = base_url
         env["NO_PROXY"] = "127.0.0.1"
 
-    if client == "claude":
-        # Bypass Claude Code nesting detection
-        env.pop("CLAUDECODE", None)
-        env.pop("CLAUDE_CODE_SSE_PORT", None)
+    for key in cfg.nesting_env_keys:
+        env.pop(key, None)
 
-    cmd = [client_cmd] + cmd_args
-    print(f"\n🚀 Starting {client_label}: {' '.join(cmd)}")
+    cmd = [cfg.cmd] + cmd_args
+    print(f"\n🚀 Starting {cfg.label}: {' '.join(cmd)}")
     if proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     else:
-        if client == "claude":
-            print(f"   ANTHROPIC_BASE_URL=http://127.0.0.1:{port}")
-        else:
-            print(f"   OPENAI_BASE_URL=http://127.0.0.1:{port}/v1")
+        print(f"   {cfg.base_url_env}={cfg.reverse_base_url(port)}")
     print()
 
     # Give child its own process group and make it the foreground group
@@ -168,7 +190,7 @@ async def run_claude(
         if sigint_count == 1:
             if proc.returncode is None:
                 proc.terminate()
-                print(f"\n⏳ Shutting down {client_label}... (Ctrl+C again to force)")
+                print(f"\n⏳ Shutting down {cfg.label}... (Ctrl+C again to force)")
         else:
             if proc.returncode is None:
                 proc.kill()
@@ -176,7 +198,7 @@ async def run_claude(
     def _handle_sigtstp():
         if proc.returncode is None:
             proc.terminate()
-            print(f"\n⏳ Shutting down {client_label}...")
+            print(f"\n⏳ Shutting down {cfg.label}...")
 
     try:
         loop.add_signal_handler(signal.SIGINT, _handle_sigint)
@@ -208,7 +230,7 @@ async def run_claude(
     except (NotImplementedError, OSError):
         pass
 
-    print(f"\n📋 {client_label} exited with code {code}")
+    print(f"\n📋 {cfg.label} exited with code {code}")
     return code
 
 
@@ -308,7 +330,7 @@ async def async_main(args: argparse.Namespace):
     try:
         if not args.no_launch:
             try:
-                exit_code = await run_claude(
+                exit_code = await run_client(
                     actual_port,
                     args.claude_args,
                     client=args.client,
@@ -494,9 +516,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.host is None:
         args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
     if args.target is None:
-        args.target = (
-            "https://api.anthropic.com" if args.client == "claude" else "https://chatgpt.com/backend-api/codex"
-        )
+        args.target = CLIENT_CONFIGS[args.client].default_target
     return args
 
 

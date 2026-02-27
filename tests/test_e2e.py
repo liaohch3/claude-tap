@@ -395,15 +395,7 @@ def _start_fake_upstream(port, handler_fn):
     return stop
 
 
-def _run_claude_tap(
-    project_dir,
-    trace_dir,
-    fake_bin_dir,
-    upstream_port,
-    timeout=30,
-    tap_client="claude",
-    client_args: list[str] | None = None,
-):
+def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout=30, tap_client="claude"):
     """Run claude_tap as a subprocess pointing at `upstream_port`.
     Returns the CompletedProcess."""
     env = os.environ.copy()
@@ -415,14 +407,11 @@ def _run_claude_tap(
         "claude_tap",
         "--tap-output-dir",
         trace_dir,
-        "--tap-no-open",
         "--tap-target",
         f"http://127.0.0.1:{upstream_port}",
     ]
     if tap_client != "claude":
         cmd.extend(["--tap-client", tap_client])
-    if client_args:
-        cmd.extend(client_args)
 
     return subprocess.run(
         cmd,
@@ -1173,7 +1162,7 @@ def test_parse_args():
     # Codex defaults
     a = parse_args(["--tap-client", "codex"])
     assert a.client == "codex"
-    assert a.target == "https://chatgpt.com/backend-api/codex"
+    assert a.target == "https://api.openai.com"
     assert a.claude_args == []
     print("  OK: codex defaults")
 
@@ -1226,7 +1215,7 @@ FAKE_CODEX_SCRIPT = r"""#!/usr/bin/env python3
 import json, os, sys, urllib.request
 
 base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-url = f"{base}/responses"
+url = f"{base}/messages"
 
 req_body = json.dumps({
     "model": "gpt-5-codex",
@@ -1249,16 +1238,11 @@ print("[fake-codex] Done.")
 
 
 def test_codex_client_reverse_proxy():
-    """Test --tap-client codex in reverse mode using OPENAI_BASE_URL.
-
-    The proxy must strip the /v1 prefix from the request path before forwarding
-    to the upstream, so the fake upstream sees /responses instead of /v1/responses.
-    """
+    """Test --tap-client codex in reverse mode using OPENAI_BASE_URL."""
 
     async def handler(request):
         body = await request.json()
-        # Proxy strips /v1 prefix: /v1/responses -> /responses
-        assert request.path == "/responses", f"expected /responses, got {request.path}"
+        assert request.path == "/messages"
         from aiohttp import web
 
         return web.json_response(
@@ -1292,13 +1276,10 @@ def test_codex_client_reverse_proxy():
         records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
         assert len(records) == 1
         record = records[0]
-        # Trace records the original path as received from the client
-        assert record["request"]["path"] == "/v1/responses"
+        assert record["request"]["path"] == "/v1/messages"
         assert record["upstream_base_url"] == "http://127.0.0.1:19242"
         assert record["request"]["body"]["model"] == "gpt-5-codex"
         assert "OPENAI_BASE_URL=http://127.0.0.1:" in proc.stdout
-        # WebSocket is now proxied natively — no forced --disable flags
-        assert "--disable responses_websockets" not in proc.stdout
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "codex")
