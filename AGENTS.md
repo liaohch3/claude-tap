@@ -37,6 +37,13 @@ If real E2E cannot run (for example due missing auth/token), explicitly document
 
 All code, comments, commit messages, docs, and skill files in this project must be in English. The only exceptions are `README_zh.md` and other explicitly Chinese README files.
 
+## E2E Conversation Rule
+
+When running E2E tests, complete at least one full conversation (multi-turn) in every run.
+
+For conversation validation and screenshot evidence, use tmux interactive flow (`scripts/run_real_e2e_tmux.sh`).
+Do not use `claude -p` one-shot runs as proof of conversation completeness.
+
 ## Pre-work Checklist
 
 Before any code change, run:
@@ -143,6 +150,9 @@ If a PR changes UI layout, styles, interaction flow, or rendered content, includ
 - Provide at least one screenshot per changed screen/state.
 - For visual diffs, include before/after screenshots when possible.
 - Include mobile screenshots when mobile behavior is affected.
+- Screenshot evidence must use real trace artifacts from `.traces/trace_*.jsonl` or real run outputs.
+- For E2E-related UI changes, screenshots must come from the same run that completed at least one full multi-turn conversation.
+- Do not use synthetic/mock request data for PR screenshots.
 
 ## Brain + Hands Protocol
 
