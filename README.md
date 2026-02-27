@@ -7,7 +7,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code). See exactly how it constructs system prompts, manages conversation history, selects tools, and uses tokens — in a beautiful trace viewer.
+Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex CLI](https://github.com/openai/codex). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -24,7 +24,7 @@ Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.
 
 ## Install
 
-Requires Python 3.11+ and [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+Requires Python 3.11+ and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (or [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`).
 
 ```bash
 # Recommended
@@ -48,9 +48,13 @@ claude-tap --tap-live
 # Pass any flags through to Claude Code
 claude-tap -- --model claude-opus-4-6
 claude-tap -c    # continue last conversation
+
+# Trace Codex CLI instead of Claude Code
+claude-tap --tap-client codex
+claude-tap --tap-client codex -- --model codex-mini-latest
 ```
 
-When Claude Code exits, open the generated HTML viewer:
+When the client exits, open the generated HTML viewer:
 
 ```bash
 open .traces/trace_*.html
@@ -58,16 +62,17 @@ open .traces/trace_*.html
 
 ### CLI Options
 
-All flags are forwarded to Claude Code, except these `--tap-*` ones:
+All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
+--tap-client CLIENT      Client to launch: claude (default) or codex
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
 --tap-open               Open HTML viewer in browser after exit
 --tap-output-dir DIR     Trace output directory (default: ./.traces)
 --tap-port PORT          Proxy port (default: auto)
---tap-target URL         Upstream API URL (default: https://api.anthropic.com)
---tap-no-launch          Only start the proxy, don't launch Claude Code
+--tap-target URL         Upstream API URL (default: auto per client)
+--tap-no-launch          Only start the proxy, don't launch client
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
@@ -80,6 +85,22 @@ claude-tap --tap-no-launch --tap-port 8080
 # In another terminal:
 ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 ```
+
+### Codex CLI Support
+
+To trace [Codex CLI](https://github.com/openai/codex) (OpenAI) instead of Claude Code:
+
+```bash
+# Launch Codex with tracing
+claude-tap --tap-client codex
+
+# With specific model
+claude-tap --tap-client codex -- --model codex-mini-latest
+```
+
+In reverse proxy mode (default), claude-tap sets `OPENAI_BASE_URL` to route Codex traffic through the proxy. The upstream target defaults to `https://api.openai.com`.
+
+**Requirements:** Codex CLI installed and `OPENAI_API_KEY` set in your environment.
 
 ## Viewer Features
 
@@ -102,8 +123,8 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 
 **How it works:**
 
-1. `claude-tap` starts a reverse proxy and spawns Claude Code with `ANTHROPIC_BASE_URL` pointing to it
-2. All API requests flow through the proxy → Anthropic API → back through proxy
+1. `claude-tap` starts a reverse proxy and spawns the selected client (`claude` or `codex`) with the provider-specific base URL pointing to it
+2. All API requests flow through the proxy → upstream API → back through proxy
 3. SSE streaming responses are forwarded in real-time (zero added latency)
 4. Each request-response pair is recorded to `trace.jsonl`
 5. On exit, a self-contained HTML viewer is generated
