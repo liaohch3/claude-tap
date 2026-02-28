@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import json
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
+
+try:
+    CLAUDE_TAP_VERSION = _pkg_version("claude-tap")
+except Exception:
+    CLAUDE_TAP_VERSION = "0.0.0"
 
 
 def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
@@ -28,6 +34,7 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
         "const EMBEDDED_TRACE_DATA = [\n" + ",\n".join(records) + "\n];\n"
         f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
         f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
+        f"const __CLAUDE_TAP_VERSION__ = {json.dumps(CLAUDE_TAP_VERSION)};\n"
     )
 
     html = template.read_text(encoding="utf-8")

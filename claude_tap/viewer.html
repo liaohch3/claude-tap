@@ -106,6 +106,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .header .logo { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .header .logo svg { width: 22px; height: 22px; }
 .header .logo span { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: -0.3px; }
+.header .logo .logo-version {
+  display: none; align-items: center;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.2px;
+  color: var(--text-tertiary); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 1px 6px; line-height: 1.4;
+}
 .header .divider { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; }
 .path-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .filter-chip {
@@ -875,6 +882,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   <div class="logo">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     <span id="logo-text">claude-tap</span>
+    <span class="logo-version" id="logo-version"></span>
   </div>
   <div class="divider"></div>
   <div class="path-filter" id="path-filter" style="display:none"></div>
@@ -933,6 +941,7 @@ let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), search
 let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
 const TRACE_JSONL_PATH = typeof __TRACE_JSONL_PATH__ !== 'undefined' ? __TRACE_JSONL_PATH__ : '';
 const TRACE_HTML_PATH = typeof __TRACE_HTML_PATH__ !== 'undefined' ? __TRACE_HTML_PATH__ : '';
+const CLAUDE_TAP_VERSION = typeof __CLAUDE_TAP_VERSION__ !== 'undefined' ? __CLAUDE_TAP_VERSION__ : '';
 
 /* ─── i18n ─── */
 const I18N = {
@@ -1144,6 +1153,15 @@ function setLang(lang) {
 function updateStaticTexts() {
   const e = id => document.getElementById(id);
   if (e('logo-text')) e('logo-text').textContent = t('title');
+  if (e('logo-version')) {
+    const rawVersion = String(CLAUDE_TAP_VERSION || '').trim();
+    if (rawVersion) {
+      e('logo-version').textContent = rawVersion.startsWith('v') ? rawVersion : `v${rawVersion}`;
+      e('logo-version').style.display = 'inline-flex';
+    } else {
+      e('logo-version').style.display = 'none';
+    }
+  }
   document.title = t('title') + ' Viewer';
   if (e('label-turns')) e('label-turns').textContent = t('stats_turns');
   if (e('label-tokens')) e('label-tokens').textContent = t('stats_tokens');
