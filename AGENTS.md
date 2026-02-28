@@ -1,3 +1,18 @@
+## ⛔ Hard Rules (MUST follow — no exceptions)
+
+These rules are **mandatory**. Do not skip any of them. If you cannot comply, stop and explain why.
+
+1. **Gate checks before every commit** — `ruff check`, `ruff format --check`, `pytest`. All must pass. No "I'll fix it later".
+2. **UI changes → screenshots in the PR body** — If you touch anything visual (HTML, CSS, styles, layout, rendered content), the PR description MUST include screenshots using `raw.githubusercontent.com` absolute URLs. Local-only screenshots don't count.
+3. **One concern per commit** — Don't mix refactoring with features or bug fixes.
+4. **English only** — All code, comments, commit messages, docs. Exception: `README_zh.md`.
+5. **Real data only** — Screenshots, demos, and test evidence must use real trace data from `.traces/`, never mocks or synthetic data.
+6. **Pre-work checklist** — Before any code: `git diff --stat`, `git log --oneline -10`, `git fetch origin`. Before opening a PR: `git rebase origin/main`, `uv lock --check`.
+
+Violating these rules means the PR will be rejected. Follow them every time.
+
+---
+
 ## Pre-commit CI checks
 
 Before every `git commit`, run these checks locally (mirrors GitHub CI):
