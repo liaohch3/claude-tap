@@ -616,6 +616,64 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 .search-bar .search-clear:hover { color: var(--text); }
 
+/* ─── Global find (Cmd/Ctrl+F) ─── */
+.global-search-overlay {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 2000;
+  display: none;
+}
+.global-search-overlay.open { display: block; }
+.global-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-lg);
+}
+.global-search-box input {
+  width: 260px;
+  font-size: 12px;
+  font-family: var(--sans);
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+.global-search-box input:focus { border-color: var(--blue); }
+.global-search-count {
+  min-width: 90px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+}
+.global-search-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.global-search-btn:hover { color: var(--blue); border-color: var(--blue); }
+.global-search-hit {
+  background: #fde047;
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+}
+.global-search-hit.current {
+  background: #fb923c;
+}
+
 /* ─── Theme toggle ─── */
 .theme-toggle {
   background: none; border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -869,6 +927,19 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
   /* R6: Search bar full-width */
   .search-bar input { font-size: 14px; }
+  .global-search-overlay {
+    left: 8px;
+    right: 8px;
+    top: 8px;
+  }
+  .global-search-box {
+    width: 100%;
+    gap: 6px;
+  }
+  .global-search-box input {
+    width: auto;
+    flex: 1;
+  }
 
   /* Sidebar items: larger touch targets */
   .sidebar-item { min-height: 44px; padding: 12px 16px; }
@@ -907,6 +978,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 <div class="trace-path-bar" id="trace-path-bar"></div>
 <div id="token-summary-bar" style="display:none;padding:6px 16px;background:var(--bg-card);border-bottom:1px solid var(--border);font-size:12px;font-family:var(--mono);display:none;gap:16px;align-items:center;flex-wrap:wrap"></div>
+<div class="global-search-overlay" id="global-search-overlay">
+  <div class="global-search-box">
+    <input type="text" id="global-search-input" placeholder="Find in trace">
+    <span class="global-search-count" id="global-search-count">0 of 0</span>
+    <button class="global-search-btn" id="global-search-prev" type="button" title="Previous match (Shift+Enter)">Prev</button>
+    <button class="global-search-btn" id="global-search-next" type="button" title="Next match (Enter)">Next</button>
+    <button class="global-search-btn" id="global-search-close" type="button" title="Close (Escape)">Close</button>
+  </div>
+</div>
 
 <div class="main" id="main-area">
   <div class="drop-zone" id="drop-zone">
@@ -939,6 +1019,14 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 const $ = s => document.querySelector(s);
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
 let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
+const globalSearchState = {
+  open: false,
+  query: '',
+  matchCounts: [],
+  totalMatches: 0,
+  currentMatch: -1,
+  textCache: new Map(),
+};
 const TRACE_JSONL_PATH = typeof __TRACE_JSONL_PATH__ !== 'undefined' ? __TRACE_JSONL_PATH__ : '';
 const TRACE_HTML_PATH = typeof __TRACE_HTML_PATH__ !== 'undefined' ? __TRACE_HTML_PATH__ : '';
 const CLAUDE_TAP_VERSION = typeof __CLAUDE_TAP_VERSION__ !== 'undefined' ? __CLAUDE_TAP_VERSION__ : '';
@@ -1269,7 +1357,7 @@ document.head.appendChild(pulseStyle);
 if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
   entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? EMBEDDED_TRACE_DATA : [];
   document.addEventListener('DOMContentLoaded', () => {
-    initTheme(); initLang();
+    initTheme(); initLang(); initGlobalSearch();
     initLiveMode();
     if (entries.length) renderApp();
     else {
@@ -1279,10 +1367,10 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
   });
 } else if (typeof EMBEDDED_TRACE_DATA !== 'undefined' && EMBEDDED_TRACE_DATA.length) {
   entries = EMBEDDED_TRACE_DATA;
-  document.addEventListener('DOMContentLoaded', () => { initTheme(); initLang(); renderApp(); });
+  document.addEventListener('DOMContentLoaded', () => { initTheme(); initLang(); initGlobalSearch(); renderApp(); });
 } else {
   document.addEventListener('DOMContentLoaded', () => {
-    initTheme(); initLang();
+    initTheme(); initLang(); initGlobalSearch();
     const dropInner = $('#drop-inner'), fileInput = $('#file-input');
     ['dragover','dragenter'].forEach(e => dropInner.addEventListener(e, ev => { ev.preventDefault(); dropInner.classList.add('dragover'); }));
     ['dragleave','drop'].forEach(e => dropInner.addEventListener(e, () => dropInner.classList.remove('dragover')));
@@ -1526,6 +1614,240 @@ function matchSearch(e, q) {
     }
   }
   return false;
+}
+
+/* ─── Global search (Cmd/Ctrl+F) ─── */
+function initGlobalSearch() {
+  const input = $('#global-search-input');
+  $('#global-search-prev').onclick = () => navigateGlobalSearch(-1);
+  $('#global-search-next').onclick = () => navigateGlobalSearch(1);
+  $('#global-search-close').onclick = () => closeGlobalSearch();
+  input.addEventListener('input', () => {
+    globalSearchState.query = input.value.trim();
+    recalcGlobalSearchMatches();
+  });
+}
+
+function openGlobalSearch() {
+  normalizeFiltersForGlobalSearch();
+  globalSearchState.open = true;
+  $('#global-search-overlay').classList.add('open');
+  const input = $('#global-search-input');
+  input.value = globalSearchState.query;
+  input.focus();
+  input.select();
+  recalcGlobalSearchMatches();
+}
+
+function closeGlobalSearch() {
+  globalSearchState.open = false;
+  globalSearchState.query = '';
+  globalSearchState.matchCounts = [];
+  globalSearchState.totalMatches = 0;
+  globalSearchState.currentMatch = -1;
+  $('#global-search-input').value = '';
+  $('#global-search-overlay').classList.remove('open');
+  clearGlobalSearchHighlights($('#detail'));
+  updateGlobalSearchCount();
+}
+
+function normalizeFiltersForGlobalSearch() {
+  // Global search must be able to move across all entries.
+  let changed = false;
+  const allPaths = new Set(entries.map(getPath));
+  if (activePaths.size !== allPaths.size) { activePaths = allPaths; changed = true; }
+  if (activeTools) { activeTools = null; changed = true; }
+  if (searchQuery) {
+    searchQuery = '';
+    if ($('#search-input')) $('#search-input').value = '';
+    if ($('#search-clear')) $('#search-clear').style.display = 'none';
+    changed = true;
+  }
+  if (changed) applyFilter(true);
+}
+
+function getEntrySearchText(entry) {
+  if (!entry?.request_id) return '';
+  if (globalSearchState.textCache.has(entry.request_id)) return globalSearchState.textCache.get(entry.request_id);
+  const body = entry.request?.body;
+  const parts = [];
+  parts.push(body?.model || '');
+  parts.push(extractSystem(body) || '');
+  getMessages(body).forEach(m => parts.push(msgToText(m)));
+  (body?.tools || []).forEach(td => parts.push(JSON.stringify(td)));
+  const output = getResponseOutput(entry);
+  if (output?.content) parts.push(msgToText({ role: 'assistant', content: output.content }));
+  (entry.response?.sse_events || []).forEach(ev => parts.push(JSON.stringify(ev)));
+  parts.push(JSON.stringify(entry));
+  const text = parts.join('\n').toLowerCase();
+  globalSearchState.textCache.set(entry.request_id, text);
+  return text;
+}
+
+function countMatchesInText(text, query) {
+  if (!text || !query) return 0;
+  let count = 0, from = 0;
+  while (true) {
+    const idx = text.indexOf(query, from);
+    if (idx === -1) break;
+    count++;
+    from = idx + query.length;
+  }
+  return count;
+}
+
+function recalcGlobalSearchMatches() {
+  clearGlobalSearchHighlights($('#detail'));
+  const query = globalSearchState.query.toLowerCase();
+  if (!query) {
+    globalSearchState.matchCounts = [];
+    globalSearchState.totalMatches = 0;
+    globalSearchState.currentMatch = -1;
+    updateGlobalSearchCount();
+    return;
+  }
+  const counts = [];
+  let total = 0;
+  entries.forEach(entry => {
+    const c = countMatchesInText(getEntrySearchText(entry), query);
+    if (c > 0) counts.push({ requestId: entry.request_id, count: c });
+    total += c;
+  });
+  globalSearchState.matchCounts = counts;
+  globalSearchState.totalMatches = total;
+  globalSearchState.currentMatch = total > 0 ? 0 : -1;
+  updateGlobalSearchCount();
+  revealCurrentSearchMatch();
+}
+
+function updateGlobalSearchCount() {
+  const total = globalSearchState.totalMatches;
+  const current = total > 0 ? (globalSearchState.currentMatch + 1) : 0;
+  const label = total > 0 ? `${current} of ${total} matches` : '0 of 0';
+  $('#global-search-count').textContent = label;
+}
+
+function getTargetForGlobalMatch(globalIndex) {
+  let seen = 0;
+  for (const row of globalSearchState.matchCounts) {
+    if (globalIndex < seen + row.count) {
+      return { requestId: row.requestId, localIndex: globalIndex - seen };
+    }
+    seen += row.count;
+  }
+  return null;
+}
+
+function findFilteredIdxByRequestId(requestId) {
+  return filtered.findIndex(entry => entry.request_id === requestId);
+}
+
+function ensureEntryVisibleForSearch(requestId) {
+  let idx = findFilteredIdxByRequestId(requestId);
+  if (idx < 0) {
+    normalizeFiltersForGlobalSearch();
+    idx = findFilteredIdxByRequestId(requestId);
+  }
+  if (idx < 0) return -1;
+  const model = filtered[idx]?.request?.body?.model || 'unknown';
+  if (collapsedGroups.has(model)) {
+    collapsedGroups.delete(model);
+    renderSidebar(true);
+    idx = findFilteredIdxByRequestId(requestId);
+  }
+  return idx;
+}
+
+function navigateGlobalSearch(delta) {
+  if (!globalSearchState.totalMatches) return;
+  const total = globalSearchState.totalMatches;
+  globalSearchState.currentMatch = (globalSearchState.currentMatch + delta + total) % total;
+  updateGlobalSearchCount();
+  revealCurrentSearchMatch();
+}
+
+function revealCurrentSearchMatch() {
+  const target = getTargetForGlobalMatch(globalSearchState.currentMatch);
+  if (!target) return;
+  const filteredIdx = ensureEntryVisibleForSearch(target.requestId);
+  if (filteredIdx < 0) return;
+  selectEntry(filteredIdx);
+  applyGlobalSearchHighlights(target.localIndex);
+}
+
+function applyGlobalSearchHighlights(targetLocalIndex) {
+  const detail = $('#detail');
+  if (!detail) return;
+  clearGlobalSearchHighlights(detail);
+  const query = globalSearchState.query.toLowerCase();
+  if (!query) return;
+  const marks = highlightSearchInContainer(detail, query);
+  autoExpandSearchMatches(marks);
+  if (!marks.length) return;
+  let idx = targetLocalIndex;
+  if (idx < 0 || idx >= marks.length) idx = 0;
+  marks.forEach((mark, i) => mark.classList.toggle('current', i === idx));
+  marks[idx].scrollIntoView({ block: 'center' });
+}
+
+function clearGlobalSearchHighlights(container) {
+  if (!container) return;
+  container.querySelectorAll('mark.global-search-hit').forEach(mark => {
+    mark.replaceWith(document.createTextNode(mark.textContent || ''));
+  });
+  container.normalize();
+}
+
+function highlightSearchInContainer(container, query) {
+  if (!query) return [];
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      if (parent.closest('#global-search-overlay')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+  const marks = [];
+  textNodes.forEach(node => {
+    const value = node.nodeValue;
+    const lower = value.toLowerCase();
+    let from = 0;
+    let found = lower.indexOf(query, from);
+    if (found === -1) return;
+    const frag = document.createDocumentFragment();
+    while (found !== -1) {
+      if (found > from) frag.appendChild(document.createTextNode(value.slice(from, found)));
+      const mark = document.createElement('mark');
+      mark.className = 'global-search-hit';
+      mark.textContent = value.slice(found, found + query.length);
+      frag.appendChild(mark);
+      marks.push(mark);
+      from = found + query.length;
+      found = lower.indexOf(query, from);
+    }
+    if (from < value.length) frag.appendChild(document.createTextNode(value.slice(from)));
+    node.parentNode.replaceChild(frag, node);
+  });
+  return marks;
+}
+
+function autoExpandSearchMatches(marks) {
+  marks.forEach(mark => {
+    const sectionBody = mark.closest('.section-body');
+    if (sectionBody && !sectionBody.classList.contains('open')) {
+      sectionBody.classList.add('open');
+      sectionBody.previousElementSibling?.querySelector('.chevron')?.classList.add('open');
+    }
+    const toolBody = mark.closest('.tool-block-body');
+    if (toolBody && !toolBody.classList.contains('open')) {
+      toolBody.classList.add('open');
+      toolBody.previousElementSibling?.querySelector('.tb-arrow')?.classList.add('open');
+    }
+  });
 }
 
 /* ─── Model helpers ─── */
@@ -1796,6 +2118,11 @@ function renderDetail(e) {
 
   d.innerHTML = html;
   bindSections(d);
+  if (globalSearchState.open && globalSearchState.query) {
+    const target = getTargetForGlobalMatch(globalSearchState.currentMatch);
+    const localIndex = target && target.requestId === e.request_id ? target.localIndex : 0;
+    applyGlobalSearchHighlights(localIndex);
+  }
 }
 
 /* ─── Renderers ─── */
@@ -2527,6 +2854,25 @@ function fmtChars(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n
 
 /* ─── Keyboard nav ─── */
 document.addEventListener('keydown', ev => {
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') {
+    ev.preventDefault();
+    openGlobalSearch();
+    return;
+  }
+  if (globalSearchState.open) {
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      closeGlobalSearch();
+      return;
+    }
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      navigateGlobalSearch(ev.shiftKey ? -1 : 1);
+      return;
+    }
+  }
+  const tag = ev.target?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || ev.target?.isContentEditable) return;
   if (!visualOrder.length) return;
   if (ev.key === 'ArrowDown' || ev.key === 'j') { ev.preventDefault(); visualNavigate(1); }
   if (ev.key === 'ArrowUp' || ev.key === 'k') { ev.preventDefault(); visualNavigate(-1); }
