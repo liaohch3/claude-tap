@@ -5,9 +5,12 @@ Usage: uv run python scripts/verify_screenshots.py .traces/trace_*.html
 
 Exit 0 = all OK, exit 1 = problems found.
 """
+
 from __future__ import annotations
+
 import sys
 from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
 
