@@ -394,7 +394,15 @@ def _start_fake_upstream(port, handler_fn):
     return stop
 
 
-def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout=30, tap_client="claude"):
+def _run_claude_tap(
+    project_dir,
+    trace_dir,
+    fake_bin_dir,
+    upstream_port,
+    timeout=30,
+    tap_client="claude",
+    client_args: list[str] | None = None,
+):
     """Run claude_tap as a subprocess pointing at `upstream_port`.
     Returns the CompletedProcess."""
     env = os.environ.copy()
@@ -411,6 +419,8 @@ def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout
     ]
     if tap_client != "claude":
         cmd.extend(["--tap-client", tap_client])
+    if client_args:
+        cmd.extend(client_args)
 
     return subprocess.run(
         cmd,
@@ -1285,6 +1295,49 @@ def test_codex_client_reverse_proxy():
         assert record["upstream_base_url"] == "http://127.0.0.1:19242"
         assert record["request"]["body"]["model"] == "gpt-5-codex"
         assert "OPENAI_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert "--disable responses_websockets_v2 --disable responses_websockets" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "codex")
+
+
+def test_codex_reverse_mode_respects_websocket_feature_override():
+    """If user explicitly enables websocket Responses, don't auto-disable it."""
+
+    async def handler(request):
+        body = await request.json()
+        from aiohttp import web
+
+        return web.json_response(
+            {
+                "id": "resp_codex_override_1",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "OK"}]}],
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+                "model": body.get("model", "gpt-5-codex"),
+            }
+        )
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_codex_override_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_codex_override_")
+    fake_codex = Path(fake_bin_dir) / "codex"
+    fake_codex.write_text(FAKE_CODEX_SCRIPT)
+    fake_codex.chmod(fake_codex.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19244, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19244,
+            tap_client="codex",
+            client_args=["--enable", "responses_websockets"],
+        )
+
+        assert proc.returncode == 0, f"codex mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        assert "--enable responses_websockets" in proc.stdout
+        assert "--disable responses_websockets " not in proc.stdout
+        assert "--disable responses_websockets_v2" in proc.stdout
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "codex")
