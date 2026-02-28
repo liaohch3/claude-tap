@@ -8,6 +8,8 @@ These rules are **mandatory**. Do not skip any of them. If you cannot comply, st
 4. **English only** — All code, comments, commit messages, docs. Exception: `README_zh.md`.
 5. **Real data only** — Screenshots, demos, and test evidence must use real trace data from `.traces/`, never mocks or synthetic data.
 6. **Pre-work checklist** — Before any code: `git diff --stat`, `git log --oneline -10`, `git fetch origin`. Before opening a PR: `git rebase origin/main`, `uv lock --check`.
+7. **You MUST `git commit` and `git push`** — After making changes, you MUST run `git add`, `git commit`, and `git push origin <branch>`. Do NOT leave changes uncommitted in the working tree. An uncommitted change is the same as no change at all.
+8. **You MUST create the PR on GitHub** — After pushing, run `gh pr create` with a proper title and body. The job is not done until the PR exists on GitHub.
 
 Violating these rules means the PR will be rejected. Follow them every time.
 
