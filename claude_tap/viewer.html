@@ -678,6 +678,76 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   background: #fb923c;
 }
 
+/* ─── Virtual scroll sidebar ─── */
+.sidebar.virtual-scroll {
+  position: relative;
+  overflow-y: auto;
+}
+.sidebar .vs-spacer {
+  position: relative;
+  width: 100%;
+}
+.sidebar .vs-spacer .sidebar-item {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+/* ─── Position indicator ─── */
+.position-indicator {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-weight: 500;
+}
+.position-indicator .pi-current {
+  color: var(--blue);
+  font-weight: 700;
+}
+.position-indicator .pi-total {
+  color: var(--text-tertiary);
+}
+.position-indicator .pi-bar {
+  flex: 1;
+  max-width: 120px;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.position-indicator .pi-fill {
+  height: 100%;
+  background: var(--blue);
+  border-radius: 2px;
+  transition: width 0.15s;
+}
+
+/* ─── Time gap indicator ─── */
+.time-gap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 3px 12px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border-light);
+}
+.time-gap .tg-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  max-width: 40px;
+}
+
 /* ─── Theme toggle ─── */
 .theme-toggle {
   background: none; border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -1008,6 +1078,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <button class="search-clear" id="search-clear" onclick="clearSearch()">&#10005;</button>
     </div>
     <div id="tool-filter" style="display:none;padding:4px 8px;border-bottom:1px solid var(--border);font-size:11px;max-height:120px;overflow-y:auto"></div>
+    <div class="position-indicator" id="position-indicator">
+      <span>Turn <span class="pi-current" id="pi-current">0</span> <span class="pi-total" id="pi-total">of 0</span></span>
+      <div class="pi-bar"><div class="pi-fill" id="pi-fill"></div></div>
+    </div>
     <div class="sidebar" id="sidebar" style="flex:1;overflow-y:auto"></div>
   </div>
   <button id="mobile-back-btn" onclick="mobileShowSidebar()" style="display:none">&#8592; Back to list</button>
@@ -1023,6 +1097,94 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 const $ = s => document.querySelector(s);
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
 let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
+
+/* ─── Lazy loading infrastructure ─── */
+const LAZY_THRESHOLD = 50;
+let lazyMode = false;
+let rawLines = null; // array of raw JSON strings, populated on first access
+const entryCache = new Map(); // index -> parsed full entry
+
+function getRawLines() {
+  if (rawLines) return rawLines;
+  const el = document.getElementById('trace-raw');
+  if (!el) return [];
+  const text = el.textContent;
+  // Free DOM node memory — we no longer need the script element
+  el.remove();
+  rawLines = text.split('\n').filter(l => l.trim());
+  return rawLines;
+}
+
+function buildStubEntry(meta, rawIdx) {
+  // Build an entry object with the same shape as real entries so existing
+  // sidebar rendering code works unchanged. Nested paths are constructed
+  // to satisfy property access patterns (e.g. entry.request.body.model).
+  const usage = {};
+  if (meta.input_tokens) usage.input_tokens = meta.input_tokens;
+  if (meta.output_tokens) usage.output_tokens = meta.output_tokens;
+  if (meta.cache_read_input_tokens) usage.cache_read_input_tokens = meta.cache_read_input_tokens;
+  if (meta.cache_creation_input_tokens) usage.cache_creation_input_tokens = meta.cache_creation_input_tokens;
+
+  // Build a minimal system field to support task fingerprinting
+  const body = { model: meta.model || '' };
+  if (meta.has_system && meta.sys_hint) {
+    body.system = meta.sys_hint;
+  }
+  if (meta.tool_names && meta.tool_names.length) {
+    body.tools = meta.tool_names.map(n => ({ name: n }));
+  }
+
+  // Build minimal response content for tool filter
+  const respContent = [];
+  if (meta.response_tool_names && meta.response_tool_names.length) {
+    meta.response_tool_names.forEach(n => respContent.push({ type: 'tool_use', name: n }));
+  }
+
+  return {
+    _isStub: true,
+    _rawIdx: rawIdx,
+    turn: meta.turn,
+    request_id: meta.request_id || '',
+    timestamp: meta.timestamp || '',
+    duration_ms: meta.duration_ms || 0,
+    request: {
+      method: meta.method || '',
+      path: meta.path || '',
+      body: body,
+    },
+    response: {
+      status: meta.status || 0,
+      body: {
+        usage: usage,
+        content: respContent.length ? respContent : undefined,
+        error: meta.error_message ? { message: meta.error_message } : undefined,
+      },
+    },
+  };
+}
+
+function getFullEntry(entry) {
+  if (!entry._isStub) return entry;
+  const idx = entry._rawIdx;
+  if (entryCache.has(idx)) return entryCache.get(idx);
+  const lines = getRawLines();
+  if (idx < 0 || idx >= lines.length) return entry;
+  try {
+    const full = JSON.parse(lines[idx]);
+    entryCache.set(idx, full);
+    return full;
+  } catch (e) {
+    console.error('Failed to parse entry at index', idx, e);
+    return entry;
+  }
+}
+
+/* ─── Virtual scroll state ─── */
+let virtualMode = false;
+const VS_ITEM_HEIGHT = 68;
+const VS_BUFFER = 10;
+let vsFilteredItems = []; // {entry, idx} pairs for virtual scroll
+
 const globalSearchState = {
   open: false,
   query: '',
@@ -1369,6 +1531,11 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
       $('#drop-zone').innerHTML = '<div style="text-align:center;padding:60px 20px;"><div style="font-size:48px;margin-bottom:16px;">📡</div><h2 style="margin-bottom:8px;">Waiting for API calls...</h2><p style="color:var(--text-secondary);">Start using Claude Code to see traces here in real-time</p></div>';
     }
   });
+} else if (typeof EMBEDDED_TRACE_META !== 'undefined' && EMBEDDED_TRACE_META.length) {
+  // Lazy mode: build stub entries from metadata
+  lazyMode = true;
+  entries = EMBEDDED_TRACE_META.map((meta, i) => buildStubEntry(meta, i));
+  document.addEventListener('DOMContentLoaded', () => { initTheme(); initLang(); initGlobalSearch(); renderApp(); });
 } else if (typeof EMBEDDED_TRACE_DATA !== 'undefined' && EMBEDDED_TRACE_DATA.length) {
   entries = EMBEDDED_TRACE_DATA;
   document.addEventListener('DOMContentLoaded', () => { initTheme(); initLang(); initGlobalSearch(); renderApp(); });
@@ -1554,6 +1721,7 @@ function applyFilter(preserveDetail) {
   }
   renderToolFilter();
   renderSidebar(preserveDetail);
+  updatePositionIndicator();
 }
 
 function renderToolFilter() {
@@ -1561,9 +1729,15 @@ function renderToolFilter() {
   // Collect all tool names from all entries (not just filtered)
   const toolSet = new Set();
   entries.forEach(e => {
-    const ro = getResponseOutput(e);
-    const rc = ro?.content;
-    if (Array.isArray(rc)) rc.forEach(b => { if (b.type === 'tool_use' && b.name) toolSet.add(b.name); });
+    if (e._isStub) {
+      // Use stub's response content (already has tool_use blocks from metadata)
+      const rc = e.response?.body?.content;
+      if (Array.isArray(rc)) rc.forEach(b => { if (b.type === 'tool_use' && b.name) toolSet.add(b.name); });
+    } else {
+      const ro = getResponseOutput(e);
+      const rc = ro?.content;
+      if (Array.isArray(rc)) rc.forEach(b => { if (b.type === 'tool_use' && b.name) toolSet.add(b.name); });
+    }
   });
   if (toolSet.size === 0) { tf.style.display = 'none'; return; }
   tf.style.display = '';
@@ -1596,6 +1770,28 @@ function clearSearch() {
   applyFilter();
 }
 function matchSearch(e, q) {
+  if (e._isStub) {
+    // In lazy mode: search metadata fields only (fast, no parsing)
+    const model = e.request?.body?.model || '';
+    if (model.toLowerCase().includes(q)) return true;
+    const path = e.request?.path || '';
+    if (path.toLowerCase().includes(q)) return true;
+    const sys = e.request?.body?.system || '';
+    if (sys.toLowerCase().includes(q)) return true;
+    const turn = String(e.turn || '');
+    if (turn.includes(q)) return true;
+    const tools = e.request?.body?.tools || [];
+    for (const td of tools) {
+      if ((td.name || '').toLowerCase().includes(q)) return true;
+    }
+    const rc = e.response?.body?.content;
+    if (Array.isArray(rc)) {
+      for (const block of rc) {
+        if ((block.name || '').toLowerCase().includes(q)) return true;
+      }
+    }
+    return false;
+  }
   const body = e.request?.body;
   if ((body?.model || '').toLowerCase().includes(q)) return true;
   const sys = extractSystem(body) || '';
@@ -1673,16 +1869,18 @@ function normalizeFiltersForGlobalSearch() {
 function getEntrySearchText(entry) {
   if (!entry?.request_id) return '';
   if (globalSearchState.textCache.has(entry.request_id)) return globalSearchState.textCache.get(entry.request_id);
-  const body = entry.request?.body;
+  // For stubs, parse the full entry first
+  const resolved = entry._isStub ? getFullEntry(entry) : entry;
+  const body = resolved.request?.body;
   const parts = [];
   parts.push(body?.model || '');
   parts.push(extractSystem(body) || '');
   getMessages(body).forEach(m => parts.push(msgToText(m)));
   (body?.tools || []).forEach(td => parts.push(JSON.stringify(td)));
-  const output = getResponseOutput(entry);
+  const output = getResponseOutput(resolved);
   if (output?.content) parts.push(msgToText({ role: 'assistant', content: output.content }));
-  (entry.response?.sse_events || []).forEach(ev => parts.push(JSON.stringify(ev)));
-  parts.push(JSON.stringify(entry));
+  (resolved.response?.sse_events || []).forEach(ev => parts.push(JSON.stringify(ev)));
+  parts.push(JSON.stringify(resolved));
   const text = parts.join('\n').toLowerCase();
   globalSearchState.textCache.set(entry.request_id, text);
   return text;
@@ -1879,6 +2077,10 @@ function modelBadge(m) {
 
 /* ─── Visual order helpers ─── */
 function buildVisualOrder() {
+  if (virtualMode) {
+    visualOrder = vsFilteredItems.map(item => item.idx);
+    return;
+  }
   visualOrder = [];
   document.querySelectorAll('.sidebar-item').forEach(el => {
     // Skip items whose parent container is collapsed (display: none)
@@ -1998,6 +2200,20 @@ function createSidebarItem(e, i) {
 function renderSidebar(preserveDetail) {
   const sb = $('#sidebar');
   const prevScrollTop = sb.scrollTop;
+
+  // Use virtual scroll for large filtered sets
+  if (filtered.length > LAZY_THRESHOLD) {
+    virtualMode = true;
+    sb.classList.add('virtual-scroll');
+    vsFilteredItems = filtered.map((e, i) => ({ entry: e, idx: i }));
+    visualOrder = vsFilteredItems.map(item => item.idx);
+    vsInitSidebar(sb, prevScrollTop, preserveDetail);
+    return;
+  }
+
+  // Standard DOM-based sidebar for small traces
+  virtualMode = false;
+  sb.classList.remove('virtual-scroll');
   sb.innerHTML = '';
   const groups = new Map();
   filtered.forEach((e, i) => {
@@ -2010,7 +2226,14 @@ function renderSidebar(preserveDetail) {
     return pa !== pb ? pa - pb : a.localeCompare(b);
   });
   if (sorted.length <= 1) {
-    filtered.forEach((e, i) => sb.appendChild(createSidebarItem(e, i)));
+    // Insert time gap indicators between entries
+    let lastTs = null;
+    filtered.forEach((e, i) => {
+      const gap = _timeGapHtml(e, lastTs);
+      if (gap) sb.insertAdjacentHTML('beforeend', gap);
+      lastTs = e.timestamp ? new Date(e.timestamp).getTime() : null;
+      sb.appendChild(createSidebarItem(e, i));
+    });
   } else {
     sorted.forEach(model => {
       const items = groups.get(model);
@@ -2036,8 +2259,11 @@ function renderSidebar(preserveDetail) {
     });
   }
   buildVisualOrder();
-  // Restore current selection if still valid, otherwise pick default
-  // When preserving detail, find the entry by request_id (not index, which may shift)
+  _restoreSelection(preserveDetail);
+  if (preserveDetail) sb.scrollTop = prevScrollTop;
+}
+
+function _restoreSelection(preserveDetail) {
   let restoredIdx = -1;
   if (preserveDetail && currentDetailRequestId) {
     restoredIdx = filtered.findIndex(e => e.request_id === currentDetailRequestId);
@@ -2047,7 +2273,6 @@ function renderSidebar(preserveDetail) {
   } else if (activeIdx >= 0 && activeIdx < filtered.length) {
     selectEntry(activeIdx, { force: !preserveDetail });
   } else if (filtered.length) {
-    // Default select first opus/sonnet entry, fall back to first entry
     let defaultIdx = 0;
     for (let i = 0; i < filtered.length; i++) {
       const m = (filtered[i].request?.body?.model || '').toLowerCase();
@@ -2057,25 +2282,149 @@ function renderSidebar(preserveDetail) {
   } else {
     activeIdx = -1; $('#detail').innerHTML = `<div class="empty-state">${t('empty_state')}</div>`;
   }
-  // Restore sidebar scroll position after rebuild (e.g. during live updates)
+}
+
+/* ─── Time gap indicator ─── */
+function _timeGapHtml(entry, lastTs) {
+  if (!lastTs || !entry.timestamp) return '';
+  const ts = new Date(entry.timestamp).getTime();
+  const gapMs = ts - lastTs;
+  if (gapMs < 60000) return ''; // less than 1 min
+  let label;
+  if (gapMs < 3600000) label = Math.round(gapMs / 60000) + ' min gap';
+  else label = (gapMs / 3600000).toFixed(1) + ' hr gap';
+  return `<div class="time-gap"><span class="tg-line"></span>${label}<span class="tg-line"></span></div>`;
+}
+
+/* ─── Position indicator ─── */
+function updatePositionIndicator() {
+  const pi = $('#position-indicator');
+  if (!pi) return;
+  if (!filtered.length || activeIdx < 0) {
+    pi.style.display = 'none';
+    return;
+  }
+  pi.style.display = 'flex';
+  const entry = filtered[activeIdx];
+  const turnNum = entry.turn || (activeIdx + 1);
+  const pos = activeIdx + 1;
+  const total = filtered.length;
+  const pct = total > 1 ? ((pos - 1) / (total - 1)) * 100 : 0;
+  $('#pi-current').textContent = turnNum;
+  $('#pi-total').textContent = `of ${total}`;
+  $('#pi-fill').style.width = pct + '%';
+}
+
+/* ─── Virtual scroll ─── */
+let _vsRafPending = false;
+
+function vsInitSidebar(sb, prevScrollTop, preserveDetail) {
+  sb.innerHTML = '';
+  const spacer = document.createElement('div');
+  spacer.className = 'vs-spacer';
+  spacer.style.height = (vsFilteredItems.length * VS_ITEM_HEIGHT) + 'px';
+  sb.appendChild(spacer);
+
+  // Throttled scroll handler
+  sb.onscroll = () => {
+    if (!_vsRafPending) {
+      _vsRafPending = true;
+      requestAnimationFrame(() => {
+        _vsRafPending = false;
+        vsRenderVisible();
+      });
+    }
+  };
+
   if (preserveDetail) sb.scrollTop = prevScrollTop;
+  vsRenderVisible();
+  _restoreSelection(preserveDetail);
+}
+
+function vsRenderVisible() {
+  const sb = $('#sidebar');
+  if (!sb) return;
+  const spacer = sb.querySelector('.vs-spacer');
+  if (!spacer) return;
+
+  const scrollTop = sb.scrollTop;
+  const viewHeight = sb.clientHeight;
+  const startIdx = Math.max(0, Math.floor(scrollTop / VS_ITEM_HEIGHT) - VS_BUFFER);
+  const endIdx = Math.min(vsFilteredItems.length, Math.ceil((scrollTop + viewHeight) / VS_ITEM_HEIGHT) + VS_BUFFER);
+
+  // Collect existing rendered items
+  const existing = new Map();
+  spacer.querySelectorAll('.sidebar-item').forEach(el => {
+    existing.set(parseInt(el.dataset.idx), el);
+  });
+
+  const needed = new Set();
+  for (let i = startIdx; i < endIdx; i++) {
+    needed.add(vsFilteredItems[i].idx);
+  }
+
+  // Remove items no longer visible
+  existing.forEach((el, idx) => {
+    if (!needed.has(idx)) el.remove();
+  });
+
+  // Add missing items
+  for (let i = startIdx; i < endIdx; i++) {
+    const { entry, idx } = vsFilteredItems[i];
+    if (existing.has(idx)) {
+      // Update active state
+      existing.get(idx).classList.toggle('active', idx === activeIdx);
+      continue;
+    }
+    const item = createSidebarItem(entry, idx);
+    item.style.position = 'absolute';
+    item.style.top = (i * VS_ITEM_HEIGHT) + 'px';
+    item.style.height = VS_ITEM_HEIGHT + 'px';
+    item.classList.toggle('active', idx === activeIdx);
+    spacer.appendChild(item);
+  }
+}
+
+function vsScrollToIdx(idx) {
+  const sb = $('#sidebar');
+  if (!sb || !virtualMode) return;
+  const pos = vsFilteredItems.findIndex(item => item.idx === idx);
+  if (pos < 0) return;
+  const itemTop = pos * VS_ITEM_HEIGHT;
+  const itemBottom = itemTop + VS_ITEM_HEIGHT;
+  if (itemTop < sb.scrollTop) {
+    sb.scrollTop = itemTop;
+  } else if (itemBottom > sb.scrollTop + sb.clientHeight) {
+    sb.scrollTop = itemBottom - sb.clientHeight;
+  }
 }
 
 function selectEntry(idx, opts) {
   if (idx < 0 || idx >= filtered.length) return;
   const force = !opts || opts.force !== false;
   activeIdx = idx;
-  document.querySelectorAll('.sidebar-item').forEach(el => {
-    el.classList.toggle('active', parseInt(el.dataset.idx) === idx);
-  });
+  if (virtualMode) {
+    vsRenderVisible();
+  } else {
+    document.querySelectorAll('.sidebar-item').forEach(el => {
+      el.classList.toggle('active', parseInt(el.dataset.idx) === idx);
+    });
+  }
   // Skip re-render if same entry and force=false (preserves scroll position in live mode)
   if (!force && currentDetailRequestId === filtered[idx].request_id) {
     // Just update sidebar highlight, keep detail as-is
   } else {
-    renderDetail(filtered[idx]);
+    const entry = filtered[idx];
+    const resolved = entry._isStub ? getFullEntry(entry) : entry;
+    renderDetail(resolved);
   }
-  const active = document.querySelector('.sidebar-item.active');
-  if (active) active.scrollIntoView({ block: 'nearest' });
+  if (virtualMode) {
+    vsScrollToIdx(idx);
+  } else {
+    const active = document.querySelector('.sidebar-item.active');
+    if (active) active.scrollIntoView({ block: 'nearest' });
+  }
+  updatePositionIndicator();
   mobileShowDetail();
   updateMobileNav();
 }
@@ -2357,11 +2706,13 @@ function syntaxHL(obj) {
 }
 
 function copyRequestBody(btn) {
-  const e = filtered[activeIdx]; if (!e) return;
+  let e = filtered[activeIdx]; if (!e) return;
+  if (e._isStub) e = getFullEntry(e);
   copyToClipboard(JSON.stringify(e.request?.body, null, 2), btn);
 }
 function copyCurl(btn) {
-  const e = filtered[activeIdx]; if (!e) return;
+  let e = filtered[activeIdx]; if (!e) return;
+  if (e._isStub) e = getFullEntry(e);
   const method = e.request?.method || 'POST', path = e.request?.path || '/v1/messages';
   const headers = e.request?.headers || {}, body = e.request?.body;
   const base = e.upstream_base_url || 'https://api.anthropic.com';
@@ -2404,7 +2755,8 @@ function _msgHash(msg) {
 }
 
 function _getMsgHashes(entry) {
-  const msgs = getMessages(entry?.request?.body);
+  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  const msgs = getMessages(resolved?.request?.body);
   return msgs.map(_msgHash);
 }
 
@@ -2519,8 +2871,10 @@ function showDiffForIdx(curIdx, triggerBtn, manualPrevIdx) {
   // Remove existing overlay if any
   document.querySelector('.diff-overlay')?.remove();
 
-  const oldBody = filtered[prevIdx].request?.body || {};
-  const newBody = filtered[curIdx].request?.body || {};
+  const prevEntry = filtered[prevIdx]._isStub ? getFullEntry(filtered[prevIdx]) : filtered[prevIdx];
+  const curEntry = filtered[curIdx]._isStub ? getFullEntry(filtered[curIdx]) : filtered[curIdx];
+  const oldBody = prevEntry.request?.body || {};
+  const newBody = curEntry.request?.body || {};
   const diff = structuralDiff(oldBody, newBody);
   const html = renderStructuralDiff(diff);
 
@@ -2875,12 +3229,43 @@ document.addEventListener('keydown', ev => {
       return;
     }
   }
+  // Ctrl/Cmd+G: jump to turn number
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'g') {
+    ev.preventDefault();
+    promptJumpToTurn();
+    return;
+  }
   const tag = ev.target?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || ev.target?.isContentEditable) return;
   if (!visualOrder.length) return;
   if (ev.key === 'ArrowDown' || ev.key === 'j') { ev.preventDefault(); visualNavigate(1); }
   if (ev.key === 'ArrowUp' || ev.key === 'k') { ev.preventDefault(); visualNavigate(-1); }
+  if (ev.key === 'Home') { ev.preventDefault(); selectEntry(visualOrder[0]); }
+  if (ev.key === 'End') { ev.preventDefault(); selectEntry(visualOrder[visualOrder.length - 1]); }
+  if (ev.key === 'PageDown') { ev.preventDefault(); visualNavigate(10); }
+  if (ev.key === 'PageUp') { ev.preventDefault(); visualNavigate(-10); }
 });
+
+function promptJumpToTurn() {
+  if (!filtered.length) return;
+  const input = prompt('Jump to turn number:');
+  if (!input) return;
+  const turnNum = parseInt(input, 10);
+  if (isNaN(turnNum)) return;
+  // Find the filtered entry with matching turn number
+  const idx = filtered.findIndex(e => e.turn === turnNum);
+  if (idx >= 0) {
+    selectEntry(idx);
+  } else {
+    // Find closest turn
+    let closestIdx = 0, closestDist = Infinity;
+    filtered.forEach((e, i) => {
+      const dist = Math.abs((e.turn || 0) - turnNum);
+      if (dist < closestDist) { closestDist = dist; closestIdx = i; }
+    });
+    selectEntry(closestIdx);
+  }
+}
 
 /* ─── Mobile sidebar toggle (R1) ─── */
 function isMobile() { return window.matchMedia('(max-width: 768px)').matches; }
