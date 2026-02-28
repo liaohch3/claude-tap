@@ -59,6 +59,127 @@ def _pick_real_trace_file() -> Path:
     return candidates[0]
 
 
+def _normalize_messages_for_diff(body: dict | None) -> list[dict]:
+    if not body:
+        return []
+    if isinstance(body.get("messages"), list) and body["messages"]:
+        return [msg for msg in body["messages"] if isinstance(msg, dict)]
+    if isinstance(body.get("input"), list):
+        normalized = []
+        for item in body["input"]:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            normalized.append(
+                {
+                    "role": item.get("role", "user"),
+                    "content": item.get("content"),
+                }
+            )
+        return normalized
+    return []
+
+
+def _normalize_content_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        normalized = []
+        for item in content:
+            if isinstance(item, dict):
+                normalized.append({k: v for k, v in item.items() if k != "cache_control"})
+            else:
+                normalized.append(item)
+        return json.dumps(normalized, ensure_ascii=False)
+    return json.dumps(content, ensure_ascii=False)
+
+
+def _msg_hash(msg: dict) -> str:
+    role = msg.get("role", "")
+    text = _normalize_content_text(msg.get("content"))
+    return f"{role}:{text[:500]}"
+
+
+def _is_prefix_of(shorter: list[str], longer: list[str]) -> bool:
+    if not shorter or len(longer) < len(shorter):
+        return False
+    return all(shorter[i] == longer[i] for i in range(len(shorter)))
+
+
+def _find_prev_same_model(entries: list[dict], idx: int) -> int:
+    target = entries[idx]
+    target_body = target.get("request", {}).get("body") or {}
+    target_hashes = [_msg_hash(msg) for msg in _normalize_messages_for_diff(target_body)]
+
+    best_idx = -1
+    best_len = 0
+    for i in range(idx - 1, -1, -1):
+        candidate_body = entries[i].get("request", {}).get("body") or {}
+        candidate_hashes = [_msg_hash(msg) for msg in _normalize_messages_for_diff(candidate_body)]
+        if candidate_hashes and _is_prefix_of(candidate_hashes, target_hashes):
+            if len(candidate_hashes) > best_len:
+                best_len = len(candidate_hashes)
+                best_idx = i
+    if best_idx >= 0:
+        return best_idx
+
+    target_model = target_body.get("model")
+    for i in range(idx - 1, -1, -1):
+        candidate_body = entries[i].get("request", {}).get("body") or {}
+        candidate_model = candidate_body.get("model")
+        if candidate_model == target_model:
+            return i
+    return -1
+
+
+def _score_diff_messages(old_msgs: list[dict], new_msgs: list[dict]) -> int:
+    prefix = 0
+    while prefix < len(old_msgs) and prefix < len(new_msgs):
+        if _msg_hash(old_msgs[prefix]) != _msg_hash(new_msgs[prefix]):
+            break
+        prefix += 1
+
+    old_tail = old_msgs[prefix:]
+    new_tail = new_msgs[prefix:]
+    if not old_tail and not new_tail:
+        return 0
+
+    max_len = 0
+    for msg in old_tail + new_tail:
+        max_len = max(max_len, len(_normalize_content_text(msg.get("content"))))
+    return max_len
+
+
+def _pick_real_trace_file_for_diff() -> tuple[Path, int]:
+    traces_dir = Path(__file__).parent.parent / ".traces"
+    trace_files = sorted(traces_dir.glob("trace_*.jsonl"))
+    best_path = None
+    best_idx = -1
+    best_score = -1
+    for path in trace_files:
+        file_size = path.stat().st_size
+        if file_size == 0 or file_size > 5_000_000:
+            continue
+        entries = _load_entries(path)
+        if len(entries) < 4:
+            continue
+        for idx in range(1, len(entries)):
+            prev_idx = _find_prev_same_model(entries, idx)
+            if prev_idx < 0:
+                continue
+            old_msgs = _normalize_messages_for_diff(entries[prev_idx].get("request", {}).get("body") or {})
+            new_msgs = _normalize_messages_for_diff(entries[idx].get("request", {}).get("body") or {})
+            if len(new_msgs) < 2:
+                continue
+            score = _score_diff_messages(old_msgs, new_msgs)
+            if score > best_score:
+                best_score = score
+                best_path = path
+                best_idx = idx
+    if best_path and best_idx >= 0:
+        return best_path, best_idx
+    raise RuntimeError("No real multi-turn trace file with a message diff target found in .traces/")
+
+
 def _extract_messages(body: dict | None) -> list[str]:
     if not body:
         return []
@@ -257,3 +378,61 @@ class TestViewerGlobalSearch:
                 return body && body.classList.contains('open');
             }"""
         )
+
+    def test_diff_overlay_content_is_scrollable(self, browser_page):
+        trace_file, target_idx = _pick_real_trace_file_for_diff()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_path = Path(tmpdir) / "diff_scroll_test_viewer.html"
+            _generate_html_viewer(trace_file, html_path)
+            browser_page.set_viewport_size({"width": 1180, "height": 360})
+            browser_page.goto(f"file://{html_path}")
+            browser_page.wait_for_selector(".sidebar-item", timeout=10000)
+            browser_page.locator(".sidebar-item").nth(target_idx).click()
+            browser_page.wait_for_timeout(120)
+            browser_page.evaluate("document.querySelector('.act-btn:nth-child(3)')?.click()")
+            browser_page.wait_for_selector(".diff-overlay", timeout=3000)
+
+            state = browser_page.evaluate("""() => {
+                const overlay = document.querySelector('.diff-overlay');
+                const body = overlay?.querySelector('.diff-body');
+                const block = overlay?.querySelector('.diff-new-msg, .diff-removed-msg, .diff-modified-msg');
+                if (!body || !block) {
+                    return {
+                        hasBody: Boolean(body),
+                        hasBlock: Boolean(block),
+                        overlayScrollable: false,
+                        blockScrollable: false,
+                        overlayCanScroll: false,
+                        blockCanScroll: false,
+                    };
+                }
+
+                const bodyFiller = document.createElement('div');
+                bodyFiller.style.height = '900px';
+                body.appendChild(bodyFiller);
+                const blockFiller = document.createElement('div');
+                blockFiller.style.height = '420px';
+                block.appendChild(blockFiller);
+
+                const overlayScrollable = body.scrollHeight > body.clientHeight;
+                const blockScrollable = block.scrollHeight > block.clientHeight;
+
+                body.scrollTop = body.scrollHeight;
+                block.scrollTop = block.scrollHeight;
+
+                return {
+                    hasBody: true,
+                    hasBlock: true,
+                    overlayScrollable,
+                    blockScrollable,
+                    overlayCanScroll: body.scrollTop > 0,
+                    blockCanScroll: block.scrollTop > 0,
+                };
+            }""")
+
+            assert state["hasBody"], "Expected diff overlay body container to exist"
+            assert state["hasBlock"], "Expected at least one diff message block to exist"
+            assert state["overlayScrollable"], "Expected diff overlay body to overflow after long content is present"
+            assert state["overlayCanScroll"], "Expected diff overlay body to scroll when content is long"
+            assert state["blockScrollable"], "Expected diff message block to overflow after long content is present"
+            assert state["blockCanScroll"], "Expected diff message block to be scrollable"
