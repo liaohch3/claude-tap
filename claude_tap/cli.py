@@ -54,27 +54,6 @@ async def run_claude(
     proxy_mode: str = "reverse",
     ca_cert_path: Path | None = None,
 ) -> int:
-    def _codex_feature_overridden(args: list[str], feature: str) -> bool:
-        """Return True if codex args already override a given feature toggle."""
-        for i, arg in enumerate(args):
-            if arg in ("--enable", "--disable"):
-                if i + 1 < len(args) and args[i + 1] == feature:
-                    return True
-                continue
-            if arg.startswith("--enable=") and arg.split("=", 1)[1] == feature:
-                return True
-            if arg.startswith("--disable=") and arg.split("=", 1)[1] == feature:
-                return True
-            if arg in ("-c", "--config"):
-                if i + 1 < len(args) and args[i + 1].startswith(f"features.{feature}="):
-                    return True
-                continue
-            if arg.startswith("-c") and arg != "-c" and arg[2:].startswith(f"features.{feature}="):
-                return True
-            if arg.startswith("--config=") and arg.split("=", 1)[1].startswith(f"features.{feature}="):
-                return True
-        return False
-
     if client == "claude":
         client_cmd = "claude"
         client_label = "Claude Code"
@@ -136,12 +115,6 @@ async def run_claude(
             env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
         else:
             env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
-            # Codex interactive runs may try websocket Responses paths; force
-            # HTTP Responses API in reverse mode unless user explicitly overrides.
-            codex_ws_features = ("responses_websockets", "responses_websockets_v2")
-            for feature in codex_ws_features:
-                if not _codex_feature_overridden(cmd_args, feature):
-                    cmd_args = ["--disable", feature] + cmd_args
         env["NO_PROXY"] = "127.0.0.1"
 
     if client == "claude":
