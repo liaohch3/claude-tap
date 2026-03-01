@@ -56,6 +56,10 @@ def filter_headers(headers: dict[str, str], *, redact_keys: bool = False) -> dic
 
 
 async def proxy_handler(request: web.Request) -> web.StreamResponse:
+    # Detect WebSocket upgrade and route to WS proxy
+    if request.headers.get("Upgrade", "").lower() == "websocket":
+        return await _handle_websocket(request)
+
     ctx: dict = request.app["trace_ctx"]
     target: str = ctx["target_url"]
     writer: TraceWriter = ctx["writer"]
@@ -301,6 +305,243 @@ def _build_record(
     }
     if sse_events:
         record["response"]["sse_events"] = sse_events
+    if upstream_base_url:
+        record["upstream_base_url"] = upstream_base_url
+    return record
+
+
+# ---------------------------------------------------------------------------
+# WebSocket proxy
+# ---------------------------------------------------------------------------
+
+# Headers managed by the WebSocket handshake — must not be forwarded to upstream.
+_WS_HANDSHAKE_HEADERS = frozenset(
+    {
+        "sec-websocket-key",
+        "sec-websocket-version",
+        "sec-websocket-extensions",
+        "sec-websocket-protocol",
+        "sec-websocket-accept",
+    }
+)
+
+
+async def _handle_websocket(request: web.Request) -> web.StreamResponse:
+    """Proxy a WebSocket connection to the upstream, recording all messages."""
+    ctx: dict = request.app["trace_ctx"]
+    target: str = ctx["target_url"]
+    writer: TraceWriter = ctx["writer"]
+    session: aiohttp.ClientSession = ctx["session"]
+
+    strip_prefix: str = ctx.get("strip_path_prefix", "")
+    fwd_path = request.path_qs
+    if strip_prefix and fwd_path.startswith(strip_prefix):
+        fwd_path = fwd_path[len(strip_prefix) :] or "/"
+    upstream_url = target.rstrip("/") + "/" + fwd_path.lstrip("/")
+
+    # Convert HTTP scheme to WebSocket scheme for upstream
+    if upstream_url.startswith("https://"):
+        upstream_ws_url = "wss://" + upstream_url[8:]
+    elif upstream_url.startswith("http://"):
+        upstream_ws_url = "ws://" + upstream_url[7:]
+    else:
+        upstream_ws_url = upstream_url
+
+    # Forward auth headers, strip hop-by-hop and WS handshake headers
+    fwd_headers = filter_headers(request.headers)
+    fwd_headers.pop("Host", None)
+    for h in list(fwd_headers.keys()):
+        if h.lower() in _WS_HANDSHAKE_HEADERS:
+            del fwd_headers[h]
+
+    # Forward WebSocket subprotocol if present
+    protocols: tuple[str, ...] = ()
+    ws_protocol = request.headers.get("Sec-WebSocket-Protocol")
+    if ws_protocol:
+        protocols = tuple(p.strip() for p in ws_protocol.split(","))
+
+    req_id = f"req_{uuid.uuid4().hex[:12]}"
+    t0 = time.monotonic()
+    ctx["turn_counter"] = ctx.get("turn_counter", 0) + 1
+    turn = ctx["turn_counter"]
+    log_prefix = f"[Turn {turn}]"
+
+    log.info(f"{log_prefix} → WS UPGRADE {request.path_qs}")
+
+    # Connect to upstream first — if it fails, return HTTP 502 before upgrading
+    try:
+        upstream_ws = await session.ws_connect(
+            upstream_ws_url,
+            headers=fwd_headers,
+            protocols=protocols,
+        )
+    except Exception as exc:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        log.error(f"{log_prefix} upstream WS connect to {upstream_ws_url} failed: {exc}")
+        record = _build_ws_record(
+            req_id=req_id,
+            turn=turn,
+            duration_ms=duration_ms,
+            path_qs=request.path_qs,
+            req_headers=request.headers,
+            client_messages=[],
+            server_messages=[],
+            upstream_base_url=target,
+            error=str(exc),
+        )
+        await writer.write(record)
+        return web.Response(status=502, text=str(exc))
+
+    # Upstream connected — accept client WebSocket upgrade
+    client_ws = web.WebSocketResponse(protocols=protocols)
+    await client_ws.prepare(request)
+
+    client_messages: list[str] = []
+    server_messages: list[str] = []
+
+    async def _relay_client_to_upstream():
+        try:
+            async for msg in client_ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    client_messages.append(msg.data)
+                    await upstream_ws.send_str(msg.data)
+                elif msg.type == aiohttp.WSMsgType.BINARY:
+                    await upstream_ws.send_bytes(msg.data)
+                elif msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                    aiohttp.WSMsgType.CLOSED,
+                ):
+                    break
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    break
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+
+    async def _relay_upstream_to_client():
+        try:
+            async for msg in upstream_ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    server_messages.append(msg.data)
+                    await client_ws.send_str(msg.data)
+                elif msg.type == aiohttp.WSMsgType.BINARY:
+                    await client_ws.send_bytes(msg.data)
+                elif msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                    aiohttp.WSMsgType.CLOSED,
+                ):
+                    break
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    break
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+
+    # Run bidirectional relay — stop when either side closes
+    tasks = [
+        asyncio.create_task(_relay_client_to_upstream()),
+        asyncio.create_task(_relay_upstream_to_client()),
+    ]
+    _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    if not upstream_ws.closed:
+        await upstream_ws.close()
+    if not client_ws.closed:
+        await client_ws.close()
+
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
+    record = _build_ws_record(
+        req_id=req_id,
+        turn=turn,
+        duration_ms=duration_ms,
+        path_qs=request.path_qs,
+        req_headers=request.headers,
+        client_messages=client_messages,
+        server_messages=server_messages,
+        upstream_base_url=target,
+    )
+    await writer.write(record)
+
+    log.info(
+        f"{log_prefix} ← WS closed ({duration_ms}ms, "
+        f"{len(client_messages)} client→upstream, "
+        f"{len(server_messages)} upstream→client)"
+    )
+
+    return client_ws
+
+
+def _build_ws_record(
+    req_id: str,
+    turn: int,
+    duration_ms: int,
+    path_qs: str,
+    req_headers: dict,
+    client_messages: list[str],
+    server_messages: list[str],
+    upstream_base_url: str,
+    error: str | None = None,
+) -> dict:
+    """Build a trace record for a WebSocket session."""
+    # Parse client messages to find request body
+    req_body = None
+    for msg in client_messages:
+        try:
+            parsed = json.loads(msg)
+            if req_body is None:
+                req_body = parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Parse server messages into structured events
+    ws_events: list[dict] = []
+    resp_body = None
+    for msg in server_messages:
+        try:
+            parsed = json.loads(msg)
+            ws_events.append(parsed)
+            # Terminal events carry the final response
+            if parsed.get("type") in ("response.completed", "response.done"):
+                resp_body = parsed.get("response", parsed)
+        except (json.JSONDecodeError, ValueError):
+            ws_events.append({"raw": msg})
+
+    # Fallback: use response.created if no terminal event seen
+    if resp_body is None:
+        for evt in ws_events:
+            if isinstance(evt, dict) and evt.get("type") == "response.created":
+                resp_body = evt.get("response", evt)
+                break
+
+    record: dict = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "request_id": req_id,
+        "turn": turn,
+        "duration_ms": duration_ms,
+        "transport": "websocket",
+        "request": {
+            "method": "WEBSOCKET",
+            "path": path_qs,
+            "headers": filter_headers(req_headers, redact_keys=True),
+            "body": req_body,
+        },
+        "response": {
+            "status": 101 if not error else 502,
+            "headers": {},
+            "body": resp_body,
+        },
+    }
+    if ws_events:
+        record["response"]["ws_events"] = ws_events
+    if error:
+        record["response"]["error"] = error
     if upstream_base_url:
         record["upstream_base_url"] = upstream_base_url
     return record
