@@ -234,11 +234,22 @@ def create_app(config: ReviewBotConfig, orchestrator: ReviewOrchestrator) -> Any
         x_github_event = request.headers.get("x-github-event", "")
         x_hub_signature_256 = request.headers.get("x-hub-signature-256", "")
         body = await request.body()
-
-        if not verify_webhook_signature(config.webhook_secret, body, x_hub_signature_256):
-            return JSONResponse({"error": "invalid signature"}, status_code=401)
-
         payload = json.loads(body.decode("utf-8"))
+
+        # smee-client wraps the payload: {"payload": "<json string>", "x-github-event": "..."}
+        if "payload" in payload and isinstance(payload.get("payload"), str):
+            LOG.info("Detected smee-wrapped payload, unwrapping")
+            inner_sig = payload.get("x-hub-signature-256", "")
+            inner_event = payload.get("x-github-event", x_github_event)
+            inner_body = payload["payload"].encode("utf-8")
+            if inner_sig and config.webhook_secret:
+                if not verify_webhook_signature(config.webhook_secret, inner_body, inner_sig):
+                    return JSONResponse({"error": "invalid signature"}, status_code=401)
+            x_github_event = inner_event
+            payload = json.loads(payload["payload"])
+        elif x_hub_signature_256 and config.webhook_secret:
+            if not verify_webhook_signature(config.webhook_secret, body, x_hub_signature_256):
+                return JSONResponse({"error": "invalid signature"}, status_code=401)
         ok, reason = should_process_pull_request(
             x_github_event,
             payload,
