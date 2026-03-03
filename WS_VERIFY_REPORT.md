@@ -99,13 +99,15 @@ Not Verified:
 
 ## Recommendation
 
-**Recommendation: merge-with-scope-change**
+**Recommendation: block**
 
 Decision logic under strict bar:
-- Do **not** merge with any claim that real WS upstream success has been proven here.
-- Merge is acceptable only if PR scope is explicitly “implementation + unit/integration coverage + observed fallback behavior,” with real WS upstream validation marked as pending due environment/network limitations.
+- Checklist item #1 (real WS success proof) failed.
+- Therefore PR #22 does not meet the current merge bar yet.
+- Keep implementation work, but do not merge until at least one real run shows WS success (`101` or explicit connected WS evidence).
 
-If strict requirement is “must show real WS 101 before merge,” then decision becomes **block**.
+Scope fallback (only if policy is relaxed):
+- If reviewers intentionally relax the bar from “real WS proven” to “implementation + tests + fallback documented,” then this can be merged with explicit scope wording changes.
 
 ## Exact PR Wording/Summary Changes Suggested
 
