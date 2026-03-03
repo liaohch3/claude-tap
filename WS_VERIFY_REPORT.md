@@ -54,6 +54,7 @@ This report applies the "truthful high-confidence" merge policy:
 ## What Is Implemented
 
 - Reverse proxy WS handler is implemented in `claude_tap/proxy.py`.
+- Root cause fixed: removed hardcoded `proxy=None` override from upstream `session.ws_connect(...)`, so WS now follows the same `ClientSession(trust_env=True)` proxy behavior as HTTP/SSE.
 - WS relay and trace recording (`transport=websocket`, `method=WEBSOCKET`, `ws_events`) are implemented.
 - Upstream WS connection failure path returns `502` and records an error.
 - Codex launch path no longer forces `--disable responses_websockets`.
@@ -61,6 +62,7 @@ This report applies the "truthful high-confidence" merge policy:
 ## What Is Verified
 
 - WS implementation behavior is verified in automated tests (`tests/test_ws_proxy.py`).
+- Regression guard added to assert upstream `ws_connect` is called without a `proxy=None` override.
 - Real Codex runs through proxy are verified.
 - Real forced WS attempts are verified to hit the WS path and then fall back to HTTPS on repeated upstream timeout.
 

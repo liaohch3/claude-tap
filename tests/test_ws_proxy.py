@@ -157,7 +157,62 @@ async def test_websocket_proxy_basic(trace_dir):
 
 
 # ---------------------------------------------------------------------------
-# Test 2: upstream WebSocket failure returns 502
+# Test 2: upstream ws_connect should inherit trust_env proxy behavior
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_websocket_upstream_connect_does_not_override_proxy(trace_dir):
+    """Upstream ws_connect must not force proxy=None; rely on session trust_env."""
+
+    async def ws_upstream_handler(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                await ws.send_str(msg.data)
+                await ws.close()
+                break
+        return ws
+
+    trace_path = Path(trace_dir) / "trace_ws_proxy_args.jsonl"
+    writer = TraceWriter(trace_path)
+
+    upstream_runner, upstream_port = await _start_ws_upstream(ws_upstream_handler)
+    proxy_runner, proxy_port, proxy_session = await _start_proxy(
+        f"http://127.0.0.1:{upstream_port}",
+        writer,
+        strip_prefix="/v1",
+    )
+
+    ws_connect_calls: list[dict] = []
+    original_ws_connect = proxy_session.ws_connect
+
+    async def _spy_ws_connect(*args, **kwargs):
+        ws_connect_calls.append(dict(kwargs))
+        return await original_ws_connect(*args, **kwargs)
+
+    proxy_session.ws_connect = _spy_ws_connect  # type: ignore[method-assign]
+
+    try:
+        async with aiohttp.ClientSession() as client:
+            ws = await client.ws_connect(f"http://127.0.0.1:{proxy_port}/v1/responses")
+            await ws.send_str("hello")
+            msg = await asyncio.wait_for(ws.receive(), timeout=5)
+            assert msg.type == aiohttp.WSMsgType.TEXT
+            assert msg.data == "hello"
+            await ws.close()
+
+        assert ws_connect_calls
+        assert "proxy" not in ws_connect_calls[0]
+    finally:
+        await proxy_session.close()
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Test 3: upstream WebSocket failure returns 502
 # ---------------------------------------------------------------------------
 
 
@@ -198,7 +253,7 @@ async def test_websocket_upstream_failure(trace_dir):
 
 
 # ---------------------------------------------------------------------------
-# Test 3: WebSocket coexists with HTTP — mixed traffic
+# Test 4: WebSocket coexists with HTTP — mixed traffic
 # ---------------------------------------------------------------------------
 
 
