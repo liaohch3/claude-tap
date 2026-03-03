@@ -90,6 +90,8 @@ pr_head=$(printf '%s\n' "$metadata" | sed -n '5p')
 pr_base=$(printf '%s\n' "$metadata" | sed -n '6p')
 pr_url=$(printf '%s\n' "$metadata" | sed -n '7p')
 
+pr_body="$(gh pr view "$pr_number" --repo "$repo" --json body --template '{{.body}}')"
+
 if [ -z "$pr_title" ] || [ -z "$pr_state" ] || [ -z "$pr_merge_status" ]; then
   echo "error: failed to parse PR metadata from gh" >&2
   exit 1
@@ -171,6 +173,24 @@ else
   echo 'Local gates: skipped (--no-tests)'
 fi
 
+# Screenshot / evidence check
+has_screenshot=0
+if printf '%s' "$pr_body" | grep -qiE '!\[.*\]\(.*\.(png|jpg|jpeg|gif|svg|webp)'; then
+  has_screenshot=1
+fi
+if printf '%s' "$pr_body" | grep -qiE '\.(png|jpg|jpeg|gif|svg|webp)\)'; then
+  has_screenshot=1
+fi
+if printf '%s' "$pr_body" | grep -qiE '<img '; then
+  has_screenshot=1
+fi
+
+if [ "$has_screenshot" -eq 1 ]; then
+  echo 'Screenshots: found in PR body'
+else
+  echo 'Screenshots: MISSING - no images found in PR body'
+fi
+
 ready=1
 reasons=""
 
@@ -214,6 +234,10 @@ fi
 if [ "$gate_failed" -eq 1 ]; then
   ready=0
   append_reason 'local gates failed'
+fi
+if [ "$has_screenshot" -eq 0 ]; then
+  ready=0
+  append_reason 'no screenshots in PR body'
 fi
 
 if [ "$ready" -eq 1 ]; then
