@@ -353,12 +353,20 @@ class TestViewerGlobalSearch:
 
     def test_collapsed_section_auto_expands_on_match(self, browser_page, trace_entries):
         _, entries, _, message_term_info = trace_entries
-        _, target_entry_idx = message_term_info
         message_term, _ = message_term_info
 
-        # Select the entry that yielded message search term.
-        browser_page.locator(".sidebar-item").nth(min(target_entry_idx, len(entries) - 1)).click()
-        browser_page.wait_for_timeout(120)
+        # Sidebar order can differ from raw trace order. Find an entry that renders messages.
+        sidebar_items = browser_page.locator(".sidebar-item")
+        max_items = min(sidebar_items.count(), len(entries))
+        found_msg_section = False
+        for i in range(max_items):
+            sidebar_items.nth(i).click()
+            browser_page.wait_for_timeout(120)
+            if browser_page.locator(".section .msg").count() > 0:
+                found_msg_section = True
+                break
+
+        assert found_msg_section, "Expected at least one sidebar entry to render message blocks"
 
         # Collapse the messages section (identified by message blocks).
         msg_section = browser_page.locator(".section", has=browser_page.locator(".msg")).first
