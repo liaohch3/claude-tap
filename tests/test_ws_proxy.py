@@ -9,8 +9,9 @@ from pathlib import Path
 import aiohttp
 import pytest
 from aiohttp import web
+from yarl import URL
 
-from claude_tap.proxy import proxy_handler
+from claude_tap.proxy import _get_ws_proxy_settings, proxy_handler
 from claude_tap.trace import TraceWriter
 
 
@@ -273,3 +274,61 @@ async def test_websocket_and_http_coexist(trace_dir):
         await proxy_session.close()
         await proxy_runner.cleanup()
         await upstream_runner.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Test 4: _get_ws_proxy_settings resolves proxy/auth from env
+# ---------------------------------------------------------------------------
+
+
+class TestGetWsProxySettings:
+    """Unit tests for _get_ws_proxy_settings helper."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_proxy_env(self, monkeypatch):
+        """Remove all proxy env vars so tests control them explicitly."""
+        for var in (
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_wss_uses_https_proxy(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:8080")
+        result = _get_ws_proxy_settings("wss://api.openai.com/v1/responses")
+        assert result == (URL("http://proxy:8080"), None)
+
+    def test_ws_uses_http_proxy(self, monkeypatch):
+        monkeypatch.setenv("HTTP_PROXY", "http://proxy:3128")
+        result = _get_ws_proxy_settings("ws://localhost/v1/responses")
+        assert result == (URL("http://proxy:3128"), None)
+
+    def test_proxy_auth_is_preserved(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://user:pass@proxy:8080")
+        result = _get_ws_proxy_settings("wss://api.openai.com/v1/responses")
+        assert result is not None
+        proxy_url, proxy_auth = result
+        assert proxy_url == URL("http://proxy:8080")
+        assert proxy_auth is not None
+        assert proxy_auth.login == "user"
+        assert proxy_auth.password == "pass"
+
+    def test_no_proxy_returns_none(self, monkeypatch):
+        # Mock get_env_proxy_for_url to raise LookupError (no proxy configured).
+        # Necessary because macOS system proxy settings bypass env vars.
+        monkeypatch.setattr(
+            "claude_tap.proxy.get_env_proxy_for_url",
+            lambda url: (_ for _ in ()).throw(LookupError("no proxy")),
+        )
+        result = _get_ws_proxy_settings("wss://api.openai.com/v1/responses")
+        assert result is None
+
+    def test_non_ws_scheme_returns_none(self):
+        result = _get_ws_proxy_settings("https://api.openai.com/v1/responses")
+        assert result is None

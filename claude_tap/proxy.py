@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 
 import aiohttp
 from aiohttp import web
+from aiohttp.helpers import get_env_proxy_for_url
+from yarl import URL
 
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
@@ -326,6 +328,28 @@ _WS_HANDSHAKE_HEADERS = frozenset(
 )
 
 
+def _get_ws_proxy_settings(ws_url: str) -> tuple[URL, aiohttp.BasicAuth | None] | None:
+    """Resolve HTTP proxy and auth from env for a WebSocket URL.
+
+    aiohttp's ``ws_connect`` does not check ``trust_env`` to auto-resolve
+    proxy settings from environment variables (unlike ``_request``).
+    ``get_env_proxy_for_url`` also doesn't recognise the ``wss://``/``ws://``
+    schemes.  Work around both by converting the scheme to its HTTP equivalent
+    (``wss`` → ``https``, ``ws`` → ``http``) for the lookup.
+    """
+    if ws_url.startswith("wss://"):
+        lookup_url = URL("https://" + ws_url[6:])
+    elif ws_url.startswith("ws://"):
+        lookup_url = URL("http://" + ws_url[5:])
+    else:
+        return None
+
+    try:
+        return get_env_proxy_for_url(lookup_url)
+    except LookupError:
+        return None
+
+
 async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     """Proxy a WebSocket connection to the upstream, recording all messages."""
     ctx: dict = request.app["trace_ctx"]
@@ -366,7 +390,16 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     turn = ctx["turn_counter"]
     log_prefix = f"[Turn {turn}]"
 
-    log.info(f"{log_prefix} → WS UPGRADE {request.path_qs}")
+    # Resolve proxy from env — aiohttp ws_connect ignores trust_env
+    proxy_settings = _get_ws_proxy_settings(upstream_ws_url) if session.trust_env else None
+    proxy_url: URL | None = None
+    proxy_auth: aiohttp.BasicAuth | None = None
+    if proxy_settings:
+        proxy_url, proxy_auth = proxy_settings
+    if proxy_url:
+        log.info(f"{log_prefix} → WS UPGRADE {request.path_qs} (via proxy {proxy_url})")
+    else:
+        log.info(f"{log_prefix} → WS UPGRADE {request.path_qs}")
 
     # Connect to upstream first — if it fails, return HTTP 502 before upgrading
     try:
@@ -374,6 +407,8 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             upstream_ws_url,
             headers=fwd_headers,
             protocols=protocols,
+            proxy=proxy_url,
+            proxy_auth=proxy_auth,
         )
     except Exception as exc:
         duration_ms = int((time.monotonic() - t0) * 1000)
