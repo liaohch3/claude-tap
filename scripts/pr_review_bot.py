@@ -102,13 +102,24 @@ def should_process_pull_request(
 # ---------------------------------------------------------------------------
 
 def build_review_prompt(pr: dict[str, Any], diff: str) -> str:
+    """Build review prompt from template, substituting PR metadata."""
     prompt_path = Path(__file__).parent.parent / "prompts" / "pr-review-prompt.md"
-    template = prompt_path.read_text() if prompt_path.exists() else "Review this PR diff."
-    return (
-        f"{template}\n\n"
-        f"## PR #{pr['number']}: {pr['title']}\n\n"
-        f"### Description\n{pr.get('body', '') or '(empty)'}\n\n"
-        f"### Diff\n```diff\n{diff[:50000]}\n```\n"
+    template = prompt_path.read_text() if prompt_path.exists() else (
+        "Review PR #{pr_number}: {pr_title}\n{pr_body}\nDiff:\n{diff_text}"
+    )
+    # Truncate diff to avoid overwhelming the agent
+    max_diff = 80000
+    truncated_diff = diff[:max_diff]
+    if len(diff) > max_diff:
+        truncated_diff += f"\n\n... (diff truncated, {len(diff) - max_diff} chars omitted)"
+
+    return template.format(
+        pr_number=pr["number"],
+        pr_title=pr["title"],
+        pr_body=pr.get("body", "") or "(empty)",
+        head_ref=pr.get("head", {}).get("ref", "unknown"),
+        base_ref=pr.get("base", {}).get("ref", "main"),
+        diff_text=truncated_diff,
     )
 
 
@@ -126,21 +137,35 @@ def fetch_diff(repo_path: str, pr_number: int, base_ref: str, head_ref: str) -> 
 
 
 def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
+    """Run Codex/Claude to review a PR. Writes prompt to file, captures output from file."""
     prompt = build_review_prompt(pr, diff)
     pr_num = pr["number"]
-    session_name = f"pr-review-{pr_num}-{uuid.uuid4().hex[:6]}"
+    run_id = uuid.uuid4().hex[:6]
+    session_name = f"pr-review-{pr_num}-{run_id}"
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-        f.write(prompt)
-        prompt_file = f.name
+    # Write prompt and diff to temp files (avoid shell arg length limits)
+    work_dir = Path(tempfile.mkdtemp(prefix=f"pr-review-{pr_num}-"))
+    prompt_file = work_dir / "prompt.md"
+    output_file = work_dir / "review-output.md"
+    prompt_file.write_text(prompt, encoding="utf-8")
+
+    # Instruct agent to read prompt from file and write review to output file
+    agent_task = (
+        f"Read the PR review prompt from {prompt_file}. "
+        f"Follow the instructions exactly. "
+        f"After completing the review, write ONLY the final review text "
+        f"(Summary + Findings + Suggested decision) to {output_file}. "
+        f"Do not include any other content in that file."
+    )
 
     if config.review_agent == "codex":
-        cmd = f'codex --dangerously-bypass-approvals-and-sandbox "$(cat {shlex.quote(prompt_file)})"'
+        cmd = f"codex --dangerously-bypass-approvals-and-sandbox {shlex.quote(agent_task)}"
     else:
-        cmd = f'claude --dangerously-skip-permissions "$(cat {shlex.quote(prompt_file)})"'
+        cmd = f"claude --dangerously-skip-permissions {shlex.quote(agent_task)}"
 
     subprocess.run(
         ["tmux", "new-session", "-d", "-s", session_name, cmd],
+        cwd=str(config.repo_path),
         timeout=10,
     )
 
@@ -152,26 +177,83 @@ def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
         )
         if result.returncode != 0:
             break
+        # Also check if output file exists (agent finished writing)
+        if output_file.exists() and output_file.stat().st_size > 100:
+            LOG.info("Review output file detected for PR #%d", pr_num)
+            time.sleep(5)  # Give agent a moment to finish writing
+            break
         time.sleep(15)
 
-    output = subprocess.run(
-        ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-200"],
-        capture_output=True, text=True,
-    )
-    review_text = output.stdout if output.returncode == 0 else "(review capture failed)"
+    # Try to read from output file first (clean output)
+    review_text = ""
+    if output_file.exists():
+        review_text = output_file.read_text(encoding="utf-8").strip()
+        LOG.info("Read review from output file (%d chars) for PR #%d", len(review_text), pr_num)
 
+    # Fallback: extract from tmux capture if output file is empty
+    if not review_text or len(review_text) < 50:
+        LOG.warning("Output file empty/missing for PR #%d, falling back to tmux capture", pr_num)
+        output = subprocess.run(
+            ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-500"],
+            capture_output=True, text=True,
+        )
+        if output.returncode == 0:
+            review_text = _extract_review_from_tmux(output.stdout)
+
+    # Cleanup
     subprocess.run(["tmux", "kill-session", "-t", session_name], capture_output=True)
-    Path(prompt_file).unlink(missing_ok=True)
-    return review_text
+    import shutil
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+    return review_text or "(review 输出为空，请检查 agent 日志)"
 
 
-def post_review(pr_number: int, review_text: str, repo: str) -> None:
-    body = f"🤖 **自动 Review（本地 Codex）**\n\n{review_text}"
-    subprocess.run(
-        ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body", body],
-        timeout=30,
+def _extract_review_from_tmux(raw: str) -> str:
+    """Extract the review section from raw tmux output."""
+    lines = raw.split("\n")
+    # Look for Summary section start
+    review_lines: list[str] = []
+    capturing = False
+    for line in lines:
+        stripped = line.strip()
+        # Start capturing at "Summary" or "## Summary"
+        if not capturing and ("Summary" in stripped and len(stripped) < 50):
+            capturing = True
+        if capturing:
+            # Stop at Codex/Claude UI elements
+            if stripped.startswith("›") or "gpt-5" in stripped or "esc to interrupt" in stripped:
+                continue
+            review_lines.append(line)
+    if review_lines:
+        return "\n".join(review_lines).strip()
+    # If no structured output found, return last 100 meaningful lines
+    meaningful = [l for l in lines if l.strip() and not l.strip().startswith("•") and "Working" not in l]
+    return "\n".join(meaningful[-100:]).strip()
+
+
+def post_review(pr_number: int, review_text: str, repo: str, agent: str = "codex") -> None:
+    """Post formatted review comment to GitHub PR."""
+    # Format as a clean GitHub comment
+    body = (
+        f"## 🤖 自动 Code Review\n\n"
+        f"> 由本地 {agent.capitalize()} 自动生成\n\n"
+        f"---\n\n"
+        f"{review_text}\n\n"
+        f"---\n"
+        f"*⚡ Powered by local PR Review Bot*"
     )
-    LOG.info("Posted review to PR #%d", pr_number)
+    # Write to temp file to avoid shell arg length issues
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+        f.write(body)
+        body_file = f.name
+    try:
+        subprocess.run(
+            ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body-file", body_file],
+            timeout=30,
+        )
+        LOG.info("Posted review to PR #%d", pr_number)
+    finally:
+        Path(body_file).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +289,7 @@ class ReviewOrchestrator:
                     LOG.warning("Empty diff for PR #%d, skipping", pr_num)
                     return
                 review = run_review(self._config, pr, diff)
-                post_review(pr_num, review, repo)
+                post_review(pr_num, review, repo, self._config.review_agent)
             except Exception:
                 LOG.exception("Review failed for PR #%d", pr_num)
 
