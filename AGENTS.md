@@ -20,6 +20,7 @@ These are mandatory and enforced in review:
 - Hard rules and repository policies: `docs/standards/hard-rules.md`
 - Validation gates and required commands: `docs/standards/validation-and-gates.md`
 - E2E and screenshot evidence requirements: `docs/standards/e2e-and-evidence.md`
+- Screenshot capture and validation standards: `docs/standards/screenshot-standards.md`
 - Coding and runtime safety rules: `docs/standards/coding-and-runtime.md`
 - Workflow, review, and Brain/Hands protocol: `docs/standards/workflow-and-review.md`
 - Metadata and maintenance process for standards docs: `docs/standards/README.md`
