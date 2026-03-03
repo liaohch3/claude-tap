@@ -24,7 +24,7 @@ fi
 if [ "$cmd1" = "pr" ] && [ "$cmd2" = "view" ]; then
   # Check if this is a body-only query
   case "$*" in
-    *--json\ body*)
+    *--json\\ body*)
       echo '## Evidence\n![trace](https://example.com/evidence/trace.png)'
       exit 0
       ;;
