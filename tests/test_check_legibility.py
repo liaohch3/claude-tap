@@ -106,6 +106,42 @@ def test_missing_manifest_path_fails(tmp_path: Path) -> None:
     assert any("expected path missing" in failure for failure in result.failures)
 
 
+def test_manifest_rejects_absolute_expected_path(tmp_path: Path) -> None:
+    module = _load_module()
+    repo_root = _base_repo(tmp_path)
+    _write(
+        repo_root / "docs" / "architecture" / "manifest.yaml",
+        "expected_paths:\n  - /tmp/not-allowed.md\n",
+    )
+
+    result = module.run_checks(
+        repo_root,
+        freshness_days=60,
+        strict_freshness=False,
+        today=dt.date(2026, 3, 3),
+    )
+
+    assert any("must be relative" in failure for failure in result.failures)
+
+
+def test_manifest_rejects_expected_path_outside_repo_root(tmp_path: Path) -> None:
+    module = _load_module()
+    repo_root = _base_repo(tmp_path)
+    _write(
+        repo_root / "docs" / "architecture" / "manifest.yaml",
+        "expected_paths:\n  - ../escape.md\n",
+    )
+
+    result = module.run_checks(
+        repo_root,
+        freshness_days=60,
+        strict_freshness=False,
+        today=dt.date(2026, 3, 3),
+    )
+
+    assert any("outside repo root" in failure for failure in result.failures)
+
+
 def test_completed_plan_with_unchecked_todo_fails(tmp_path: Path) -> None:
     module = _load_module()
     repo_root = _base_repo(tmp_path, plan_status="completed")
@@ -122,3 +158,21 @@ def test_completed_plan_with_unchecked_todo_fails(tmp_path: Path) -> None:
     )
 
     assert any("unchecked TODO" in failure for failure in result.failures)
+
+
+def test_completed_plan_ignores_unchecked_todo_in_fenced_code(tmp_path: Path) -> None:
+    module = _load_module()
+    repo_root = _base_repo(tmp_path, plan_status="completed")
+    _write(
+        repo_root / "docs" / "plans" / "plan.md",
+        ("---\nstatus: completed\n---\n\n# Plan\n\n```markdown\n- [ ] example only\n```\n\nAll work done.\n"),
+    )
+
+    result = module.run_checks(
+        repo_root,
+        freshness_days=60,
+        strict_freshness=False,
+        today=dt.date(2026, 3, 3),
+    )
+
+    assert not any("unchecked TODO" in failure for failure in result.failures)

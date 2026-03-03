@@ -73,6 +73,38 @@ def parse_iso_date(date_str: str) -> dt.date | None:
         return None
 
 
+def _is_within_repo_root(repo_root: Path, candidate_path: Path) -> bool:
+    try:
+        candidate_path.relative_to(repo_root)
+        return True
+    except ValueError:
+        return False
+
+
+def _strip_fenced_code_blocks(markdown_text: str) -> str:
+    kept_lines: list[str] = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+
+    for line in markdown_text.splitlines():
+        stripped = line.lstrip()
+        if not in_fence and (stripped.startswith("```") or stripped.startswith("~~~")):
+            in_fence = True
+            fence_char = stripped[0]
+            fence_len = len(stripped) - len(stripped.lstrip(fence_char))
+            continue
+
+        if in_fence:
+            if stripped.startswith(fence_char * fence_len):
+                in_fence = False
+            continue
+
+        kept_lines.append(line)
+
+    return "\n".join(kept_lines)
+
+
 def check_standards_freshness(
     repo_root: Path, *, freshness_days: int, strict_freshness: bool, today: dt.date
 ) -> CheckResult:
@@ -112,6 +144,7 @@ def check_standards_freshness(
 
 def check_architecture_manifest(repo_root: Path) -> CheckResult:
     failures: list[str] = []
+    resolved_repo_root = repo_root.resolve()
     manifest_path = repo_root / "docs" / "architecture" / "manifest.yaml"
     if not manifest_path.exists():
         return CheckResult(failures=[f"{manifest_path}: missing manifest file"], warnings=[])
@@ -122,7 +155,16 @@ def check_architecture_manifest(repo_root: Path) -> CheckResult:
         return CheckResult(failures=failures, warnings=[])
 
     for relative_path in expected_paths:
-        absolute_path = repo_root / relative_path
+        candidate_path = Path(relative_path)
+        if candidate_path.is_absolute():
+            failures.append(f"{manifest_path}: expected path must be relative: {relative_path}")
+            continue
+
+        absolute_path = (repo_root / candidate_path).resolve()
+        if not _is_within_repo_root(resolved_repo_root, absolute_path):
+            failures.append(f"{manifest_path}: expected path resolves outside repo root: {relative_path}")
+            continue
+
         if not absolute_path.exists():
             failures.append(f"{manifest_path}: expected path missing: {relative_path}")
 
@@ -142,7 +184,7 @@ def check_plan_state_drift(repo_root: Path) -> CheckResult:
             failures.append(f"{file_path}: status must be one of {sorted(ALLOWED_PLAN_STATUS)}")
             continue
 
-        if status == "completed" and "- [ ]" in text:
+        if status == "completed" and "- [ ]" in _strip_fenced_code_blocks(text):
             failures.append(f"{file_path}: completed plan still contains unchecked TODO checkboxes")
 
     return CheckResult(failures=failures, warnings=[])
