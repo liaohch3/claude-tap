@@ -260,6 +260,69 @@ def post_review(pr_number: int, review_text: str, repo: str, agent: str = "codex
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+
+
+def notify_openclaw(pr_number: int, review_text: str, repo: str, decision: str) -> None:
+    """Send notification to Feishu group chat via bot API to trigger OpenClaw processing loop."""
+    import os
+    import urllib.request
+
+    chat_id = os.environ.get("PR_REVIEW_NOTIFY_CHAT", "")
+    if not chat_id:
+        LOG.info("PR_REVIEW_NOTIFY_CHAT not set, skipping notification")
+        return
+
+    app_id = os.environ.get("FEISHU_APP_ID", "")
+    app_secret = os.environ.get("FEISHU_APP_SECRET", "")
+    if not app_id or not app_secret:
+        LOG.warning("FEISHU_APP_ID/FEISHU_APP_SECRET not set, skipping notification")
+        return
+
+    try:
+        # Get tenant access token
+        token_data = json.dumps({"app_id": app_id, "app_secret": app_secret}).encode()
+        token_req = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            data=token_data,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(token_req, timeout=10) as resp:
+            token = json.loads(resp.read())["tenant_access_token"]
+
+        # Build message
+        short_review = review_text[:800]
+        msg_content = (
+            f"🔄 PR #{pr_number} 自动 Review 完成\n\n"
+            f"仓库: {repo}\n"
+            f"决策: {decision}\n\n"
+            f"请根据 review findings 修复代码并 push，触发下一轮 review。\n\n"
+            f"Review 摘要:\n{short_review}"
+        )
+
+        # Send to group chat
+        send_data = json.dumps({
+            "receive_id": chat_id,
+            "msg_type": "text",
+            "content": json.dumps({"text": msg_content}),
+        }).encode()
+        send_req = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+            data=send_data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        with urllib.request.urlopen(send_req, timeout=10) as resp:
+            result = json.loads(resp.read())
+            if result.get("code") == 0:
+                LOG.info("Notified OpenClaw chat %s for PR #%d", chat_id, pr_number)
+            else:
+                LOG.warning("Feishu send failed: %s", result)
+    except Exception:
+        LOG.exception("Failed to notify OpenClaw for PR #%d", pr_number)
+
+
 class ReviewOrchestrator:
     def __init__(self, config: ReviewBotConfig) -> None:
         self._config = config
@@ -290,6 +353,13 @@ class ReviewOrchestrator:
                     return
                 review = run_review(self._config, pr, diff)
                 post_review(pr_num, review, repo, self._config.review_agent)
+                # Determine decision from review text
+                decision = "COMMENT"
+                if "REQUEST_CHANGES" in review:
+                    decision = "REQUEST_CHANGES"
+                elif "APPROVE" in review and "REQUEST_CHANGES" not in review:
+                    decision = "APPROVE"
+                notify_openclaw(pr_num, review, repo, decision)
             except Exception:
                 LOG.exception("Review failed for PR #%d", pr_num)
 
