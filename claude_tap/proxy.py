@@ -392,11 +392,12 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
 
     # Resolve proxy from env — aiohttp ws_connect ignores trust_env
     proxy_settings = _get_ws_proxy_settings(upstream_ws_url) if session.trust_env else None
-    proxy_url: URL | None = None
-    proxy_auth: aiohttp.BasicAuth | None = None
+    ws_connect_kwargs: dict[str, object] = {}
     if proxy_settings:
         proxy_url, proxy_auth = proxy_settings
-    if proxy_url:
+        ws_connect_kwargs["proxy"] = proxy_url
+        if proxy_auth is not None:
+            ws_connect_kwargs["proxy_auth"] = proxy_auth
         log.info(f"{log_prefix} → WS UPGRADE {request.path_qs} (via proxy {proxy_url})")
     else:
         log.info(f"{log_prefix} → WS UPGRADE {request.path_qs}")
@@ -407,8 +408,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             upstream_ws_url,
             headers=fwd_headers,
             protocols=protocols,
-            proxy=proxy_url,
-            proxy_auth=proxy_auth,
+            **ws_connect_kwargs,
         )
     except Exception as exc:
         duration_ms = int((time.monotonic() - t0) * 1000)
