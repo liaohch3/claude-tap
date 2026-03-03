@@ -10,7 +10,15 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: uv run pytest -x -q --timeout=30
+        entry: uv run pytest -x -q --timeout=60
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: legibility
+        name: legibility
+        entry: uv run python scripts/check_legibility.py
         language: system
         pass_filenames: false
         always_run: true
