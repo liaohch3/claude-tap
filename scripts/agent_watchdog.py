@@ -30,6 +30,11 @@ DEFAULT_BAD_PATTERNS = [
     r"traceback",
     r"error:",
 ]
+EVENT_MARKER_PROGRESS = "WD_PROGRESS"
+EVENT_MARKER_BLOCKER = "WD_BLOCKER"
+EVENT_MARKER_DONE = "WD_DONE"
+EVENT_MARKERS = (EVENT_MARKER_PROGRESS, EVENT_MARKER_BLOCKER, EVENT_MARKER_DONE)
+EVENT_MARKER_REGEX = re.compile(r"\[(WD_PROGRESS|WD_BLOCKER|WD_DONE)\]\s*(.*)")
 
 CORRECTIVE_TEMPLATE = Path("prompts/agent-templates/corrective.md")
 RETRY_TEMPLATE = Path("prompts/agent-templates/retry-after-review-fail.md")
@@ -41,6 +46,12 @@ class Decision:
     state: str
     reason: str
     action: str
+
+
+@dataclass(frozen=True)
+class MarkerEvent:
+    marker: str
+    detail: str
 
 
 def now_utc_iso() -> str:
@@ -67,9 +78,47 @@ def _matched_bad_pattern(pane_tail: str, bad_patterns: list[str]) -> str | None:
     return None
 
 
+def _extract_new_tail_segment(previous_tail: str, current_tail: str) -> str:
+    if not previous_tail:
+        return current_tail
+    if current_tail == previous_tail:
+        return ""
+
+    prev_lines = previous_tail.splitlines()
+    curr_lines = current_tail.splitlines()
+    if not prev_lines:
+        return current_tail
+    if curr_lines == prev_lines:
+        return ""
+
+    prev_count = len(prev_lines)
+    curr_count = len(curr_lines)
+    if curr_count >= prev_count:
+        for start in range(curr_count - prev_count + 1):
+            if curr_lines[start : start + prev_count] == prev_lines:
+                return "\n".join(curr_lines[start + prev_count :])
+
+    max_overlap = min(prev_count, curr_count)
+    for overlap in range(max_overlap, 0, -1):
+        if prev_lines[-overlap:] == curr_lines[:overlap]:
+            return "\n".join(curr_lines[overlap:])
+    return current_tail
+
+
+def _extract_latest_marker_event(text: str) -> MarkerEvent | None:
+    latest: MarkerEvent | None = None
+    for line in text.splitlines():
+        match = EVENT_MARKER_REGEX.search(line)
+        if match:
+            latest = MarkerEvent(marker=match.group(1), detail=match.group(2).strip())
+    return latest
+
+
 def evaluate_decision(
     *,
     pane_tail: str,
+    marker_event: MarkerEvent | None,
+    matched_new_bad_pattern: str | None,
     elapsed_since_progress_minutes: float,
     human_verdict: str | None,
     session_running: bool,
@@ -89,11 +138,22 @@ def evaluate_decision(
     if elapsed_since_progress_minutes >= stuck_minutes:
         return Decision(state=STATE_STUCK, reason="stuck_timeout", action="restart")
 
-    matched_pattern = _matched_bad_pattern(pane_tail, bad_patterns)
-    if matched_pattern is not None:
+    if marker_event is not None:
+        if marker_event.marker == EVENT_MARKER_BLOCKER:
+            return Decision(
+                state=STATE_RUNNING_BAD,
+                reason=f"marker:{EVENT_MARKER_BLOCKER}",
+                action="send_corrective",
+            )
+        if marker_event.marker == EVENT_MARKER_PROGRESS:
+            return Decision(state=STATE_RUNNING_GOOD, reason=f"marker:{EVENT_MARKER_PROGRESS}", action="noop")
+        if marker_event.marker == EVENT_MARKER_DONE:
+            return Decision(state=STATE_RUNNING_GOOD, reason=f"marker:{EVENT_MARKER_DONE}", action="noop")
+
+    if matched_new_bad_pattern is not None:
         return Decision(
             state=STATE_RUNNING_BAD,
-            reason=f"bad_pattern:{matched_pattern}",
+            reason=f"bad_pattern:{matched_new_bad_pattern}",
             action="send_corrective",
         )
 
@@ -240,6 +300,10 @@ def cmd_init(args: argparse.Namespace) -> int:
         "created_at": now,
         "updated_at": now,
         "last_progress_at": now,
+        "last_seen_tail_hash": None,
+        "last_seen_line_count_marker": 0,
+        "last_seen_tail_text": "",
+        # Backward compatibility for older state files.
         "last_pane_fingerprint": None,
         "last_action": {"type": None, "at": None, "detail": None},
         "config": {
@@ -305,18 +369,32 @@ def cmd_tick(args: argparse.Namespace) -> int:
     status = _capture_status(state, tail_lines=args.tail_lines)
     pane_tail = str(status.get("tail", ""))
     pane_fingerprint = _tail_fingerprint(pane_tail)
+    pane_line_count = len(pane_tail.splitlines())
+    previous_fingerprint = state.get("last_seen_tail_hash") or state.get("last_pane_fingerprint")
+    previous_line_count = int(state.get("last_seen_line_count_marker") or 0)
+    previous_tail = str(state.get("last_seen_tail_text", ""))
+    tail_changed = pane_fingerprint != previous_fingerprint or pane_line_count != previous_line_count
+    new_tail_segment = _extract_new_tail_segment(previous_tail, pane_tail) if tail_changed else ""
 
-    if pane_fingerprint != state.get("last_pane_fingerprint"):
-        state["last_pane_fingerprint"] = pane_fingerprint
+    if tail_changed:
         state["last_progress_at"] = now.isoformat()
+    state["last_seen_tail_hash"] = pane_fingerprint
+    state["last_seen_line_count_marker"] = pane_line_count
+    state["last_seen_tail_text"] = pane_tail
+    # Backward compatibility for older state readers.
+    state["last_pane_fingerprint"] = pane_fingerprint
 
     timeout_minutes = int(state.get("config", {}).get("timeout_minutes", DEFAULT_TIMEOUT_MINUTES))
     stuck_minutes = int(state.get("config", {}).get("stuck_minutes", DEFAULT_STUCK_MINUTES))
     bad_patterns = list(state.get("config", {}).get("bad_patterns", DEFAULT_BAD_PATTERNS))
+    marker_event = _extract_latest_marker_event(new_tail_segment)
+    matched_new_bad_pattern = _matched_bad_pattern(new_tail_segment, bad_patterns)
 
     elapsed = elapsed_minutes(state.get("last_progress_at"), now)
     decision = evaluate_decision(
         pane_tail=pane_tail,
+        marker_event=marker_event,
+        matched_new_bad_pattern=matched_new_bad_pattern,
         elapsed_since_progress_minutes=elapsed,
         human_verdict=state.get("human_verdict"),
         session_running=bool(status.get("running", False)),
@@ -332,6 +410,9 @@ def cmd_tick(args: argparse.Namespace) -> int:
         "reason": decision.reason,
         "elapsed_minutes": f"{elapsed:.1f}",
         "pane_tail": pane_tail[-4000:],
+        "new_tail_segment": new_tail_segment[-4000:],
+        "event_marker": marker_event.marker if marker_event else "",
+        "event_detail": marker_event.detail if marker_event else "",
     }
 
     action_taken = "noop"
@@ -369,6 +450,51 @@ def cmd_tick(args: argparse.Namespace) -> int:
         "action": action_taken,
         "session_running": bool(status.get("running", False)),
         "elapsed_since_progress_minutes": round(elapsed, 2),
+        "new_tail_segment_lines": len(new_tail_segment.splitlines()),
+    }
+    print(json.dumps(output, indent=2, sort_keys=True))
+    return 0
+
+
+def _contains_arg_value(line: str, arg_name: str, value: str) -> bool:
+    pattern = rf"{re.escape(arg_name)}(?:[=\s]+){re.escape(value)}(?:\s|$)"
+    return re.search(pattern, line) is not None
+
+
+def cmd_check_delivery(args: argparse.Namespace) -> int:
+    proc = subprocess.run(["openclaw", "cron", "list"], check=False, text=True, capture_output=True)
+    if proc.returncode != 0:
+        raise SystemExit(f"openclaw cron list failed: {proc.stderr.strip() or 'unknown error'}")
+
+    matched_line: str | None = None
+    for raw_line in proc.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if args.task_id and args.task_id not in line:
+            continue
+        if _contains_arg_value(line, "--channel", args.channel) and _contains_arg_value(line, "--to", args.to):
+            matched_line = line
+            break
+
+    if matched_line is None:
+        output = {
+            "ok": False,
+            "reason": "delivery_target_missing",
+            "task_id_filter": args.task_id,
+            "required_channel": args.channel,
+            "required_to": args.to,
+        }
+        print(json.dumps(output, indent=2, sort_keys=True))
+        return 2
+
+    output = {
+        "ok": True,
+        "reason": "delivery_target_found",
+        "task_id_filter": args.task_id,
+        "required_channel": args.channel,
+        "required_to": args.to,
+        "matched_cron_entry": matched_line,
     }
     print(json.dumps(output, indent=2, sort_keys=True))
     return 0
@@ -410,7 +536,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_tick = sub.add_parser("tick")
     p_tick.add_argument("--task-id", required=True)
     p_tick.add_argument("--tail-lines", type=int, default=120)
+    p_tick.add_argument("--once", action="store_true", help="Explicit one-shot tick for cron/manual invocation.")
     p_tick.set_defaults(func=cmd_tick)
+
+    p_check_delivery = sub.add_parser("check-delivery")
+    p_check_delivery.add_argument("--channel", required=True)
+    p_check_delivery.add_argument("--to", required=True)
+    p_check_delivery.add_argument("--task-id")
+    p_check_delivery.set_defaults(func=cmd_check_delivery)
 
     return parser
 
