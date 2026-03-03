@@ -25,6 +25,7 @@ LOG = logging.getLogger("pr-review-bot")
 # Config
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ReviewBotConfig:
     webhook_secret: str
@@ -38,6 +39,7 @@ class ReviewBotConfig:
 
 def load_config() -> ReviewBotConfig:
     import os
+
     return ReviewBotConfig(
         webhook_secret=os.environ.get("PR_REVIEW_WEBHOOK_SECRET", ""),
         repo_path=os.environ.get("PR_REVIEW_REPO_PATH", os.getcwd()),
@@ -68,6 +70,7 @@ def setup_logging(log_file: str) -> None:
 # ---------------------------------------------------------------------------
 # Webhook helpers
 # ---------------------------------------------------------------------------
+
 
 def verify_webhook_signature(secret: str, body: bytes, signature_header: str) -> bool:
     if not secret:
@@ -101,11 +104,14 @@ def should_process_pull_request(
 # Review logic
 # ---------------------------------------------------------------------------
 
+
 def build_review_prompt(pr: dict[str, Any], diff: str) -> str:
     """Build review prompt from template, substituting PR metadata."""
     prompt_path = Path(__file__).parent.parent / "prompts" / "pr-review-prompt.md"
-    template = prompt_path.read_text() if prompt_path.exists() else (
-        "Review PR #{pr_number}: {pr_title}\n{pr_body}\nDiff:\n{diff_text}"
+    template = (
+        prompt_path.read_text()
+        if prompt_path.exists()
+        else ("Review PR #{pr_number}: {pr_title}\n{pr_body}\nDiff:\n{diff_text}")
     )
     # Truncate diff to avoid overwhelming the agent
     max_diff = 80000
@@ -127,11 +133,16 @@ def fetch_diff(repo_path: str, pr_number: int, base_ref: str, head_ref: str) -> 
     cwd = repo_path
     subprocess.run(
         ["git", "fetch", "origin", f"pull/{pr_number}/head:pr-{pr_number}"],
-        cwd=cwd, capture_output=True, timeout=60,
+        cwd=cwd,
+        capture_output=True,
+        timeout=60,
     )
     result = subprocess.run(
         ["git", "diff", f"origin/{base_ref}...pr-{pr_number}"],
-        cwd=cwd, capture_output=True, text=True, timeout=60,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     return result.stdout
 
@@ -183,13 +194,15 @@ def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
     # Capture tmux output to extract decision for notification
     output = subprocess.run(
         ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-500"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     raw_output = output.stdout if output.returncode == 0 else ""
 
     # Cleanup
     subprocess.run(["tmux", "kill-session", "-t", session_name], capture_output=True)
     import shutil
+
     shutil.rmtree(work_dir, ignore_errors=True)
 
     if timed_out:
@@ -198,7 +211,6 @@ def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
 
     LOG.info("Agent finished review for PR #%d", pr_num)
     return raw_output
-
 
 
 def extract_decision(raw_output: str) -> str:
@@ -213,7 +225,6 @@ def extract_decision(raw_output: str) -> str:
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
-
 
 
 def notify_openclaw(pr_number: int, review_text: str, repo: str, decision: str) -> None:
@@ -254,11 +265,13 @@ def notify_openclaw(pr_number: int, review_text: str, repo: str, decision: str) 
         )
 
         # Send to group chat
-        send_data = json.dumps({
-            "receive_id": chat_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": msg_content}),
-        }).encode()
+        send_data = json.dumps(
+            {
+                "receive_id": chat_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": msg_content}),
+            }
+        ).encode()
         send_req = urllib.request.Request(
             "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
             data=send_data,
@@ -322,6 +335,7 @@ class ReviewOrchestrator:
 # ASGI app (Starlette for raw body access)
 # ---------------------------------------------------------------------------
 
+
 def create_app(config: ReviewBotConfig, orchestrator: ReviewOrchestrator) -> Any:
     from starlette.applications import Starlette
     from starlette.requests import Request
@@ -362,15 +376,18 @@ def create_app(config: ReviewBotConfig, orchestrator: ReviewOrchestrator) -> Any
         orchestrator.submit_review(payload)
         return JSONResponse({"accepted": True, "reason": "scheduled"})
 
-    return Starlette(routes=[
-        Route("/health", health, methods=["GET"]),
-        Route("/webhook", webhook, methods=["POST"]),
-    ])
+    return Starlette(
+        routes=[
+            Route("/health", health, methods=["GET"]),
+            Route("/webhook", webhook, methods=["POST"]),
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run local GitHub PR review webhook server.")

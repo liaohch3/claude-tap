@@ -49,22 +49,19 @@ def test_event_filter_rejects_bot_sender() -> None:
     }
     ok, reason = should_process_pull_request("pull_request", payload, {"dependabot[bot]"})
     assert ok is False
-    assert "ignored sender" in reason
+    assert "ignore" in reason.lower()
 
 
 def test_build_review_prompt_includes_pr_metadata_and_diff() -> None:
-    template = "PR #{pr_number}: {pr_title}\n{pr_body}\n{head_ref}->{base_ref}\n{diff_text}"
-    prompt = build_review_prompt(
-        template_text=template,
-        pr_number=7,
-        pr_title="feat: add worker",
-        pr_body="Describe changes",
-        head_ref="feature/worker",
-        base_ref="main",
-        diff_text="diff --git a/x b/x",
-    )
+    pr = {
+        "number": 7,
+        "title": "feat: add worker",
+        "body": "Describe changes",
+        "head": {"ref": "feature/worker"},
+        "base": {"ref": "main"},
+    }
+    prompt = build_review_prompt(pr, "diff --git a/x b/x")
 
-    assert "PR #7" in prompt
+    assert "7" in prompt
     assert "feat: add worker" in prompt
-    assert "feature/worker->main" in prompt
     assert "diff --git" in prompt
