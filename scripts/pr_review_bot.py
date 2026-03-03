@@ -18,347 +18,225 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-try:
-    from scripts.pr_review_bot_config import ReviewBotConfig, load_config
-except ModuleNotFoundError:  # pragma: no cover - direct script execution fallback
-    from pr_review_bot_config import ReviewBotConfig, load_config
+LOG = logging.getLogger("pr-review-bot")
 
-LOG = logging.getLogger("pr_review_bot")
-PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "prompts" / "pr-review-prompt.md"
 
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
 
 @dataclass
-class ReviewWorker:
-    thread: threading.Thread
-    cancel_event: threading.Event
-    run_id: str
+class ReviewBotConfig:
+    webhook_secret: str
+    repo_path: str
+    review_agent: str
+    review_timeout: int
+    port: int
+    ignore_users: set[str]
+    log_file: str
 
 
-def setup_logging(log_file: Path) -> None:
-    LOG.setLevel(logging.INFO)
-    if LOG.handlers:
-        return
+def load_config() -> ReviewBotConfig:
+    import os
+    return ReviewBotConfig(
+        webhook_secret=os.environ.get("PR_REVIEW_WEBHOOK_SECRET", ""),
+        repo_path=os.environ.get("PR_REVIEW_REPO_PATH", os.getcwd()),
+        review_agent=os.environ.get("PR_REVIEW_AGENT", "codex"),
+        review_timeout=int(os.environ.get("PR_REVIEW_TIMEOUT", "600")),
+        port=int(os.environ.get("PR_REVIEW_PORT", "3456")),
+        ignore_users=set(
+            u.strip()
+            for u in os.environ.get(
+                "PR_REVIEW_IGNORE_USERS",
+                "github-actions[bot],dependabot[bot]",
+            ).split(",")
+            if u.strip()
+        ),
+        log_file=os.environ.get("PR_REVIEW_LOG_FILE", "/tmp/pr-review-bot.log"),
+    )
 
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
-    file_handler.setFormatter(formatter)
+def setup_logging(log_file: str) -> None:
+    fmt = "%(asctime)s %(levelname)s %(message)s"
+    logging.basicConfig(level=logging.INFO, format=fmt)
+    if log_file:
+        fh = logging.FileHandler(log_file)
+        fh.setFormatter(logging.Formatter(fmt))
+        logging.getLogger().addHandler(fh)
 
-    LOG.addHandler(stream_handler)
-    LOG.addHandler(file_handler)
 
+# ---------------------------------------------------------------------------
+# Webhook helpers
+# ---------------------------------------------------------------------------
 
 def verify_webhook_signature(secret: str, body: bytes, signature_header: str) -> bool:
     if not secret:
         return True
     if not signature_header.startswith("sha256="):
         return False
-    provided = signature_header.split("=", 1)[1]
-    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, provided)
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature_header)
 
 
 def should_process_pull_request(
-    event_name: str,
+    event: str,
     payload: dict[str, Any],
-    ignore_users: set[str] | frozenset[str],
+    ignore_users: set[str],
 ) -> tuple[bool, str]:
-    if event_name != "pull_request":
-        return False, "not a pull_request event"
-
-    action = payload.get("action")
-    if action not in {"opened", "synchronize"}:
-        return False, f"ignored action={action}"
-
-    sender_login = str(payload.get("sender", {}).get("login", ""))
-    if sender_login in ignore_users or sender_login.endswith("[bot]"):
-        return False, f"ignored sender={sender_login}"
-
-    pr = payload.get("pull_request")
-    if not isinstance(pr, dict) or "number" not in pr:
-        return False, "missing pull_request payload"
-    return True, "accepted"
+    if event != "pull_request":
+        return False, f"event={event} not pull_request"
+    action = payload.get("action", "")
+    if action not in ("opened", "synchronize"):
+        return False, f"action={action} not opened/synchronize"
+    sender = payload.get("sender", {})
+    login = sender.get("login", "")
+    if login in ignore_users:
+        return False, f"sender={login} in ignore list"
+    if sender.get("type", "").lower() == "bot":
+        return False, f"sender={login} is bot"
+    return True, "ok"
 
 
-def build_review_prompt(
-    *,
-    template_text: str,
-    pr_number: int,
-    pr_title: str,
-    pr_body: str,
-    head_ref: str,
-    base_ref: str,
-    diff_text: str,
-) -> str:
-    safe_body = pr_body.strip() or "(No PR description)"
-    safe_diff = diff_text.strip() or "(No diff content)"
-    return template_text.format(
-        pr_number=pr_number,
-        pr_title=pr_title.strip(),
-        pr_body=safe_body,
-        head_ref=head_ref.strip(),
-        base_ref=base_ref.strip(),
-        diff_text=safe_diff,
+# ---------------------------------------------------------------------------
+# Review logic
+# ---------------------------------------------------------------------------
+
+def build_review_prompt(pr: dict[str, Any], diff: str) -> str:
+    prompt_path = Path(__file__).parent.parent / "prompts" / "pr-review-prompt.md"
+    template = prompt_path.read_text() if prompt_path.exists() else "Review this PR diff."
+    return (
+        f"{template}\n\n"
+        f"## PR #{pr['number']}: {pr['title']}\n\n"
+        f"### Description\n{pr.get('body', '') or '(empty)'}\n\n"
+        f"### Diff\n```diff\n{diff[:50000]}\n```\n"
     )
 
+
+def fetch_diff(repo_path: str, pr_number: int, base_ref: str, head_ref: str) -> str:
+    cwd = repo_path
+    subprocess.run(
+        ["git", "fetch", "origin", f"pull/{pr_number}/head:pr-{pr_number}"],
+        cwd=cwd, capture_output=True, timeout=60,
+    )
+    result = subprocess.run(
+        ["git", "diff", f"origin/{base_ref}...pr-{pr_number}"],
+        cwd=cwd, capture_output=True, text=True, timeout=60,
+    )
+    return result.stdout
+
+
+def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
+    prompt = build_review_prompt(pr, diff)
+    pr_num = pr["number"]
+    session_name = f"pr-review-{pr_num}-{uuid.uuid4().hex[:6]}"
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+        f.write(prompt)
+        prompt_file = f.name
+
+    if config.review_agent == "codex":
+        cmd = f'codex --dangerously-bypass-approvals-and-sandbox "$(cat {shlex.quote(prompt_file)})"'
+    else:
+        cmd = f'claude --dangerously-skip-permissions "$(cat {shlex.quote(prompt_file)})"'
+
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-s", session_name, cmd],
+        timeout=10,
+    )
+
+    deadline = time.time() + config.review_timeout
+    while time.time() < deadline:
+        result = subprocess.run(
+            ["tmux", "has-session", "-t", session_name],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            break
+        time.sleep(15)
+
+    output = subprocess.run(
+        ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-200"],
+        capture_output=True, text=True,
+    )
+    review_text = output.stdout if output.returncode == 0 else "(review capture failed)"
+
+    subprocess.run(["tmux", "kill-session", "-t", session_name], capture_output=True)
+    Path(prompt_file).unlink(missing_ok=True)
+    return review_text
+
+
+def post_review(pr_number: int, review_text: str, repo: str) -> None:
+    body = f"🤖 **自动 Review（本地 Codex）**\n\n{review_text}"
+    subprocess.run(
+        ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body", body],
+        timeout=30,
+    )
+    LOG.info("Posted review to PR #%d", pr_number)
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
 
 class ReviewOrchestrator:
     def __init__(self, config: ReviewBotConfig) -> None:
-        self.config = config
-        self._workers: dict[int, ReviewWorker] = {}
+        self._config = config
         self._lock = threading.Lock()
+        self._active: dict[int, threading.Thread] = {}
 
     def submit_review(self, payload: dict[str, Any]) -> None:
         pr = payload["pull_request"]
-        pr_number = int(pr["number"])
-        run_id = uuid.uuid4().hex[:8]
-        cancel_event = threading.Event()
-
-        worker = ReviewWorker(
-            thread=threading.Thread(
-                target=self._review_pr_thread,
-                args=(pr_number, payload, cancel_event, run_id),
-                daemon=True,
-            ),
-            cancel_event=cancel_event,
-            run_id=run_id,
-        )
+        pr_num = pr["number"]
+        repo = payload["repository"]["full_name"]
 
         with self._lock:
-            previous = self._workers.get(pr_number)
-            if previous:
-                LOG.info("Cancelling previous worker for PR #%s run=%s", pr_number, previous.run_id)
-                previous.cancel_event.set()
-            self._workers[pr_number] = worker
-        LOG.info("Starting worker for PR #%s run=%s", pr_number, run_id)
-        worker.thread.start()
+            old = self._active.pop(pr_num, None)
+            if old and old.is_alive():
+                LOG.info("Cancelling previous review for PR #%d", pr_num)
 
-    def _review_pr_thread(
-        self,
-        pr_number: int,
-        payload: dict[str, Any],
-        cancel_event: threading.Event,
-        run_id: str,
-    ) -> None:
-        try:
-            review_text, recommendation = run_review_pipeline(
-                config=self.config,
-                pr_number=pr_number,
-                payload=payload,
-                cancel_event=cancel_event,
-                run_id=run_id,
-            )
-            if cancel_event.is_set():
-                LOG.info("Worker finished but was cancelled for PR #%s run=%s", pr_number, run_id)
-                return
-            post_review(self.config, pr_number=pr_number, review_text=review_text, recommendation=recommendation)
-        except Exception:
-            LOG.exception("Worker failed for PR #%s run=%s", pr_number, run_id)
-        finally:
-            with self._lock:
-                current = self._workers.get(pr_number)
-                if current and current.run_id == run_id:
-                    self._workers.pop(pr_number, None)
+        def _worker() -> None:
+            try:
+                LOG.info("Starting review for PR #%d", pr_num)
+                diff = fetch_diff(
+                    self._config.repo_path,
+                    pr_num,
+                    pr["base"]["ref"],
+                    pr["head"]["ref"],
+                )
+                if not diff.strip():
+                    LOG.warning("Empty diff for PR #%d, skipping", pr_num)
+                    return
+                review = run_review(self._config, pr, diff)
+                post_review(pr_num, review, repo)
+            except Exception:
+                LOG.exception("Review failed for PR #%d", pr_num)
+
+        t = threading.Thread(target=_worker, name=f"review-pr-{pr_num}", daemon=True)
+        with self._lock:
+            self._active[pr_num] = t
+        t.start()
 
 
-def _run_git(repo_path: Path, args: list[str]) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout
-
-
-def _run_cmd(repo_path: Path, args: list[str]) -> str:
-    result = subprocess.run(args, cwd=repo_path, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"{' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout
-
-
-def _agent_shell_command(agent: str, prompt_file: Path, output_file: Path, status_file: Path) -> str:
-    if agent == "claude":
-        runner = f"claude --print < {shlex.quote(str(prompt_file))}"
-    else:
-        runner = f"codex exec < {shlex.quote(str(prompt_file))}"
-    return (
-        f"set -euo pipefail; {runner} > {shlex.quote(str(output_file))} 2>&1; echo 0 > {shlex.quote(str(status_file))}"
-    )
-
-
-def _wait_for_agent(
-    *,
-    session_name: str,
-    status_file: Path,
-    timeout_seconds: int,
-    cancel_event: threading.Event,
-) -> None:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        if cancel_event.is_set():
-            raise TimeoutError("review cancelled by newer event")
-        if status_file.exists():
-            return
-        time.sleep(2)
-    subprocess.run(["tmux", "kill-session", "-t", session_name], check=False, capture_output=True)
-    raise TimeoutError(f"agent timeout after {timeout_seconds}s")
-
-
-def run_review_pipeline(
-    *,
-    config: ReviewBotConfig,
-    pr_number: int,
-    payload: dict[str, Any],
-    cancel_event: threading.Event,
-    run_id: str,
-) -> tuple[str, str]:
-    repo_path = config.repo_path
-    pr = payload["pull_request"]
-    pr_title = str(pr.get("title", ""))
-    pr_body = str(pr.get("body", ""))
-    head_ref = str(pr.get("head", {}).get("ref", ""))
-    base_ref = str(pr.get("base", {}).get("ref", "main"))
-
-    LOG.info("PR #%s run=%s fetching branch", pr_number, run_id)
-    _run_git(repo_path, ["fetch", "origin", f"pull/{pr_number}/head:pr-{pr_number}"])
-
-    diff_text = _run_git(repo_path, ["diff", f"{base_ref}...pr-{pr_number}"])
-    diff_path = Path(tempfile.gettempdir()) / f"pr-{pr_number}.diff"
-    diff_path.write_text(diff_text, encoding="utf-8")
-
-    template_text = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
-    prompt = build_review_prompt(
-        template_text=template_text,
-        pr_number=pr_number,
-        pr_title=pr_title,
-        pr_body=pr_body,
-        head_ref=head_ref,
-        base_ref=base_ref,
-        diff_text=diff_text,
-    )
-
-    run_tmp_dir = Path(tempfile.gettempdir()) / f"pr-review-bot-{pr_number}-{run_id}"
-    run_tmp_dir.mkdir(parents=True, exist_ok=True)
-    prompt_file = run_tmp_dir / "prompt.md"
-    output_file = run_tmp_dir / "review.txt"
-    status_file = run_tmp_dir / "status.txt"
-    prompt_file.write_text(prompt, encoding="utf-8")
-
-    session_name = f"pr-review-{pr_number}-{run_id}"
-    command = _agent_shell_command(config.review_agent, prompt_file, output_file, status_file)
-    LOG.info("PR #%s run=%s starting tmux session=%s", pr_number, run_id, session_name)
-    tmux_result = subprocess.run(
-        ["tmux", "new-session", "-d", "-s", session_name, command],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if tmux_result.returncode != 0:
-        raise RuntimeError(f"tmux session start failed: {tmux_result.stderr.strip()}")
-
-    _wait_for_agent(
-        session_name=session_name,
-        status_file=status_file,
-        timeout_seconds=config.review_timeout,
-        cancel_event=cancel_event,
-    )
-    subprocess.run(["tmux", "kill-session", "-t", session_name], check=False, capture_output=True)
-
-    review_text = output_file.read_text(encoding="utf-8").strip()
-    if not review_text:
-        review_text = "Review agent returned empty output."
-    review_text = review_text[:65000]
-    recommendation = parse_recommendation(review_text)
-    return review_text, recommendation
-
-
-def parse_recommendation(review_text: str) -> str:
-    upper = review_text.upper()
-    if "REQUEST_CHANGES" in upper:
-        return "REQUEST_CHANGES"
-    if "APPROVE" in upper:
-        return "APPROVE"
-    return "COMMENT"
-
-
-def post_review(config: ReviewBotConfig, *, pr_number: int, review_text: str, recommendation: str) -> None:
-    repo_path = config.repo_path
-    temp_path = Path(tempfile.gettempdir()) / f"pr-{pr_number}-review-body.txt"
-    temp_path.write_text(review_text, encoding="utf-8")
-    LOG.info("Posting %s review for PR #%s", recommendation, pr_number)
-
-    if recommendation == "APPROVE":
-        _run_cmd(
-            repo_path,
-            [
-                "gh",
-                "pr",
-                "review",
-                str(pr_number),
-                "--approve",
-                "--body-file",
-                str(temp_path),
-            ],
-        )
-        return
-
-    if recommendation == "REQUEST_CHANGES":
-        _run_cmd(
-            repo_path,
-            [
-                "gh",
-                "pr",
-                "review",
-                str(pr_number),
-                "--request-changes",
-                "--body-file",
-                str(temp_path),
-            ],
-        )
-        return
-
-    _run_cmd(
-        repo_path,
-        [
-            "gh",
-            "pr",
-            "comment",
-            str(pr_number),
-            "--body-file",
-            str(temp_path),
-        ],
-    )
-
+# ---------------------------------------------------------------------------
+# ASGI app (Starlette for raw body access)
+# ---------------------------------------------------------------------------
 
 def create_app(config: ReviewBotConfig, orchestrator: ReviewOrchestrator) -> Any:
-    try:
-        from fastapi import FastAPI, Header, HTTPException, Request
-    except ImportError as exc:
-        raise RuntimeError("FastAPI is required. Install with: uv sync --extra review-bot") from exc
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
 
-    app = FastAPI(title="Local PR Review Bot")
+    async def health(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
 
-    @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
-
-    @app.post("/webhook")
-    async def webhook(
-        request: Request,
-        x_github_event: str = Header(default=""),
-        x_hub_signature_256: str = Header(default=""),
-    ) -> dict[str, Any]:
+    async def webhook(request: Request) -> JSONResponse:
+        x_github_event = request.headers.get("x-github-event", "")
+        x_hub_signature_256 = request.headers.get("x-hub-signature-256", "")
         body = await request.body()
+
         if not verify_webhook_signature(config.webhook_secret, body, x_hub_signature_256):
-            raise HTTPException(status_code=401, detail="invalid signature")
+            return JSONResponse({"error": "invalid signature"}, status_code=401)
 
         payload = json.loads(body.decode("utf-8"))
         ok, reason = should_process_pull_request(
@@ -367,22 +245,26 @@ def create_app(config: ReviewBotConfig, orchestrator: ReviewOrchestrator) -> Any
             config.ignore_users,
         )
         if not ok:
-            return {"accepted": False, "reason": reason}
+            return JSONResponse({"accepted": False, "reason": reason})
 
         orchestrator.submit_review(payload)
-        return {"accepted": True, "reason": "scheduled"}
+        return JSONResponse({"accepted": True, "reason": "scheduled"})
 
-    return app
+    return Starlette(routes=[
+        Route("/health", health, methods=["GET"]),
+        Route("/webhook", webhook, methods=["POST"]),
+    ])
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run local GitHub PR review webhook server.")
-    parser.add_argument("--dry-run", action="store_true", help="Validate imports/configuration and exit.")
-    return parser.parse_args()
-
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def main() -> int:
-    args = parse_args()
+    parser = argparse.ArgumentParser(description="Run local GitHub PR review webhook server.")
+    parser.add_argument("--dry-run", action="store_true", help="Validate imports/configuration and exit.")
+    args = parser.parse_args()
+
     config = load_config()
     setup_logging(config.log_file)
     LOG.info(
@@ -402,7 +284,7 @@ def main() -> int:
     try:
         import uvicorn
     except ImportError as exc:
-        raise RuntimeError("uvicorn is required. Install with: uv sync --extra review-bot") from exc
+        raise RuntimeError("uvicorn is required: uv sync --extra review-bot") from exc
     uvicorn.run(app, host="0.0.0.0", port=config.port)
     return 0
 
