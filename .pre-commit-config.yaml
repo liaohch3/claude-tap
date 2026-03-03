@@ -9,8 +9,16 @@ repos:
   - repo: local
     hooks:
       - id: pytest
-        name: pytest
-        entry: uv run pytest -x -q --timeout=60
+        name: pytest (fast, excludes slow/e2e)
+        entry: uv run pytest -x -q --timeout=30 -m "not slow and not real_e2e" --ignore=tests/e2e
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: e2e-reminder
+        name: e2e reminder
+        entry: sh -c 'echo "⚠️  pre-commit 跳过了 slow/e2e 测试。push 前请手动运行："; echo "  uv run pytest tests/ -x --timeout=60"; echo "  uv run pytest tests/e2e/ --run-real-e2e --timeout=180"; exit 0'
         language: system
         pass_filenames: false
         always_run: true
