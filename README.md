@@ -146,6 +146,39 @@ Strict freshness mode (promotes stale standards metadata to failures):
 uv run python scripts/check_legibility.py --strict-freshness
 ```
 
+## PR Merge-Readiness Check
+
+Run a concise merge-readiness report for a pull request:
+
+```bash
+scripts/check_pr.sh <pr_number>
+```
+
+Options:
+
+```bash
+# Use an explicit repo instead of current checkout
+scripts/check_pr.sh <pr_number> --repo owner/repo
+
+# Skip local gates (CI/metadata only)
+scripts/check_pr.sh <pr_number> --no-tests
+```
+
+The script prints:
+
+- PR metadata (title, state, draft flag, merge state, head/base branch)
+- CI checks summary (`pass` / `fail` / `pending` counts)
+- Local gate results (unless `--no-tests`)
+- Final verdict line: `VERDICT: READY ...` or `VERDICT: NOT_READY ...`
+
+Local gates executed by default:
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest tests/ -x --timeout=60
+```
+
 ## License
 
 MIT
