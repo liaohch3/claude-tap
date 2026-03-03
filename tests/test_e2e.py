@@ -1621,6 +1621,7 @@ def test_detect_installer():
 FAKE_PYPI_PORT = 19210
 
 
+@pytest.mark.slow
 def test_version_check_with_fake_pypi():
     """Test that update check detects a newer version from a fake PyPI server."""
     from http.server import BaseHTTPRequestHandler, HTTPServer
