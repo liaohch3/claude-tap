@@ -137,25 +137,23 @@ def fetch_diff(repo_path: str, pr_number: int, base_ref: str, head_ref: str) -> 
 
 
 def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
-    """Run Codex/Claude to review a PR. Writes prompt to file, captures output from file."""
+    """Run Codex/Claude to review a PR. Agent posts review directly via gh CLI."""
     prompt = build_review_prompt(pr, diff)
     pr_num = pr["number"]
     run_id = uuid.uuid4().hex[:6]
     session_name = f"pr-review-{pr_num}-{run_id}"
 
-    # Write prompt and diff to temp files (avoid shell arg length limits)
+    # Write prompt to temp file (avoid shell arg length limits)
     work_dir = Path(tempfile.mkdtemp(prefix=f"pr-review-{pr_num}-"))
     prompt_file = work_dir / "prompt.md"
-    output_file = work_dir / "review-output.md"
     prompt_file.write_text(prompt, encoding="utf-8")
 
-    # Instruct agent to read prompt from file and write review to output file
+    # Agent reads prompt and posts review directly via gh CLI
     agent_task = (
-        f"Read the PR review prompt from {prompt_file}. "
-        f"Follow the instructions exactly. "
-        f"After completing the review, write ONLY the final review text "
-        f"(Summary + Findings + Suggested decision) to {output_file}. "
-        f"Do not include any other content in that file."
+        f"Read the PR review instructions from {prompt_file}. "
+        f"Review the code carefully following the project standards. "
+        f"Then post your review directly using gh pr review or gh pr comment. "
+        f"The PR number is {pr_num}."
     )
 
     if config.review_agent == "codex":
@@ -169,6 +167,7 @@ def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
         timeout=10,
     )
 
+    # Wait for agent to finish
     deadline = time.time() + config.review_timeout
     while time.time() < deadline:
         result = subprocess.run(
@@ -177,83 +176,38 @@ def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
         )
         if result.returncode != 0:
             break
-        # Also check if output file exists (agent finished writing)
-        if output_file.exists() and output_file.stat().st_size > 100:
-            LOG.info("Review output file detected for PR #%d", pr_num)
-            time.sleep(5)  # Give agent a moment to finish writing
-            break
         time.sleep(15)
 
-    # Try to read from output file first (clean output)
-    review_text = ""
-    if output_file.exists():
-        review_text = output_file.read_text(encoding="utf-8").strip()
-        LOG.info("Read review from output file (%d chars) for PR #%d", len(review_text), pr_num)
+    timed_out = time.time() >= deadline
 
-    # Fallback: extract from tmux capture if output file is empty
-    if not review_text or len(review_text) < 50:
-        LOG.warning("Output file empty/missing for PR #%d, falling back to tmux capture", pr_num)
-        output = subprocess.run(
-            ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-500"],
-            capture_output=True, text=True,
-        )
-        if output.returncode == 0:
-            review_text = _extract_review_from_tmux(output.stdout)
+    # Capture tmux output to extract decision for notification
+    output = subprocess.run(
+        ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-500"],
+        capture_output=True, text=True,
+    )
+    raw_output = output.stdout if output.returncode == 0 else ""
 
     # Cleanup
     subprocess.run(["tmux", "kill-session", "-t", session_name], capture_output=True)
     import shutil
     shutil.rmtree(work_dir, ignore_errors=True)
 
-    return review_text or "(review 输出为空，请检查 agent 日志)"
+    if timed_out:
+        LOG.warning("Review timed out for PR #%d", pr_num)
+        return "(review timed out)"
+
+    LOG.info("Agent finished review for PR #%d", pr_num)
+    return raw_output
 
 
-def _extract_review_from_tmux(raw: str) -> str:
-    """Extract the review section from raw tmux output."""
-    lines = raw.split("\n")
-    # Look for Summary section start
-    review_lines: list[str] = []
-    capturing = False
-    for line in lines:
-        stripped = line.strip()
-        # Start capturing at "Summary" or "## Summary"
-        if not capturing and ("Summary" in stripped and len(stripped) < 50):
-            capturing = True
-        if capturing:
-            # Stop at Codex/Claude UI elements
-            if stripped.startswith("›") or "gpt-5" in stripped or "esc to interrupt" in stripped:
-                continue
-            review_lines.append(line)
-    if review_lines:
-        return "\n".join(review_lines).strip()
-    # If no structured output found, return last 100 meaningful lines
-    meaningful = [l for l in lines if l.strip() and not l.strip().startswith("•") and "Working" not in l]
-    return "\n".join(meaningful[-100:]).strip()
 
-
-def post_review(pr_number: int, review_text: str, repo: str, agent: str = "codex") -> None:
-    """Post formatted review comment to GitHub PR."""
-    # Format as a clean GitHub comment
-    body = (
-        f"## 🤖 自动 Code Review\n\n"
-        f"> 由本地 {agent.capitalize()} 自动生成\n\n"
-        f"---\n\n"
-        f"{review_text}\n\n"
-        f"---\n"
-        f"*⚡ Powered by local PR Review Bot*"
-    )
-    # Write to temp file to avoid shell arg length issues
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-        f.write(body)
-        body_file = f.name
-    try:
-        subprocess.run(
-            ["gh", "pr", "comment", str(pr_number), "--repo", repo, "--body-file", body_file],
-            timeout=30,
-        )
-        LOG.info("Posted review to PR #%d", pr_number)
-    finally:
-        Path(body_file).unlink(missing_ok=True)
+def extract_decision(raw_output: str) -> str:
+    """Extract review decision from agent output."""
+    if "request-changes" in raw_output.lower() or "REQUEST_CHANGES" in raw_output:
+        return "REQUEST_CHANGES"
+    if "--approve" in raw_output.lower() or "APPROVE" in raw_output:
+        return "APPROVE"
+    return "COMMENT"
 
 
 # ---------------------------------------------------------------------------
@@ -351,15 +305,10 @@ class ReviewOrchestrator:
                 if not diff.strip():
                     LOG.warning("Empty diff for PR #%d, skipping", pr_num)
                     return
-                review = run_review(self._config, pr, diff)
-                post_review(pr_num, review, repo, self._config.review_agent)
-                # Determine decision from review text
-                decision = "COMMENT"
-                if "REQUEST_CHANGES" in review:
-                    decision = "REQUEST_CHANGES"
-                elif "APPROVE" in review and "REQUEST_CHANGES" not in review:
-                    decision = "APPROVE"
-                notify_openclaw(pr_num, review, repo, decision)
+                raw_output = run_review(self._config, pr, diff)
+                decision = extract_decision(raw_output)
+                LOG.info("Review decision for PR #%d: %s", pr_num, decision)
+                notify_openclaw(pr_num, raw_output, repo, decision)
             except Exception:
                 LOG.exception("Review failed for PR #%d", pr_num)
 

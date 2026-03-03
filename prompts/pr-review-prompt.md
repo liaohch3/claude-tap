@@ -36,26 +36,50 @@ Read and enforce these project standards (all files are in the repo):
 5. **对照项目标准** — 读 AGENTS.md 和 docs/standards/ 确认合规性
 6. **给出决策建议** — APPROVE / REQUEST_CHANGES / COMMENT
 
-## Output Format (严格遵守)
+## Output: 直接提交 Review
 
-用中文输出，格式如下：
+审查完成后，**直接用 gh CLI 提交 review**，不要写到文件：
+
+```bash
+# 如果有具体行的问题，用 inline comment：
+gh pr review {pr_number} --request-changes --body "你的 review 内容（Markdown 格式，中文）"
+
+# 或者如果一切 OK：
+gh pr review {pr_number} --approve --body "LGTM. 简要说明..."
+
+# 或者只是建议：
+gh pr comment {pr_number} --body "你的评论"
+```
+
+### Review 格式要求（写在 --body 里）
+
+用中文，Markdown 格式：
+
+```
+## 🤖 自动 Code Review
 
 ### Summary
-（一句话总结 PR 做了什么，质量如何）
+（一句话总结）
 
 ### Findings
 
 #### Critical
-（列出，没有则写"无"）
+（没有则写"无"）
 
 #### High
-（列出）
+...
 
 #### Medium
-（列出）
+...
 
 #### Low
-（列出）
+...
 
-### Suggested Decision
-（APPROVE / REQUEST_CHANGES / COMMENT，附一句理由）
+### Decision
+（APPROVE / REQUEST_CHANGES / COMMENT + 理由）
+
+---
+*⚡ Powered by local PR Review Bot*
+```
+
+**重要**：你必须自己执行 `gh pr review` 或 `gh pr comment` 命令。这是你的最终输出。
