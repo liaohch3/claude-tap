@@ -1,25 +1,23 @@
-# Hardcoded Version String in CLI
+# CLI 中硬编码版本字符串
 
-**Date:** 2026-02-26
-**Severity:** Medium
-**Tags:** versioning, cli, metadata, release
+**日期：** 2026-02-26
+**严重级别：** 中
+**标签：** versioning, cli, metadata, release
 
-## Problem
+## 问题
 
-`__version__` in `cli.py` was hardcoded as `"0.1.7"` and never updated on
-release. Users saw the wrong version with the `-v` flag even after upgrading.
+`cli.py` 中的 `__version__` 被硬编码为 `"0.1.7"`，发布时从未更新。
+用户即使升级后，用 `-v` 看到的仍是错误版本。
 
-## Root Cause
+## 根因
 
-The version string was a literal in source code instead of reading from package
-metadata.
+版本字符串是源码字面量，而不是从 package metadata 读取。
 
-## Fix
+## 修复
 
-Replaced the hardcoded value with `importlib.metadata.version("claude-tap")` so
-it always matches `pyproject.toml` and PyPI package metadata.
+将硬编码值替换为 `importlib.metadata.version("claude-tap")`，
+使其始终与 `pyproject.toml` 和 PyPI package metadata 一致。
 
-## Lesson Learned
+## 经验
 
-Never hardcode version strings. Always use `importlib.metadata` (or another
-single source of truth such as dynamic reading from `pyproject.toml`).
+不要硬编码版本字符串。始终使用 `importlib.metadata`（或其他单一真相源，例如从 `pyproject.toml` 动态读取）。

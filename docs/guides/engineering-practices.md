@@ -1,34 +1,34 @@
-# Engineering Practices Guide
+# 工程实践指南
 
-This document codifies the engineering standards for the claude-tap project.
+本文档对 claude-tap 项目的工程标准进行规范化。
 
-## Python Code Style
+## Python 代码风格
 
-- **Linter/formatter:** [ruff](https://docs.astral.sh/ruff/)
-- **Line length:** 120 characters
-- **Target version:** Python 3.11+
-- **Lint rules:** `E` (errors), `F` (pyflakes), `W` (warnings), `I` (import sorting)
-- **Ignored rules:** `E501` (line length — enforced by formatter instead)
+- **Linter/formatter：** [ruff](https://docs.astral.sh/ruff/)
+- **行长限制：** 120 字符
+- **目标版本：** Python 3.11+
+- **Lint 规则：** `E`（errors）、`F`（pyflakes）、`W`（warnings）、`I`（import sorting）
+- **忽略规则：** `E501`（行长，由 formatter 而非 lint 强制）
 
-Run locally:
+本地运行：
 ```bash
 uv run ruff check .          # Lint
 uv run ruff format --check . # Check formatting
 uv run ruff format .         # Auto-fix formatting
 ```
 
-## Testing Strategy
+## 测试策略
 
-### Test Layers
+### 测试分层
 
-| Layer | Location | What It Tests | Runs In CI | External Deps |
-|-------|----------|---------------|------------|---------------|
-| **Unit** | `tests/test_diff_matching.py` | Pure logic (diff matching, parsing) | Yes | None |
-| **Mock E2E** | `tests/test_e2e.py` | Full pipeline with fake upstream + fake Claude | Yes | None |
-| **Browser integration** | `tests/test_nav_browser.py` | HTML viewer JavaScript logic | Yes (with Playwright) | Playwright |
-| **Real E2E** | `tests/e2e/` | Actual Claude CLI integration | No (opt-in) | Claude CLI, API key |
+| Layer | Location | 测试内容 | 在 CI 中运行 | 外部依赖 |
+|-------|----------|----------|--------------|----------|
+| **Unit** | `tests/test_diff_matching.py` | 纯逻辑（diff matching、parsing） | 是 | 无 |
+| **Mock E2E** | `tests/test_e2e.py` | fake upstream + fake Claude 的完整 pipeline | 是 | 无 |
+| **Browser integration** | `tests/test_nav_browser.py` | HTML viewer JavaScript 逻辑 | 是（使用 Playwright） | Playwright |
+| **Real E2E** | `tests/e2e/` | 真实 Claude CLI 集成 | 否（opt-in） | Claude CLI、API key |
 
-### Running Tests
+### 运行测试
 
 ```bash
 # Full CI suite (unit + mock E2E)
@@ -44,23 +44,23 @@ uv run pytest tests/e2e/ --run-real-e2e --timeout=300
 uv run pytest tests/ --run-real-e2e --timeout=300
 ```
 
-### Writing New Tests
+### 编写新测试
 
-- Use `pytest` fixtures for setup/teardown (see `conftest.py`)
-- Use `tempfile.mkdtemp()` for temporary directories — always clean up
-- For async tests, use `pytest-asyncio` (configured with `asyncio_mode = "auto"`)
-- Mark slow tests with `@pytest.mark.slow`
-- Mark integration tests with `@pytest.mark.integration`
+- 使用 `pytest` fixtures 做 setup/teardown（见 `conftest.py`）
+- 用 `tempfile.mkdtemp()` 创建临时目录，并始终清理
+- 对 async 测试，使用 `pytest-asyncio`（配置为 `asyncio_mode = "auto"`）
+- 慢测试标记为 `@pytest.mark.slow`
+- integration 测试标记为 `@pytest.mark.integration`
 
-## Commit Conventions
+## Commit 约定
 
-- Write commit messages in English
-- Use imperative mood: "add feature" not "added feature"
-- Prefix with type: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`
-- Keep subject line under 72 characters
-- Add body for non-trivial changes explaining "why"
+- commit message 使用英文
+- 使用祈使语气：“add feature” 而非 “added feature”
+- 使用类型前缀：`feat:`、`fix:`、`refactor:`、`test:`、`docs:`、`chore:`
+- subject 行保持在 72 字符以内
+- 对非简单变更，在 body 解释“为什么”
 
-Examples:
+示例：
 ```
 feat: add --tap-host flag for custom bind address
 fix: handle malformed SSE events without crashing
@@ -70,20 +70,20 @@ docs: update engineering practices guide
 
 ## Pre-Work Checklist
 
-Before making any code change:
+进行任何代码变更之前：
 
-1. **Check repo state:**
+1. **检查仓库状态：**
    ```bash
    git diff --stat
    git log --oneline -10
    ```
-2. **Ensure clean working tree** or stash changes
-3. **Pull latest main:** `git fetch origin && git rebase origin/main`
-4. **Verify tests pass:** `uv run pytest tests/ -x --timeout=60`
+2. **确保工作树干净**，或先 stash 变更
+3. **拉取最新 main：** `git fetch origin && git rebase origin/main`
+4. **确认测试通过：** `uv run pytest tests/ -x --timeout=60`
 
-## Worktree Workflow for Features
+## Feature 的 Worktree 工作流
 
-Use git worktrees for isolated feature development:
+使用 git worktree 进行隔离的 feature 开发：
 
 ```bash
 # Create worktree for new feature
@@ -102,29 +102,29 @@ git worktree remove /tmp/claude-tap-my-feature
 git branch -d feat/my-feature
 ```
 
-Benefits:
-- Main worktree stays clean
-- Can switch between features without stashing
-- Natural isolation prevents cross-contamination
+收益：
+- 主 worktree 保持干净
+- 无需 stash 即可在多个 feature 间切换
+- 自然隔离可防止相互污染
 
-## Code Review Process
+## Code Review 流程
 
-Before committing:
+commit 前：
 
-1. **Lint:** `uv run ruff check .`
-2. **Format:** `uv run ruff format --check .`
-3. **Test:** `uv run pytest tests/ -x --timeout=60`
-4. **Review diff:** `git diff` — read every changed line
-5. **Verify scope:** Only changed files relevant to the task?
+1. **Lint：** `uv run ruff check .`
+2. **Format：** `uv run ruff format --check .`
+3. **Test：** `uv run pytest tests/ -x --timeout=60`
+4. **Review diff：** `git diff`，逐行阅读每个变更
+5. **验证范围：** 仅修改了与任务相关的文件吗？
 
-Before merging a PR:
+合并 PR 前：
 
-1. All CI checks pass
-2. No unresolved review comments
-3. Branch is rebased on latest `main`
-4. `uv.lock` is consistent
+1. 所有 CI 检查通过
+2. 无未解决 review 评论
+3. 分支已 rebase 到最新 `main`
+4. `uv.lock` 保持一致
 
-## Language
+## 语言
 
-All code, comments, commit messages, docs, and skill files must be in English.
-The only exceptions are `README_zh.md` and other explicitly Chinese README files.
+所有代码、注释、commit message、文档和 skill 文件必须使用英文。
+唯一例外是 `README_zh.md` 以及其他明确为中文的 README 文件。

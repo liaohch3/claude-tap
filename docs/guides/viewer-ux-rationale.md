@@ -1,42 +1,42 @@
-# Viewer UX Rationale
+# Viewer UX 设计依据
 
-This guide captures stable design decisions that were previously tracked in one-off implementation specs.
+本指南记录了稳定的设计决策，这些决策此前分散在一次性的实现规格中。
 
-## Navigation Order
+## 导航顺序
 
-Keyboard and touch navigation must follow the same visual order shown in the sidebar.
+键盘与触控导航必须遵循侧边栏展示的同一视觉顺序。
 
-- Sidebar grouping and sorting define the user's expected navigation order.
-- `j/k` and arrow-key navigation should move through visible items in DOM order.
-- Mobile previous/next controls should use the same order as desktop keyboard navigation.
+- 侧边栏的分组与排序定义了用户预期的导航顺序。
+- `j/k` 与方向键导航应按 DOM 顺序在可见项间移动。
+- 移动端上一条/下一条控件应与桌面键盘导航保持相同顺序。
 
-## Mobile-First Constraints
+## Mobile-First 约束
 
-The viewer must remain usable on narrow screens without horizontal overflow.
+viewer 在窄屏下必须保持可用，且不能出现水平溢出。
 
-- Mobile layout should prioritize one primary pane at a time.
-- Detail view actions need touch-friendly controls and clear boundaries.
-- Diff and content-heavy views should switch to stacked layouts on mobile.
+- 移动端布局应优先一次只显示一个主 pane。
+- detail view 的操作区需要触控友好的控件和清晰边界。
+- diff 与内容密集视图在移动端应切换为堆叠布局。
 
-## Diff Matching Semantics
+## Diff 匹配语义
 
-Diff quality depends on comparing related turns.
+diff 质量取决于是否比较了相关 turn。
 
-- Prefer history-aware matching (shared message prefix or equivalent thread signal).
-- If fallback matching is approximate, show an explicit warning in the UI.
-- Allow manual target selection so users can override automatic matching.
+- 优先使用带历史感知的匹配（共享消息前缀或等价线程信号）。
+- 如果 fallback 匹配是近似的，应在 UI 中明确给出警告。
+- 允许手动选择目标，使用户可以覆盖自动匹配结果。
 
-## Internationalization
+## 国际化
 
-New user-visible UI text must be localized consistently.
+新增面向用户的 UI 文案必须保持一致的本地化策略。
 
-- Route all strings through the translation layer.
-- Keep language packs complete when adding new keys.
+- 所有字符串都要经过翻译层。
+- 增加新 key 时保持 language pack 完整。
 
-## Testing and Scope Discipline
+## 测试与范围纪律
 
-Viewer UX work should remain focused and verifiable.
+viewer UX 相关工作应保持聚焦且可验证。
 
-- Prefer constrained changes in `claude_tap/viewer.html` when possible.
-- Keep desktop behavior stable while improving mobile UX.
-- Validate behavior through tests and manual trace-viewer verification.
+- 可行时优先在 `claude_tap/viewer.html` 中做受限改动。
+- 在改进移动端 UX 的同时保持桌面行为稳定。
+- 通过测试与手动 trace-viewer 验证来确认行为。

@@ -1,25 +1,25 @@
-# UI Fix Delivery Pattern: Sticky Header + Evidence-First Validation
+# UI 修复交付模式：Sticky Header + 证据优先验证
 
-**Date:** 2026-02-27
-**Tags:** ui, viewer, testing, workflow, pr
+**日期：** 2026-02-27
+**标签：** ui, viewer, testing, workflow, pr
 
-## Context
+## 背景
 
-A small UI behavior fix (sticky action controls in the viewer detail panel) needed to be delivered with reliable evidence for review.
+一个小型 UI 行为修复（viewer detail panel 的操作控件 sticky）需要以可靠证据交付，便于 review。
 
-## What Worked
+## 有效做法
 
-1. Applied a minimal CSS-only fix first, without changing JS behavior.
-2. Ran fast quality gates early (`ruff` + `pytest`) to quickly detect regressions.
-3. Produced visual evidence (before/after scrolling state) for PR review.
-4. Added explicit process requirements in `AGENTS.md` so future UI changes consistently include E2E validation and screenshots.
+1. 先应用最小化、仅 CSS 的修复，不改动 JS 行为。
+2. 提前运行快速质量 gate（`ruff` + `pytest`）以快速发现回归。
+3. 产出可视化证据（滚动前/后状态）供 PR review。
+4. 在 `AGENTS.md` 添加明确流程要求，确保未来 UI 变更始终附带 E2E 验证与截图。
 
-## Why This Pattern Is Good
+## 为什么这个模式好
 
-- Low risk: tiny change surface.
-- High review clarity: behavior proof is visible in screenshots.
-- Reusable process: same flow can be applied to future UI changes.
+- 低风险：改动面很小。
+- review 清晰度高：截图可直接证明行为。
+- 流程可复用：同样流程可应用于后续 UI 变更。
 
-## Lesson Learned
+## 经验
 
-For UI behavior fixes, evidence is part of the deliverable. A good PR is not only "code + tests" but also "visual proof + explicit validation steps".
+对 UI 行为修复，证据是交付物的一部分。好的 PR 不只是“代码 + 测试”，还包括“可视化证明 + 明确验证步骤”。

@@ -1,24 +1,22 @@
-# `rg` (ripgrep) Not Available in All Environments
+# `rg`（ripgrep）并非所有环境都可用
 
-**Date:** 2026-02-26
-**Severity:** Low
-**Tags:** portability, shell, tooling
+**日期：** 2026-02-26
+**严重级别：** 低
+**标签：** portability, shell, tooling
 
-## Problem
+## 问题
 
-Shell script `run_real_e2e_tmux.sh` used `rg` (ripgrep) for JSONL assertions.
-On environments where ripgrep is not installed or not in `$PATH`, the script
-silently failed or gave misleading results.
+Shell 脚本 `run_real_e2e_tmux.sh` 使用 `rg`（ripgrep）做 JSONL 断言。
+在未安装 ripgrep 或不在 `$PATH` 的环境里，脚本会静默失败或给出误导结果。
 
-## Root Cause
+## 根因
 
-`rg` is a Rust-based tool that is not part of POSIX or macOS default installs.
-CI runners, Codex sandboxes, and freshly provisioned machines may lack it.
+`rg` 是 Rust 工具，不属于 POSIX，也不是 macOS 默认安装。
+CI runner、Codex sandbox 和新初始化机器都可能缺少它。
 
-## Fix
+## 修复
 
-Replaced all `rg` calls with `grep -F` (fixed-string match), which is POSIX-standard
-and universally available.
+将全部 `rg` 调用替换为 `grep -F`（固定字符串匹配），后者是 POSIX 标准且普遍可用。
 
 ```bash
 # Before (fragile)
@@ -28,8 +26,8 @@ rg '"tool_use"' "$JSONL_FILE"
 grep -F '"tool_use"' "$JSONL_FILE"
 ```
 
-## Lesson Learned
+## 经验
 
-**Prefer POSIX-standard utilities in shell scripts**: `grep`, `sed`, `awk`, `find`, `cut`.
-Reserve `rg`, `fd`, `jq`, etc. for interactive use or when explicitly declared as
-dependencies. Scripts must work on bare environments.
+**在 shell 脚本中优先使用 POSIX 标准工具**：`grep`、`sed`、`awk`、`find`、`cut`。
+`rg`、`fd`、`jq` 等工具应留给交互式使用，或明确声明为依赖。
+脚本必须能在裸环境运行。

@@ -1,28 +1,23 @@
-# Playbook: Adding a New LLM Client to claude-tap
+# Playbook：为 claude-tap 添加新的 LLM Client
 
-Distilled from the Codex integration (PR #12, 2026-02-28). Use this as a repeatable
-framework for adding support for any new LLM client (e.g., Gemini CLI, Grok CLI, etc.).
+提炼自 Codex 集成（PR #12，2026-02-28）。将其作为可复用框架，用于为任意新的 LLM client（如 Gemini CLI、Grok CLI 等）添加支持。
 
 ---
 
-## Phase 1: Reconnaissance — Understand the Client's Wire Protocol
+## 第 1 阶段：侦察 - 理解 Client 的 Wire Protocol
 
-Before writing code, answer these questions:
+在写代码前，先回答以下问题：
 
-1. **What API endpoint does the client call?** (e.g., `api.openai.com/v1/responses`,
-   `api.anthropic.com/v1/messages`)
-2. **Does it have alternative endpoints?** (e.g., Codex uses `chatgpt.com/backend-api/codex`
-   for ChatGPT Plus users, NOT `api.openai.com`)
-3. **What transport does it use?** HTTP POST? WebSocket? gRPC?
-   - **Lesson from Codex**: Codex v0.106.0 silently switched from HTTP to WebSocket
-     for `/v1/responses`. The HTTP proxy saw nothing. Always verify the actual wire
-     transport, not what the docs say.
-4. **What env var controls the base URL?** (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, etc.)
-5. **Does the child process actually inherit that env var?** (Codex has a Rust subprocess
-   that may or may not respect the Node.js parent's env)
-6. **What encoding/compression does it use?** (Codex sends zstd-compressed bodies)
+1. **Client 调用的是哪个 API endpoint？**（例如 `api.openai.com/v1/responses`、
+   `api.anthropic.com/v1/messages`）
+2. **它是否有备用 endpoint？**（例如 Codex 对 ChatGPT Plus 用户使用 `chatgpt.com/backend-api/codex`，而不是 `api.openai.com`）
+3. **它使用什么传输方式？** HTTP POST？WebSocket？gRPC？
+   - **Codex 经验**：Codex v0.106.0 在无提示情况下把 `/v1/responses` 从 HTTP 切到 WebSocket。HTTP proxy 看不到任何内容。务必验证实际 wire transport，而不是只看文档。
+4. **哪个 env var 控制 base URL？**（`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL` 等）
+5. **子进程是否真的继承了该 env var？**（Codex 有 Rust 子进程，可能会或可能不会遵循 Node.js 父进程环境）
+6. **它使用何种编码/压缩？**（Codex 会发送 zstd 压缩体）
 
-### How to investigate
+### 如何调查
 
 ```bash
 # Watch actual network traffic
@@ -35,23 +30,22 @@ ps -p <pid> -E | tr ' ' '\n' | grep BASE_URL
 mitmproxy --mode reverse:https://api.example.com --listen-port 8080
 ```
 
-**Key principle**: Don't trust documentation. Observe actual behavior.
+**关键原则**：不要盲信文档。观察真实行为。
 
 ---
 
-## Phase 2: Proxy Wiring — Make Every Request Visible
+## 第 2 阶段：Proxy Wiring - 让每个请求都可见
 
 ### Checklist
 
-- [ ] Set the correct env var to redirect traffic to claude-tap's local proxy
-- [ ] Handle path mapping (client sends `/v1/responses`, upstream expects `/responses`)
-- [ ] Handle request body encoding (zstd, gzip, etc.)
-- [ ] Handle response streaming (SSE events, chunked transfer)
-- [ ] **Pin transport to HTTP if using reverse proxy** — disable WebSocket/gRPC features
-      that bypass the HTTP proxy
-- [ ] Verify with actual traffic (not just unit tests)
+- [ ] 设置正确的 env var，将流量重定向到 claude-tap 本地 proxy
+- [ ] 处理路径映射（client 发送 `/v1/responses`，upstream 期望 `/responses`）
+- [ ] 处理请求体编码（zstd、gzip 等）
+- [ ] 处理响应流（SSE events、chunked transfer）
+- [ ] **若使用 reverse proxy，将传输固定为 HTTP** - 禁用会绕过 HTTP proxy 的 WebSocket/gRPC 特性
+- [ ] 用真实流量验证（不仅是 unit tests）
 
-### Validation checkpoint
+### 验证检查点
 
 ```bash
 # Run the client through claude-tap
@@ -68,14 +62,13 @@ with open('.traces/trace_<latest>.jsonl') as f:
 "
 ```
 
-**If trace only shows 1 line (models/health check): the real API calls are bypassing
-your proxy.** Stop and investigate transport.
+**如果 trace 只有 1 行（models/health check），说明真实 API 调用绕过了你的 proxy。** 立即停止并排查传输路径。
 
 ---
 
-## Phase 3: Viewer Compatibility — Every API Format Is Different
+## 第 3 阶段：Viewer 兼容性 - 每种 API 格式都不同
 
-Each LLM provider has a different response format. Map these fields:
+每个 LLM provider 的响应格式都不同。需要映射这些字段：
 
 | Concept | Claude (Chat Completions) | OpenAI (Responses API) | Your Client |
 |---------|--------------------------|----------------------|-------------|
@@ -86,77 +79,77 @@ Each LLM provider has a different response format. Map these fields:
 | Response output | `response.body.content` | SSE `response.output_text.delta` | ? |
 | Tools | `body.tools[]` | `body.tools[]` | ? |
 
-### Viewer fix pattern
+### Viewer 修复模式
 
-1. Find every place the viewer reads Claude-specific fields
-2. Add a normalize function that maps the new format to a common structure
-3. Keep backward compatibility — old traces must still render correctly
+1. 找出 viewer 读取 Claude 特定字段的所有位置
+2. 新增 normalize 函数，把新格式映射到通用结构
+3. 保持向后兼容，旧 trace 仍要能正确渲染
 
-### Validation checkpoint
+### 验证检查点
 
-Open the HTML viewer with a real trace and verify:
-- [ ] System prompt displayed
-- [ ] Messages rendered with correct roles
-- [ ] Token counts non-zero
-- [ ] Diff between turns works
-- [ ] Response output shown
-
----
-
-## Phase 4: Recording — Evidence Is Part of the Deliverable
-
-Every new client integration needs:
-
-1. **Terminal recording**: Real E2E session showing the client running through claude-tap
-   - Tool: `asciinema rec` → `agg` (GIF) → `ffmpeg` (MP4)
-   - Must show: startup banner, at least 2-3 turns, tool calls if applicable
-
-2. **Viewer recording**: Playwright-automated walkthrough of the HTML viewer
-   - Tool: Playwright `record_video_dir` → `.webm` → `ffmpeg` (MP4)
-   - Must show: system prompt, messages, tokens, diff
-
-3. **Screenshots**: Static evidence for PR review
-   - At least: overview, messages, diff, token stats
-
-**Use real trace data, not mocks.** Reviewers can tell the difference.
-
-### PR screenshots gotcha
-
-Use absolute URLs in PR descriptions (`raw.githubusercontent.com/...`), not relative
-paths. GitHub PR bodies don't resolve relative image paths.
+用真实 trace 打开 HTML viewer 并验证：
+- [ ] System prompt 已显示
+- [ ] Messages 以正确 role 渲染
+- [ ] Token 计数非零
+- [ ] Turn 间 diff 可用
+- [ ] Response output 已显示
 
 ---
 
-## Phase 5: Defensive Design — What Will Break Next?
+## 第 4 阶段：录制 - 证据是交付物的一部分
 
-After the integration works, anticipate future breakage:
+每次新增 client 集成都需要：
 
-- **Client updates transport**: Pin transport explicitly, don't assume HTTP forever.
-  Document the workaround AND file a TODO for native support.
-- **Client changes API format**: Keep normalize functions isolated so they're easy to update.
-- **Client adds auth complexity**: Document required scopes/permissions in the plan doc.
+1. **终端录制**：展示 client 通过 claude-tap 运行的真实 E2E 会话
+   - 工具：`asciinema rec` → `agg`（GIF）→ `ffmpeg`（MP4）
+   - 必须展示：启动 banner、至少 2-3 轮对话、如适用的 tool calls
 
-### Always leave behind
+2. **Viewer 录制**：通过 Playwright 自动化演示 HTML viewer
+   - 工具：Playwright `record_video_dir` → `.webm` → `ffmpeg`（MP4）
+   - 必须展示：system prompt、messages、tokens、diff
 
-- [ ] Error experience doc if you hit non-obvious issues
-- [ ] TODO/plan doc for known limitations (e.g., WebSocket native support)
-- [ ] Tests that catch the specific failure mode you discovered
+3. **截图**：用于 PR review 的静态证据
+   - 至少包括：overview、messages、diff、token stats
 
----
+**使用真实 trace 数据，不要用 mock。** reviewer 一眼就能看出来。
 
-## Anti-Patterns (from Codex integration)
+### PR 截图陷阱
 
-| Anti-pattern | What happened | Lesson |
-|-------------|---------------|--------|
-| Trusting the obvious API endpoint | Assumed `api.openai.com`, actual was `chatgpt.com/backend-api/codex` | Always trace actual network calls |
-| Assuming HTTP transport | Codex uses WebSocket by default, proxy saw nothing | Verify wire transport, pin if needed |
-| Recording demos before fixing data | First recordings showed 0 tokens (403 errors in trace) | Fix data pipeline first, record last |
-| Using old trace data for screenshots | Screenshots showed errors from pre-fix traces | Always re-record after fixes |
-| Relative image paths in PR body | All images broken on GitHub | Use `raw.githubusercontent.com` absolute URLs |
+PR 描述中使用绝对 URL（`raw.githubusercontent.com/...`），不要用相对路径。
+GitHub PR 正文不会解析相对图片路径。
 
 ---
 
-## Template: New Client Checklist
+## 第 5 阶段：防御式设计 - 下一次会坏在哪里？
+
+集成跑通后，提前预判未来的破坏点：
+
+- **Client 更新传输方式**：显式固定传输，不要假设永远是 HTTP。
+  记录 workaround，并为原生支持创建 TODO。
+- **Client 修改 API 格式**：将 normalize 函数隔离，便于后续更新。
+- **Client 新增 auth 复杂性**：在 plan 文档记录所需 scopes/permissions。
+
+### 始终留下这些资产
+
+- [ ] 遇到非显而易见问题时，写 error experience 文档
+- [ ] 已知限制写 TODO/plan 文档（例如 WebSocket 原生支持）
+- [ ] 补能覆盖你发现的特定失败模式的测试
+
+---
+
+## 反模式（来自 Codex 集成）
+
+| Anti-pattern | 发生了什么 | 经验 |
+|-------------|-----------|------|
+| 相信“看起来明显”的 API endpoint | 以为是 `api.openai.com`，实际是 `chatgpt.com/backend-api/codex` | 必须追踪真实网络调用 |
+| 假设传输一定是 HTTP | Codex 默认使用 WebSocket，proxy 什么都看不到 | 验证 wire transport，必要时固定 |
+| 在数据修复前录制演示 | 首版录制中 token 为 0（trace 中有 403 错误） | 先修数据链路，最后再录制 |
+| 截图使用旧 trace 数据 | 截图仍显示修复前 trace 的错误 | 修复后必须重新录制 |
+| PR 正文使用相对图片路径 | GitHub 上所有图片都坏掉 | 使用 `raw.githubusercontent.com` 绝对 URL |
+
+---
+
+## 模板：新 Client Checklist
 
 ```markdown
 ## Adding support for: <CLIENT_NAME>

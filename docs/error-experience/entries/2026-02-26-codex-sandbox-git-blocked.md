@@ -1,28 +1,28 @@
-# Codex Sandbox Cannot Run Git Commit
+# Codex Sandbox 无法执行 Git Commit
 
-**Date:** 2026-02-26
-**Severity:** Medium
-**Tags:** codex, sandbox, git, environment
+**日期：** 2026-02-26
+**严重级别：** 中
+**标签：** codex, sandbox, git, environment
 
-## Problem
+## 问题
 
-Codex `--full-auto` sandbox blocks write access to `.git/index.lock` and
-`.git/FETCH_HEAD`, preventing `git commit` and `git fetch` from completing.
+Codex `--full-auto` sandbox 会阻止对 `.git/index.lock` 和
+`.git/FETCH_HEAD` 的写访问，导致 `git commit` 与 `git fetch` 无法完成。
 
-## Impact
+## 影响
 
-- Codex can stage files with `git add` but cannot commit or fetch.
-- Any workflow that requires committing at the end must defer to external execution.
+- Codex 可以通过 `git add` 暂存文件，但无法 commit 或 fetch。
+- 任何要求最后提交的工作流都必须转到外部环境执行。
 
-## Workaround
+## 变通方案
 
-- Use Codex for code edits, refactors, test runs, and lint checks.
-- After Codex finishes, run `git add -A && git commit` outside the sandbox
-  (via OpenClaw exec or local shell).
-- Do not include `git commit` in Codex task prompts; it will fail silently or error out.
+- 用 Codex 完成代码编辑、重构、测试和 lint 检查。
+- Codex 完成后，在 sandbox 外执行 `git add -A && git commit`
+  （通过 OpenClaw exec 或本地 shell）。
+- 不要在 Codex 任务提示中要求 `git commit`；它会静默失败或直接报错。
 
-## Lesson Learned
+## 经验
 
-The Codex sandbox restricts `.git/` directory writes. Always plan for a post-Codex
-commit step when delegating tasks that produce file changes. Split the workflow:
-Codex edits → external git commit → push.
+Codex sandbox 会限制 `.git/` 目录写入。把会产生文件变更的任务交给 Codex 时，
+始终规划一个 Codex 后置 commit 步骤。将流程拆分为：
+Codex 编辑 → 外部 git commit → push。

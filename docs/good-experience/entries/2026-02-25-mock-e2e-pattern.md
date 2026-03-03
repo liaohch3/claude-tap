@@ -1,52 +1,48 @@
-# Mock E2E Test Pattern: Fake Upstream + Fake Claude
+# Mock E2E 测试模式：Fake Upstream + Fake Claude
 
-**Date:** 2026-02-25
-**Tags:** testing, E2E, mock, best-practice
+**日期：** 2026-02-25
+**标签：** testing, E2E, mock, best-practice
 
-## Pattern Description
+## 模式描述
 
-The existing E2E test suite (`tests/test_e2e.py`) uses a fully mocked approach
-that tests the entire claude-tap pipeline without any external dependencies:
+现有 E2E 测试套件（`tests/test_e2e.py`）采用了全 mock 方案，
+可在无外部依赖的情况下测试整个 claude-tap pipeline：
 
-1. **Fake upstream server** — An aiohttp server running in a background thread
-   that mimics the Anthropic API, returning both non-streaming and streaming (SSE)
-   responses.
+1. **Fake upstream server** - 在后台线程运行 aiohttp server，
+   模拟 Anthropic API，同时返回 non-streaming 与 streaming（SSE）响应。
 
-2. **Fake Claude script** — A temporary Python script placed in PATH that acts
-   as the `claude` CLI. It makes HTTP requests to `ANTHROPIC_BASE_URL` (set by
-   claude-tap to point at the proxy) and prints the results.
+2. **Fake Claude script** - 在 PATH 中放置临时 Python 脚本作为 `claude` CLI。
+   它向 `ANTHROPIC_BASE_URL`（由 claude-tap 设置为 proxy 地址）发送 HTTP 请求并打印结果。
 
-3. **Real claude-tap** — The actual `claude_tap` module is run as a subprocess
-   with `--tap-target` pointing to the fake upstream.
+3. **真实 claude-tap** - 以子进程方式运行真实 `claude_tap` module，
+   并通过 `--tap-target` 指向 fake upstream。
 
-## Why It Works Well
+## 为什么效果好
 
-- **No external dependencies**: Tests run offline, no API keys needed
-- **Deterministic**: Same input always produces the same output
-- **Fast**: No network latency, no rate limits
-- **Complete coverage**: Tests the full pipeline — proxy startup, request forwarding,
-  SSE reassembly, JSONL recording, HTML viewer generation, API key redaction
-- **Robust edge cases**: Includes tests for upstream errors (500), malformed SSE,
-  and large payloads (100KB+)
+- **无外部依赖**：测试可离线运行，无需 API keys
+- **可确定性**：相同输入始终产生相同输出
+- **速度快**：无网络时延，无 rate limit
+- **覆盖完整**：测试全链路，包括 proxy 启动、请求转发、SSE 重组、JSONL 记录、HTML viewer 生成、API key 脱敏
+- **边界情况稳健**：覆盖上游错误（500）、畸形 SSE、大 payload（100KB+）
 
-## Key Implementation Details
+## 关键实现细节
 
-- `run_fake_upstream_in_thread()` uses `threading.Event` for synchronization
-- Fake Claude script is created with `_create_fake_claude()` and made executable
-- Temporary bin directory is prepended to `PATH` so claude-tap finds the fake `claude`
-- Port hardcoding (19199, 19200, etc.) keeps tests isolated
-- Trace files are written to `tempfile.mkdtemp()` and cleaned up after assertions
+- `run_fake_upstream_in_thread()` 使用 `threading.Event` 做同步
+- Fake Claude 脚本由 `_create_fake_claude()` 创建并设为可执行
+- 临时 bin 目录会 prepend 到 `PATH`，让 claude-tap 找到 fake `claude`
+- 端口硬编码（19199、19200 等）保持测试隔离
+- Trace 文件写入 `tempfile.mkdtemp()`，断言后清理
 
-## When to Use This Pattern
+## 何时使用此模式
 
-Use this pattern when:
-- Testing proxy behavior (forwarding, recording, SSE handling)
-- Testing HTML viewer generation
-- Testing header redaction and security features
-- Running in CI where no Claude API access is available
+适用于：
+- 测试 proxy 行为（转发、记录、SSE 处理）
+- 测试 HTML viewer 生成
+- 测试 header 脱敏与安全能力
+- 在无 Claude API 访问的 CI 中运行
 
-## Complementary Pattern
+## 互补模式
 
-For testing real Claude integration (actual API responses, tool use, multi-turn
-conversations), see the real E2E tests in `tests/e2e/`. Those require a working
-`claude` CLI installation and are skipped by default in CI.
+若要测试真实 Claude 集成（实际 API 响应、tool use、多轮对话），
+请参考 `tests/e2e/` 下的 real E2E 测试。它们需要可用的 `claude` CLI 安装，
+且在 CI 中默认跳过。

@@ -4,32 +4,32 @@ last_reviewed: 2026-03-03
 source_of_truth: AGENTS.md
 ---
 
-# Coding Standards
+# 编码标准
 
-## Do
+## 应做
 
-- Delete dead code.
-- Fix root cause of test failures.
-- Use existing patterns and keep scope limited to relevant files.
-- Trust type invariants and avoid redundant runtime checks for typed values.
-- Keep functions focused on one purpose.
-- Prefer POSIX shell tools in scripts.
-- Use `grep -F` for fixed-string matches in scripts.
-- Read package version from metadata, not hardcoded strings.
+- 删除无用代码。
+- 修复测试失败的根因。
+- 使用现有模式，并将范围限制在相关文件。
+- 信任类型不变量，避免对已类型化值进行冗余运行时检查。
+- 保持函数聚焦单一职责。
+- 在脚本中优先使用 POSIX shell 工具。
+- 在脚本中使用 `grep -F` 做固定字符串匹配。
+- 从 metadata 读取 package version，而不是硬编码字符串。
 
-## Do Not
+## 禁止
 
-- Leave commented-out code.
-- Add speculative abstractions.
-- Suppress linter warnings without justification.
-- Commit generated files.
-- Mix refactoring with feature work.
-- Add compatibility shims for unused code.
-- Depend on non-portable tools without checks (`rg`, `jq`, `fd` may be missing).
+- 保留注释掉的代码。
+- 添加猜测性的抽象。
+- 无理由抑制 linter 警告。
+- 提交生成文件。
+- 将 refactor 与 feature 工作混在一起。
+- 为未使用代码添加兼容性 shim。
+- 在未做检查时依赖不可移植工具（`rg`、`jq`、`fd` 可能不存在）。
 
-# Runtime Safety Rules
+# 运行时安全规则
 
-- If using `tcsetpgrp` foreground handoff, handle `SIGTTOU` when reclaiming parent foreground process group.
-- Treat highest CI Python version (currently 3.13) as the compatibility ceiling for runtime-sensitive behavior.
-- Certificate generation for TLS tests/runtime must include SKI/AKI extensions for Python 3.13 compatibility.
-- For certificate/proxy/security-sensitive changes, validate on Python 3.13 locally when available.
+- 如果使用 `tcsetpgrp` 的前台控制权切换，在将父进程组切回前台时要处理 `SIGTTOU`。
+- 将 CI 最高 Python 版本（当前为 3.13）视为运行时敏感行为的兼容性上限。
+- TLS 测试/运行时的证书生成必须包含 SKI/AKI 扩展，以兼容 Python 3.13。
+- 涉及证书/proxy/安全敏感变更时，在可用条件下本地以 Python 3.13 验证。

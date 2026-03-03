@@ -2,58 +2,58 @@
 status: active
 ---
 
-# TODO: Support Codex WebSocket transport for /v1/responses
+# TODO：支持 /v1/responses 的 Codex WebSocket 传输
 
-**Date:** 2026-02-28
-**Priority:** Medium
-**Status:** Planned
+**日期：** 2026-02-28
+**优先级：** 中
+**状态：** 计划中
 
-## Context
+## 背景
 
-Codex CLI v0.106.0+ defaults to WebSocket transport for `/v1/responses` API calls
-(`responses_websockets` and `responses_websockets_v2` features). Currently claude-tap
-works around this by auto-injecting `--disable responses_websockets` to force HTTP,
-which allows the existing HTTP reverse proxy to capture all requests.
+Codex CLI v0.106.0+ 默认对 `/v1/responses` API 调用使用 WebSocket 传输
+（`responses_websockets` 和 `responses_websockets_v2` 特性）。当前 claude-tap
+通过自动注入 `--disable responses_websockets` 的方式绕过该行为并强制使用 HTTP，
+从而使现有 HTTP reverse proxy 能捕获全部请求。
 
-This is a functional workaround but not ideal — WebSocket transport is likely faster
-and will become the default/only path in future Codex versions.
+这个方案可用，但不理想。WebSocket 传输可能更快，且未来 Codex 版本很可能会
+成为默认/唯一路径。
 
-## Goal
+## 目标
 
-Natively support WebSocket interception in claude-tap's reverse proxy mode, so Codex
-can use its default WebSocket transport while claude-tap still captures all API calls.
+在 claude-tap 的 reverse proxy mode 中原生支持 WebSocket 拦截，使 Codex
+可使用默认 WebSocket 传输，同时 claude-tap 仍能捕获全部 API 调用。
 
-## Approach Options
+## 方案选项
 
-### Option A: WebSocket MITM proxy
-- Intercept WebSocket upgrade requests to `/v1/responses`
-- Proxy the WebSocket connection, recording all frames
-- Reassemble frames into the same trace format (request body + SSE-equivalent events)
-- Pros: Transparent to Codex, no CLI flag injection needed
-- Cons: More complex, need to handle WS frame reassembly
+### 方案 A：WebSocket MITM proxy
+- 拦截到 `/v1/responses` 的 WebSocket upgrade 请求
+- 代理 WebSocket 连接并记录全部 frame
+- 将 frame 重组为相同 trace 格式（请求体 + SSE 等价事件）
+- 优点：对 Codex 透明，无需注入 CLI flag
+- 缺点：实现更复杂，需要处理 WS frame 重组
 
-### Option B: Forward proxy with CONNECT tunneling
-- Use forward proxy mode (HTTP_PROXY/HTTPS_PROXY) with TLS interception
-- Intercept both HTTP and WebSocket traffic at the TLS layer
-- Pros: Works for all transport types
-- Cons: Requires TLS cert injection, more moving parts
+### 方案 B：带 CONNECT 隧道的 forward proxy
+- 使用 forward proxy mode（HTTP_PROXY/HTTPS_PROXY）并做 TLS 拦截
+- 在 TLS 层同时拦截 HTTP 与 WebSocket 流量
+- 优点：适用于所有传输类型
+- 缺点：需要注入 TLS 证书，系统组成更复杂
 
-### Option C: Hybrid — detect and adapt
-- Detect if Codex is using WebSocket (check for Upgrade headers)
-- If WebSocket: proxy the WS connection and record frames
-- If HTTP: use existing streaming proxy path
-- Pros: Backward compatible, works with any Codex version
-- Cons: Two code paths to maintain
+### 方案 C：混合方案（检测并自适应）
+- 检测 Codex 是否使用 WebSocket（检查 Upgrade headers）
+- 若是 WebSocket：代理 WS 连接并记录 frame
+- 若是 HTTP：使用现有 streaming proxy 路径
+- 优点：向后兼容，可覆盖任意 Codex 版本
+- 缺点：需要维护两条代码路径
 
-## Implementation Notes
+## 实现说明
 
-- WebSocket frames for Responses API likely follow the same SSE-like event structure
-- Need to investigate the exact WebSocket message format Codex uses
-- `aiohttp` (already a dependency) supports WebSocket proxying
-- The `--disable` flag workaround should remain as a fallback option
+- Responses API 的 WebSocket frame 很可能遵循类似 SSE 的事件结构
+- 需要进一步确认 Codex 使用的具体 WebSocket 消息格式
+- `aiohttp`（已是依赖）支持 WebSocket proxying
+- `--disable` flag 绕过方案应保留为 fallback 选项
 
-## References
+## 参考
 
-- Fix commit: `a0e00e2` (disable websocket transport in reverse mode)
-- Error experience: `docs/error-experience/entries/2026-02-28-codex-reverse-websocket-capture-gap.md`
-- Codex CLI flags: `--enable/--disable responses_websockets[_v2]`
+- 修复 commit：`a0e00e2`（在 reverse mode 下禁用 websocket 传输）
+- 错误经验：`docs/error-experience/entries/2026-02-28-codex-reverse-websocket-capture-gap.md`
+- Codex CLI flags：`--enable/--disable responses_websockets[_v2]`

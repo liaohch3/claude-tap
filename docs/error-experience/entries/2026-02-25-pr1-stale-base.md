@@ -1,38 +1,36 @@
-# PR #1 Stale Base Branch Caused CI Failure
+# PR #1 过期基线分支导致 CI 失败
 
-**Date:** 2026-02-25
-**Severity:** Medium
-**Tags:** git, CI, uv.lock, rebase
+**日期：** 2026-02-25
+**严重级别：** 中
+**标签：** git, CI, uv.lock, rebase
 
-## What Happened
+## 发生了什么
 
-PR #1 (adding the `--tap-host` feature) had tests fail in CI because it was based
-on a stale `main` branch. The branch was forked from `bc7d344` while `main` had
-advanced to `bd7ec3f`. The `uv.lock` file was incompatible between the two versions,
-causing dependency resolution to fail and tests to error out.
+PR #1（新增 `--tap-host` 功能）在 CI 中测试失败，原因是它基于过期的 `main` 分支。
+该分支从 `bc7d344` 分叉，而 `main` 已推进到 `bd7ec3f`。两个版本的 `uv.lock`
+不兼容，导致依赖解析失败，测试报错。
 
-## Root Cause
+## 根因
 
-The feature branch was not rebased onto the latest `main` before opening the PR.
-The `uv.lock` file had diverged, and the stale version could not resolve the correct
-dependency set.
+在打开 PR 前，feature 分支没有 rebase 到最新 `main`。
+`uv.lock` 已产生分叉，过期版本无法解析正确依赖集。
 
-## Impact
+## 影响
 
-- CI tests failed on an otherwise correct PR
-- Required an extra rebase cycle to fix
-- Delayed merge by one review round
+- 原本正确的 PR 在 CI 中失败
+- 需要额外一次 rebase 循环修复
+- 合并延迟了一个 review 回合
 
-## Lesson Learned
+## 经验
 
-**Always rebase onto latest `main` before opening or merging a PR.**
+**在打开或合并 PR 前，始终先 rebase 到最新 `main`。**
 
-Checklist to prevent recurrence:
-1. Before opening a PR: `git fetch origin && git rebase origin/main`
-2. Verify `uv.lock` is up to date: `uv lock --check`
-3. Run the full test suite locally after rebase: `uv run pytest tests/ -x --timeout=60`
+防止复发的 checklist：
+1. 开 PR 前：`git fetch origin && git rebase origin/main`
+2. 验证 `uv.lock` 最新：`uv lock --check`
+3. rebase 后本地运行完整测试：`uv run pytest tests/ -x --timeout=60`
 
-## Related
+## 相关
 
-- PR: #1
-- Commits: bc7d344..bd7ec3f
+- PR：#1
+- Commits：bc7d344..bd7ec3f

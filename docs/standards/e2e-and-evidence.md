@@ -4,58 +4,58 @@ last_reviewed: 2026-03-03
 source_of_truth: AGENTS.md
 ---
 
-# E2E Validation Requirements
+# E2E 验证要求
 
-If a change affects proxying, trace capture, CLI session flow, auth handling, or other end-to-end behavior, run real E2E validation before opening a PR.
+如果变更影响 proxying、trace 捕获、CLI session 流程、auth 处理或其他端到端行为，在开 PR 前必须运行真实 E2E 验证。
 
-Preferred commands:
+优先命令：
 
 ```bash
 uv run pytest tests/e2e/ --run-real-e2e --timeout=300
 uv run pytest tests/e2e/test_real_proxy.py::TestRealProxy::test_single_turn --run-real-e2e --timeout=180
 ```
 
-Manual alternatives:
+手动替代方案：
 
 ```bash
 scripts/run_real_e2e.sh
 scripts/run_real_e2e_tmux.sh
 ```
 
-If real E2E cannot run (for example, missing auth/token), document reason and residual risk in the PR body.
+如果无法运行真实 E2E（例如缺少 auth/token），在 PR 正文中记录原因与剩余风险。
 
-# E2E Conversation Rule
+# E2E 对话规则
 
-Each E2E run must include at least one complete multi-turn conversation.
-For conversation validation and screenshot evidence, use tmux interactive flow (`scripts/run_real_e2e_tmux.sh`).
-Do not use `claude -p` one-shot runs as proof of conversation completeness.
+每次 E2E 运行必须至少包含一次完整的多轮对话。
+对于对话验证和截图证据，请使用 tmux 交互流程（`scripts/run_real_e2e_tmux.sh`）。
+不要使用 `claude -p` 的单次运行作为对话完整性的证明。
 
-# UI Evidence Requirements
+# UI 证据要求
 
-For PRs changing UI layout, styles, interaction flow, or rendered content:
+对于会改变 UI 布局、样式、交互流程或渲染内容的 PR：
 
-- Include at least one screenshot per changed screen/state.
-- Include before/after screenshots when a visual diff matters.
-- Include mobile screenshots when mobile behavior is affected.
-- Use real trace artifacts from `.traces/trace_*.jsonl` or real run outputs.
-- For E2E-related UI changes, screenshots must come from a run that completed at least one full multi-turn conversation.
+- 每个变更的页面/状态至少提供一张截图。
+- 当视觉差异重要时，提供变更前后截图。
+- 当移动端行为受影响时，提供移动端截图。
+- 使用来自 `.traces/trace_*.jsonl` 或真实运行输出的真实 trace 产物。
+- 对于与 E2E 相关的 UI 变更，截图必须来自至少完成一次完整多轮对话的运行。
 
-# Screenshot Quality Gate
+# 截图质量门禁
 
-Every screenshot committed as PR evidence must pass these checks before `git add`:
+作为 PR 证据提交的每张截图，在 `git add` 之前都必须通过以下检查：
 
-## Mandatory Checks
-1. **Viewport width ≥ 1280px** — Headless browsers often default to narrow viewports. Always resize to desktop dimensions (1280x800 or 1440x900) before capture.
-2. **Content matches claim** — If the PR says "WS trace captured", the screenshot must visibly show the WS trace, not a different request or a loading screen.
-3. **No encoding corruption** — Unicode arrows (→←), CJK characters, and emoji must render correctly. If in doubt, use ASCII equivalents or HTML entities in generated evidence pages.
-4. **No error pages** — 404, ERR_EMPTY_RESPONSE, blank pages, or "page not found" are not evidence.
-5. **Minimum resolution** — Image width must be ≥ 1000px. Anything narrower is likely a mobile/tablet capture.
-6. **File size sanity** — Screenshots < 10KB are likely blank or error pages. Typical trace viewer screenshots are 100KB–500KB.
+## 强制检查
+1. **Viewport 宽度 ≥ 1280px** — Headless browser 常默认窄 viewport。截图前务必调整为桌面尺寸（1280x800 或 1440x900）。
+2. **内容与声明一致** — 如果 PR 写的是“已捕获 WS trace”，截图中必须清楚显示 WS trace，而不是其他请求或加载页。
+3. **无编码损坏** — Unicode 箭头（→←）、CJK 字符和 emoji 必须正确渲染。如有疑问，在生成证据页面时使用 ASCII 等价字符或 HTML entity。
+4. **无错误页面** — 404、ERR_EMPTY_RESPONSE、空白页或 “page not found” 不能作为证据。
+5. **最小分辨率** — 图像宽度必须 ≥ 1000px。更窄通常是移动端/平板截图。
+6. **文件大小合理** — 小于 10KB 的截图通常是空白页或错误页。典型 trace viewer 截图为 100KB–500KB。
 
-## Best Practices
-- For log/text evidence, render as styled HTML (dark card, monospace, syntax highlighting) rather than serving raw `.log` files — avoids font/encoding issues.
-- When taking trace viewer screenshots, navigate to the specific entry first, then capture.
-- Use `scripts/check_screenshots.sh` to automate pre-commit validation.
+## 最佳实践
+- 对日志/文本证据，优先渲染为有样式的 HTML（深色卡片、monospace、语法高亮），不要直接提供原始 `.log` 文件，以避免字体/编码问题。
+- 截取 trace viewer 时，先导航到指定 entry，再截图。
+- 使用 `scripts/check_screenshots.sh` 自动执行 pre-commit 验证。
 
-## Anti-Pattern: Blind Commit
-Never `git add` + `git commit` + `git push` screenshots without opening and reviewing them first. This wastes reviewer time and erodes trust in the evidence.
+## 反模式：盲目提交
+不要在未先打开并检查截图的情况下直接 `git add` + `git commit` + `git push`。这会浪费 reviewer 时间并削弱证据信任。
