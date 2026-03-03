@@ -22,6 +22,13 @@ if [ "$cmd1" = "repo" ] && [ "$cmd2" = "view" ]; then
 fi
 
 if [ "$cmd1" = "pr" ] && [ "$cmd2" = "view" ]; then
+  # Check if this is a body-only query
+  case "$*" in
+    *--json\ body*)
+      echo '## Evidence\n![trace](https://example.com/evidence/trace.png)'
+      exit 0
+      ;;
+  esac
   cat <<'EOF'
 Improve merge readiness automation
 OPEN
