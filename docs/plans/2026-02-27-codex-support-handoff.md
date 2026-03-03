@@ -1,3 +1,7 @@
+---
+status: completed
+---
+
 # Codex Support Handoff (Detailed)
 
 Date: 2026-02-27
@@ -237,4 +241,3 @@ If you need an abbreviated bootstrap prompt for another Codex process:
 - Tests pass locally (`48 passed, 18 skipped`) for `tests/`.
 - Real Codex still blocked by `403 missing scopes: api.model.read`.
 - Continue by fixing credentials/scopes and adding real Codex E2E tests + README updates.
-

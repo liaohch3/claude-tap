@@ -1,3 +1,7 @@
+---
+status: active
+---
+
 # TODO: Support Codex WebSocket transport for /v1/responses
 
 **Date:** 2026-02-28

@@ -132,6 +132,20 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 
 **Key features:** 🔒 API keys auto-redacted · ⚡ Zero latency · 📦 Self-contained viewer · 🔄 Real-time live mode
 
+## Contributor Legibility Checks
+
+Run deterministic legibility checks locally:
+
+```bash
+uv run python scripts/check_legibility.py
+```
+
+Strict freshness mode (promotes stale standards metadata to failures):
+
+```bash
+uv run python scripts/check_legibility.py --strict-freshness
+```
+
 ## License
 
 MIT
