@@ -23,6 +23,7 @@ These are mandatory and enforced in review:
 - Screenshot capture and validation standards: `docs/standards/screenshot-standards.md`
 - Coding and runtime safety rules: `docs/standards/coding-and-runtime.md`
 - Workflow, review, and Brain/Hands protocol: `docs/standards/workflow-and-review.md`
+- Debugging methodology and anti-patterns: `docs/standards/debugging-standards.md`
 - Metadata and maintenance process for standards docs: `docs/standards/README.md`
 
 ## Legibility Checks
