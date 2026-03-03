@@ -1,3 +1,7 @@
+---
+status: completed
+---
+
 # Viewer Sticky Action Bar + Validation Workflow Plan
 
 ## Problem

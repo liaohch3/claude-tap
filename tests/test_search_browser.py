@@ -55,7 +55,7 @@ def _pick_real_trace_file() -> Path:
         if line_count >= 4:
             candidates.append(path)
     if not candidates:
-        raise RuntimeError("No real trace file with >=4 entries found in .traces/")
+        pytest.skip("No real trace file with >=4 entries found in .traces/")
     return candidates[0]
 
 
@@ -177,7 +177,7 @@ def _pick_real_trace_file_for_diff() -> tuple[Path, int]:
                 best_idx = idx
     if best_path and best_idx >= 0:
         return best_path, best_idx
-    raise RuntimeError("No real multi-turn trace file with a message diff target found in .traces/")
+    pytest.skip("No real multi-turn trace file with a message diff target found in .traces/")
 
 
 def _extract_messages(body: dict | None) -> list[str]:

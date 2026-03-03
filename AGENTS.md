@@ -1,181 +1,29 @@
-## ⛔ Hard Rules (MUST follow — no exceptions)
+# AGENTS Index
 
-These rules are **mandatory**. Do not skip any of them. If you cannot comply, stop and explain why.
+This file is the entry point for contributor rules. Detailed policy text lives in `docs/standards/*.md`.
 
-1. **Gate checks before every commit** — `ruff check`, `ruff format --check`, `pytest`. All must pass. No "I'll fix it later".
-2. **UI changes → screenshots in the PR body** — If you touch anything visual (HTML, CSS, styles, layout, rendered content), the PR description MUST include screenshots using `raw.githubusercontent.com` absolute URLs. Local-only screenshots don't count.
-3. **One concern per commit** — Don't mix refactoring with features or bug fixes.
-4. **English only** — All code, comments, commit messages, docs. Exception: `README_zh.md`.
-5. **Real data only** — Screenshots, demos, and test evidence must use real trace data from `.traces/`, never mocks or synthetic data.
-6. **Pre-work checklist** — Before any code: `git diff --stat`, `git log --oneline -10`, `git fetch origin`. Before opening a PR: `git rebase origin/main`, `uv lock --check`.
-7. **You MUST `git commit` and `git push`** — After making changes, you MUST run `git add`, `git commit`, and `git push origin <branch>`. Do NOT leave changes uncommitted in the working tree. An uncommitted change is the same as no change at all.
-8. **You MUST create the PR on GitHub** — After pushing, run `gh pr create` with a proper title and body. The job is not done until the PR exists on GitHub.
+## Non-negotiable Rules
 
-Violating these rules means the PR will be rejected. Follow them every time.
+These are mandatory and enforced in review:
 
----
+1. Run gate checks before every commit: `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest tests/ -x --timeout=60`.
+2. UI changes require PR screenshots with `raw.githubusercontent.com` absolute URLs.
+3. One concern per commit (no mixed refactor + feature/fix in the same commit).
+4. English only for code/comments/docs/commits, except `README_zh.md`.
+5. Evidence must use real trace data from `.traces/` (no synthetic mock screenshots/demos).
+6. Run pre-work checklist before coding and pre-PR checklist before opening a PR.
+7. Do not leave local-only work; you must `git add`, `git commit`, and `git push`.
+8. You must open a GitHub PR with `gh pr create`.
 
-## Pre-commit CI checks
+## Standards Catalog
 
-Before every `git commit`, run these checks locally (mirrors GitHub CI):
+- Hard rules and repository policies: `docs/standards/hard-rules.md`
+- Validation gates and required commands: `docs/standards/validation-and-gates.md`
+- E2E and screenshot evidence requirements: `docs/standards/e2e-and-evidence.md`
+- Coding and runtime safety rules: `docs/standards/coding-and-runtime.md`
+- Workflow, review, and Brain/Hands protocol: `docs/standards/workflow-and-review.md`
+- Metadata and maintenance process for standards docs: `docs/standards/README.md`
 
-```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest tests/ -x --timeout=60
-```
+## Legibility Checks
 
-All three must pass before committing. If format fails, run `uv run ruff format .` first.
-
-## E2E Validation Requirements
-
-If a change affects proxying, trace capture, CLI session flow, auth handling, or other end-to-end behavior, run real E2E validation before opening a PR.
-
-Preferred commands:
-
-```bash
-# Full real E2E suite (requires Claude CLI auth)
-uv run pytest tests/e2e/ --run-real-e2e --timeout=300
-
-# Targeted real E2E case
-uv run pytest tests/e2e/test_real_proxy.py::TestRealProxy::test_single_turn --run-real-e2e --timeout=180
-```
-
-Pragmatic manual alternatives:
-
-```bash
-scripts/run_real_e2e.sh
-scripts/run_real_e2e_tmux.sh
-```
-
-If real E2E cannot run (for example due missing auth/token), explicitly document the reason and residual risk in the PR description.
-
-## Language
-
-All code, comments, commit messages, docs, and skill files in this project must be in English. The only exceptions are `README_zh.md` and other explicitly Chinese README files.
-
-## E2E Conversation Rule
-
-When running E2E tests, complete at least one full conversation (multi-turn) in every run.
-
-For conversation validation and screenshot evidence, use tmux interactive flow (`scripts/run_real_e2e_tmux.sh`).
-Do not use `claude -p` one-shot runs as proof of conversation completeness.
-
-## Pre-work Checklist
-
-Before any code change, run:
-
-```bash
-git diff --stat            # Check for uncommitted changes
-git log --oneline -10      # Understand recent history
-git fetch origin           # Get latest remote state
-```
-
-Ensure you are working on a clean, up-to-date branch.
-
-Before opening or merging a PR, also run:
-
-```bash
-git rebase origin/main     # Rebase onto latest main
-uv lock --check            # Ensure lockfile is consistent
-uv run pytest tests/ -x --timeout=60  # Re-verify after rebase
-```
-
-## Compounding Engineering
-
-Record lessons learned so they compound over time:
-
-- **Error experience** (mistakes, failures): `docs/error-experience/entries/YYYY-MM-DD-<slug>.md`
-- **Good experience** (wins, patterns): `docs/good-experience/entries/YYYY-MM-DD-<slug>.md`
-- **Summaries**: `docs/error-experience/summary/entries/` and `docs/good-experience/summary/entries/`
-- **Plans**: `docs/plans/`
-- **Guides**: `docs/guides/`
-
-After encountering a significant bug, CI failure, or discovering a useful pattern,
-create an entry documenting what happened, root cause, and the lesson.
-
-## Coding Standards
-
-### DO
-
-| Practice | Why |
-|----------|-----|
-| Delete dead code | Dead code misleads readers and rots |
-| Fix root cause of test failures | Patching symptoms creates fragile tests |
-| Use existing patterns | Consistency beats novelty |
-| Modify only relevant files | Minimize blast radius |
-| Trust type invariants | Don't add redundant runtime checks for typed values |
-| Keep functions focused | One function, one purpose |
-| Prefer POSIX shell tools in scripts | Scripts must run in bare environments |
-| Use `grep -F` for fixed-string matches in scripts | Portable replacement for `rg` in CI/fresh machines |
-| Read package version from metadata | Avoid stale hardcoded version strings |
-
-### DON'T
-
-| Anti-pattern | Why |
-|--------------|-----|
-| Leave commented-out code | Use version control, not comments |
-| Add speculative abstractions | YAGNI — wait until you need it |
-| Suppress linter warnings without justification | Fix the issue or document why it's a false positive |
-| Commit generated files | Regenerate from source |
-| Mix refactoring with feature work | One concern per commit |
-| Add backwards-compat shims for unused code | Just delete it |
-| Depend on non-portable shell tools without checks | `rg`/`jq`/`fd` may be missing in CI or fresh machines |
-
-## Runtime Safety Rules
-
-- If code uses `tcsetpgrp`/terminal foreground handoff, handle `SIGTTOU` when reclaiming the parent foreground process group.
-- Treat the highest Python version in CI as the compatibility ceiling (currently Python 3.13), and validate behavior there for runtime-sensitive changes.
-- Certificate generation for TLS tests/runtime must include SKI/AKI extensions for Python 3.13 compatibility.
-- For certificate/proxy/security-sensitive changes, validate tests on Python 3.13 locally when available (CI also enforces this).
-
-## Worktree Workflow
-
-Use git worktrees for isolated feature development:
-
-```bash
-# Create worktree
-git worktree add -b feat/<name> /tmp/claude-tap-<name> main
-
-# Develop and test in worktree
-cd /tmp/claude-tap-<name>
-uv run pytest tests/ -x --timeout=60
-
-# Merge back (fast-forward only)
-cd /path/to/claude-tap
-git merge --ff-only feat/<name>
-
-# Clean up
-git worktree remove /tmp/claude-tap-<name>
-git branch -d feat/<name>
-```
-
-## Code Review
-
-Before every commit:
-
-1. `uv run ruff check .` — lint passes
-2. `uv run ruff format --check .` — format passes
-3. `uv run pytest tests/ -x --timeout=60` — tests pass
-4. `git diff` — review every changed line before staging
-5. Verify scope: only files relevant to the task were modified
-
-## PR Requirements for UI Changes
-
-If a PR changes UI layout, styles, interaction flow, or rendered content, include screenshots in the PR description.
-
-- Provide at least one screenshot per changed screen/state.
-- For visual diffs, include before/after screenshots when possible.
-- Include mobile screenshots when mobile behavior is affected.
-- Screenshot evidence must use real trace artifacts from `.traces/trace_*.jsonl` or real run outputs.
-- For E2E-related UI changes, screenshots must come from the same run that completed at least one full multi-turn conversation.
-- Do not use synthetic/mock request data for PR screenshots.
-
-## Brain + Hands Protocol
-
-- **Claude Code (Opus)** = planning brain. Makes architecture decisions, designs APIs,
-  chooses patterns, reviews code.
-- **Codex** = execution hands. Writes boilerplate, runs commands, applies mechanical changes.
-
-Never delegate architecture decisions to execution tools. The brain decides *what* and *why*;
-the hands do *how*.
+Deterministic legibility checks are implemented in `scripts/check_legibility.py` and run in CI via `.github/workflows/legibility.yml`.
