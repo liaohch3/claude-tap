@@ -1,3 +1,9 @@
+---
+owner: claude-tap-maintainers
+last_reviewed: 2026-03-03
+source_of_truth: AGENTS.md
+---
+
 # Debugging Standards
 
 ## Pre-Debug Checklist
