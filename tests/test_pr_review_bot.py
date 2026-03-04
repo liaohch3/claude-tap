@@ -7,16 +7,19 @@ import hmac
 import json
 import os
 import subprocess
+import time
 from collections.abc import Iterable
 from pathlib import Path
 
 from scripts.pr_review_bot import (
     ReviewBotConfig,
+    ReviewOrchestrator,
     build_review_prompt,
     create_app,
     extract_decision,
     fetch_diff,
     load_config,
+    post_review,
     should_process_pull_request,
     verify_webhook_signature,
 )
@@ -250,3 +253,103 @@ def test_fetch_diff_raises_when_git_fetch_fails(monkeypatch) -> None:
         assert "fetch failed" in str(exc.stderr)
     else:
         raise AssertionError("fetch_diff should raise CalledProcessError")
+
+
+def test_post_review_uses_review_for_approve(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("scripts.pr_review_bot.subprocess.run", _fake_run)
+    post_review(28, "LGTM", "owner/repo", "APPROVE")
+    assert commands[0][:4] == ["gh", "pr", "review", "28"]
+    assert "--approve" in commands[0]
+
+
+def test_post_review_uses_review_for_request_changes(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("scripts.pr_review_bot.subprocess.run", _fake_run)
+    post_review(28, "Needs fixes", "owner/repo", "REQUEST_CHANGES")
+    assert commands[0][:4] == ["gh", "pr", "review", "28"]
+    assert "--request-changes" in commands[0]
+
+
+def test_post_review_uses_comment_for_default(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("scripts.pr_review_bot.subprocess.run", _fake_run)
+    post_review(28, "General comment", "owner/repo", "COMMENT")
+    assert commands[0][:4] == ["gh", "pr", "comment", "28"]
+
+
+def test_submit_review_cancels_previous_worker(monkeypatch) -> None:
+    config = _base_config()
+    orchestrator = ReviewOrchestrator(config)
+    posted: list[tuple[int, str]] = []
+    run_calls = {"count": 0}
+
+    payload = {
+        "repository": {"full_name": "owner/repo"},
+        "pull_request": {
+            "number": 7,
+            "base": {"ref": "main"},
+            "head": {"ref": "feature"},
+            "title": "Test PR",
+            "body": "",
+        },
+    }
+
+    def _fake_fetch_diff(repo_path: Path, pr_number: int, base_ref: str) -> str:
+        assert repo_path == config.repo_path
+        assert pr_number == 7
+        assert base_ref == "main"
+        return "diff --git a/x b/x"
+
+    def _fake_run_review(
+        _config: ReviewBotConfig,
+        _pr: dict[str, object],
+        _diff: str,
+        cancel_event,
+    ) -> str:
+        run_calls["count"] += 1
+        if run_calls["count"] == 1:
+            while not cancel_event.is_set():
+                time.sleep(0.01)
+            raise TimeoutError("review cancelled by newer event")
+        return "Decision: COMMENT\nAll good."
+
+    def _fake_post_review(pr_number: int, review_text: str, repo: str, recommendation: str) -> None:
+        posted.append((pr_number, recommendation))
+        assert review_text == "All good."
+        assert repo == "owner/repo"
+
+    monkeypatch.setattr("scripts.pr_review_bot.fetch_diff", _fake_fetch_diff)
+    monkeypatch.setattr("scripts.pr_review_bot.run_review", _fake_run_review)
+    monkeypatch.setattr("scripts.pr_review_bot.post_review", _fake_post_review)
+    monkeypatch.setattr("scripts.pr_review_bot.notify_openclaw", lambda *args, **kwargs: None)
+
+    orchestrator.submit_review(payload)
+    time.sleep(0.05)
+    orchestrator.submit_review(payload)
+
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        with orchestrator._lock:
+            active = orchestrator._active.get(7)
+        if active is None:
+            break
+        time.sleep(0.05)
+
+    assert run_calls["count"] == 2
+    assert posted == [(7, "COMMENT")]

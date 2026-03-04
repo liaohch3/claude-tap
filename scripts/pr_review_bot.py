@@ -172,7 +172,7 @@ def run_review(
     diff: str,
     cancel_event: threading.Event,
 ) -> str:
-    """Run Codex/Claude to review a PR. Agent posts review directly via gh CLI."""
+    """Run Codex/Claude to review a PR and return raw model output."""
     prompt = build_review_prompt(pr, diff, config.output_language)
     pr_num = pr["number"]
     run_id = uuid.uuid4().hex[:6]
@@ -185,12 +185,13 @@ def run_review(
     status_file = work_dir / "agent-status.txt"
     prompt_file.write_text(prompt, encoding="utf-8")
 
-    # Agent reads prompt and posts review directly via gh CLI
+    # Agent reads prompt and prints review markdown plus a Decision marker.
     agent_task = (
         f"Read the PR review instructions from {prompt_file}. "
         f"Review the code carefully following the project standards. "
-        f"Then post your review directly using gh pr review or gh pr comment. "
-        f"The PR number is {pr_num}."
+        "Output only the review body markdown and include one explicit line "
+        "formatted exactly as: `Decision: APPROVE`, `Decision: REQUEST_CHANGES`, "
+        "or `Decision: COMMENT`."
     )
 
     cmd = _agent_shell_command(config.review_agent, agent_task, output_file, status_file)
@@ -240,6 +241,81 @@ def extract_decision(raw_output: str) -> str:
     if re.search(r"\bgh\s+pr\s+comment\b", raw_output, re.IGNORECASE):
         return "COMMENT"
     return "COMMENT"
+
+
+def extract_review_body(raw_output: str) -> str:
+    """Build comment/review body from model output."""
+    lines = raw_output.splitlines()
+    filtered_lines = []
+    for line in lines:
+        normalized = line.strip().upper()
+        if normalized.startswith("DECISION:") or normalized.startswith("SUGGESTED DECISION:"):
+            continue
+        filtered_lines.append(line)
+    review_body = "\n".join(filtered_lines).strip()
+    if not review_body:
+        return "Automated review completed, but the agent did not provide review content."
+    return review_body
+
+
+def post_review(pr_number: int, review_text: str, repo: str, recommendation: str) -> None:
+    """Submit review result to GitHub using gh CLI."""
+    normalized = (recommendation or "COMMENT").strip().upper()
+
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as tmp:
+        tmp.write(review_text)
+        body_file = tmp.name
+
+    try:
+        if normalized == "APPROVE":
+            cmd = [
+                "gh",
+                "pr",
+                "review",
+                str(pr_number),
+                "--repo",
+                repo,
+                "--approve",
+                "--body-file",
+                body_file,
+            ]
+        elif normalized == "REQUEST_CHANGES":
+            cmd = [
+                "gh",
+                "pr",
+                "review",
+                str(pr_number),
+                "--repo",
+                repo,
+                "--request-changes",
+                "--body-file",
+                body_file,
+            ]
+        else:
+            cmd = [
+                "gh",
+                "pr",
+                "comment",
+                str(pr_number),
+                "--repo",
+                repo,
+                "--body-file",
+                body_file,
+            ]
+        subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=True)
+        LOG.info("Posted %s to PR #%d", normalized, pr_number)
+    except subprocess.CalledProcessError as exc:
+        LOG.error(
+            "Failed to post %s to PR #%d: rc=%s stdout=%s stderr=%s",
+            normalized,
+            pr_number,
+            exc.returncode,
+            exc.stdout,
+            exc.stderr,
+        )
+        raise
+    finally:
+        Path(body_file).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -366,11 +442,15 @@ class ReviewOrchestrator:
                     return
                 raw_output = run_review(self._config, pr, diff, cancel_event)
                 if cancel_event.is_set():
-                    LOG.info("Skipping notification for cancelled review PR #%d", pr_num)
+                    LOG.info("Skipping post for cancelled review PR #%d", pr_num)
                     return
-                decision = extract_decision(raw_output)
-                LOG.info("Review decision for PR #%d: %s", pr_num, decision)
-                notify_openclaw(pr_num, raw_output, repo, decision)
+                recommendation = extract_decision(raw_output)
+                review_text = extract_review_body(raw_output)
+                if cancel_event.is_set():
+                    LOG.info("Skipping post for cancelled review PR #%d", pr_num)
+                    return
+                post_review(pr_num, review_text, repo, recommendation)
+                notify_openclaw(pr_num, review_text, repo, recommendation)
             except TimeoutError:
                 LOG.info("Review cancelled for PR #%d", pr_num)
             except Exception:
