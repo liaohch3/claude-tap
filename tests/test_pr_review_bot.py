@@ -6,13 +6,16 @@ import hashlib
 import hmac
 import json
 import os
+import subprocess
 from collections.abc import Iterable
+from pathlib import Path
 
 from scripts.pr_review_bot import (
     ReviewBotConfig,
     build_review_prompt,
     create_app,
     extract_decision,
+    fetch_diff,
     load_config,
     should_process_pull_request,
     verify_webhook_signature,
@@ -110,13 +113,13 @@ def _base_config() -> ReviewBotConfig:
     return ReviewBotConfig(
         webhook_secret="top-secret",
         allow_insecure_webhooks=False,
-        repo_path=os.getcwd(),
+        repo_path=Path(os.getcwd()),
         review_agent="codex",
         output_language="zh",
         review_timeout=30,
         port=3456,
-        ignore_users=set(),
-        log_file="",
+        ignore_users=frozenset(),
+        log_file=Path("/tmp/pr-review-bot-test.log"),
     )
 
 
@@ -213,3 +216,37 @@ async def test_webhook_requires_wrapped_signature_when_secret_is_set() -> None:
     )
     assert status == 401
     assert response["error"] == "missing signature"
+
+
+def test_fetch_diff_uses_force_refspec_and_base_fetch(monkeypatch) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((cmd, kwargs))
+        if cmd[:2] == ["git", "diff"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="diff-content", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("scripts.pr_review_bot.subprocess.run", _fake_run)
+
+    diff = fetch_diff(Path("/tmp/repo"), 28, "main")
+
+    assert diff == "diff-content"
+    assert calls[0][0] == ["git", "fetch", "origin", "+pull/28/head:pr-28"]
+    assert calls[1][0] == ["git", "fetch", "origin", "main"]
+    assert calls[2][0] == ["git", "diff", "origin/main...pr-28"]
+    assert all(call_kwargs["check"] is True for _, call_kwargs in calls)
+
+
+def test_fetch_diff_raises_when_git_fetch_fails(monkeypatch) -> None:
+    def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(returncode=1, cmd=cmd, output="", stderr="fetch failed")
+
+    monkeypatch.setattr("scripts.pr_review_bot.subprocess.run", _fake_run)
+
+    try:
+        fetch_diff(Path("/tmp/repo"), 28, "main")
+    except subprocess.CalledProcessError as exc:
+        assert "fetch failed" in str(exc.stderr)
+    else:
+        raise AssertionError("fetch_diff should raise CalledProcessError")

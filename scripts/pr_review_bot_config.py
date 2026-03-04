@@ -11,7 +11,9 @@ from pathlib import Path
 @dataclass(frozen=True)
 class ReviewBotConfig:
     webhook_secret: str
+    allow_insecure_webhooks: bool
     review_agent: str
+    output_language: str
     repo_path: Path
     review_timeout: int
     port: int
@@ -21,7 +23,14 @@ class ReviewBotConfig:
 
 def load_config() -> ReviewBotConfig:
     webhook_secret = os.getenv("PR_REVIEW_WEBHOOK_SECRET", "")
-    review_agent = os.getenv("PR_REVIEW_AGENT", "codex").strip().lower() or "codex"
+    review_agent = (os.getenv("PR_REVIEW_AGENT", "codex") or "").strip().lower()
+    if review_agent not in {"codex", "claude"}:
+        review_agent = "codex"
+    output_language = (os.getenv("PR_REVIEW_OUTPUT_LANGUAGE", "zh") or "").strip().lower()
+    if output_language not in {"zh", "en"}:
+        output_language = "zh"
+    insecure_raw = (os.getenv("PR_REVIEW_ALLOW_INSECURE_WEBHOOKS", "") or "").strip().lower()
+    allow_insecure_webhooks = insecure_raw in {"1", "true", "yes", "on"}
     repo_path = Path(os.getenv("PR_REVIEW_REPO_PATH", Path.cwd())).expanduser().resolve()
     review_timeout = int(os.getenv("PR_REVIEW_TIMEOUT", "600"))
     port = int(os.getenv("PR_REVIEW_PORT", "3456"))
@@ -36,7 +45,9 @@ def load_config() -> ReviewBotConfig:
     )
     return ReviewBotConfig(
         webhook_secret=webhook_secret,
+        allow_insecure_webhooks=allow_insecure_webhooks,
         review_agent=review_agent,
+        output_language=output_language,
         repo_path=repo_path,
         review_timeout=review_timeout,
         port=port,

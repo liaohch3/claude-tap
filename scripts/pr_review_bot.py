@@ -8,7 +8,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import re
 import shlex
 import shutil
@@ -17,66 +16,15 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from scripts.pr_review_bot_config import ReviewBotConfig, load_config
 
 LOG = logging.getLogger("pr-review-bot")
 
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ReviewBotConfig:
-    webhook_secret: str
-    allow_insecure_webhooks: bool
-    repo_path: str
-    review_agent: str
-    output_language: str
-    review_timeout: int
-    port: int
-    ignore_users: set[str]
-    log_file: str
-
-
-def load_config() -> ReviewBotConfig:
-    review_agent = (os.environ.get("PR_REVIEW_AGENT", "codex") or "").strip().lower()
-    if review_agent not in {"codex", "claude"}:
-        LOG.warning("Unsupported PR_REVIEW_AGENT=%r, fallback to codex", review_agent)
-        review_agent = "codex"
-
-    output_language = (os.environ.get("PR_REVIEW_OUTPUT_LANGUAGE", "zh") or "").strip().lower()
-    if output_language not in {"zh", "en"}:
-        LOG.warning("Unsupported PR_REVIEW_OUTPUT_LANGUAGE=%r, fallback to zh", output_language)
-        output_language = "zh"
-
-    insecure_raw = (os.environ.get("PR_REVIEW_ALLOW_INSECURE_WEBHOOKS", "") or "").strip().lower()
-    allow_insecure_webhooks = insecure_raw in {"1", "true", "yes", "on"}
-
-    return ReviewBotConfig(
-        webhook_secret=os.environ.get("PR_REVIEW_WEBHOOK_SECRET", ""),
-        allow_insecure_webhooks=allow_insecure_webhooks,
-        repo_path=os.environ.get("PR_REVIEW_REPO_PATH", os.getcwd()),
-        review_agent=review_agent,
-        output_language=output_language,
-        review_timeout=int(os.environ.get("PR_REVIEW_TIMEOUT", "600")),
-        port=int(os.environ.get("PR_REVIEW_PORT", "3456")),
-        ignore_users=set(
-            u.strip()
-            for u in os.environ.get(
-                "PR_REVIEW_IGNORE_USERS",
-                "github-actions[bot],dependabot[bot]",
-            ).split(",")
-            if u.strip()
-        ),
-        log_file=os.environ.get("PR_REVIEW_LOG_FILE", "/tmp/pr-review-bot.log"),
-    )
-
-
-def setup_logging(log_file: str) -> None:
+def setup_logging(log_file: Path) -> None:
     fmt = "%(asctime)s %(levelname)s %(message)s"
     logging.basicConfig(level=logging.INFO, format=fmt)
     if log_file:
@@ -93,7 +41,7 @@ def setup_logging(log_file: str) -> None:
 def verify_webhook_signature(secret: str, body: bytes, signature_header: str) -> bool:
     if not secret:
         return False
-    if not signature_header.startswith("sha256="):
+    if not signature_header or not signature_header.startswith("sha256="):
         return False
     expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature_header)
@@ -102,7 +50,7 @@ def verify_webhook_signature(secret: str, body: bytes, signature_header: str) ->
 def should_process_pull_request(
     event: str,
     payload: dict[str, Any],
-    ignore_users: set[str],
+    ignore_users: frozenset[str],
 ) -> tuple[bool, str]:
     if event != "pull_request":
         return False, f"event={event} not pull_request"
@@ -148,9 +96,8 @@ def build_review_prompt(pr: dict[str, Any], diff: str, output_language: str) -> 
     )
 
 
-def fetch_diff(repo_path: str, pr_number: int, base_ref: str, head_ref: str) -> str:
-    _ = head_ref
-    cwd = repo_path
+def fetch_diff(repo_path: Path, pr_number: int, base_ref: str) -> str:
+    cwd = str(repo_path)
     subprocess.run(
         ["git", "fetch", "origin", f"+pull/{pr_number}/head:pr-{pr_number}"],
         cwd=cwd,
@@ -329,7 +276,11 @@ def notify_openclaw(pr_number: int, review_text: str, repo: str, decision: str) 
             if resp.getcode() != 200:
                 LOG.warning("Feishu token request HTTP %s: %s", resp.getcode(), raw_token_body)
                 return
-            token_resp = json.loads(raw_token_body)
+            try:
+                token_resp = json.loads(raw_token_body)
+            except json.JSONDecodeError:
+                LOG.warning("Feishu token response is not valid JSON: %s", raw_token_body)
+                return
             token = token_resp.get("tenant_access_token")
             if token_resp.get("code") != 0 or not token:
                 LOG.warning("Feishu token request failed: %s", raw_token_body)
@@ -338,11 +289,11 @@ def notify_openclaw(pr_number: int, review_text: str, repo: str, decision: str) 
         # Build message
         short_review = review_text[:800]
         msg_content = (
-            f"🔄 PR #{pr_number} 自动 Review 完成\n\n"
-            f"仓库: {repo}\n"
-            f"决策: {decision}\n\n"
-            f"请根据 review findings 修复代码并 push，触发下一轮 review。\n\n"
-            f"Review 摘要:\n{short_review}"
+            f"PR #{pr_number} automated review completed.\n\n"
+            f"Repository: {repo}\n"
+            f"Decision: {decision}\n\n"
+            "Please apply fixes from the review findings and push updates for the next cycle.\n\n"
+            f"Review summary:\n{short_review}"
         )
 
         # Send to group chat
@@ -362,7 +313,12 @@ def notify_openclaw(pr_number: int, review_text: str, repo: str, decision: str) 
             },
         )
         with urllib.request.urlopen(send_req, timeout=10) as resp:
-            result = json.loads(resp.read())
+            raw_send_body = resp.read().decode("utf-8")
+            try:
+                result = json.loads(raw_send_body)
+            except json.JSONDecodeError:
+                LOG.warning("Feishu send response is not valid JSON: %s", raw_send_body)
+                return
             if result.get("code") == 0:
                 LOG.info("Notified OpenClaw chat %s for PR #%d", chat_id, pr_number)
             else:
@@ -404,7 +360,6 @@ class ReviewOrchestrator:
                     self._config.repo_path,
                     pr_num,
                     pr["base"]["ref"],
-                    pr["head"]["ref"],
                 )
                 if not diff.strip():
                     LOG.warning("Empty diff for PR #%d, skipping", pr_num)
