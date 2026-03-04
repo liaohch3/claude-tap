@@ -109,13 +109,15 @@ def find_missing_keys(lang_entries: dict[str, dict[str, str]], target_languages:
     if "en" not in lang_entries or "zh-CN" not in lang_entries:
         raise ValueError("Source i18n object must include both 'en' and 'zh-CN'.")
 
-    source_keys = set(lang_entries["en"]).intersection(lang_entries["zh-CN"])
+    en_keys = list(lang_entries["en"])
+    zh_keys = set(lang_entries["zh-CN"])
+    source_keys = [key for key in en_keys if key in zh_keys]
     missing: dict[str, list[str]] = {}
     for lang in target_languages:
         if lang not in lang_entries:
             continue
         lang_keys = set(lang_entries[lang])
-        keys = sorted(source_keys - lang_keys)
+        keys = [key for key in source_keys if key not in lang_keys]
         if keys:
             missing[lang] = keys
     return missing
@@ -155,6 +157,16 @@ def request_openrouter_translation(
         for key in keys
     ]
 
+    fullwidth_examples: dict[str, dict[str, str]] = {}
+    existing_examples = {
+        key: value for key, value in existing_lang_map.items() if any(symbol in value for symbol in ("：", "！", "？"))
+    }
+    zh_examples = {key: value for key, value in zh_map.items() if any(symbol in value for symbol in ("：", "！", "？"))}
+    if existing_examples:
+        fullwidth_examples["target_existing"] = existing_examples
+    if zh_examples:
+        fullwidth_examples["zh-CN_reference"] = zh_examples
+
     prompt = {
         "task": "Translate missing UI i18n strings.",
         "context": "This is a developer tool (trace viewer) for inspecting LLM API calls.",
@@ -168,6 +180,15 @@ def request_openrouter_translation(
         "existing_translations_for_consistency": existing_lang_map,
         "items_to_translate": request_items,
     }
+    if lang in {"ja", "ko", "zh-CN"}:
+        prompt["requirements"].append(
+            "For ja/ko/zh-CN, preserve fullwidth punctuation style (e.g., ：！？) to match existing translations."
+        )
+        prompt["requirements"].append(
+            "If zh-CN reference uses fullwidth punctuation for a key, mirror that punctuation width in translation."
+        )
+        if fullwidth_examples:
+            prompt["fullwidth_punctuation_examples"] = fullwidth_examples
 
     payload = {
         "model": model,
@@ -215,7 +236,28 @@ def request_openrouter_translation(
     if missing:
         raise RuntimeError(f"Model response missing keys for {lang}: {', '.join(missing)}")
 
-    return {key: translations[key] for key in keys}
+    ordered = {key: translations[key] for key in keys}
+    return normalize_punctuation_style(lang=lang, translations=ordered, zh_map=zh_map)
+
+
+def normalize_punctuation_style(
+    lang: str,
+    translations: dict[str, str],
+    zh_map: dict[str, str],
+) -> dict[str, str]:
+    if lang not in {"ja", "ko", "zh-CN"}:
+        return translations
+
+    replacements = {":": "：", "!": "！", "?": "？"}
+    normalized: dict[str, str] = {}
+    for key, value in translations.items():
+        target = value
+        zh_value = zh_map.get(key, "")
+        for ascii_punc, fullwidth_punc in replacements.items():
+            if fullwidth_punc in zh_value:
+                target = target.replace(ascii_punc, fullwidth_punc)
+        normalized[key] = target
+    return normalized
 
 
 def apply_translations_to_source(
@@ -226,25 +268,50 @@ def apply_translations_to_source(
     object_block, lang_blocks, _ = collect_i18n_data(source, object_name)
     body = object_block.body
 
-    insertions: list[tuple[int, str]] = []
+    replacements: list[tuple[int, int, str]] = []
     for lang, translations in updates.items():
         if not translations:
             continue
         lang_block = lang_blocks.get(lang)
         if not lang_block:
             continue
-        lines = [f"    {key}: {json.dumps(value, ensure_ascii=False)},\n" for key, value in translations.items()]
-        insertions.append((lang_block.body_end, "".join(lines)))
+        updated_lang_body = build_updated_lang_body(lang_block.body, translations)
+        if updated_lang_body != lang_block.body:
+            replacements.append((lang_block.body_start, lang_block.body_end, updated_lang_body))
 
-    if not insertions:
+    if not replacements:
         return source
 
     updated_body = body
-    for index, text_to_insert in sorted(insertions, key=lambda item: item[0], reverse=True):
-        updated_body = updated_body[:index] + text_to_insert + updated_body[index:]
+    for start, end, replacement in sorted(replacements, key=lambda item: item[0], reverse=True):
+        updated_body = updated_body[:start] + replacement + updated_body[end:]
 
     updated_block = f"{object_block.prefix}{updated_body}{object_block.suffix}"
     return source[: object_block.start] + updated_block + source[object_block.end :]
+
+
+def build_updated_lang_body(lang_body: str, translations: dict[str, str]) -> str:
+    lines = lang_body.splitlines(keepends=True)
+    key_line_indices = [i for i, line in enumerate(lines) if re.search(r"[A-Za-z0-9_]+\s*:\s*\"", line)]
+    if not key_line_indices:
+        return lang_body
+
+    packed_style = any(len(re.findall(r"[A-Za-z0-9_]+\s*:\s*\"", lines[i])) > 1 for i in key_line_indices)
+    last_key_idx = key_line_indices[-1]
+    last_key_line = lines[last_key_idx]
+    indent_match = re.match(r"(\s*)", last_key_line)
+    indent = indent_match.group(1) if indent_match else "    "
+    entries = [f"{key}: {json.dumps(value, ensure_ascii=False)}," for key, value in translations.items()]
+    line_ending = "\r\n" if last_key_line.endswith("\r\n") else "\n" if last_key_line.endswith("\n") else ""
+
+    if packed_style:
+        inserted_line = f"{indent}{' '.join(entries)}{line_ending}"
+        insert_at = last_key_idx + 1
+        return "".join(lines[:insert_at] + [inserted_line] + lines[insert_at:])
+
+    inserted_lines = "".join(f"{indent}{entry}{line_ending}" for entry in entries)
+    insert_at = last_key_idx + 1
+    return "".join(lines[:insert_at] + [inserted_lines] + lines[insert_at:])
 
 
 def resolve_target(args: argparse.Namespace) -> tuple[Path, str]:
