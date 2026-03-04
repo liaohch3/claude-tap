@@ -35,6 +35,10 @@ done
 
 port="${PR_REVIEW_PORT:-3456}"
 repo_path="${PR_REVIEW_REPO_PATH:-$(pwd)}"
+cd "$repo_path" || {
+  echo "error: failed to cd to repo path: $repo_path" >&2
+  exit 1
+}
 mkdir -p /tmp
 
 echo "Installing review bot dependencies..."
@@ -63,5 +67,4 @@ if [ "$daemon" -eq 1 ]; then
   exit 0
 fi
 
-cd "$repo_path"
 python3 scripts/pr_review_bot.py

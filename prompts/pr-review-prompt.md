@@ -42,18 +42,18 @@ Read and enforce these project standards (all files are in the repo):
 
 ```bash
 # 如果有具体行的问题，用 inline comment：
-gh pr review {pr_number} --request-changes --body "你的 review 内容（Markdown 格式，中文）"
+gh pr review {pr_number} --request-changes --body "Your review body in {output_language} Markdown"
 
 # 或者如果一切 OK：
-gh pr review {pr_number} --approve --body "LGTM. 简要说明..."
+gh pr review {pr_number} --approve --body "LGTM. Brief summary..."
 
 # 或者只是建议：
-gh pr comment {pr_number} --body "你的评论"
+gh pr comment {pr_number} --body "Your comment in {output_language}"
 ```
 
 ### Review 格式要求（写在 --body 里）
 
-用中文，Markdown 格式：
+Use {output_language} and Markdown format:
 
 ```
 ## 🤖 自动 Code Review

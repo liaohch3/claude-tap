@@ -8,7 +8,10 @@ import hashlib
 import hmac
 import json
 import logging
+import os
+import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -29,8 +32,10 @@ LOG = logging.getLogger("pr-review-bot")
 @dataclass
 class ReviewBotConfig:
     webhook_secret: str
+    allow_insecure_webhooks: bool
     repo_path: str
     review_agent: str
+    output_language: str
     review_timeout: int
     port: int
     ignore_users: set[str]
@@ -38,12 +43,25 @@ class ReviewBotConfig:
 
 
 def load_config() -> ReviewBotConfig:
-    import os
+    review_agent = (os.environ.get("PR_REVIEW_AGENT", "codex") or "").strip().lower()
+    if review_agent not in {"codex", "claude"}:
+        LOG.warning("Unsupported PR_REVIEW_AGENT=%r, fallback to codex", review_agent)
+        review_agent = "codex"
+
+    output_language = (os.environ.get("PR_REVIEW_OUTPUT_LANGUAGE", "zh") or "").strip().lower()
+    if output_language not in {"zh", "en"}:
+        LOG.warning("Unsupported PR_REVIEW_OUTPUT_LANGUAGE=%r, fallback to zh", output_language)
+        output_language = "zh"
+
+    insecure_raw = (os.environ.get("PR_REVIEW_ALLOW_INSECURE_WEBHOOKS", "") or "").strip().lower()
+    allow_insecure_webhooks = insecure_raw in {"1", "true", "yes", "on"}
 
     return ReviewBotConfig(
         webhook_secret=os.environ.get("PR_REVIEW_WEBHOOK_SECRET", ""),
+        allow_insecure_webhooks=allow_insecure_webhooks,
         repo_path=os.environ.get("PR_REVIEW_REPO_PATH", os.getcwd()),
-        review_agent=os.environ.get("PR_REVIEW_AGENT", "codex"),
+        review_agent=review_agent,
+        output_language=output_language,
         review_timeout=int(os.environ.get("PR_REVIEW_TIMEOUT", "600")),
         port=int(os.environ.get("PR_REVIEW_PORT", "3456")),
         ignore_users=set(
@@ -74,7 +92,7 @@ def setup_logging(log_file: str) -> None:
 
 def verify_webhook_signature(secret: str, body: bytes, signature_header: str) -> bool:
     if not secret:
-        return True
+        return False
     if not signature_header.startswith("sha256="):
         return False
     expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
@@ -105,7 +123,7 @@ def should_process_pull_request(
 # ---------------------------------------------------------------------------
 
 
-def build_review_prompt(pr: dict[str, Any], diff: str) -> str:
+def build_review_prompt(pr: dict[str, Any], diff: str, output_language: str) -> str:
     """Build review prompt from template, substituting PR metadata."""
     prompt_path = Path(__file__).parent.parent / "prompts" / "pr-review-prompt.md"
     template = (
@@ -125,17 +143,29 @@ def build_review_prompt(pr: dict[str, Any], diff: str) -> str:
         pr_body=pr.get("body", "") or "(empty)",
         head_ref=pr.get("head", {}).get("ref", "unknown"),
         base_ref=pr.get("base", {}).get("ref", "main"),
+        output_language=output_language,
         diff_text=truncated_diff,
     )
 
 
 def fetch_diff(repo_path: str, pr_number: int, base_ref: str, head_ref: str) -> str:
+    _ = head_ref
     cwd = repo_path
     subprocess.run(
-        ["git", "fetch", "origin", f"pull/{pr_number}/head:pr-{pr_number}"],
+        ["git", "fetch", "origin", f"+pull/{pr_number}/head:pr-{pr_number}"],
         cwd=cwd,
         capture_output=True,
+        text=True,
         timeout=60,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "fetch", "origin", base_ref],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
     )
     result = subprocess.run(
         ["git", "diff", f"origin/{base_ref}...pr-{pr_number}"],
@@ -143,13 +173,60 @@ def fetch_diff(repo_path: str, pr_number: int, base_ref: str, head_ref: str) -> 
         capture_output=True,
         text=True,
         timeout=60,
+        check=True,
     )
     return result.stdout
 
 
-def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
+def _agent_shell_command(agent: str, agent_task: str, output_file: Path, status_file: Path) -> str:
+    if agent == "claude":
+        runner = f"claude --dangerously-skip-permissions {shlex.quote(agent_task)}"
+    else:
+        runner = f"codex --dangerously-bypass-approvals-and-sandbox {shlex.quote(agent_task)}"
+    return (
+        "set -uo pipefail; "
+        f"{runner} > {shlex.quote(str(output_file))} 2>&1; "
+        f"status=$?; printf '%s' \"$status\" > {shlex.quote(str(status_file))}; "
+        'exit "$status"'
+    )
+
+
+def _wait_for_agent(
+    *,
+    session_name: str,
+    status_file: Path,
+    timeout_seconds: int,
+    cancel_event: threading.Event,
+) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if cancel_event.is_set():
+            subprocess.run(["tmux", "kill-session", "-t", session_name], check=False, capture_output=True)
+            raise TimeoutError("review cancelled by newer event")
+        if status_file.exists():
+            status = status_file.read_text(encoding="utf-8").strip() or "1"
+            if status != "0":
+                raise RuntimeError(f"agent exited with status {status}")
+            return
+        tmux_state = subprocess.run(
+            ["tmux", "has-session", "-t", session_name],
+            capture_output=True,
+        )
+        if tmux_state.returncode != 0:
+            raise RuntimeError("agent session terminated unexpectedly before reporting status")
+        time.sleep(2)
+    subprocess.run(["tmux", "kill-session", "-t", session_name], check=False, capture_output=True)
+    raise TimeoutError(f"agent timeout after {timeout_seconds}s")
+
+
+def run_review(
+    config: ReviewBotConfig,
+    pr: dict[str, Any],
+    diff: str,
+    cancel_event: threading.Event,
+) -> str:
     """Run Codex/Claude to review a PR. Agent posts review directly via gh CLI."""
-    prompt = build_review_prompt(pr, diff)
+    prompt = build_review_prompt(pr, diff, config.output_language)
     pr_num = pr["number"]
     run_id = uuid.uuid4().hex[:6]
     session_name = f"pr-review-{pr_num}-{run_id}"
@@ -157,6 +234,8 @@ def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
     # Write prompt to temp file (avoid shell arg length limits)
     work_dir = Path(tempfile.mkdtemp(prefix=f"pr-review-{pr_num}-"))
     prompt_file = work_dir / "prompt.md"
+    output_file = work_dir / "agent-output.log"
+    status_file = work_dir / "agent-status.txt"
     prompt_file.write_text(prompt, encoding="utf-8")
 
     # Agent reads prompt and posts review directly via gh CLI
@@ -167,58 +246,52 @@ def run_review(config: ReviewBotConfig, pr: dict[str, Any], diff: str) -> str:
         f"The PR number is {pr_num}."
     )
 
-    if config.review_agent == "codex":
-        cmd = f"codex --dangerously-bypass-approvals-and-sandbox {shlex.quote(agent_task)}"
-    else:
-        cmd = f"claude --dangerously-skip-permissions {shlex.quote(agent_task)}"
+    cmd = _agent_shell_command(config.review_agent, agent_task, output_file, status_file)
 
     subprocess.run(
         ["tmux", "new-session", "-d", "-s", session_name, cmd],
         cwd=str(config.repo_path),
         timeout=10,
+        check=True,
     )
 
-    # Wait for agent to finish
-    deadline = time.time() + config.review_timeout
-    while time.time() < deadline:
-        result = subprocess.run(
-            ["tmux", "has-session", "-t", session_name],
-            capture_output=True,
+    try:
+        _wait_for_agent(
+            session_name=session_name,
+            status_file=status_file,
+            timeout_seconds=config.review_timeout,
+            cancel_event=cancel_event,
         )
-        if result.returncode != 0:
-            break
-        time.sleep(15)
-
-    timed_out = time.time() >= deadline
-
-    # Capture tmux output to extract decision for notification
-    output = subprocess.run(
-        ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-500"],
-        capture_output=True,
-        text=True,
-    )
-    raw_output = output.stdout if output.returncode == 0 else ""
-
-    # Cleanup
-    subprocess.run(["tmux", "kill-session", "-t", session_name], capture_output=True)
-    import shutil
-
-    shutil.rmtree(work_dir, ignore_errors=True)
-
-    if timed_out:
+        raw_output = output_file.read_text(encoding="utf-8") if output_file.exists() else ""
+        LOG.info("Agent finished review for PR #%d", pr_num)
+        return raw_output
+    except TimeoutError:
+        if cancel_event.is_set():
+            raise
         LOG.warning("Review timed out for PR #%d", pr_num)
         return "(review timed out)"
-
-    LOG.info("Agent finished review for PR #%d", pr_num)
-    return raw_output
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", session_name], check=False, capture_output=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def extract_decision(raw_output: str) -> str:
     """Extract review decision from agent output."""
-    if "request-changes" in raw_output.lower() or "REQUEST_CHANGES" in raw_output:
+    for line in raw_output.splitlines():
+        normalized = line.strip().upper()
+        if normalized.startswith("DECISION:") or normalized.startswith("SUGGESTED DECISION:"):
+            if re.search(r"\bREQUEST_CHANGES\b", normalized):
+                return "REQUEST_CHANGES"
+            if re.search(r"\bAPPROVE\b", normalized):
+                return "APPROVE"
+            if re.search(r"\bCOMMENT\b", normalized):
+                return "COMMENT"
+    if re.search(r"\bgh\s+pr\s+review\b[^\n]*\s--request-changes\b", raw_output, re.IGNORECASE):
         return "REQUEST_CHANGES"
-    if "--approve" in raw_output.lower() or "APPROVE" in raw_output:
+    if re.search(r"\bgh\s+pr\s+review\b[^\n]*\s--approve\b", raw_output, re.IGNORECASE):
         return "APPROVE"
+    if re.search(r"\bgh\s+pr\s+comment\b", raw_output, re.IGNORECASE):
+        return "COMMENT"
     return "COMMENT"
 
 
@@ -252,7 +325,15 @@ def notify_openclaw(pr_number: int, review_text: str, repo: str, decision: str) 
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(token_req, timeout=10) as resp:
-            token = json.loads(resp.read())["tenant_access_token"]
+            raw_token_body = resp.read().decode("utf-8")
+            if resp.getcode() != 200:
+                LOG.warning("Feishu token request HTTP %s: %s", resp.getcode(), raw_token_body)
+                return
+            token_resp = json.loads(raw_token_body)
+            token = token_resp.get("tenant_access_token")
+            if token_resp.get("code") != 0 or not token:
+                LOG.warning("Feishu token request failed: %s", raw_token_body)
+                return
 
         # Build message
         short_review = review_text[:800]
@@ -295,6 +376,7 @@ class ReviewOrchestrator:
         self._config = config
         self._lock = threading.Lock()
         self._active: dict[int, threading.Thread] = {}
+        self._cancel: dict[int, threading.Event] = {}
 
     def submit_review(self, payload: dict[str, Any]) -> None:
         pr = payload["pull_request"]
@@ -303,8 +385,17 @@ class ReviewOrchestrator:
 
         with self._lock:
             old = self._active.pop(pr_num, None)
+            old_cancel = self._cancel.pop(pr_num, None)
             if old and old.is_alive():
                 LOG.info("Cancelling previous review for PR #%d", pr_num)
+                if old_cancel:
+                    old_cancel.set()
+        if old and old.is_alive():
+            old.join(timeout=5)
+            if old.is_alive():
+                LOG.warning("Previous review thread still running for PR #%d", pr_num)
+
+        cancel_event = threading.Event()
 
         def _worker() -> None:
             try:
@@ -318,16 +409,27 @@ class ReviewOrchestrator:
                 if not diff.strip():
                     LOG.warning("Empty diff for PR #%d, skipping", pr_num)
                     return
-                raw_output = run_review(self._config, pr, diff)
+                raw_output = run_review(self._config, pr, diff, cancel_event)
+                if cancel_event.is_set():
+                    LOG.info("Skipping notification for cancelled review PR #%d", pr_num)
+                    return
                 decision = extract_decision(raw_output)
                 LOG.info("Review decision for PR #%d: %s", pr_num, decision)
                 notify_openclaw(pr_num, raw_output, repo, decision)
+            except TimeoutError:
+                LOG.info("Review cancelled for PR #%d", pr_num)
             except Exception:
                 LOG.exception("Review failed for PR #%d", pr_num)
+            finally:
+                with self._lock:
+                    if self._active.get(pr_num) is threading.current_thread():
+                        self._active.pop(pr_num, None)
+                        self._cancel.pop(pr_num, None)
 
         t = threading.Thread(target=_worker, name=f"review-pr-{pr_num}", daemon=True)
         with self._lock:
             self._active[pr_num] = t
+            self._cancel[pr_num] = cancel_event
         t.start()
 
 
@@ -349,7 +451,10 @@ def create_app(config: ReviewBotConfig, orchestrator: ReviewOrchestrator) -> Any
         x_github_event = request.headers.get("x-github-event", "")
         x_hub_signature_256 = request.headers.get("x-hub-signature-256", "")
         body = await request.body()
-        payload = json.loads(body.decode("utf-8"))
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "invalid json payload"}, status_code=400)
 
         # smee-client wraps the payload: {"payload": "<json string>", "x-github-event": "..."}
         if "payload" in payload and isinstance(payload.get("payload"), str):
@@ -357,12 +462,19 @@ def create_app(config: ReviewBotConfig, orchestrator: ReviewOrchestrator) -> Any
             inner_sig = payload.get("x-hub-signature-256", "")
             inner_event = payload.get("x-github-event", x_github_event)
             inner_body = payload["payload"].encode("utf-8")
-            if inner_sig and config.webhook_secret:
+            if config.webhook_secret and not inner_sig:
+                return JSONResponse({"error": "missing signature"}, status_code=401)
+            if config.webhook_secret:
                 if not verify_webhook_signature(config.webhook_secret, inner_body, inner_sig):
                     return JSONResponse({"error": "invalid signature"}, status_code=401)
             x_github_event = inner_event
-            payload = json.loads(payload["payload"])
-        elif x_hub_signature_256 and config.webhook_secret:
+            try:
+                payload = json.loads(payload["payload"])
+            except json.JSONDecodeError:
+                return JSONResponse({"error": "invalid json payload"}, status_code=400)
+        elif config.webhook_secret:
+            if not x_hub_signature_256:
+                return JSONResponse({"error": "missing signature"}, status_code=401)
             if not verify_webhook_signature(config.webhook_secret, body, x_hub_signature_256):
                 return JSONResponse({"error": "invalid signature"}, status_code=401)
         ok, reason = should_process_pull_request(
@@ -396,12 +508,16 @@ def main() -> int:
 
     config = load_config()
     setup_logging(config.log_file)
+    if not args.dry_run and not config.webhook_secret and not config.allow_insecure_webhooks:
+        raise RuntimeError("PR_REVIEW_WEBHOOK_SECRET is required unless PR_REVIEW_ALLOW_INSECURE_WEBHOOKS is set")
     LOG.info(
-        "Loaded config: agent=%s repo=%s timeout=%ss port=%s",
+        "Loaded config: agent=%s repo=%s timeout=%ss port=%s output_language=%s insecure_webhooks=%s",
         config.review_agent,
         config.repo_path,
         config.review_timeout,
         config.port,
+        config.output_language,
+        config.allow_insecure_webhooks,
     )
 
     if args.dry_run:

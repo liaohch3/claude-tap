@@ -1,6 +1,6 @@
 # 本地 PR 自动 Review 机器人使用指南
 
-本文档说明如何在本地运行 webhook 驱动的 PR review 机器人，并自动把审查结果回贴到 GitHub PR。
+本文档说明如何在本地运行 webhook 驱动的 PR review 机器人，并自动把审查结果回帖到 GitHub PR。
 
 ## 1. 前置条件
 
@@ -30,6 +30,7 @@ uv sync --extra review-bot --dev
 export PR_REVIEW_WEBHOOK_SECRET="your_webhook_secret"
 export PR_REVIEW_REPO_PATH="/absolute/path/to/this/repo"
 export PR_REVIEW_AGENT="codex"   # or claude
+export PR_REVIEW_OUTPUT_LANGUAGE="zh"  # zh or en
 export PR_REVIEW_TIMEOUT="600"
 export PR_REVIEW_PORT="3456"
 ```
@@ -39,6 +40,7 @@ export PR_REVIEW_PORT="3456"
 ```bash
 export PR_REVIEW_IGNORE_USERS="github-actions[bot],dependabot[bot]"
 export PR_REVIEW_LOG_FILE="/tmp/pr-review-bot.log"
+export PR_REVIEW_ALLOW_INSECURE_WEBHOOKS="false"  # only for local debug
 export SMEE_URL="https://smee.io/your-channel"
 ```
 
@@ -92,8 +94,9 @@ curl -s http://127.0.0.1:${PR_REVIEW_PORT:-3456}/health
 3. 忽略 bot 自身账号触发的 PR（避免循环）。
 4. 同一 PR 新事件到达时取消旧任务，只保留最新任务。
 5. 执行：
-   - `git fetch origin pull/<number>/head:pr-<number>`
-   - `git diff <base>...pr-<number>`
+   - `git fetch origin +pull/<number>/head:pr-<number>`
+   - `git fetch origin <base>`
+   - `git diff origin/<base>...pr-<number>`
 6. 根据 `prompts/pr-review-prompt.md` 生成 prompt。
 7. 在 tmux session 中调用 `codex` 或 `claude` 完成 review。
 8. 10 分钟超时控制，超时或失败会记录日志。
@@ -115,7 +118,7 @@ curl -s http://127.0.0.1:${PR_REVIEW_PORT:-3456}/health
 1. webhook 返回 401  
    检查 `PR_REVIEW_WEBHOOK_SECRET` 与 GitHub Webhook Secret 是否一致。
 
-2. review 未回贴  
+2. review 未回帖  
    检查 `gh auth status`，确认 token 权限包含 PR review/comment。
 
 3. agent 命令失败  
