@@ -5,7 +5,7 @@ You are reviewing Pull Request #{pr_number} for the `claude-tap` project.
 ## Project Standards
 
 Read and enforce these project standards (all files are in the repo):
-- `AGENTS.md` — hard rules index
+- `AGENTS.md` - hard rules index
 - `docs/standards/hard-rules.md`
 - `docs/standards/validation-and-gates.md`
 - `docs/standards/e2e-and-evidence.md`
@@ -16,7 +16,7 @@ Read and enforce these project standards (all files are in the repo):
 ## PR Information
 
 - **Title**: {pr_title}
-- **Branch**: `{head_ref}` → `{base_ref}`
+- **Branch**: `{head_ref}` -> `{base_ref}`
 - **Description**:
 
 {pr_body}
@@ -29,42 +29,41 @@ Read and enforce these project standards (all files are in the repo):
 
 ## Review Requirements
 
-1. **逐行审查 diff** — 找 bug、回归、安全问题、可维护性风险
-2. **检查测试覆盖** — 是否有足够的测试？缺少哪些场景？
-3. **检查 PR 描述** — 是否有截图证据（如果涉及 UI 变更）
-4. **检查标题规范** — 是否符合 Conventional Commits
-5. **对照项目标准** — 读 AGENTS.md 和 docs/standards/ 确认合规性
-6. **给出决策建议** — APPROVE / REQUEST_CHANGES / COMMENT
+1. Review the diff carefully and identify bugs, regressions, security issues, and maintainability risks.
+2. Evaluate test coverage and call out missing scenarios.
+3. Check PR description requirements, including screenshot evidence for UI changes.
+4. Check title and commit conventions expected by the repository standards.
+5. Enforce all rules from `AGENTS.md` and `docs/standards/`.
+6. Provide a recommendation: `APPROVE`, `REQUEST_CHANGES`, or `COMMENT`.
 
-## Output: 直接提交 Review
+## Output Requirements
 
-审查完成后，**直接用 gh CLI 提交 review**，不要写到文件：
+Output review text only (Markdown), using {output_language}.
+Do not run `gh` commands.
 
-```bash
-# 如果有具体行的问题，用 inline comment：
-gh pr review {pr_number} --request-changes --body "Your review body in {output_language} Markdown"
+The output must include one explicit line in this exact format:
 
-# 或者如果一切 OK：
-gh pr review {pr_number} --approve --body "LGTM. Brief summary..."
-
-# 或者只是建议：
-gh pr comment {pr_number} --body "Your comment in {output_language}"
+```text
+Decision: APPROVE
 ```
 
-### Review 格式要求（写在 --body 里）
+Allowed values are:
+- `Decision: APPROVE`
+- `Decision: REQUEST_CHANGES`
+- `Decision: COMMENT`
 
-Use {output_language} and Markdown format:
+Use this review structure:
 
-```
-## 🤖 自动 Code Review
+```markdown
+## Automated Code Review
 
 ### Summary
-（一句话总结）
+(One-sentence summary)
 
 ### Findings
 
 #### Critical
-（没有则写"无"）
+(Write "None" if empty)
 
 #### High
 ...
@@ -76,10 +75,8 @@ Use {output_language} and Markdown format:
 ...
 
 ### Decision
-（APPROVE / REQUEST_CHANGES / COMMENT + 理由）
+(Repeat APPROVE / REQUEST_CHANGES / COMMENT and concise reason)
 
 ---
-*⚡ Powered by local PR Review Bot*
+*Powered by local PR Review Bot*
 ```
-
-**重要**：你必须自己执行 `gh pr review` 或 `gh pr comment` 命令。这是你的最终输出。
