@@ -1,26 +1,22 @@
 name: Publish to PyPI
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
+  push:
+    tags:
+      - "v*"
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      !contains(github.event.workflow_run.head_commit.message, '[skip publish]')
     environment: pypi
     permissions:
       id-token: write
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Install uv
@@ -29,28 +25,21 @@ jobs:
       - name: Set up Python
         run: uv python install 3.13
 
-      - name: Bump patch version
-        id: bump
+      - name: Read version from pyproject.toml
+        id: version
         run: |
-          current=$(python3 -c "
-          import re
-          m = re.search(r'version = \"(.+?)\"', open('pyproject.toml').read())
-          print(m.group(1))
-          ")
-          IFS='.' read -r major minor patch <<< "$current"
-          new_version="$major.$minor.$((patch + 1))"
-          sed -i "s/version = \"$current\"/version = \"$new_version\"/" pyproject.toml
-          echo "version=$new_version" >> "$GITHUB_OUTPUT"
-          echo "Bumped $current -> $new_version"
+          project_version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "pyproject_version=$project_version" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and tag
+      - name: Validate tag matches project version
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml
-          git commit -m "chore: release v${{ steps.bump.outputs.version }} [skip publish]"
-          git tag -f "v${{ steps.bump.outputs.version }}"
-          git push origin main --tags --force
+          tag_version="${GITHUB_REF_NAME#v}"
+          project_version="${{ steps.version.outputs.pyproject_version }}"
+
+          if [ "$tag_version" != "$project_version" ]; then
+            echo "Tag version ($tag_version) does not match pyproject.toml version ($project_version)."
+            exit 1
+          fi
 
       - name: Build package
         run: uv build
@@ -60,30 +49,46 @@ jobs:
 
       - name: Create GitHub Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          version="${{ steps.bump.outputs.version }}"
-          notes="$(git log -n 20 --pretty=format:'- %h %s')"
-          gh release create "v${version}" \
-            --title "v${version}" \
-            --notes "${notes}"
+          current_tag="$GITHUB_REF_NAME"
+          previous_tag=$(git tag --sort=-creatordate | grep '^v' | grep -vx "$current_tag" | head -n1 || true)
+
+          {
+            echo "## Changes"
+            echo
+            if [ -n "$previous_tag" ]; then
+              git log --pretty=format:'- %s (%h)' "$previous_tag..$current_tag"
+            else
+              git log --pretty=format:'- %s (%h)' "$current_tag"
+            fi
+          } > release_notes.md
+
+          if ! grep -q '^- ' release_notes.md; then
+            echo "- Release $current_tag" >> release_notes.md
+          fi
+
+          gh release create "$current_tag" \
+            --verify-tag \
+            --title "$current_tag" \
+            --notes-file release_notes.md
 
       - name: Verify PyPI install
         run: |
-          version="${{ steps.bump.outputs.version }}"
+          version="${{ steps.version.outputs.pyproject_version }}"
+          python3 -m pip install --upgrade pip
+
           for attempt in 1 2 3 4 5; do
-            python3 -m venv .venv-pypi-check
-            . .venv-pypi-check/bin/activate
-            python -m pip install --upgrade pip
-            if python -m pip install "claude-tap==${version}"; then
-              deactivate
-              rm -rf .venv-pypi-check
+            echo "Attempt $attempt/5: pip install claude-tap==$version"
+            if python3 -m pip install "claude-tap==$version"; then
+              python3 -c "from importlib import metadata; assert metadata.version('claude-tap') == '$version'"
               exit 0
             fi
-            deactivate
-            rm -rf .venv-pypi-check
-            echo "PyPI package not ready yet (attempt ${attempt}/5), retrying in 30s..."
+
+            if [ "$attempt" -eq 5 ]; then
+              echo "Failed to install claude-tap==$version from PyPI after 5 attempts."
+              exit 1
+            fi
+
             sleep 30
           done
-          echo "Failed to install claude-tap==${version} from PyPI."
-          exit 1
