@@ -1,4 +1,9 @@
-# Claude Tap 配置与启动指南（OpenClaw 集成）
+---
+name: openclaw-claude-tap-setup
+description: Configure and launch claude-tap as a local proxy for OpenClaw integration. Use when setting up claude-tap with OpenClaw, troubleshooting API proxy issues, or managing trace collection in an OpenClaw environment.
+---
+
+# Claude Tap 配置与启动指南（OpenClaw 集成时注意必读）
 
 ## 背景
 
