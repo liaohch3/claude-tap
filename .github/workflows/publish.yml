@@ -49,11 +49,41 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add pyproject.toml
           git commit -m "chore: release v${{ steps.bump.outputs.version }} [skip publish]"
-          git tag "v${{ steps.bump.outputs.version }}"
-          git push origin main --tags
+          git tag -f "v${{ steps.bump.outputs.version }}"
+          git push origin main --tags --force
 
       - name: Build package
         run: uv build
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.bump.outputs.version }}"
+          notes="$(git log -n 20 --pretty=format:'- %h %s')"
+          gh release create "v${version}" \
+            --title "v${version}" \
+            --notes "${notes}"
+
+      - name: Verify PyPI install
+        run: |
+          version="${{ steps.bump.outputs.version }}"
+          for attempt in 1 2 3 4 5; do
+            python3 -m venv .venv-pypi-check
+            . .venv-pypi-check/bin/activate
+            python -m pip install --upgrade pip
+            if python -m pip install "claude-tap==${version}"; then
+              deactivate
+              rm -rf .venv-pypi-check
+              exit 0
+            fi
+            deactivate
+            rm -rf .venv-pypi-check
+            echo "PyPI package not ready yet (attempt ${attempt}/5), retrying in 30s..."
+            sleep 30
+          done
+          echo "Failed to install claude-tap==${version} from PyPI."
+          exit 1
