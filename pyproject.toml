@@ -50,6 +50,10 @@ dev = [
     "pexpect>=4.9",
     "ruff>=0.11",
 ]
+review-bot = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.31,<1",
+]
 
 [tool.ruff]
 target-version = "py311"
