@@ -24,6 +24,15 @@ scripts/run_real_e2e_tmux.sh
 
 如果无法运行真实 E2E（例如缺少 auth/token），在 PR 正文中记录原因与剩余风险。
 
+# 代理/路由变更的额外要求
+
+如果变更影响 URL 构造、路径 strip、target 选择或代理转发逻辑：
+
+1. 参照 `docs/support-matrix.md` 中的支持矩阵，确认所有组合的 URL 构造正确。
+2. 运行 `test_codex_upstream_url_construction` 验证 URL 断言。
+3. 至少对一种真实后端做 tmux E2E 验证（如果 auth 可用）。
+4. 不要将 proxy 请求失败归因为"环境问题"，除非已确认构造的 upstream URL 正确。
+
 # E2E 对话规则
 
 每次 E2E 运行必须至少包含一次完整的多轮对话。

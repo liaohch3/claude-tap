@@ -295,7 +295,7 @@ async def async_main(args: argparse.Namespace):
             "writer": writer,
             "session": session,
             "turn_counter": 0,
-            "strip_path_prefix": "/v1" if args.client == "codex" else "",
+            "strip_path_prefix": "/v1" if args.client == "codex" and "api.openai.com" not in args.target else "",
         }
         app.router.add_route("*", "/{path_info:.*}", proxy_handler)
 

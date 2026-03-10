@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Pre-commit gate checks — mirrors CI lint job.
+# Install: git config core.hooksPath .githooks
+set -e
+
+echo "🔍 pre-commit: ruff check"
+uv run ruff check .
+
+echo "🔍 pre-commit: ruff format --check"
+uv run ruff format --check .
+
+echo "✅ pre-commit: all checks passed"

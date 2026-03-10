@@ -395,7 +395,7 @@ class TestViewerGlobalSearch:
             browser_page.set_viewport_size({"width": 1180, "height": 360})
             browser_page.goto(f"file://{html_path}")
             browser_page.wait_for_selector(".sidebar-item", timeout=10000)
-            browser_page.locator(".sidebar-item").nth(target_idx).click()
+            browser_page.locator(f".sidebar-item[data-idx='{target_idx}']").click()
             browser_page.wait_for_timeout(120)
             browser_page.evaluate("document.querySelector('.act-btn:nth-child(3)')?.click()")
             browser_page.wait_for_selector(".diff-overlay", timeout=3000)

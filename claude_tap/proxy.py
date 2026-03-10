@@ -107,7 +107,9 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
 
     model = req_body.get("model", "") if isinstance(req_body, dict) else ""
     log_prefix = f"[Turn {turn}]"
-    log.info(f"{log_prefix} → {request.method} {request.path} (model={model}, stream={is_streaming})")
+    log.info(
+        f"{log_prefix} → {request.method} {request.path} (model={model}, stream={is_streaming}, upstream={upstream_url})"
+    )
 
     # Request identity encoding from upstream to avoid client-side zstd decode issues
     # and to simplify SSE/text reconstruction.
@@ -398,9 +400,9 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         ws_connect_kwargs["proxy"] = proxy_url
         if proxy_auth is not None:
             ws_connect_kwargs["proxy_auth"] = proxy_auth
-        log.info(f"{log_prefix} → WS UPGRADE {request.path_qs} (via proxy {proxy_url})")
+        log.info(f"{log_prefix} → WS UPGRADE {request.path_qs} (upstream={upstream_ws_url}, via proxy {proxy_url})")
     else:
-        log.info(f"{log_prefix} → WS UPGRADE {request.path_qs}")
+        log.info(f"{log_prefix} → WS UPGRADE {request.path_qs} (upstream={upstream_ws_url})")
 
     # Connect to upstream first — if it fails, return HTTP 502 before upgrading
     try:
