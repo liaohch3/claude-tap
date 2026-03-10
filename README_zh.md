@@ -38,6 +38,8 @@ pip install claude-tap
 
 ## 使用
 
+### Claude Code
+
 ```bash
 # 基本用法 — 启动带 trace 的 Claude Code
 claude-tap
@@ -49,15 +51,94 @@ claude-tap --tap-live
 claude-tap -- --model claude-opus-4-6
 claude-tap -c    # 继续上次对话
 
-# 追踪 Codex CLI 而非 Claude Code
-claude-tap --tap-client codex
-claude-tap --tap-client codex -- --model codex-mini-latest
+# 跳过所有权限确认（自动批准工具调用）
+claude-tap -- --dangerously-skip-permissions
+
+# 全功能组合：实时查看器 + 跳过权限确认 + 指定模型
+claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
-客户端退出后，打开生成的 HTML 查看器：
+### Codex CLI
+
+Codex CLI 支持两种认证方式，对应不同的上游目标：
+
+| 认证方式 | 如何认证 | 上游目标 | 说明 |
+|---------|---------|---------|------|
+| **OAuth**（ChatGPT 付费套餐） | `codex login` | `https://chatgpt.com/backend-api/codex` | ChatGPT Plus/Pro/Team 用户默认方式 |
+| **API Key** | 设置 `OPENAI_API_KEY` | `https://api.openai.com`（默认） | 通过 OpenAI Platform 按量付费 |
+
+```bash
+# OAuth 用户（ChatGPT Plus/Pro/Team）— 需指定 target
+claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex
+
+# API Key 用户 — 默认 target 即可
+claude-tap --tap-client codex
+
+# 指定模型
+claude-tap --tap-client codex -- --model codex-mini-latest
+
+# 全自动模式（跳过所有权限确认）
+claude-tap --tap-client codex -- --full-auto
+
+# OAuth + 全自动 + 实时查看器
+claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+```
+
+### 浏览器预览
+
+```bash
+# 客户端退出后自动在浏览器中打开 HTML 查看器（默认开启）
+claude-tap --tap-open
+
+# 禁用自动打开
+claude-tap --tap-no-open
+
+# 实时模式 — 客户端运行时在浏览器中实时查看
+claude-tap --tap-live
+claude-tap --tap-live --tap-live-port 3000    # 固定实时查看器端口
+```
+
+客户端退出后，也可以手动打开生成的查看器：
 
 ```bash
 open .traces/trace_*.html
+```
+
+### 纯代理模式
+
+仅启动代理，不自动启动客户端 — 适用于自定义场景或在另一个终端手动连接：
+
+```bash
+# Claude Code
+claude-tap --tap-no-launch --tap-port 8080
+# 在另一个终端:
+ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
+
+# Codex CLI（OAuth）
+claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 8080
+# 在另一个终端:
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
+
+# Codex CLI（API Key）
+claude-tap --tap-client codex --tap-no-launch --tap-port 8080
+# 在另一个终端:
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
+```
+
+### 常用组合
+
+```bash
+# 追踪 Claude Code：实时查看器 + 自动批准
+claude-tap --tap-live -- --dangerously-skip-permissions
+
+# 追踪 Codex（OAuth）：实时查看器 + 全自动
+claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+
+# 自定义 trace 输出目录
+claude-tap --tap-output-dir ./my-traces
+
+# 仅保留最近 10 次 trace
+claude-tap --tap-max-traces 10
 ```
 
 ### CLI 选项
@@ -66,41 +147,20 @@ open .traces/trace_*.html
 
 ```
 --tap-client CLIENT      启动的客户端: claude（默认）或 codex
+--tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               启动实时查看器（自动打开浏览器）
 --tap-live-port PORT     实时查看器端口（默认: 自动分配）
---tap-open               退出后自动在浏览器中打开 HTML 查看器
+--tap-open               退出后自动在浏览器中打开 HTML 查看器（默认开启）
+--tap-no-open            退出后不自动打开 HTML 查看器
 --tap-output-dir DIR     Trace 输出目录（默认: ./.traces）
 --tap-port PORT          代理端口（默认: 自动分配）
---tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
+--tap-host HOST          绑定地址（默认: 127.0.0.1，--tap-no-launch 模式下为 0.0.0.0）
 --tap-no-launch          仅启动代理，不启动客户端
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
+--tap-proxy-mode MODE    代理模式: reverse（默认）或 forward
 ```
-
-**纯代理模式**（适用于自定义场景）：
-
-```bash
-claude-tap --tap-no-launch --tap-port 8080
-# 在另一个终端:
-ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
-```
-
-### Codex CLI 支持
-
-追踪 [Codex CLI](https://github.com/openai/codex)（OpenAI）而非 Claude Code：
-
-```bash
-# 启动带 trace 的 Codex
-claude-tap --tap-client codex
-
-# 指定模型
-claude-tap --tap-client codex -- --model codex-mini-latest
-```
-
-在反向代理模式（默认）下，claude-tap 通过设置 `OPENAI_BASE_URL` 将 Codex 流量路由到代理。上游目标默认为 `https://api.openai.com`。
-
-**前提条件:** 已安装 Codex CLI，且环境变量中已设置 `OPENAI_API_KEY`。
 
 ## 查看器功能
 

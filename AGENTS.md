@@ -2,11 +2,19 @@
 
 本文件是贡献者规则的入口。详细策略文本位于 `docs/standards/*.md`。
 
+## Pre-commit Hook
+
+项目提供了 `.githooks/pre-commit` 自动在 commit 前运行 lint 检查。首次 clone 后执行：
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## 不可协商规则
 
 以下规则是强制性的，并会在 review 中执行：
 
-1. 每次 commit 前运行 gate 检查：`uv run ruff check .`、`uv run ruff format --check .`、`uv run pytest tests/ -x --timeout=60`。
+1. 每次 commit 前运行 gate 检查：`uv run ruff check .`、`uv run ruff format --check .`、`uv run pytest tests/ -x --timeout=60`。启用 pre-commit hook 可自动执行 lint 检查。
 2. UI 变更要求在 PR 中提供使用 `raw.githubusercontent.com` 绝对 URL 的截图。
 3. 每个 commit 只处理一个关注点（不要在同一 commit 中混合 refactor 与 feature/fix）。
 4. 代码/注释/文档/commit 仅使用英文，`README_zh.md` 除外。
@@ -24,6 +32,7 @@
 - 编码与运行时安全规则：`docs/standards/coding-and-runtime.md`
 - 工作流、review 与 Brain/Hands 协议：`docs/standards/workflow-and-review.md`
 - 调试方法论与反模式：`docs/standards/debugging-standards.md`
+- 客户端支持矩阵与 URL 构造规则：`docs/support-matrix.md`
 - 标准文档元数据与维护流程：`docs/standards/README.md`
 
 ## 可读性检查

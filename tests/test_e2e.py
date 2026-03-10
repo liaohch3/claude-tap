@@ -79,12 +79,16 @@ print("[fake-claude] Done.")
 
 
 def run_fake_upstream_in_thread():
-    """Start fake upstream in a background thread with its own event loop."""
+    """Start fake upstream in a background thread with its own event loop.
+
+    Returns (stop_fn, actual_port) where actual_port is the OS-assigned port.
+    """
     from aiohttp import web
 
     ready = threading.Event()
     loop = None
     runner = None
+    actual_port_holder: list[int] = []
 
     async def handler(request):
         body = await request.read()
@@ -163,8 +167,9 @@ def run_fake_upstream_in_thread():
         app.router.add_route("*", "/{path_info:.*}", handler)
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, "127.0.0.1", FAKE_UPSTREAM_PORT)
+        site = web.TCPSite(runner, "127.0.0.1", 0)  # OS-assigned port
         await site.start()
+        actual_port_holder.append(site._server.sockets[0].getsockname()[1])
         ready.set()
         # Run forever until loop is stopped
         while True:
@@ -180,6 +185,8 @@ def run_fake_upstream_in_thread():
             pass
         finally:
             try:
+                if runner:
+                    loop.run_until_complete(runner.cleanup())
                 loop.run_until_complete(loop.shutdown_asyncgens())
             except RuntimeError:
                 pass
@@ -191,23 +198,32 @@ def run_fake_upstream_in_thread():
 
     def stop():
         if loop and loop.is_running():
+            # Clean up runner first to release the port
+            import concurrent.futures
+
+            if runner:
+                fut = asyncio.run_coroutine_threadsafe(runner.cleanup(), loop)
+                try:
+                    fut.result(timeout=3)
+                except (concurrent.futures.TimeoutError, RuntimeError):
+                    pass
             loop.call_soon_threadsafe(loop.stop)
         t.join(timeout=3)
 
-    return stop
+    return stop, actual_port_holder[0] if actual_port_holder else FAKE_UPSTREAM_PORT
 
 
 def test_e2e():
-    stop_upstream = run_fake_upstream_in_thread()
-    print(f"[test] Fake upstream on :{FAKE_UPSTREAM_PORT}")
+    stop_upstream, upstream_port = run_fake_upstream_in_thread()
+    print(f"[test] Fake upstream on :{upstream_port}")
 
     try:
-        _run_test()
+        _run_test(upstream_port)
     finally:
         stop_upstream()
 
 
-def _run_test():
+def _run_test(upstream_port):
     project_dir = Path(__file__).parent
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_")
 
@@ -233,7 +249,7 @@ def _run_test():
                 trace_dir,
                 "--tap-no-open",
                 "--tap-target",
-                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                f"http://127.0.0.1:{upstream_port}",
             ],
             cwd=str(project_dir),
             env=env,
@@ -1601,6 +1617,14 @@ def test_detect_installer():
 
 FAKE_PYPI_PORT = 19210
 
+# Minimal fake claude that exits immediately without making any upstream
+# requests.  Used by version-check tests which only care about the update
+# banner printed by claude-tap itself, not about proxied API traffic.
+FAKE_CLAUDE_NOOP_SCRIPT = r'''#!/usr/bin/env python3
+"""Fake claude CLI -- exits immediately (no network calls)."""
+print("[fake-claude] noop exit")
+'''
+
 
 @pytest.mark.slow
 def test_version_check_with_fake_pypi():
@@ -1623,7 +1647,7 @@ def test_version_check_with_fake_pypi():
 
     project_dir = Path(__file__).parent
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_update_")
-    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_SCRIPT)
+    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_NOOP_SCRIPT)
 
     try:
         env = os.environ.copy()
@@ -1639,7 +1663,7 @@ def test_version_check_with_fake_pypi():
                 trace_dir,
                 "--tap-no-open",
                 "--tap-target",
-                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                "http://127.0.0.1:1",  # dummy target; noop client never connects
                 "--tap-no-auto-update",
             ],
             cwd=str(project_dir),
@@ -1653,8 +1677,8 @@ def test_version_check_with_fake_pypi():
         assert "99.0.0" in proc.stdout
         print("  OK: update available detected")
         print("  test_version_check_with_fake_pypi PASSED")
-    except subprocess.TimeoutExpired:
-        print("  TIMEOUT")
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError("claude_tap subprocess timed out (30s) — possible port conflict or hang") from exc
     finally:
         server.shutdown()
         _cleanup(trace_dir, fake_bin_dir, "update_check")
@@ -1685,7 +1709,7 @@ def test_version_check_no_update():
 
     project_dir = Path(__file__).parent
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_noupdate_")
-    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_SCRIPT)
+    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_NOOP_SCRIPT)
 
     try:
         env = os.environ.copy()
@@ -1701,7 +1725,7 @@ def test_version_check_no_update():
                 trace_dir,
                 "--tap-no-open",
                 "--tap-target",
-                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                "http://127.0.0.1:1",  # dummy target; noop client never connects
             ],
             cwd=str(project_dir),
             env=env,
@@ -1713,8 +1737,8 @@ def test_version_check_no_update():
         assert "Update available" not in proc.stdout, f"Unexpected 'Update available' in stdout:\n{proc.stdout}"
         print("  OK: no update message when version matches")
         print("  test_version_check_no_update PASSED")
-    except subprocess.TimeoutExpired:
-        print("  TIMEOUT")
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError("claude_tap subprocess timed out (30s) — possible port conflict or hang") from exc
     finally:
         server.shutdown()
         _cleanup(trace_dir, fake_bin_dir, "no_update")
@@ -1841,7 +1865,7 @@ def test_e2e_with_cleanup():
     """E2E test: pre-fill traces, run claude-tap with --tap-max-traces, verify cleanup."""
     from claude_tap import _register_trace
 
-    stop_upstream = run_fake_upstream_in_thread()
+    stop_upstream, upstream_port = run_fake_upstream_in_thread()
 
     project_dir = Path(__file__).parent
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_cleanup_")
@@ -1870,7 +1894,7 @@ def test_e2e_with_cleanup():
                 trace_dir,
                 "--tap-no-open",
                 "--tap-target",
-                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                f"http://127.0.0.1:{upstream_port}",
                 "--tap-max-traces",
                 "3",
                 "--tap-no-update-check",
@@ -2111,6 +2135,65 @@ def test_parse_args_proxy_mode():
     print("  OK: forward mode with other flags")
 
     print("  test_parse_args_proxy_mode PASSED")
+
+
+## ---------------------------------------------------------------------------
+## Test: Codex upstream URL construction for all (target × path) combos
+## ---------------------------------------------------------------------------
+
+
+def test_codex_upstream_url_construction():
+    """Verify that strip_path_prefix produces correct upstream URLs for all Codex backends.
+
+    This is a regression guard for the bug where strip_path_prefix="/v1" combined
+    with target="https://api.openai.com" produced wrong URLs like
+    https://api.openai.com/responses instead of https://api.openai.com/v1/responses.
+
+    See: docs/error-experience/entries/2026-03-10-codex-strip-prefix-url-mismatch.md
+    """
+    from claude_tap import parse_args
+
+    def _build_upstream(target: str, strip_prefix: str, request_path: str) -> str:
+        fwd_path = request_path
+        if strip_prefix and fwd_path.startswith(strip_prefix):
+            fwd_path = fwd_path[len(strip_prefix) :] or "/"
+        return target.rstrip("/") + "/" + fwd_path.lstrip("/")
+
+    # Case 1: API Key mode — target=api.openai.com, should NOT strip /v1
+    args = parse_args(["--tap-client", "codex"])
+    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    url = _build_upstream(args.target, strip, "/v1/responses")
+    assert url == "https://api.openai.com/v1/responses", f"API Key mode URL wrong: {url}"
+    print("  OK: api.openai.com + /v1/responses → correct")
+
+    # Case 2: OAuth mode — target=chatgpt.com, should strip /v1
+    args = parse_args(["--tap-client", "codex", "--tap-target", "https://chatgpt.com/backend-api/codex"])
+    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    url = _build_upstream(args.target, strip, "/v1/responses")
+    assert url == "https://chatgpt.com/backend-api/codex/responses", f"OAuth mode URL wrong: {url}"
+    print("  OK: chatgpt.com + /v1/responses → correct")
+
+    # Case 3: API Key mode with /v1/models path
+    args = parse_args(["--tap-client", "codex"])
+    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    url = _build_upstream(args.target, strip, "/v1/models")
+    assert url == "https://api.openai.com/v1/models", f"API Key models URL wrong: {url}"
+    print("  OK: api.openai.com + /v1/models → correct")
+
+    # Case 4: OAuth mode with /v1/models path
+    args = parse_args(["--tap-client", "codex", "--tap-target", "https://chatgpt.com/backend-api/codex"])
+    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    url = _build_upstream(args.target, strip, "/v1/models")
+    assert url == "https://chatgpt.com/backend-api/codex/models", f"OAuth models URL wrong: {url}"
+    print("  OK: chatgpt.com + /v1/models → correct")
+
+    # Case 5: Claude client should never strip
+    args = parse_args(["--tap-client", "claude"])
+    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    assert strip == "", "Claude client should never strip path prefix"
+    print("  OK: claude client has no strip prefix")
+
+    print("  test_codex_upstream_url_construction PASSED")
 
 
 ## ---------------------------------------------------------------------------

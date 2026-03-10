@@ -38,6 +38,8 @@ Upgrade: `uv tool upgrade claude-tap` or `pip install --upgrade claude-tap`
 
 ## Usage
 
+### Claude Code
+
 ```bash
 # Basic — launch Claude Code with tracing
 claude-tap
@@ -49,15 +51,94 @@ claude-tap --tap-live
 claude-tap -- --model claude-opus-4-6
 claude-tap -c    # continue last conversation
 
-# Trace Codex CLI instead of Claude Code
-claude-tap --tap-client codex
-claude-tap --tap-client codex -- --model codex-mini-latest
+# Skip all permission prompts (auto-accept tool calls)
+claude-tap -- --dangerously-skip-permissions
+
+# Full-power combo: live viewer + skip permissions + specific model
+claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
-When the client exits, open the generated HTML viewer:
+### Codex CLI
+
+Codex CLI supports two authentication modes with different upstream targets:
+
+| Auth Mode | How to authenticate | Upstream target | Notes |
+|-----------|-------------------|-----------------|-------|
+| **OAuth** (ChatGPT subscription) | `codex login` | `https://chatgpt.com/backend-api/codex` | Default for ChatGPT Plus/Pro/Team users |
+| **API Key** | Set `OPENAI_API_KEY` | `https://api.openai.com` (default) | Pay-per-use via OpenAI Platform |
+
+```bash
+# OAuth users (ChatGPT Plus/Pro/Team) — must specify target
+claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex
+
+# API Key users — default target works out of the box
+claude-tap --tap-client codex
+
+# With specific model
+claude-tap --tap-client codex -- --model codex-mini-latest
+
+# Full auto-approval (skip all permission prompts)
+claude-tap --tap-client codex -- --full-auto
+
+# OAuth + full auto + live viewer
+claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+```
+
+### Browser Preview
+
+```bash
+# Auto-open HTML viewer in browser when client exits (default: on)
+claude-tap --tap-open
+
+# Disable auto-open
+claude-tap --tap-no-open
+
+# Live mode — real-time viewer opens in browser while client runs
+claude-tap --tap-live
+claude-tap --tap-live --tap-live-port 3000    # fixed port for live viewer
+```
+
+When the client exits, you can also manually open the generated viewer:
 
 ```bash
 open .traces/trace_*.html
+```
+
+### Proxy-Only Mode
+
+Start the proxy without launching a client — useful for custom setups or connecting from a separate terminal:
+
+```bash
+# Claude Code
+claude-tap --tap-no-launch --tap-port 8080
+# In another terminal:
+ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
+
+# Codex CLI (OAuth)
+claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 8080
+# In another terminal:
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
+
+# Codex CLI (API Key)
+claude-tap --tap-client codex --tap-no-launch --tap-port 8080
+# In another terminal:
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
+```
+
+### Common Combos
+
+```bash
+# Trace Claude Code with live viewer and auto-accept
+claude-tap --tap-live -- --dangerously-skip-permissions
+
+# Trace Codex (OAuth) with live viewer and full auto
+claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+
+# Save traces to a custom directory
+claude-tap --tap-output-dir ./my-traces
+
+# Keep only the last 10 trace sessions
+claude-tap --tap-max-traces 10
 ```
 
 ### CLI Options
@@ -66,41 +147,20 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
 --tap-client CLIENT      Client to launch: claude (default) or codex
+--tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
---tap-open               Open HTML viewer in browser after exit
+--tap-open               Open HTML viewer in browser after exit (default: on)
+--tap-no-open            Don't auto-open HTML viewer after exit
 --tap-output-dir DIR     Trace output directory (default: ./.traces)
 --tap-port PORT          Proxy port (default: auto)
---tap-target URL         Upstream API URL (default: auto per client)
+--tap-host HOST          Bind address (default: 127.0.0.1, or 0.0.0.0 in --tap-no-launch mode)
 --tap-no-launch          Only start the proxy, don't launch client
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
+--tap-proxy-mode MODE    Proxy mode: reverse (default) or forward
 ```
-
-**Proxy-only mode** (useful for custom setups):
-
-```bash
-claude-tap --tap-no-launch --tap-port 8080
-# In another terminal:
-ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
-```
-
-### Codex CLI Support
-
-To trace [Codex CLI](https://github.com/openai/codex) (OpenAI) instead of Claude Code:
-
-```bash
-# Launch Codex with tracing
-claude-tap --tap-client codex
-
-# With specific model
-claude-tap --tap-client codex -- --model codex-mini-latest
-```
-
-In reverse proxy mode (default), claude-tap sets `OPENAI_BASE_URL` to route Codex traffic through the proxy. The upstream target defaults to `https://api.openai.com`.
-
-**Requirements:** Codex CLI installed and `OPENAI_API_KEY` set in your environment.
 
 ## Viewer Features
 

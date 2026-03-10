@@ -91,5 +91,8 @@ demo-tui*.svg
 test_and_view.sh
 test_e2e_tap.sh
 
+# Runtime logs
+log/
+
 # Ruff / lint cache
 .ruff_cache/
