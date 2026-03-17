@@ -86,7 +86,7 @@ claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex
 
 ### OpenClaw
 
-[OpenClaw](https://github.com/openclaw-ai/openclaw) (npm: `openclaw`) is a self-hosted AI agent gateway. It routes API calls through [pi-ai](https://github.com/mariozechner/pi-ai) internally, so a small one-time patch is needed to redirect traffic through claude-tap.
+[OpenClaw](https://github.com/openclaw-ai/openclaw) (npm: `openclaw`) is a self-hosted AI agent gateway. It routes API calls through [pi-ai](https://github.com/mariozechner/pi-ai) internally. The setup differs by model provider.
 
 **Step 1 — Start claude-tap in proxy-only mode**
 
@@ -100,34 +100,37 @@ claude-tap --tap-no-launch --tap-target https://api.anthropic.com --tap-port 199
 claude-tap --tap-no-launch --tap-target https://chatgpt.com/backend-api --tap-port 19999 --tap-live
 ```
 
-**Step 2 — Patch pi-ai to route through the proxy**
+**Step 2 — Route traffic through the proxy**
 
-Locate the pi-ai dist directory inside the global OpenClaw install:
+For **Anthropic** (Claude) models — add a provider override to OpenClaw's `models.json`. No source files need to be modified:
+
+```bash
+AGENT_DIR=~/.openclaw/agents/main/agent
+python3 -c "
+import json, sys
+path = '$AGENT_DIR/models.json'
+try:
+    cfg = json.load(open(path))
+except Exception:
+    cfg = {'providers': {}}
+cfg['providers']['anthropic'] = {'baseUrl': 'http://127.0.0.1:19999'}
+json.dump(cfg, open(path, 'w'), indent=2)
+print('Done')
+"
+```
+
+For **OpenAI Codex** models — the Codex provider uses a hardcoded endpoint that ignores `model.baseUrl`, so a one-line source patch is required:
 
 ```bash
 PI_AI="$(npm root -g)/openclaw/node_modules/@mariozechner/pi-ai/dist"
-```
-
-For **Anthropic** (Claude) models — patch the base URL in the model registry:
-
-```bash
-sed -i '' 's|https://api.anthropic.com|http://127.0.0.1:19999|g' "$PI_AI/models.generated.js"
-```
-
-For **OpenAI Codex** models — two patches are required because `openai-codex-responses.js` uses a hardcoded endpoint that ignores `model.baseUrl`:
-
-```bash
-# Patch the model registry
-sed -i '' 's|https://chatgpt.com/backend-api|http://127.0.0.1:19999|g' "$PI_AI/models.generated.js"
-
-# Patch the hardcoded Codex endpoint
-sed -i '' 's|https://chatgpt.com/backend-api/codex/responses|http://127.0.0.1:19999/codex/responses|g' \
-    "$PI_AI/providers/openai-codex-responses.js"
+sed -i '' \
+  's|https://chatgpt.com/backend-api/codex/responses|http://127.0.0.1:19999/codex/responses|g' \
+  "$PI_AI/providers/openai-codex-responses.js"
 ```
 
 **Step 3 — Restart OpenClaw with compile cache disabled**
 
-Node.js module compile cache will otherwise shadow the patched files:
+Node.js module compile cache will otherwise shadow the patched file:
 
 ```bash
 NODE_DISABLE_COMPILE_CACHE=1 openclaw gateway --force
@@ -135,7 +138,7 @@ NODE_DISABLE_COMPILE_CACHE=1 openclaw gateway --force
 
 Traces will now appear in the live viewer for every conversation turn.
 
-> **Note:** These patches modify `node_modules` files and will be lost after `npm update openclaw`. Re-apply them after upgrading.
+> **Note for Codex users:** The source patch modifies a `node_modules` file and will be lost after `npm update openclaw`. Re-apply it after upgrading.
 
 ### Browser Preview
 

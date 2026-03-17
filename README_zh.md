@@ -86,7 +86,7 @@ claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex
 
 ### OpenClaw
 
-[OpenClaw](https://github.com/openclaw-ai/openclaw)（npm: `openclaw`）是一个自托管 AI 智能体网关。它通过内部的 [pi-ai](https://github.com/mariozechner/pi-ai) 管理 API 路由，需要对其进行一次性的路径修改，才能将流量转发到 claude-tap。
+[OpenClaw](https://github.com/openclaw-ai/openclaw)（npm: `openclaw`）是一个自托管 AI 智能体网关，通过内部的 [pi-ai](https://github.com/mariozechner/pi-ai) 管理 API 路由。不同模型服务商的配置方式有所不同。
 
 **第一步 — 以纯代理模式启动 claude-tap**
 
@@ -100,29 +100,32 @@ claude-tap --tap-no-launch --tap-target https://api.anthropic.com --tap-port 199
 claude-tap --tap-no-launch --tap-target https://chatgpt.com/backend-api --tap-port 19999 --tap-live
 ```
 
-**第二步 — 修改 pi-ai，将请求转发到代理**
+**第二步 — 将流量转发到代理**
 
-定位全局安装的 OpenClaw 中的 pi-ai dist 目录：
+使用 **Anthropic 系列模型**（Claude）时，通过 OpenClaw 的 `models.json` 覆盖 provider 配置即可，无需修改任何源文件：
+
+```bash
+AGENT_DIR=~/.openclaw/agents/main/agent
+python3 -c "
+import json, sys
+path = '$AGENT_DIR/models.json'
+try:
+    cfg = json.load(open(path))
+except Exception:
+    cfg = {'providers': {}}
+cfg['providers']['anthropic'] = {'baseUrl': 'http://127.0.0.1:19999'}
+json.dump(cfg, open(path, 'w'), indent=2)
+print('Done')
+"
+```
+
+使用 **OpenAI Codex 系列模型**时，因为 Codex provider 使用了不受 `model.baseUrl` 控制的硬编码端点，需要对源文件进行一处修改：
 
 ```bash
 PI_AI="$(npm root -g)/openclaw/node_modules/@mariozechner/pi-ai/dist"
-```
-
-使用 **Anthropic 系列模型**（Claude）时，修改模型注册表中的 base URL：
-
-```bash
-sed -i '' 's|https://api.anthropic.com|http://127.0.0.1:19999|g' "$PI_AI/models.generated.js"
-```
-
-使用 **OpenAI Codex 系列模型**时，需要两处修改——因为 `openai-codex-responses.js` 使用了硬编码的端点地址，不受 `model.baseUrl` 控制：
-
-```bash
-# 修改模型注册表
-sed -i '' 's|https://chatgpt.com/backend-api|http://127.0.0.1:19999|g' "$PI_AI/models.generated.js"
-
-# 修改硬编码的 Codex 端点
-sed -i '' 's|https://chatgpt.com/backend-api/codex/responses|http://127.0.0.1:19999/codex/responses|g' \
-    "$PI_AI/providers/openai-codex-responses.js"
+sed -i '' \
+  's|https://chatgpt.com/backend-api/codex/responses|http://127.0.0.1:19999/codex/responses|g' \
+  "$PI_AI/providers/openai-codex-responses.js"
 ```
 
 **第三步 — 禁用编译缓存后重启 OpenClaw**
@@ -135,7 +138,7 @@ NODE_DISABLE_COMPILE_CACHE=1 openclaw gateway --force
 
 之后每次对话都会在实时查看器中生成新的 trace 记录。
 
-> **注意：** 以上修改的是 `node_modules` 中的文件，执行 `npm update openclaw` 后会被覆盖。升级后需重新执行修改步骤。
+> **Codex 用户注意：** 以上修改的是 `node_modules` 中的文件，执行 `npm update openclaw` 后会被覆盖，升级后需重新执行修改步骤。
 
 ### 浏览器预览
 
