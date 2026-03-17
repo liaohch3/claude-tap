@@ -1879,7 +1879,7 @@ function getEntrySearchText(entry) {
   (body?.tools || []).forEach(td => parts.push(JSON.stringify(td)));
   const output = getResponseOutput(resolved);
   if (output?.content) parts.push(msgToText({ role: 'assistant', content: output.content }));
-  (resolved.response?.sse_events || []).forEach(ev => parts.push(JSON.stringify(ev)));
+  getResponseEvents(resolved).forEach(ev => parts.push(JSON.stringify(ev)));
   parts.push(JSON.stringify(resolved));
   const text = parts.join('\n').toLowerCase();
   globalSearchState.textCache.set(entry.request_id, text);
@@ -2461,11 +2461,11 @@ function renderDetail(e) {
   const msgs = getMessages(reqBody);
   if (msgs && msgs.length) html += section(t('section_messages'), renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'));
 
-  const respOutput = respBody?.content ? respBody : getResponseOutput(e);
+  const respOutput = getResponseOutput(e);
   if (respOutput?.content) html += section(t('section_response'), renderResponseContent(respOutput), true);
 
-  const sseEvents = e.response?.sse_events;
-  if (sseEvents && sseEvents.length) html += section(t('section_sse'), renderSSEEvents(sseEvents), false, null, sseEvents.length + ' ' + t('badge_events'));
+  const streamEvents = getResponseEvents(e);
+  if (streamEvents.length) html += section(t('section_sse'), renderSSEEvents(streamEvents), false, null, streamEvents.length + ' ' + t('badge_events'));
 
   html += section(t('section_json'), `<div class="json-view">${syntaxHL(e)}</div>`, false, JSON.stringify(e, null, 2));
 
@@ -2488,15 +2488,44 @@ function extractSystem(body) {
   return null;
 }
 
+function getResponseEvents(entry) {
+  const sse = entry?.response?.sse_events;
+  if (Array.isArray(sse) && sse.length > 0) return sse;
+  const ws = entry?.response?.ws_events;
+  return Array.isArray(ws) ? ws : [];
+}
+
+function getEventType(event) {
+  if (!event || typeof event !== 'object') return '';
+  return typeof event.event === 'string' ? event.event : (typeof event.type === 'string' ? event.type : '');
+}
+
+function getEventData(event) {
+  if (!event || typeof event !== 'object') return null;
+  let data = Object.prototype.hasOwnProperty.call(event, 'data') ? event.data : event;
+  if (typeof data === 'string') {
+    try { data = JSON.parse(data); } catch(e) { return null; }
+  }
+  return data && typeof data === 'object' ? data : null;
+}
+
 // Normalize messages from Chat Completions (body.messages) or Responses API (body.input)
 function getMessages(body) {
   if (!body) return [];
   if (Array.isArray(body.messages) && body.messages.length > 0) return body.messages;
   if (Array.isArray(body.input)) {
-    return body.input.filter(item => item.type === 'message').map(item => ({
+    return body.input.filter(item => {
+      if (!item || typeof item !== 'object') return false;
+      if (typeof item.role !== 'string' || !item.role) return false;
+      return item.type === undefined || item.type === 'message';
+    }).map(item => ({
       role: item.role || 'user',
       content: Array.isArray(item.content)
-        ? item.content.map(c => c.type === 'input_text' ? { type: 'text', text: c.text } : c)
+        ? item.content.map(c => {
+            if (!c || typeof c !== 'object') return c;
+            if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { type: 'text', text: c.text };
+            return c;
+          })
         : item.content
     }));
   }
@@ -2507,52 +2536,48 @@ function getMessages(body) {
 function getUsage(entry) {
   const u = entry?.response?.body?.usage;
   if (u) return u;
-  const sse = entry?.response?.sse_events;
-  if (Array.isArray(sse)) {
-    for (let i = sse.length - 1; i >= 0; i--) {
-      if (sse[i].event === 'response.completed') {
-        let data = sse[i].data;
-        if (typeof data === 'string') { try { data = JSON.parse(data); } catch(e) { continue; } }
-        if (data?.response?.usage) return data.response.usage;
-      }
-    }
+  const events = getResponseEvents(entry);
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (getEventType(events[i]) !== 'response.completed') continue;
+    const data = getEventData(events[i]);
+    if (data?.response?.usage) return data.response.usage;
   }
   return null;
+}
+
+function normalizeResponseOutput(output) {
+  if (!Array.isArray(output) || output.length === 0) return null;
+  const content = [];
+  for (const item of output) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'message' && Array.isArray(item.content)) {
+      for (const c of item.content) {
+        if (c?.type === 'output_text') content.push({ type: 'text', text: c.text });
+        else content.push(c);
+      }
+    } else if (item.type === 'function_call') {
+      content.push({ type: 'tool_use', name: item.name, input: item.arguments ? (typeof item.arguments === 'string' ? (() => { try { return JSON.parse(item.arguments); } catch(e) { return item.arguments; } })() : item.arguments) : {} });
+    } else if (item.type === 'reasoning') {
+      if (!item.summary) continue;
+      const summaryText = Array.isArray(item.summary) ? item.summary.map(s => s?.text || '').join('\n') : (item.summary.text || JSON.stringify(item.summary));
+      if (summaryText.trim()) content.push({ type: 'thinking', thinking: summaryText });
+    }
+  }
+  return content.length > 0 ? { content } : null;
 }
 
 // Extract response output from response.body.content or SSE response.completed event
 function getResponseOutput(entry) {
   const body = entry?.response?.body;
   if (body?.content) return body;
-  const sse = entry?.response?.sse_events;
-  if (Array.isArray(sse)) {
-    for (let i = sse.length - 1; i >= 0; i--) {
-      if (sse[i].event === 'response.completed') {
-        let data = sse[i].data;
-        if (typeof data === 'string') { try { data = JSON.parse(data); } catch(e) { continue; } }
-        const output = data?.response?.output;
-        if (Array.isArray(output) && output.length > 0) {
-          // Convert Responses API output to content blocks for rendering
-          const content = [];
-          for (const item of output) {
-            if (item.type === 'message' && Array.isArray(item.content)) {
-              for (const c of item.content) {
-                if (c.type === 'output_text') content.push({ type: 'text', text: c.text });
-                else content.push(c);
-              }
-            } else if (item.type === 'function_call') {
-              content.push({ type: 'tool_use', name: item.name, input: item.arguments ? (typeof item.arguments === 'string' ? (() => { try { return JSON.parse(item.arguments); } catch(e) { return item.arguments; } })() : item.arguments) : {} });
-            } else if (item.type === 'reasoning') {
-              if (item.summary) {
-                const summaryText = Array.isArray(item.summary) ? item.summary.map(s => s.text || '').join('\n') : (item.summary.text || JSON.stringify(item.summary));
-                content.push({ type: 'thinking', thinking: summaryText });
-              }
-            }
-          }
-          if (content.length > 0) return { content };
-        }
-      }
-    }
+  const fromBody = normalizeResponseOutput(body?.output);
+  if (fromBody) return fromBody;
+  const events = getResponseEvents(entry);
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (getEventType(events[i]) !== 'response.completed') continue;
+    const data = getEventData(events[i]);
+    const normalized = normalizeResponseOutput(data?.response?.output);
+    if (normalized) return normalized;
   }
   return null;
 }
@@ -2571,7 +2596,11 @@ function renderContent(content, role) {
   if (!Array.isArray(content)) return `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
   return content.map(block => {
     if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') { const txt = block.text || ''; if (!txt.trim()) return ''; return `<div class="content-block">${esc(txt)}</div>`; }
-    if (block.type === 'thinking') return `<div class="content-block"><span class="thinking-label">thinking</span><div class="pre-text">${esc(block.thinking || '')}</div></div>`;
+    if (block.type === 'thinking') {
+      const thinking = block.thinking || '';
+      if (!thinking.trim()) return '';
+      return `<div class="content-block"><span class="thinking-label">thinking</span><div class="pre-text">${esc(thinking)}</div></div>`;
+    }
     if (block.type === 'tool_use') return `<div class="content-block"><span class="tool-use-label">${esc(block.name || 'tool_use')}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre></div>`;
     if (block.type === 'tool_result') {
       const rc = block.content;
@@ -2645,9 +2674,11 @@ function renderTokenUsage(u) {
 
 function renderSSEEvents(events) {
   return events.map(e => {
-    const data = typeof e.data === 'string' ? e.data : JSON.stringify(e.data);
+    const eventType = getEventType(e) || 'event';
+    const payload = Object.prototype.hasOwnProperty.call(e, 'data') ? e.data : e;
+    const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
     const short = data.length > 200 ? data.substring(0, 200) + '...' : data;
-    return `<div class="sse-event"><span class="sse-type">${esc(e.event)}</span><span class="sse-data">${esc(short)}</span></div>`;
+    return `<div class="sse-event"><span class="sse-type">${esc(eventType)}</span><span class="sse-data">${esc(short)}</span></div>`;
   }).join('');
 }
 

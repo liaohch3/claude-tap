@@ -15,6 +15,78 @@ except Exception:
 LAZY_THRESHOLD = 50
 
 
+def _iter_response_events(resp: dict) -> list[dict]:
+    """Return stream events from SSE or WebSocket traces."""
+    if not isinstance(resp, dict):
+        return []
+    events = resp.get("sse_events")
+    if isinstance(events, list) and events:
+        return events
+    events = resp.get("ws_events")
+    if isinstance(events, list):
+        return events
+    return []
+
+
+def _event_type(event: dict) -> str:
+    if not isinstance(event, dict):
+        return ""
+    value = event.get("event") or event.get("type")
+    return value if isinstance(value, str) else ""
+
+
+def _event_payload(event: dict) -> dict | None:
+    if not isinstance(event, dict):
+        return None
+    payload = event.get("data", event)
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _extract_request_messages(body: dict) -> list[dict]:
+    if not isinstance(body, dict):
+        return []
+    msgs = body.get("messages")
+    if isinstance(msgs, list) and msgs:
+        return [msg for msg in msgs if isinstance(msg, dict)]
+
+    inp = body.get("input")
+    if not isinstance(inp, list):
+        return []
+
+    normalized = []
+    for item in inp:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") not in (None, "message") and "role" not in item:
+            continue
+        role = item.get("role")
+        if not isinstance(role, str) or not role:
+            continue
+        normalized.append({"role": role, "content": item.get("content")})
+    return normalized
+
+
+def _extract_response_tool_names(output: list) -> list[str]:
+    names: list[str] = []
+    if not isinstance(output, list):
+        return names
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "message":
+            for c in item.get("content") or []:
+                if isinstance(c, dict) and c.get("type") == "tool_use":
+                    names.append(c.get("name", ""))
+        elif item.get("type") == "function_call":
+            names.append(item.get("name", ""))
+    return names
+
+
 def _extract_metadata(record_json: str) -> dict | None:
     """Extract sidebar-relevant metadata from a raw JSON record string.
 
@@ -30,23 +102,19 @@ def _extract_metadata(record_json: str) -> dict | None:
     body = req.get("body") or {}
     resp = r.get("response") or {}
     resp_body = resp.get("body") or {}
+    stream_events = _iter_response_events(resp)
 
-    # Token usage — from response.body.usage or SSE response.completed
+    # Token usage — from response.body.usage or terminal stream event
     usage = resp_body.get("usage") or {}
     if not usage:
-        sse = resp.get("sse_events") or []
-        for ev in reversed(sse):
-            if ev.get("event") == "response.completed":
-                data = ev.get("data")
-                if isinstance(data, str):
-                    try:
-                        data = json.loads(data)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                if isinstance(data, dict):
-                    usage = (data.get("response") or {}).get("usage") or {}
-                    if usage:
-                        break
+        for ev in reversed(stream_events):
+            if _event_type(ev) != "response.completed":
+                continue
+            data = _event_payload(ev)
+            if isinstance(data, dict):
+                usage = (data.get("response") or {}).get("usage") or {}
+                if usage:
+                    break
 
     # System prompt hint (first 200 chars)
     sys_text = ""
@@ -64,10 +132,7 @@ def _extract_metadata(record_json: str) -> dict | None:
         sys_text = body["instructions"]
 
     # Messages
-    msgs = body.get("messages") or []
-    if not msgs:
-        inp = body.get("input") or []
-        msgs = [item for item in inp if isinstance(item, dict) and item.get("type") == "message"]
+    msgs = _extract_request_messages(body)
 
     # Tool names from request
     tools = body.get("tools") or []
@@ -77,32 +142,22 @@ def _extract_metadata(record_json: str) -> dict | None:
     response_tool_names = []
     # Try response.body.content first
     rc = resp_body.get("content") or []
-    if not rc:
-        # Try SSE response.completed
-        sse = resp.get("sse_events") or []
-        for ev in reversed(sse):
-            if ev.get("event") == "response.completed":
-                data = ev.get("data")
-                if isinstance(data, str):
-                    try:
-                        data = json.loads(data)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                if isinstance(data, dict):
-                    output = (data.get("response") or {}).get("output") or []
-                    for item in output:
-                        if isinstance(item, dict):
-                            if item.get("type") == "message":
-                                for c in item.get("content") or []:
-                                    if isinstance(c, dict) and c.get("type") == "tool_use":
-                                        response_tool_names.append(c.get("name", ""))
-                            elif item.get("type") == "function_call":
-                                response_tool_names.append(item.get("name", ""))
-                    break
-    else:
+    if rc:
         for block in rc:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 response_tool_names.append(block.get("name", ""))
+    else:
+        response_tool_names.extend(_extract_response_tool_names(resp_body.get("output") or []))
+    if not response_tool_names:
+        for ev in reversed(stream_events):
+            if _event_type(ev) != "response.completed":
+                continue
+            data = _event_payload(ev)
+            if isinstance(data, dict):
+                response_tool_names.extend(
+                    _extract_response_tool_names((data.get("response") or {}).get("output") or [])
+                )
+                break
 
     # Error info
     error_msg = ""

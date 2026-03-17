@@ -54,6 +54,12 @@ class SSEReassembler:
         try:
             if event_type == "message_start":
                 self._snapshot = copy.deepcopy(data.get("message", {}))
+            elif event_type in ("response.created", "response.completed", "response.done"):
+                response = data.get("response")
+                if isinstance(response, dict):
+                    self._snapshot = copy.deepcopy(response)
+                elif event_type in ("response.completed", "response.done"):
+                    self._snapshot = copy.deepcopy(data)
             elif self._snapshot is None:
                 return
             elif event_type == "content_block_start":
