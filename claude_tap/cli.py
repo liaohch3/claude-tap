@@ -425,82 +425,113 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="claude-tap",
         description="Trace Claude Code or Codex API requests via a local proxy. "
         "All flags not listed below are forwarded to the selected client.",
+        epilog=(
+            "claude code:\n"
+            "  claude-tap                            Basic tracing\n"
+            "  claude-tap --tap-live                 Real-time viewer in browser\n"
+            "  claude-tap -- --model claude-opus-4-6  Pass flags to Claude Code\n"
+            "  claude-tap -- -c                      Continue last conversation\n"
+            "  claude-tap -- --dangerously-skip-permissions  Auto-accept tool calls\n"
+            "  claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6\n"
+            "\n"
+            "codex cli:\n"
+            "  # API Key users (OPENAI_API_KEY) — default target works out of the box\n"
+            "  claude-tap --tap-client codex\n"
+            "  # OAuth users (ChatGPT Plus/Pro/Team) — must specify target\n"
+            "  claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex\n"
+            "  # With model and full auto-approval\n"
+            "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
+            "\n"
+            "proxy-only mode (connect from another terminal):\n"
+            "  claude-tap --tap-no-launch --tap-port 8080\n"
+            "  # then: ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude\n"
+            "\n"
+            "export traces:\n"
+            "  claude-tap export trace.jsonl              Export to markdown\n"
+            "  claude-tap export trace.jsonl -o out.md    Export to file\n"
+            "  claude-tap export trace.jsonl --format json Export as JSON\n"
+            "\n"
+            "homepage: https://github.com/liaohch3/claude-tap"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     tap_parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
-    tap_parser.add_argument(
-        "--tap-output-dir", default="./.traces", dest="output_dir", help="Trace output directory (default: ./.traces)"
-    )
-    tap_parser.add_argument("--tap-port", type=int, default=0, dest="port", help="Proxy port (default: 0 = auto)")
-    tap_parser.add_argument(
+
+    # -- Proxy options --
+    proxy_group = tap_parser.add_argument_group("proxy options")
+    proxy_group.add_argument("--tap-port", type=int, default=0, dest="port", help="Proxy port (default: auto)")
+    proxy_group.add_argument(
         "--tap-host",
         default=None,
         dest="host",
-        help="Bind address for proxy and live viewer (default: 0.0.0.0 in --tap-no-launch mode, 127.0.0.1 otherwise)",
+        help="Bind address (default: 127.0.0.1, or 0.0.0.0 with --tap-no-launch)",
     )
-    tap_parser.add_argument(
+    proxy_group.add_argument(
         "--tap-client",
         choices=["claude", "codex"],
         default="claude",
         dest="client",
         help="Client to launch (default: claude)",
     )
-    tap_parser.add_argument(
+    proxy_group.add_argument(
         "--tap-target",
         default=None,
         dest="target",
         help="Upstream API URL (default: provider-specific)",
     )
-    tap_parser.add_argument(
+    proxy_group.add_argument(
         "--tap-proxy-mode",
         choices=["reverse", "forward"],
         default="reverse",
         dest="proxy_mode",
-        help="Proxy mode: 'reverse' sets provider base URL (default), "
-        "'forward' sets HTTPS_PROXY with CONNECT/TLS termination",
+        help="'reverse' sets provider base URL (default), 'forward' sets HTTPS_PROXY with CONNECT/TLS termination",
     )
-    tap_parser.add_argument(
+    proxy_group.add_argument(
         "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
     )
-    tap_parser.add_argument(
-        "--tap-open",
-        action="store_true",
-        dest="open_viewer",
-        default=True,
-        help="Open HTML viewer in browser after exit (default: on)",
-    )
-    tap_parser.add_argument(
+
+    # -- Viewer options --
+    viewer_group = tap_parser.add_argument_group("viewer options")
+    viewer_group.add_argument(
         "--tap-no-open",
         action="store_false",
         dest="open_viewer",
+        default=True,
         help="Don't auto-open HTML viewer after exit",
     )
-    tap_parser.add_argument(
+    viewer_group.add_argument(
         "--tap-live",
         action="store_true",
         dest="live_viewer",
         help="Start real-time viewer server (auto-opens browser)",
     )
-    tap_parser.add_argument(
+    viewer_group.add_argument(
         "--tap-live-port",
         type=int,
         default=0,
         dest="live_port",
         help="Port for live viewer server (default: auto)",
     )
-    tap_parser.add_argument(
+
+    # -- Storage & update options --
+    storage_group = tap_parser.add_argument_group("storage and update options")
+    storage_group.add_argument(
+        "--tap-output-dir", default="./.traces", dest="output_dir", help="Trace output directory (default: ./.traces)"
+    )
+    storage_group.add_argument(
         "--tap-max-traces",
         type=int,
         default=50,
         dest="max_traces",
         help="Max trace sessions to keep (default: 50, 0 = unlimited)",
     )
-    tap_parser.add_argument(
+    storage_group.add_argument(
         "--tap-no-update-check",
         action="store_true",
         dest="no_update_check",
         help="Disable PyPI update check on startup",
     )
-    tap_parser.add_argument(
+    storage_group.add_argument(
         "--tap-no-auto-update",
         action="store_true",
         dest="no_auto_update",

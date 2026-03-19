@@ -87,10 +87,7 @@ claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex
 ### Browser Preview
 
 ```bash
-# Auto-open HTML viewer in browser when client exits (default: on)
-claude-tap --tap-open
-
-# Disable auto-open
+# Disable auto-open of HTML viewer after exit (on by default)
 claude-tap --tap-no-open
 
 # Live mode — real-time viewer opens in browser while client runs
@@ -150,8 +147,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
---tap-open               Open HTML viewer in browser after exit (default: on)
---tap-no-open            Don't auto-open HTML viewer after exit
+--tap-no-open            Don't auto-open HTML viewer after exit (on by default)
 --tap-output-dir DIR     Trace output directory (default: ./.traces)
 --tap-port PORT          Proxy port (default: auto)
 --tap-host HOST          Bind address (default: 127.0.0.1, or 0.0.0.0 in --tap-no-launch mode)

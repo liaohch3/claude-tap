@@ -87,10 +87,7 @@ claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex
 ### 浏览器预览
 
 ```bash
-# 客户端退出后自动在浏览器中打开 HTML 查看器（默认开启）
-claude-tap --tap-open
-
-# 禁用自动打开
+# 禁用退出后自动打开 HTML 查看器（默认开启）
 claude-tap --tap-no-open
 
 # 实时模式 — 客户端运行时在浏览器中实时查看
@@ -150,8 +147,7 @@ claude-tap --tap-max-traces 10
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               启动实时查看器（自动打开浏览器）
 --tap-live-port PORT     实时查看器端口（默认: 自动分配）
---tap-open               退出后自动在浏览器中打开 HTML 查看器（默认开启）
---tap-no-open            退出后不自动打开 HTML 查看器
+--tap-no-open            退出后不自动打开 HTML 查看器（默认开启）
 --tap-output-dir DIR     Trace 输出目录（默认: ./.traces）
 --tap-port PORT          代理端口（默认: 自动分配）
 --tap-host HOST          绑定地址（默认: 127.0.0.1，--tap-no-launch 模式下为 0.0.0.0）
