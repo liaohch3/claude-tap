@@ -270,13 +270,13 @@ def _run_test(upstream_port):
 
     # ── Assertions ──
 
-    # Trace file exists
-    trace_files = list(Path(trace_dir).glob("*.jsonl"))
+    # Trace file exists (may be in a date-based subdirectory, e.g. trace_dir/YYYY-MM-DD/)
+    trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
     assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
     trace_file = trace_files[0]
 
     # Log file exists
-    log_files = list(Path(trace_dir).glob("*.log"))
+    log_files = list(Path(trace_dir).glob("**/*.log"))
     assert len(log_files) == 1, f"Expected 1 log file, got {log_files}"
     log_content = log_files[0].read_text()
     print(f"[test] Proxy log:\n{log_content.rstrip()}")
@@ -327,7 +327,7 @@ def _run_test(upstream_port):
     print("  ✅ Proxy log: has Turn details")
 
     # ── HTML viewer generated ──
-    html_files = list(Path(trace_dir).glob("*.html"))
+    html_files = list(Path(trace_dir).glob("**/*.html"))
     assert len(html_files) == 1, f"Expected 1 HTML file, got {html_files}"
     html_content = html_files[0].read_text()
     assert "EMBEDDED_TRACE_DATA" in html_content
@@ -524,7 +524,7 @@ def test_upstream_error():
             print(f"[test_upstream_error] stderr:\n{proc.stderr.rstrip()}")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
         trace_file = trace_files[0]
 
@@ -674,7 +674,7 @@ def test_malformed_sse():
         print("  OK: proxy did not crash")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
         trace_file = trace_files[0]
 
@@ -806,7 +806,7 @@ def test_large_payload():
         print("  OK: proxy handled large payload without crashing")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
         trace_file = trace_files[0]
 
@@ -969,7 +969,7 @@ def test_concurrent_requests():
         print("  OK: proxy handled concurrent requests without crashing")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
         trace_file = trace_files[0]
 
@@ -1287,7 +1287,7 @@ def test_codex_client_reverse_proxy():
         )
 
         assert proc.returncode == 0, f"codex mode failed: stdout={proc.stdout} stderr={proc.stderr}"
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         assert len(trace_files) == 1
         records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
         assert len(records) == 1
@@ -1560,7 +1560,7 @@ def test_upstream_unreachable():
         print("  OK: proxy did not crash")
 
         # No trace records (502 returned in-process, not from upstream)
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         if trace_files:
             with open(trace_files[0]) as f:
                 records = [json.loads(line) for line in f if line.strip()]
@@ -1568,7 +1568,7 @@ def test_upstream_unreachable():
         print("  OK: no trace records (upstream unreachable, 502 returned)")
 
         # Log should contain error info
-        log_files = list(Path(trace_dir).glob("*.log"))
+        log_files = list(Path(trace_dir).glob("**/*.log"))
         assert len(log_files) == 1
         log_content = log_files[0].read_text()
         assert "upstream error" in log_content.lower() or "connect" in log_content.lower(), (
