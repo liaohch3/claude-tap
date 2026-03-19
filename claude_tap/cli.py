@@ -238,14 +238,19 @@ async def async_main(args: argparse.Namespace):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    trace_path = output_dir / f"trace_{ts}.jsonl"
-    log_path = output_dir / f"trace_{ts}.log"
+    now = datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H%M%S")
+    ts = now.strftime("%Y%m%d_%H%M%S")  # kept for manifest compatibility
+    date_dir = output_dir / date_str
+    date_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = date_dir / f"trace_{time_str}.jsonl"
+    log_path = date_dir / f"trace_{time_str}.log"
 
     # Start live viewer server if requested
     live_server: LiveViewerServer | None = None
     if args.live_viewer:
-        live_server = LiveViewerServer(trace_path, port=args.live_port, host=args.host)
+        live_server = LiveViewerServer(trace_path, port=args.live_port, host=args.host, output_dir=output_dir)
         await live_server.start()
         print(f"🌐 Live viewer: {live_server.url}")
         _open_browser(live_server.url)
@@ -377,9 +382,9 @@ async def async_main(args: argparse.Namespace):
         _generate_html_viewer(trace_path, html_path)
 
         # Register trace and cleanup old ones
-        trace_files = [trace_path.name, log_path.name]
+        trace_files = [str(trace_path.relative_to(output_dir)), str(log_path.relative_to(output_dir))]
         if html_path.exists():
-            trace_files.append(html_path.name)
+            trace_files.append(str(html_path.relative_to(output_dir)))
         _register_trace(output_dir, ts, trace_files)
         if args.max_traces > 0:
             cleaned = _cleanup_traces(output_dir, args.max_traces)
@@ -652,11 +657,20 @@ def _cleanup_traces(output_dir: Path, max_traces: int) -> int:
     to_remove = traces[: len(traces) - max_traces]
     removed = 0
     for entry in to_remove:
+        parents_to_check: set[Path] = set()
         for fname in entry.get("files", []):
             fpath = output_dir / fname
             if fpath.exists():
+                parents_to_check.add(fpath.parent)
                 try:
                     fpath.unlink()
+                except OSError:
+                    pass
+        # Remove empty date subdirectories
+        for parent in parents_to_check:
+            if parent != output_dir and parent.is_dir() and not any(parent.iterdir()):
+                try:
+                    parent.rmdir()
                 except OSError:
                     pass
         traces.remove(entry)
@@ -672,16 +686,20 @@ def _maybe_migrate_existing(output_dir: Path, manifest: dict) -> None:
     for entry in manifest.get("traces", []):
         known_files.update(entry.get("files", []))
 
-    for jsonl in sorted(output_dir.glob("trace_*.jsonl")):
-        if jsonl.name in known_files:
+    for jsonl in sorted(output_dir.glob("**/trace_*.jsonl")):
+        rel = str(jsonl.relative_to(output_dir))
+        if rel in known_files or jsonl.name in known_files:
             continue
         stem = jsonl.stem
         ts = stem.replace("trace_", "", 1)
-        files = [jsonl.name]
+        # Prefix with date dir if present
+        if jsonl.parent != output_dir:
+            ts = jsonl.parent.name.replace("-", "") + "_" + ts
+        files = [rel]
         for suffix in [".log", ".html"]:
             companion = jsonl.with_suffix(suffix)
             if companion.exists():
-                files.append(companion.name)
+                files.append(str(companion.relative_to(output_dir)))
         manifest["traces"].append(
             {
                 "timestamp": ts,

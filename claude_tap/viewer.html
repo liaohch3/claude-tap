@@ -1072,6 +1072,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     </div>
   </div>
   <div id="sidebar-wrap" style="display:none;display:flex;flex-direction:column">
+    <div id="date-picker" style="display:none;padding:6px 12px;border-bottom:1px solid var(--border);font-size:13px;align-items:center;gap:8px;">
+      <label style="color:var(--text-secondary);white-space:nowrap;">Date:</label>
+      <select id="date-select" onchange="onDateChange(this.value)" style="flex:1;padding:3px 6px;border-radius:4px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-size:13px;cursor:pointer;"></select>
+    </div>
     <div class="search-bar" id="search-bar">
       <span class="search-icon">&#128269;</span>
       <input type="text" id="search-input" placeholder="Search messages, tools, prompts..." oninput="onSearch(this.value)">
@@ -1520,11 +1524,83 @@ const pulseStyle = document.createElement('style');
 pulseStyle.textContent = '@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }';
 document.head.appendChild(pulseStyle);
 
+let _liveRecords = []; // SSE records for current session
+let _viewingDate = null; // null = live, string = historical date
+
+async function fetchDates() {
+  try {
+    const resp = await fetch('/api/dates');
+    const data = await resp.json();
+    const sel = $('#date-select');
+    if (!sel || !data.dates) return;
+    sel.innerHTML = '';
+    // "Live" option for current session
+    const liveOpt = document.createElement('option');
+    liveOpt.value = 'live';
+    liveOpt.textContent = 'Live (current session)';
+    sel.appendChild(liveOpt);
+    // Date options
+    for (const d of data.dates) {
+      const opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = d;
+      sel.appendChild(opt);
+    }
+    if (data.has_legacy) {
+      const opt = document.createElement('option');
+      opt.value = 'legacy';
+      opt.textContent = 'Legacy (flat)';
+      sel.appendChild(opt);
+    }
+    const picker = $('#date-picker');
+    if (picker) picker.style.display = 'flex';
+  } catch (e) {
+    console.error('Failed to fetch dates:', e);
+  }
+}
+
+async function onDateChange(value) {
+  if (value === 'live') {
+    _viewingDate = null;
+    entries = _liveRecords.slice();
+    renderApp(true);
+    return;
+  }
+  _viewingDate = value;
+  try {
+    const resp = await fetch('/api/traces/' + encodeURIComponent(value));
+    const records = await resp.json();
+    entries = records;
+    renderApp();
+  } catch (e) {
+    console.error('Failed to load traces for date:', value, e);
+  }
+}
+
 if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
   entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? EMBEDDED_TRACE_DATA : [];
+  _liveRecords = entries;
+  // Patch initLiveMode to also track live records
+  const _origOnMessage = null;
+  const _origInitLiveMode = initLiveMode;
+  initLiveMode = function() {
+    _origInitLiveMode();
+    // Wrap onmessage to also push to _liveRecords
+    if (liveEventSource) {
+      const origHandler = liveEventSource.onmessage;
+      liveEventSource.onmessage = function(event) {
+        origHandler.call(this, event);
+        try {
+          const record = JSON.parse(event.data);
+          _liveRecords.push(record);
+        } catch(e) {}
+      };
+    }
+  };
   document.addEventListener('DOMContentLoaded', () => {
     initTheme(); initLang(); initGlobalSearch();
     initLiveMode();
+    fetchDates();
     if (entries.length) renderApp();
     else {
       // Show waiting state
