@@ -53,11 +53,48 @@ def filter_headers(headers: dict[str, str], *, redact_keys: bool = False) -> dic
 
 
 # ---------------------------------------------------------------------------
+# Path allowlist – only forward requests to known API endpoints.
+# Scanners / crawlers hitting the proxy with paths like /etc/passwd, /swagger,
+# /metrics etc. are rejected with 404 without forwarding or recording.
+# ---------------------------------------------------------------------------
+
+ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
+    # Anthropic API (Claude Code)
+    "/v1/messages",
+    "/v1/complete",
+    # OpenAI API (Codex CLI)
+    "/v1/responses",
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/v1/models",
+    "/v1/embeddings",
+    # OpenAI Responses API (after strip_path_prefix removes /v1)
+    "/responses",
+    "/chat/completions",
+    "/completions",
+    "/models",
+    "/embeddings",
+)
+
+
+def _is_allowed_path(path: str) -> bool:
+    """Check whether the request path matches a known API endpoint."""
+    # Strip query string for matching
+    clean = path.split("?", 1)[0].rstrip("/")
+    return any(clean == prefix or clean.startswith(prefix + "/") for prefix in ALLOWED_PATH_PREFIXES)
+
+
+# ---------------------------------------------------------------------------
 # Proxy handler
 # ---------------------------------------------------------------------------
 
 
 async def proxy_handler(request: web.Request) -> web.StreamResponse:
+    # Reject requests to unknown paths (scanner/crawler protection)
+    if not _is_allowed_path(request.path):
+        log.debug(f"Blocked non-API path: {request.method} {request.path}")
+        return web.Response(status=404, text="Not Found")
+
     # Detect WebSocket upgrade and route to WS proxy
     if request.headers.get("Upgrade", "").lower() == "websocket":
         return await _handle_websocket(request)
