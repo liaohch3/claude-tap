@@ -164,15 +164,17 @@ class LiveViewerServer:
         """Return available trace dates (descending)."""
         if not self.output_dir or not self.output_dir.is_dir():
             return web.json_response({"dates": [], "has_legacy": False})
-        dates = []
+        dates_set: set[str] = set()
         has_legacy = False
         for item in sorted(self.output_dir.iterdir(), reverse=True):
             if item.is_dir() and _DATE_RE.match(item.name):
-                # Only include if dir has trace files
                 if any(item.glob("trace_*.jsonl")):
-                    dates.append(item.name)
+                    dates_set.add(item.name)
             elif item.is_file() and item.name.startswith("trace_") and item.suffix == ".jsonl":
                 has_legacy = True
+        # Always include today so cross-midnight sessions are visible
+        dates_set.add(date.today().isoformat())
+        dates = sorted(dates_set, reverse=True)
         return web.json_response({"dates": dates, "has_legacy": has_legacy})
 
     async def _handle_traces_by_date(self, request: web.Request) -> web.Response:
