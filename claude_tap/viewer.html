@@ -1019,6 +1019,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   .sidebar-item { min-height: 44px; padding: 12px 16px; }
   .sidebar-group-header { min-height: 44px; }
 }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 </style>
 </head>
 <body>
@@ -1463,43 +1464,48 @@ function initLang() {
 let liveEventSource = null;
 let liveConnected = false;
 let currentDetailRequestId = null;
+let liveRecords = [];
+let viewingDate = null; // null = live, string = historical date
+let liveRenderTimer = null;
+const liveSeenIds = new Set();
 
 function initLiveMode() {
   const statusEl = $('#live-status');
   statusEl.style.display = 'flex';
   updateLiveStatus('connecting');
 
-  let renderTimer = null;
-
   liveEventSource = new EventSource('/events');
 
   liveEventSource.onopen = () => {
     liveConnected = true;
-    updateLiveStatus('connected');
+    updateLiveStatus('connected', liveRecords.length);
   };
 
   liveEventSource.onmessage = (event) => {
     try {
       const record = JSON.parse(event.data);
-      entries.push(record);
-      updateLiveStatus('connected', entries.length);
-      // Debounce rendering so initial batch of history records renders once
-      clearTimeout(renderTimer);
-      renderTimer = setTimeout(() => renderApp(true), 50);
+      // Deduplicate: SSE replays full history on each reconnect
+      const id = record.request_id || record.req_id;
+      if (id && liveSeenIds.has(id)) return;
+      if (id) liveSeenIds.add(id);
+
+      liveRecords.push(record);
+      if (!viewingDate) {
+        entries.push(record);
+        updateLiveStatus('connected', entries.length);
+        clearTimeout(liveRenderTimer);
+        liveRenderTimer = setTimeout(() => renderApp(true), 50);
+      }
     } catch (e) {
       console.error('Failed to parse SSE data:', e);
     }
   };
 
+  // EventSource auto-reconnects on transient errors;
+  // only update status indicator here.
   liveEventSource.onerror = () => {
     liveConnected = false;
     updateLiveStatus('disconnected');
-    // Attempt reconnect after 3 seconds
-    setTimeout(() => {
-      if (!liveConnected && liveEventSource.readyState === EventSource.CLOSED) {
-        initLiveMode();
-      }
-    }, 3000);
   };
 }
 
@@ -1519,38 +1525,18 @@ function updateLiveStatus(status, count) {
   el.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:${c.dot};${status === 'connected' ? 'animation:pulse 2s infinite;' : ''}"></span>${labels[status]}${countText}`;
 }
 
-// Add pulse animation for live indicator
-const pulseStyle = document.createElement('style');
-pulseStyle.textContent = '@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }';
-document.head.appendChild(pulseStyle);
-
-let _liveRecords = []; // SSE records for current session
-let _viewingDate = null; // null = live, string = historical date
-
 async function fetchDates() {
   try {
     const resp = await fetch('/api/dates');
     const data = await resp.json();
     const sel = $('#date-select');
     if (!sel || !data.dates) return;
-    sel.innerHTML = '';
-    // "Live" option for current session
-    const liveOpt = document.createElement('option');
-    liveOpt.value = 'live';
-    liveOpt.textContent = 'Live (current session)';
-    sel.appendChild(liveOpt);
-    // Date options
+    sel.innerHTML = '<option value="live">Live (current session)</option>';
     for (const d of data.dates) {
-      const opt = document.createElement('option');
-      opt.value = d;
-      opt.textContent = d;
-      sel.appendChild(opt);
+      sel.insertAdjacentHTML('beforeend', `<option value="${d}">${d}</option>`);
     }
     if (data.has_legacy) {
-      const opt = document.createElement('option');
-      opt.value = 'legacy';
-      opt.textContent = 'Legacy (flat)';
-      sel.appendChild(opt);
+      sel.insertAdjacentHTML('beforeend', '<option value="legacy">Legacy (flat)</option>');
     }
     const picker = $('#date-picker');
     if (picker) picker.style.display = 'flex';
@@ -1561,16 +1547,15 @@ async function fetchDates() {
 
 async function onDateChange(value) {
   if (value === 'live') {
-    _viewingDate = null;
-    entries = _liveRecords.slice();
+    viewingDate = null;
+    entries = liveRecords.slice();
     renderApp(true);
     return;
   }
-  _viewingDate = value;
+  viewingDate = value;
   try {
     const resp = await fetch('/api/traces/' + encodeURIComponent(value));
-    const records = await resp.json();
-    entries = records;
+    entries = await resp.json();
     renderApp();
   } catch (e) {
     console.error('Failed to load traces for date:', value, e);
@@ -1579,24 +1564,6 @@ async function onDateChange(value) {
 
 if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
   entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? EMBEDDED_TRACE_DATA : [];
-  _liveRecords = entries;
-  // Patch initLiveMode to also track live records
-  const _origOnMessage = null;
-  const _origInitLiveMode = initLiveMode;
-  initLiveMode = function() {
-    _origInitLiveMode();
-    // Wrap onmessage to also push to _liveRecords
-    if (liveEventSource) {
-      const origHandler = liveEventSource.onmessage;
-      liveEventSource.onmessage = function(event) {
-        origHandler.call(this, event);
-        try {
-          const record = JSON.parse(event.data);
-          _liveRecords.push(record);
-        } catch(e) {}
-      };
-    }
-  };
   document.addEventListener('DOMContentLoaded', () => {
     initTheme(); initLang(); initGlobalSearch();
     initLiveMode();
