@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from datetime import date
 from pathlib import Path
 
 from aiohttp import web
@@ -22,6 +23,7 @@ class LiveViewerServer:
         self.output_dir = output_dir
         self._sse_clients: list[web.StreamResponse] = []
         self._records: list[dict] = []
+        self._current_date: str = date.today().isoformat()
         self._lock = asyncio.Lock()
         self._runner: web.AppRunner | None = None
         self._actual_port: int = 0
@@ -64,6 +66,13 @@ class LiveViewerServer:
     async def broadcast(self, record: dict) -> None:
         """Broadcast a new record to all connected SSE clients."""
         async with self._lock:
+            # Cross-midnight: clear in-memory records when the date changes.
+            # Previous records are already persisted in the JSONL file and
+            # accessible via the date picker.
+            today = date.today().isoformat()
+            if today != self._current_date:
+                self._records.clear()
+                self._current_date = today
             self._records.append(record)
 
         data = json.dumps(record, ensure_ascii=False, separators=(",", ":"))

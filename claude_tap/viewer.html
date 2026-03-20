@@ -2473,9 +2473,48 @@ function selectEntry(idx, opts) {
 }
 
 /* ─── Detail ─── */
+// Persist section collapse state across turn switches.
+// Key: section title text, Value: true = open, false = collapsed.
+const sectionCollapseState = {};
+
+function saveSectionStates() {
+  const d = $('#detail');
+  if (!d) return;
+  d.querySelectorAll('.section').forEach(sec => {
+    const titleEl = sec.querySelector('.section-header .title');
+    const bodyEl = sec.querySelector('.section-body');
+    if (titleEl && bodyEl) {
+      sectionCollapseState[titleEl.textContent] = bodyEl.classList.contains('open');
+    }
+  });
+}
+
+function restoreSectionStates() {
+  const d = $('#detail');
+  if (!d) return;
+  d.querySelectorAll('.section').forEach(sec => {
+    const titleEl = sec.querySelector('.section-header .title');
+    const bodyEl = sec.querySelector('.section-body');
+    const chevron = sec.querySelector('.chevron');
+    if (!titleEl || !bodyEl || !chevron) return;
+    const key = titleEl.textContent;
+    if (key in sectionCollapseState) {
+      const shouldBeOpen = sectionCollapseState[key];
+      if (shouldBeOpen && !bodyEl.classList.contains('open')) {
+        bodyEl.classList.add('open');
+        chevron.classList.add('open');
+      } else if (!shouldBeOpen && bodyEl.classList.contains('open')) {
+        bodyEl.classList.remove('open');
+        chevron.classList.remove('open');
+      }
+    }
+  });
+}
+
 function renderDetail(e) {
+  saveSectionStates();
   currentDetailRequestId = e.request_id;
-  const d = $('#detail'); d.scrollTop = 0;
+  const d = $('#detail');
   const reqBody = e.request?.body, respBody = e.response?.body, usage = getUsage(e);
   const statusCode = getResponseStatus(e);
   const isError = statusCode >= 400;
@@ -2514,6 +2553,7 @@ function renderDetail(e) {
 
   d.innerHTML = html;
   bindSections(d);
+  restoreSectionStates();
   if (globalSearchState.open && globalSearchState.query) {
     const target = getTargetForGlobalMatch(globalSearchState.currentMatch);
     const localIndex = target && target.requestId === e.request_id ? target.localIndex : 0;
