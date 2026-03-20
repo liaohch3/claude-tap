@@ -2138,7 +2138,7 @@ function visualNavigate(delta) {
   const pos = visualOrder.indexOf(activeIdx);
   if (pos === -1) { selectEntry(visualOrder[0]); return; }
   const next = Math.max(0, Math.min(pos + delta, visualOrder.length - 1));
-  selectEntry(visualOrder[next]);
+  selectEntry(visualOrder[next], { preserveScroll: true });
 }
 
 /* ─── Sidebar ─── */
@@ -2460,7 +2460,7 @@ function selectEntry(idx, opts) {
   } else {
     const entry = filtered[idx];
     const resolved = entry._isStub ? getFullEntry(entry) : entry;
-    renderDetail(resolved);
+    renderDetail(resolved, opts?.preserveScroll);
   }
   if (virtualMode) {
     vsScrollToIdx(idx);
@@ -2512,10 +2512,11 @@ function restoreSectionStates() {
   });
 }
 
-function renderDetail(e) {
+function renderDetail(e, preserveScroll) {
   saveSectionStates();
   currentDetailRequestId = e.request_id;
   const d = $('#detail');
+  const savedScroll = preserveScroll ? d.scrollTop : 0;
   const reqBody = e.request?.body, respBody = e.response?.body, usage = getUsage(e);
   const statusCode = getResponseStatus(e);
   const isError = statusCode >= 400;
@@ -2553,6 +2554,7 @@ function renderDetail(e) {
   html += section(t('section_json'), `<div class="json-view">${syntaxHL(e)}</div>`, false, JSON.stringify(e, null, 2));
 
   d.innerHTML = html;
+  d.scrollTop = savedScroll;
   bindSections(d);
   restoreSectionStates();
   if (globalSearchState.open && globalSearchState.query) {
