@@ -1481,11 +1481,14 @@ function initLiveMode() {
   liveEventSource.onmessage = (event) => {
     try {
       const record = JSON.parse(event.data);
-      entries.push(record);
-      updateLiveStatus('connected', entries.length);
-      // Debounce rendering so initial batch of history records renders once
-      clearTimeout(renderTimer);
-      renderTimer = setTimeout(() => renderApp(true), 50);
+      _liveRecords.push(record);
+      // Only update visible entries if viewing live
+      if (!_viewingDate) {
+        entries.push(record);
+        updateLiveStatus('connected', entries.length);
+        clearTimeout(renderTimer);
+        renderTimer = setTimeout(() => renderApp(true), 50);
+      }
     } catch (e) {
       console.error('Failed to parse SSE data:', e);
     }
@@ -1569,8 +1572,7 @@ async function onDateChange(value) {
   _viewingDate = value;
   try {
     const resp = await fetch('/api/traces/' + encodeURIComponent(value));
-    const records = await resp.json();
-    entries = records;
+    entries = await resp.json();
     renderApp();
   } catch (e) {
     console.error('Failed to load traces for date:', value, e);
@@ -1579,24 +1581,6 @@ async function onDateChange(value) {
 
 if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
   entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? EMBEDDED_TRACE_DATA : [];
-  _liveRecords = entries;
-  // Patch initLiveMode to also track live records
-  const _origOnMessage = null;
-  const _origInitLiveMode = initLiveMode;
-  initLiveMode = function() {
-    _origInitLiveMode();
-    // Wrap onmessage to also push to _liveRecords
-    if (liveEventSource) {
-      const origHandler = liveEventSource.onmessage;
-      liveEventSource.onmessage = function(event) {
-        origHandler.call(this, event);
-        try {
-          const record = JSON.parse(event.data);
-          _liveRecords.push(record);
-        } catch(e) {}
-      };
-    }
-  };
   document.addEventListener('DOMContentLoaded', () => {
     initTheme(); initLang(); initGlobalSearch();
     initLiveMode();
