@@ -23,6 +23,15 @@ git config core.hooksPath .githooks
 7. 不要留下仅本地存在的工作；你必须执行 `git add`、`git commit` 和 `git push`。
 8. 你必须使用 `gh pr create` 打开 GitHub PR。
 
+## Pre-PR Checklist (MUST complete before every `gh pr create`)
+
+1. Run gate checks: `uv run ruff check . && uv run ruff format --check . && uv run pytest tests/ -x --timeout=60`
+2. For UI changes: capture screenshots using Playwright or browser, embed in PR body using `raw.githubusercontent.com` absolute URLs. At least one screenshot per changed page/state.
+3. For E2E-affecting changes: run real E2E tests or document why they were skipped.
+4. All test plan items in PR body must be checked off, or explicitly note why they were skipped.
+5. Use real trace data from `.traces/` for evidence — no synthetic mocks.
+6. Run `/pr-preflight` skill if available for automated merge-readiness validation.
+
 ## 标准目录
 
 - 硬性规则与仓库策略：`docs/standards/hard-rules.md`
