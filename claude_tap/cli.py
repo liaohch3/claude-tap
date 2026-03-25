@@ -432,12 +432,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "All flags not listed below are forwarded to the selected client.",
         epilog=(
             "claude code:\n"
-            "  claude-tap                            Basic tracing\n"
-            "  claude-tap --tap-live                 Real-time viewer in browser\n"
+            "  claude-tap                            Trace with real-time viewer (default)\n"
+            "  claude-tap --tap-no-live              Record only, no live viewer\n"
             "  claude-tap -- --model claude-opus-4-6  Pass flags to Claude Code\n"
             "  claude-tap -- -c                      Continue last conversation\n"
             "  claude-tap -- --dangerously-skip-permissions  Auto-accept tool calls\n"
-            "  claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6\n"
+            "  claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6\n"
             "\n"
             "codex cli:\n"
             "  # API Key users (OPENAI_API_KEY) — default target works out of the box\n"
@@ -505,10 +505,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Don't auto-open HTML viewer after exit",
     )
     viewer_group.add_argument(
-        "--tap-live",
-        action="store_true",
+        "--tap-no-live",
+        action="store_false",
         dest="live_viewer",
-        help="Start real-time viewer server (auto-opens browser)",
+        default=True,
+        help="Disable real-time viewer server (only record traces)",
     )
     viewer_group.add_argument(
         "--tap-live-port",
