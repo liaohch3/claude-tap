@@ -2598,20 +2598,34 @@ function getMessages(body) {
   if (!body) return [];
   if (Array.isArray(body.messages) && body.messages.length > 0) return body.messages;
   if (Array.isArray(body.input)) {
-    return body.input.filter(item => {
-      if (!item || typeof item !== 'object') return false;
-      if (typeof item.role !== 'string' || !item.role) return false;
-      return item.type === undefined || item.type === 'message';
-    }).map(item => ({
-      role: item.role || 'user',
-      content: Array.isArray(item.content)
-        ? item.content.map(c => {
-            if (!c || typeof c !== 'object') return c;
-            if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { type: 'text', text: c.text };
-            return c;
-          })
-        : item.content
-    }));
+    const result = [];
+    for (const item of body.input) {
+      if (!item || typeof item !== 'object') continue;
+      // Responses API: function_call (assistant tool invocation)
+      if (item.type === 'function_call') {
+        const args = typeof item.arguments === 'string' ? (() => { try { return JSON.parse(item.arguments); } catch(e) { return item.arguments; } })() : (item.arguments || {});
+        result.push({ role: 'assistant', content: [{ type: 'tool_use', name: item.name || '', input: args }] });
+        continue;
+      }
+      // Responses API: function_call_output (tool result)
+      if (item.type === 'function_call_output') {
+        result.push({ role: 'tool', content: item.output || '' });
+        continue;
+      }
+      if (typeof item.role !== 'string' || !item.role) continue;
+      if (item.type !== undefined && item.type !== 'message') continue;
+      result.push({
+        role: item.role || 'user',
+        content: Array.isArray(item.content)
+          ? item.content.map(c => {
+              if (!c || typeof c !== 'object') return c;
+              if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { type: 'text', text: c.text };
+              return c;
+            })
+          : item.content
+      });
+    }
+    return result;
   }
   return [];
 }

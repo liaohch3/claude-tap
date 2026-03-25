@@ -41,6 +41,46 @@ def test_extract_metadata_supports_responses_input_roles_and_ws_usage() -> None:
     assert "exec_command" in meta["tool_names"]
 
 
+def test_extract_metadata_counts_function_call_and_output_as_messages() -> None:
+    """function_call and function_call_output in Responses API input should be counted."""
+    fixture_path = Path(__file__).parent / "fixtures" / "responses_function_call_trace.jsonl"
+    record_json = fixture_path.read_text(encoding="utf-8").splitlines()[0]
+
+    meta = _extract_metadata(record_json)
+
+    assert meta is not None
+    # 1 user + 1 function_call + 1 function_call_output + 1 assistant + 1 function_call + 1 function_call_output = 6
+    assert meta["message_count"] == 6
+    assert meta["input_tokens"] == 800
+    assert meta["output_tokens"] == 20
+    assert meta["has_system"] is True
+    assert "Read" in meta["tool_names"]
+    assert "Edit" in meta["tool_names"]
+
+
+def test_extract_request_messages_normalizes_function_call_items() -> None:
+    """function_call items should be normalized to assistant messages with tool_use content."""
+    from claude_tap.viewer import _extract_request_messages
+
+    body = {
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Hello"}]},
+            {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "Read", "arguments": "{\"path\": \"/tmp\"}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "file contents here"},
+        ]
+    }
+
+    msgs = _extract_request_messages(body)
+
+    assert len(msgs) == 3
+    assert msgs[0]["role"] == "user"
+    assert msgs[1]["role"] == "assistant"
+    assert msgs[1]["content"][0]["type"] == "tool_use"
+    assert msgs[1]["content"][0]["name"] == "Read"
+    assert msgs[2]["role"] == "tool"
+    assert msgs[2]["content"] == "file contents here"
+
+
 def test_extract_metadata_supports_interleaved_responses_roles_without_type() -> None:
     record = {
         "turn": 1,
