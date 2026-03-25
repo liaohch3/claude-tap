@@ -179,8 +179,10 @@ async def run_client(
     # --- Signal handling: graceful Ctrl+C / Ctrl+Z ---
     loop = asyncio.get_running_loop()
 
-    # Prevent Ctrl+Z from suspending the session
-    old_sigtstp = signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+    # Prevent Ctrl+Z from suspending the session (Unix only)
+    old_sigtstp = None
+    if hasattr(signal, "SIGTSTP"):
+        old_sigtstp = signal.signal(signal.SIGTSTP, signal.SIG_IGN)
 
     sigint_count = 0
 
@@ -220,7 +222,8 @@ async def run_client(
         signal.signal(signal.SIGTTOU, old_sigttou)
 
     # Restore original SIGTSTP handler and remove async signal handlers
-    signal.signal(signal.SIGTSTP, old_sigtstp)
+    if hasattr(signal, "SIGTSTP") and old_sigtstp is not None:
+        signal.signal(signal.SIGTSTP, old_sigtstp)
     try:
         loop.remove_signal_handler(signal.SIGINT)
     except (NotImplementedError, OSError):
