@@ -98,7 +98,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 /* ─── Header ─── */
 .header {
   display: flex; align-items: center; gap: 16px;
-  padding: 0 20px; height: 52px;
+  padding: 0 20px; min-height: 52px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0; z-index: 10;
@@ -114,7 +114,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   padding: 1px 6px; line-height: 1.4;
 }
 .header .divider { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; }
-.path-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.path-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; flex: 1 1 0; }
+.filter-chip-toggle {
+  font-size: 11px; font-family: var(--sans); padding: 4px 10px; border-radius: 20px;
+  border: 1px dashed var(--border); background: var(--bg); color: var(--text-tertiary);
+  cursor: pointer; transition: all .15s; white-space: nowrap; line-height: 1;
+}
+.filter-chip-toggle:hover { border-color: var(--blue); color: var(--blue); }
 .filter-chip {
   font-size: 12px; font-family: var(--mono); padding: 4px 10px; border-radius: 20px;
   border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary);
@@ -1226,6 +1232,7 @@ const I18N = {
     diff_chars: "chars", diff_tools_unchanged: "tools, unchanged", diff_trailing: "trailing messages unchanged",
     badge_messages: "messages", badge_tools: "tools", badge_events: "events",
     search_placeholder: "Search messages, tools, prompts...",
+    filter_more: "more", filter_less: "Show less",
     diff_sys_old: "Previous", diff_sys_new: "Current",
     diff_fallback_warning: "No exact thread match found — showing closest same-model request",
     diff_select_target: "Compare against:", diff_select_auto: "Auto",
@@ -1249,6 +1256,7 @@ const I18N = {
     diff_chars: "字符", diff_tools_unchanged: "个工具，无变化", diff_trailing: "末尾消息无变化",
     badge_messages: "条消息", badge_tools: "个工具", badge_events: "个事件",
     search_placeholder: "搜索消息、工具、提示词...",
+    filter_more: "更多", filter_less: "收起",
     diff_sys_old: "上次", diff_sys_new: "本次",
     diff_fallback_warning: "未找到精确线程匹配 — 显示最近的同模型请求",
     diff_select_target: "对比对象：", diff_select_auto: "自动",
@@ -1272,6 +1280,7 @@ const I18N = {
     diff_chars: "文字", diff_tools_unchanged: "個のツール、変更なし", diff_trailing: "末尾メッセージ変更なし",
     badge_messages: "件のメッセージ", badge_tools: "個のツール", badge_events: "件のイベント",
     search_placeholder: "メッセージ、ツール、プロンプトを検索...",
+    filter_more: "他", filter_less: "折りたたむ",
     diff_sys_old: "前回", diff_sys_new: "今回",
     diff_fallback_warning: "正確なスレッド一致が見つかりません — 同モデルの直近のリクエストを表示",
     diff_select_target: "比較対象：", diff_select_auto: "自動",
@@ -1295,6 +1304,7 @@ const I18N = {
     diff_chars: "자", diff_tools_unchanged: "개 도구, 변경 없음", diff_trailing: "마지막 메시지 변경 없음",
     badge_messages: "개 메시지", badge_tools: "개 도구", badge_events: "개 이벤트",
     search_placeholder: "메시지, 도구, 프롬프트 검색...",
+    filter_more: "더보기", filter_less: "접기",
     diff_sys_old: "이전", diff_sys_new: "현재",
     diff_fallback_warning: "정확한 스레드 일치를 찾을 수 없습니다 — 가장 가까운 동일 모델 요청을 표시",
     diff_select_target: "비교 대상：", diff_select_auto: "자동",
@@ -1318,6 +1328,7 @@ const I18N = {
     diff_chars: "car.", diff_tools_unchanged: "outils, inchangés", diff_trailing: "messages finaux inchangés",
     badge_messages: "messages", badge_tools: "outils", badge_events: "événements",
     search_placeholder: "Rechercher messages, outils, prompts...",
+    filter_more: "plus", filter_less: "Réduire",
     diff_sys_old: "Précédent", diff_sys_new: "Actuel",
     diff_fallback_warning: "Aucune correspondance de fil exacte trouvée — affichage de la requête du même modèle la plus proche",
     diff_select_target: "Comparer avec :", diff_select_auto: "Auto",
@@ -1341,6 +1352,7 @@ const I18N = {
     diff_chars: "حرف", diff_tools_unchanged: "أداة، بدون تغيير", diff_trailing: "الرسائل الأخيرة بدون تغيير",
     badge_messages: "رسالة", badge_tools: "أداة", badge_events: "حدث",
     search_placeholder: "بحث في الرسائل والأدوات والموجهات...",
+    filter_more: "المزيد", filter_less: "تقليص",
     diff_sys_old: "السابق", diff_sys_new: "الحالي",
     diff_fallback_warning: "لم يتم العثور على تطابق دقيق للخيط — عرض أقرب طلب لنفس النموذج",
     diff_select_target: "مقارنة مع:", diff_select_auto: "تلقائي",
@@ -1364,6 +1376,7 @@ const I18N = {
     diff_chars: "Zeichen", diff_tools_unchanged: "Werkzeuge, unverändert", diff_trailing: "letzte Nachrichten unverändert",
     badge_messages: "Nachrichten", badge_tools: "Werkzeuge", badge_events: "Ereignisse",
     search_placeholder: "Nachrichten, Werkzeuge, Prompts suchen...",
+    filter_more: "mehr", filter_less: "Weniger",
     diff_sys_old: "Vorherige", diff_sys_new: "Aktuelle",
     diff_fallback_warning: "Keine exakte Thread-Übereinstimmung gefunden — zeige nächste Anfrage desselben Modells",
     diff_select_target: "Vergleichen mit:", diff_select_auto: "Auto",
@@ -1387,6 +1400,7 @@ const I18N = {
     diff_chars: "симв.", diff_tools_unchanged: "инструм., без изменений", diff_trailing: "последние сообщения без изменений",
     badge_messages: "сообщений", badge_tools: "инструм.", badge_events: "событий",
     search_placeholder: "Поиск сообщений, инструментов, промптов...",
+    filter_more: "ещё", filter_less: "Свернуть",
     diff_sys_old: "Предыдущий", diff_sys_new: "Текущий",
     diff_fallback_warning: "Точное совпадение потока не найдено — показан ближайший запрос той же модели",
     diff_select_target: "Сравнить с:", diff_select_auto: "Авто",
@@ -1619,8 +1633,10 @@ function renderApp(preserveDetail) {
   entries.forEach(e => { const p = getPath(e); pathCounts[p] = (pathCounts[p] || 0) + 1; });
   const paths = Object.keys(pathCounts).sort();
   if (activePaths.size === 0) {
-    if (paths.includes('/v1/messages')) activePaths.add('/v1/messages');
-    else paths.forEach(p => activePaths.add(p));
+    /* Few paths: activate all; many paths: activate only primary */
+    const primaryPaths = paths.filter(isPathPrimary);
+    if (paths.length <= 5 || primaryPaths.length === 0) paths.forEach(p => activePaths.add(p));
+    else primaryPaths.forEach(p => activePaths.add(p));
   }
   renderPathFilter(paths, pathCounts);
   renderTracePathBar();
@@ -1706,20 +1722,60 @@ function copyToClipboard(text, btn, copiedLabel = null) {
   });
 }
 
+let pathFilterExpanded = false;
+
+/*
+ * Path priority tiers:
+ *   primary   – core AI conversation endpoints, always visible
+ *   secondary – useful auxiliary APIs (MCP, models, token counting), collapsed behind "+N more"
+ *   noise     – plugin manifests, bot APIs, asset downloads, version checks — hidden by default
+ */
+const PRIMARY_PATH_PREFIXES = ['/v1/messages', '/v1/responses', '/v1/chat/completions', '/v1/completions'];
+const SECONDARY_PATH_PREFIXES = ['/v1/mcp', '/v1/models', '/v1/embeddings', '/responses', '/models', '/chat/completions', '/completions'];
+function pathTier(p) {
+  if (PRIMARY_PATH_PREFIXES.some(pfx => p.startsWith(pfx))) return 0;
+  if (SECONDARY_PATH_PREFIXES.some(pfx => p.startsWith(pfx))) return 1;
+  return 2;
+}
+function isPathPrimary(p) { return pathTier(p) === 0; }
+
 function renderPathFilter(paths, pathCounts) {
   const c = $('#path-filter'); c.innerHTML = '';
-  paths.forEach(p => {
-    const chip = document.createElement('button');
-    chip.className = 'filter-chip' + (activePaths.has(p) ? ' active' : '');
-    chip.innerHTML = `${esc(p)}<span class="chip-count">${pathCounts[p]}</span>`;
-    chip.onclick = () => {
-      if (activePaths.has(p)) activePaths.delete(p); else activePaths.add(p);
-      if (activePaths.size === 0) activePaths.add(p);
-      chip.classList.toggle('active');
-      applyFilter();
-    };
-    c.appendChild(chip);
-  });
+  const buckets = [[], [], []]; /* primary, secondary, noise */
+  paths.forEach(p => buckets[pathTier(p)].push(p));
+  buckets.forEach(b => b.sort((a, bb) => pathCounts[bb] - pathCounts[a]));
+
+  /* Always show primary */
+  buckets[0].forEach(p => c.appendChild(makeFilterChip(p, pathCounts[p])));
+
+  const hiddenPaths = [...buckets[1], ...buckets[2]];
+  if (hiddenPaths.length > 0) {
+    if (pathFilterExpanded) {
+      buckets[1].forEach(p => c.appendChild(makeFilterChip(p, pathCounts[p])));
+      buckets[2].forEach(p => c.appendChild(makeFilterChip(p, pathCounts[p])));
+    }
+    const toggle = document.createElement('button');
+    toggle.className = 'filter-chip-toggle';
+    toggle.textContent = pathFilterExpanded ? t('filter_less') : `+${hiddenPaths.length} ${t('filter_more')}`;
+    toggle.onclick = () => { pathFilterExpanded = !pathFilterExpanded; renderPathFilter(paths, pathCounts); };
+    c.appendChild(toggle);
+  }
+}
+
+function makeFilterChip(p, count) {
+  const chip = document.createElement('button');
+  chip.className = 'filter-chip' + (activePaths.has(p) ? ' active' : '');
+  /* Truncate long paths: show last 40 chars with ellipsis */
+  const label = p.length > 40 ? '\u2026' + p.slice(-39) : p;
+  chip.innerHTML = `<span title="${esc(p)}">${esc(label)}</span><span class="chip-count">${count}</span>`;
+  chip.title = p;
+  chip.onclick = () => {
+    if (activePaths.has(p)) activePaths.delete(p); else activePaths.add(p);
+    if (activePaths.size === 0) activePaths.add(p);
+    chip.classList.toggle('active');
+    applyFilter();
+  };
+  return chip;
 }
 
 function applyFilter(preserveDetail) {
