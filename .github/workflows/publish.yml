@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.1.27)"
+        required: true
 
 jobs:
   ci:
@@ -13,6 +18,8 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -32,6 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Install uv
@@ -42,9 +50,10 @@ jobs:
 
       - name: Sync version from tag into pyproject.toml
         run: |
-          tag="${GITHUB_REF#refs/tags/v}"
-          echo "Publishing version $tag"
-          sed -i "s/^version = \".*\"/version = \"$tag\"/" pyproject.toml
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          echo "Publishing version $version"
+          sed -i "s/^version = \".*\"/version = \"$version\"/" pyproject.toml
           grep '^version' pyproject.toml
 
       - name: Build package
@@ -57,7 +66,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
+          tag="${{ inputs.tag || github.ref_name }}"
+          # Skip if release already exists (e.g. manual tag push)
+          if gh release view "$tag" &>/dev/null; then
+            echo "Release $tag already exists, skipping"
+            exit 0
+          fi
           prev_tag=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || echo "")
           if [ -n "$prev_tag" ]; then
             notes="$(git log "${prev_tag}..${tag}" --pretty=format:'- %h %s')"
