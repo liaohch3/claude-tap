@@ -40,19 +40,12 @@ jobs:
       - name: Set up Python
         run: uv python install 3.13
 
-      - name: Verify version matches tag
+      - name: Sync version from tag into pyproject.toml
         run: |
           tag="${GITHUB_REF#refs/tags/v}"
-          pkg_version=$(python3 -c "
-          import re
-          m = re.search(r'version = \"(.+?)\"', open('pyproject.toml').read())
-          print(m.group(1))
-          ")
-          if [ "$tag" != "$pkg_version" ]; then
-            echo "::error::Tag v$tag does not match pyproject.toml version $pkg_version"
-            exit 1
-          fi
-          echo "Publishing version $pkg_version"
+          echo "Publishing version $tag"
+          sed -i "s/^version = \".*\"/version = \"$tag\"/" pyproject.toml
+          grep '^version' pyproject.toml
 
       - name: Build package
         run: uv build
