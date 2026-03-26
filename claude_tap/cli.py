@@ -179,8 +179,10 @@ async def run_client(
     # --- Signal handling: graceful Ctrl+C / Ctrl+Z ---
     loop = asyncio.get_running_loop()
 
-    # Prevent Ctrl+Z from suspending the session
-    old_sigtstp = signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+    # Prevent Ctrl+Z from suspending the session (Unix only)
+    old_sigtstp = None
+    if hasattr(signal, "SIGTSTP"):
+        old_sigtstp = signal.signal(signal.SIGTSTP, signal.SIG_IGN)
 
     sigint_count = 0
 
@@ -220,7 +222,8 @@ async def run_client(
         signal.signal(signal.SIGTTOU, old_sigttou)
 
     # Restore original SIGTSTP handler and remove async signal handlers
-    signal.signal(signal.SIGTSTP, old_sigtstp)
+    if hasattr(signal, "SIGTSTP") and old_sigtstp is not None:
+        signal.signal(signal.SIGTSTP, old_sigtstp)
     try:
         loop.remove_signal_handler(signal.SIGINT)
     except (NotImplementedError, OSError):
@@ -432,12 +435,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "All flags not listed below are forwarded to the selected client.",
         epilog=(
             "claude code:\n"
-            "  claude-tap                            Basic tracing\n"
-            "  claude-tap --tap-live                 Real-time viewer in browser\n"
+            "  claude-tap                            Trace with real-time viewer (default)\n"
+            "  claude-tap --tap-no-live              Record only, no live viewer\n"
             "  claude-tap -- --model claude-opus-4-6  Pass flags to Claude Code\n"
             "  claude-tap -- -c                      Continue last conversation\n"
             "  claude-tap -- --dangerously-skip-permissions  Auto-accept tool calls\n"
-            "  claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6\n"
+            "  claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6\n"
             "\n"
             "codex cli:\n"
             "  # API Key users (OPENAI_API_KEY) — default target works out of the box\n"
@@ -505,10 +508,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Don't auto-open HTML viewer after exit",
     )
     viewer_group.add_argument(
-        "--tap-live",
-        action="store_true",
+        "--tap-no-live",
+        action="store_false",
         dest="live_viewer",
-        help="Start real-time viewer server (auto-opens browser)",
+        default=True,
+        help="Disable real-time viewer server (only record traces)",
     )
     viewer_group.add_argument(
         "--tap-live-port",
