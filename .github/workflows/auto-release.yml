@@ -5,11 +5,13 @@ on:
     branches: [main]
 
 jobs:
-  auto-tag:
-    # Skip version-bump-only commits to avoid infinite tag loop
+  auto-release:
+    # Skip version-bump-only commits to avoid loops
     if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
     runs-on: ubuntu-latest
+    environment: pypi
     permissions:
+      id-token: write
       contents: write
     steps:
       - uses: actions/checkout@v4
@@ -21,23 +23,59 @@ jobs:
         run: |
           latest=$(git tag --list 'v*' --sort=-v:refname | head -1)
           if [ -z "$latest" ]; then
-            next="v0.1.0"
+            next="0.1.0"
           else
-            # Strip 'v' prefix, split, bump patch
             ver="${latest#v}"
             major=$(echo "$ver" | cut -d. -f1)
             minor=$(echo "$ver" | cut -d. -f2)
             patch=$(echo "$ver" | cut -d. -f3)
-            next="v${major}.${minor}.$((patch + 1))"
+            next="${major}.${minor}.$((patch + 1))"
           fi
-          echo "tag=$next" >> "$GITHUB_OUTPUT"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
           echo "Next version: $next"
 
-      - name: Create and push tag
+      - name: Run lint checks
+        run: |
+          pip install ruff
+          ruff check .
+          ruff format --check .
+
+      - name: Run tests
+        run: |
+          pip install -e ".[dev]"
+          python -m pytest tests/ -x --timeout=60
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync version and build
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          sed -i "s/^version = \".*\"/version = \"$version\"/" pyproject.toml
+          grep '^version' pyproject.toml
+          uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create tag and GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${{ steps.version.outputs.tag }}"
+          version="${{ steps.version.outputs.version }}"
+          tag="v${version}"
           git tag "$tag"
           git push origin "$tag"
-          echo "Tagged $tag — publish workflow will handle the rest"
+          prev_tag=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || echo "")
+          if [ -n "$prev_tag" ]; then
+            notes="$(git log "${prev_tag}..${tag}" --pretty=format:'- %h %s')"
+          else
+            notes="$(git log --pretty=format:'- %h %s' -n 20)"
+          fi
+          gh release create "$tag" \
+            --title "$tag" \
+            --notes "$notes"
+          echo "Published $tag to PyPI and created GitHub Release"
