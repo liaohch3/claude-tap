@@ -333,6 +333,7 @@ async def async_main(args: argparse.Namespace):
             "session": session,
             "turn_counter": 0,
             "strip_path_prefix": "/v1" if args.client == "codex" and "api.openai.com" not in args.target else "",
+            "force_http": args.client == "codex",
         }
         app.router.add_route("*", "/{path_info:.*}", proxy_handler)
 
@@ -451,6 +452,27 @@ async def async_main(args: argparse.Namespace):
     return exit_code
 
 
+_CODEX_CHATGPT_TARGET = "https://chatgpt.com/backend-api/codex"
+
+
+def _detect_codex_target() -> str:
+    """Auto-detect the correct upstream target for Codex CLI.
+
+    Reads ``~/.codex/auth.json`` (or ``$CODEX_HOME/auth.json``) to determine
+    the auth mode.  ChatGPT OAuth users (``codex login``) need the chatgpt.com
+    backend; API-key users use api.openai.com.
+    """
+    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    auth_file = codex_home / "auth.json"
+    try:
+        data = json.loads(auth_file.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("auth_mode") == "chatgpt":
+            return _CODEX_CHATGPT_TARGET
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+    return CLIENT_CONFIGS["codex"].default_target
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse argv, extracting ``--tap-*`` flags for ourselves and forwarding
     everything else to the selected client.
@@ -514,7 +536,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--tap-target",
         default=None,
         dest="target",
-        help="Upstream API URL (default: provider-specific)",
+        help="Upstream API URL (default: auto-detected from auth state)",
     )
     proxy_group.add_argument(
         "--tap-proxy-mode",
@@ -584,7 +606,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.host is None:
         args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
     if args.target is None:
-        args.target = CLIENT_CONFIGS[args.client].default_target
+        if args.client == "codex":
+            args.target = _detect_codex_target()
+        else:
+            args.target = CLIENT_CONFIGS[args.client].default_target
     return args
 
 
