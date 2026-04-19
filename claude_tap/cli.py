@@ -295,6 +295,11 @@ async def async_main(args: argparse.Namespace):
     aiohttp_server_log = logging.getLogger("aiohttp.server")
     aiohttp_server_log.addHandler(file_handler)
     aiohttp_server_log.propagate = False
+    # uvloop emits TLS shutdown warnings through the asyncio logger.
+    # Keep them in the trace log rather than printing them into the client TUI.
+    asyncio_log = logging.getLogger("asyncio")
+    asyncio_log.addHandler(file_handler)
+    asyncio_log.propagate = False
 
     # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY) for
     # outbound upstream requests. This is important when users route traffic

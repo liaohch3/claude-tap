@@ -2301,6 +2301,96 @@ async def test_forward_proxy_connect():
     print("  test_forward_proxy_connect PASSED")
 
 
+@pytest.mark.asyncio
+async def test_forward_proxy_connect_websocket():
+    """Test the forward proxy CONNECT/TLS flow with a fake WSS upstream."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+    from claude_tap.trace import TraceWriter
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        trace_path = tmpdir / "trace_ws.jsonl"
+        ca_dir = tmpdir / "ca"
+
+        ca_cert_path, ca_key_path = ensure_ca(ca_dir)
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port = await _start_fake_wss_upstream(tmpdir)
+        print(f"  Fake WSS upstream on port {upstream_port}")
+
+        writer = TraceWriter(trace_path)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False)
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+        )
+        proxy_port = await server.start()
+        print(f"  Forward proxy on port {proxy_port}")
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/v1/responses",
+                    proxy=proxy_url,
+                    ssl=ssl_ctx,
+                )
+                await ws.send_json({"model": "gpt-test", "input": "hello"})
+
+                received = []
+                while True:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        received.append(json.loads(msg.data))
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                    ):
+                        break
+                await ws.close()
+
+            assert len(received) == 3
+            assert received[0]["type"] == "response.created"
+            assert received[-1]["type"] == "response.completed"
+            print("  OK: CONNECT + WSS upgrade works")
+
+            await asyncio.sleep(0.1)
+            writer.close()
+
+            trace_text = trace_path.read_text().strip()
+            assert trace_text, "No WS trace recorded"
+            records = [json.loads(line) for line in trace_text.splitlines()]
+            assert len(records) == 1
+            assert records[0]["transport"] == "websocket"
+            assert records[0]["request"]["method"] == "WEBSOCKET"
+            assert records[0]["request"]["path"] == "/v1/responses"
+            assert records[0]["response"]["status"] == 101
+            assert records[0]["response"]["body"]["status"] == "completed"
+            print("  OK: WS trace recorded correctly")
+        finally:
+            await server.stop()
+            await session.close()
+
+    print("  test_forward_proxy_connect_websocket PASSED")
+
+
 async def _start_fake_https_upstream(tmpdir: Path) -> int:
     """Start a fake HTTPS server for testing. Returns the port."""
     import ssl as ssl_module
@@ -2411,6 +2501,102 @@ async def _start_fake_https_upstream(tmpdir: Path) -> int:
     server = await asyncio.start_server(handle_client, "127.0.0.1", 0, ssl=ssl_ctx)
     port = server.sockets[0].getsockname()[1]
     return port
+
+
+async def _start_fake_wss_upstream(tmpdir: Path) -> int:
+    """Start a fake WSS upstream server for websocket proxy tests."""
+    import ssl as ssl_module
+
+    import aiohttp
+    from aiohttp import web
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    import datetime
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName("127.0.0.1"),
+                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                ]
+            ),
+            critical=False,
+        )
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+
+    cert_path = tmpdir / "upstream-ws.pem"
+    key_path = tmpdir / "upstream-ws-key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+    ssl_ctx = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_SERVER)
+    ssl_ctx.load_cert_chain(str(cert_path), str(key_path))
+
+    async def ws_handler(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                model = data.get("model", "gpt-test")
+                await ws.send_json(
+                    {
+                        "type": "response.created",
+                        "response": {"id": "resp_ws_1", "model": model, "status": "in_progress"},
+                    }
+                )
+                await ws.send_json({"type": "response.output_text.delta", "delta": "Hello over WSS"})
+                await ws.send_json(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_ws_1",
+                            "model": model,
+                            "status": "completed",
+                            "output": [
+                                {
+                                    "type": "message",
+                                    "content": [{"type": "output_text", "text": "Hello over WSS"}],
+                                }
+                            ],
+                            "usage": {"input_tokens": 10, "output_tokens": 5},
+                        },
+                    }
+                )
+                await ws.close()
+                break
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/v1/responses", ws_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=ssl_ctx)
+    await site.start()
+    return site._server.sockets[0].getsockname()[1]
 
 
 ## ---------------------------------------------------------------------------
