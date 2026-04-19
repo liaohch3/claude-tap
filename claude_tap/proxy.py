@@ -564,35 +564,18 @@ def _build_ws_record(
     error: str | None = None,
 ) -> dict:
     """Build a trace record for a WebSocket session."""
-    # Parse client messages to find request body
-    req_body = None
-    for msg in client_messages:
-        try:
-            parsed = json.loads(msg)
-            if req_body is None:
-                req_body = parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
+    req_body = _reconstruct_ws_request_body(client_messages)
 
     # Parse server messages into structured events
     ws_events: list[dict] = []
-    resp_body = None
     for msg in server_messages:
         try:
             parsed = json.loads(msg)
             ws_events.append(parsed)
-            # Terminal events carry the final response
-            if parsed.get("type") in ("response.completed", "response.done"):
-                resp_body = parsed.get("response", parsed)
         except (json.JSONDecodeError, ValueError):
             ws_events.append({"raw": msg})
 
-    # Fallback: use response.created if no terminal event seen
-    if resp_body is None:
-        for evt in ws_events:
-            if isinstance(evt, dict) and evt.get("type") == "response.created":
-                resp_body = evt.get("response", evt)
-                break
+    resp_body = _reconstruct_ws_response_body(ws_events)
 
     record: dict = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -619,3 +602,89 @@ def _build_ws_record(
     if upstream_base_url:
         record["upstream_base_url"] = upstream_base_url
     return record
+
+
+def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
+    """Merge client WebSocket messages into the most complete request body."""
+    merged: dict | None = None
+    for msg in client_messages:
+        try:
+            parsed = json.loads(msg)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        if merged is None:
+            merged = parsed.copy()
+            continue
+        for key, value in parsed.items():
+            if key in ("input", "tools"):
+                if value:
+                    merged[key] = value
+                else:
+                    merged.setdefault(key, value)
+                continue
+            if value not in (None, "", [], {}):
+                merged[key] = value
+            else:
+                merged.setdefault(key, value)
+    return merged
+
+
+def _reconstruct_ws_response_body(ws_events: list[dict]) -> dict | None:
+    """Build a best-effort response body from WS events.
+
+    Recent Codex versions may emit multiple response.completed events and keep
+    the actual assistant text inside response.output_item.done rather than the
+    terminal response payload. Reconstruct a richer body for traces/viewer use.
+    """
+    merged: dict | None = None
+    output_items: dict[int, dict] = {}
+
+    for event in ws_events:
+        if not isinstance(event, dict):
+            continue
+
+        event_type = event.get("type")
+        payload = event.get("response", event)
+        if isinstance(payload, dict) and event_type in (
+            "response.created",
+            "response.in_progress",
+            "response.completed",
+            "response.done",
+        ):
+            if merged is None:
+                merged = payload.copy()
+            else:
+                for key, value in payload.items():
+                    if key == "output":
+                        if value:
+                            merged[key] = value
+                        else:
+                            merged.setdefault(key, value)
+                        continue
+                    if key == "usage":
+                        if value:
+                            merged[key] = value
+                        else:
+                            merged.setdefault(key, value)
+                        continue
+                    if value not in (None, "", [], {}):
+                        merged[key] = value
+                    else:
+                        merged.setdefault(key, value)
+
+        if event_type == "response.output_item.done":
+            item = event.get("item")
+            output_index = event.get("output_index")
+            if isinstance(item, dict) and isinstance(output_index, int):
+                output_items[output_index] = item
+
+    if output_items:
+        ordered_output = [output_items[idx] for idx in sorted(output_items)]
+        if merged is None:
+            merged = {"output": ordered_output}
+        elif not merged.get("output"):
+            merged["output"] = ordered_output
+
+    return merged
