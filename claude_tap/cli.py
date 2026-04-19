@@ -108,6 +108,18 @@ async def run_client(
 
     cmd_args = list(extra_args)
 
+    def _has_config_override(args: list[str], key: str) -> bool:
+        for i, arg in enumerate(args):
+            if arg == "-c" and i + 1 < len(args):
+                candidate = args[i + 1]
+                if candidate.startswith(f"{key}="):
+                    return True
+            elif arg.startswith("-c") and arg != "-c":
+                candidate = arg[2:]
+                if candidate.startswith(f"{key}="):
+                    return True
+        return False
+
     if proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
         # Set both upper/lower-case variants for tools that read one form only.
@@ -119,6 +131,8 @@ async def run_client(
         env["all_proxy"] = proxy_url
         if ca_cert_path:
             env["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
+            env["SSL_CERT_FILE"] = str(ca_cert_path)
+            env["CODEX_CA_CERTIFICATE"] = str(ca_cert_path)
 
         if client == "claude":
             # Claude Code may source proxy env from settings rather than process env.
@@ -143,6 +157,8 @@ async def run_client(
         base_url = cfg.reverse_base_url(port)
         env[cfg.base_url_env] = base_url
         env["NO_PROXY"] = "127.0.0.1"
+        if client == "codex" and not _has_config_override(cmd_args, "openai_base_url"):
+            cmd_args = ["-c", f"openai_base_url={base_url}"] + cmd_args
 
     for key in cfg.nesting_env_keys:
         env.pop(key, None)
