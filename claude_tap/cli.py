@@ -107,6 +107,7 @@ async def run_client(
     env = os.environ.copy()
 
     cmd_args = list(extra_args)
+    has_openai_base_override = _has_config_override(cmd_args, "openai_base_url")
 
     if proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
@@ -119,6 +120,9 @@ async def run_client(
         env["all_proxy"] = proxy_url
         if ca_cert_path:
             env["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
+            # Codex is a Rust binary; NODE_EXTRA_CA_CERTS does not affect its TLS stack.
+            env["SSL_CERT_FILE"] = str(ca_cert_path)
+            env["CODEX_CA_CERTIFICATE"] = str(ca_cert_path)
 
         if client == "claude":
             # Claude Code may source proxy env from settings rather than process env.
@@ -143,6 +147,10 @@ async def run_client(
         base_url = cfg.reverse_base_url(port)
         env[cfg.base_url_env] = base_url
         env["NO_PROXY"] = "127.0.0.1"
+        if client == "codex" and not has_openai_base_override:
+            # Newer Codex builds may ignore OPENAI_BASE_URL in OAuth/WebSocket mode
+            # unless the same value is also supplied as a config override.
+            cmd_args = ["-c", f'openai_base_url="{base_url}"'] + cmd_args
 
     for key in cfg.nesting_env_keys:
         env.pop(key, None)
@@ -232,6 +240,25 @@ async def run_client(
 
     print(f"\n📋 {cfg.label} exited with code {code}")
     return code
+
+
+def _has_config_override(args: list[str], key: str) -> bool:
+    """Return True when argv already contains a matching -c/--config override."""
+    prefixes = (f"{key}=",)
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-c", "--config"):
+            if i + 1 < len(args) and args[i + 1].startswith(prefixes):
+                return True
+            i += 2
+            continue
+        if arg.startswith("--config="):
+            value = arg.split("=", 1)[1]
+            if value.startswith(prefixes):
+                return True
+        i += 1
+    return False
 
 
 async def async_main(args: argparse.Namespace):

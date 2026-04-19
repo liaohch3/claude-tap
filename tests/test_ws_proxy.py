@@ -11,7 +11,7 @@ import pytest
 from aiohttp import web
 from yarl import URL
 
-from claude_tap.proxy import _get_ws_proxy_settings, proxy_handler
+from claude_tap.proxy import _build_ws_record, _get_ws_proxy_settings, proxy_handler
 from claude_tap.trace import TraceWriter
 
 
@@ -250,6 +250,75 @@ async def test_websocket_upstream_failure(trace_dir):
     finally:
         await proxy_session.close()
         await proxy_runner.cleanup()
+
+
+def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
+    record = _build_ws_record(
+        req_id="req_test",
+        turn=1,
+        duration_ms=25,
+        path_qs="/v1/responses",
+        req_headers={"Authorization": "Bearer test-token"},
+        client_messages=[
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "model": "gpt-5.4",
+                    "instructions": "You are Codex.",
+                    "input": [],
+                    "tools": [{"type": "function", "name": "exec_command"}],
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+                }
+            ),
+        ],
+        server_messages=[
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {"input_tokens": 10, "output_tokens": 0},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 1,
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "HELLO_FROM_WS"}],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {"input_tokens": 10, "output_tokens": 2},
+                    },
+                }
+            ),
+        ],
+        upstream_base_url="https://chatgpt.com/backend-api/codex",
+    )
+
+    assert record["request"]["body"]["input"][0]["content"][0]["text"] == "hello"
+    assert record["request"]["body"]["tools"][0]["name"] == "exec_command"
+    assert record["response"]["body"]["usage"] == {"input_tokens": 10, "output_tokens": 2}
+    assert record["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_FROM_WS"
 
 
 # ---------------------------------------------------------------------------
