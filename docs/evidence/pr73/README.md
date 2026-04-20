@@ -97,15 +97,12 @@ Observed behavior:
 
 ## Screenshots
 
-- `pr73-direct-forward-websocket.png`
-  - Source viewer: `/tmp/codex-forward-real/2026-04-20/trace_011250.html`
-  - Captures the websocket upgrade row and websocket trace detail
-- `pr73-cxx-forward-websocket.png`
-  - Source viewer: `/Users/liaohch3/.claude-tap-traces/2026-04-20/trace_011853.html`
-  - Captures the original alias run proving websocket upgrade
+- `pr73-direct-forward-websocket-fixed-output.png`
+  - Source viewer: `/tmp/codex-forward-real-fixed/2026-04-20/trace_112817.html`
+  - Captures the repaired direct forward-mode run with websocket upgrade and visible final assistant output
 - `pr73-cxx-forward-websocket-fixed-output.png`
   - Source viewer: `/Users/liaohch3/.claude-tap-traces/2026-04-20/trace_104528.html`
-  - Captures the repaired alias run where the final assistant output is visible in the viewer
+  - Captures the repaired alias run with visible final assistant output
 
 ## Local validation
 
@@ -133,5 +130,5 @@ Results:
 - targeted websocket regression -> `2 passed, 27 deselected in 0.82s`
 - websocket reconstruction unit test -> `1 passed, 9 deselected in 0.19s`
 - browser reconstruction regression -> `3 passed in 1.48s`
-- screenshot quality check -> `PASS=3 WARN=0 FAIL=0`
+- screenshot quality check -> `PASS=4 WARN=0 FAIL=0`
 - viewer rendering verification -> all 3 viewer HTML files passed
