@@ -32,7 +32,13 @@ from aiohttp._websocket.reader import WebSocketDataQueue, WebSocketReader
 from aiohttp.http_websocket import WS_KEY, WebSocketWriter
 
 from claude_tap.certs import CertificateAuthority
-from claude_tap.proxy import HOP_BY_HOP, _build_record, filter_headers
+from claude_tap.proxy import (
+    HOP_BY_HOP,
+    _build_record,
+    filter_headers,
+    reconstruct_ws_request_body,
+    reconstruct_ws_response_body,
+)
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
 
@@ -705,9 +711,7 @@ class ForwardProxyServer:
                 "method": "WEBSOCKET",
                 "path": path,
                 "headers": filter_headers(headers, redact_keys=True),
-                "body": json.loads(client_messages[0])
-                if client_messages and client_messages[0].startswith("{")
-                else None,
+                "body": reconstruct_ws_request_body(client_messages),
             },
             "response": {
                 "status": 101,
@@ -717,14 +721,7 @@ class ForwardProxyServer:
             },
             "upstream_base_url": upstream_base_url,
         }
-        for msg in reversed(server_messages):
-            try:
-                parsed = json.loads(msg)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if parsed.get("type") in ("response.completed", "response.done"):
-                record["response"]["body"] = parsed.get("response", parsed)
-                break
+        record["response"]["body"] = reconstruct_ws_response_body(record["response"]["ws_events"])
         await self._writer.write(record)
         log.info(
             f"{log_prefix} <- WS closed ({duration_ms}ms, "

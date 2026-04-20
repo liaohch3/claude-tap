@@ -2706,6 +2706,25 @@ function normalizeResponseOutput(output) {
   return content.length > 0 ? { content } : null;
 }
 
+function reconstructOutputFromEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) return null;
+  const outputItems = new Map();
+  for (const ev of events) {
+    if (getEventType(ev) !== 'response.output_item.done') continue;
+    const data = getEventData(ev);
+    const item = data?.item;
+    const outputIndex = data?.output_index;
+    if (!item || typeof item !== 'object' || !Number.isInteger(outputIndex)) continue;
+    outputItems.set(outputIndex, item);
+  }
+  if (outputItems.size === 0) return null;
+  return normalizeResponseOutput(
+    [...outputItems.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, item]) => item)
+  );
+}
+
 // Extract response output from response.body.content or SSE response.completed event
 function getResponseOutput(entry) {
   const body = entry?.response?.body;
@@ -2713,6 +2732,8 @@ function getResponseOutput(entry) {
   const fromBody = normalizeResponseOutput(body?.output);
   if (fromBody) return fromBody;
   const events = getResponseEvents(entry);
+  const fromItems = reconstructOutputFromEvents(events);
+  if (fromItems) return fromItems;
   for (let i = events.length - 1; i >= 0; i--) {
     if (getEventType(events[i]) !== 'response.completed') continue;
     const data = getEventData(events[i]);

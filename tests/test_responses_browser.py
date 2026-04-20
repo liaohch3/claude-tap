@@ -73,3 +73,23 @@ def test_viewer_omits_empty_reasoning_blocks_for_zero_reasoning_tokens(responses
 
     assert "Visible answer" in detail_text
     assert "thinking" not in detail_text.lower()
+
+
+def test_viewer_reconstructs_ws_output_from_output_item_done_when_completed_output_is_empty(
+    responses_page,
+) -> None:
+    responses_page.evaluate(
+        """() => {
+          entries[0].response.body = { status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } };
+          entries[0].response.ws_events = [
+            { type: 'response.created', response: { id: 'resp_1', status: 'in_progress' } },
+            { type: 'response.output_item.done', output_index: 0, item: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Recovered from ws_events' }] } },
+            { type: 'response.completed', response: { id: 'resp_1', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } } }
+          ];
+          renderDetail(entries[0]);
+        }"""
+    )
+
+    detail_text = responses_page.locator("#detail").inner_text()
+
+    assert "Recovered from ws_events" in detail_text

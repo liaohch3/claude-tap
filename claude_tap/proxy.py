@@ -688,3 +688,17 @@ def _reconstruct_ws_response_body(ws_events: list[dict]) -> dict | None:
             merged["output"] = ordered_output
 
     return merged
+
+
+def reconstruct_ws_response_body(ws_events: list[dict]) -> dict | None:
+    """Public wrapper for websocket response-body reconstruction.
+
+    Forward and reverse proxy code paths both need identical reconstruction
+    behavior so viewer output stays consistent across transport modes.
+    """
+    return _reconstruct_ws_response_body(ws_events)
+
+
+def reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
+    """Public wrapper for websocket request-body reconstruction."""
+    return _reconstruct_ws_request_body(client_messages)

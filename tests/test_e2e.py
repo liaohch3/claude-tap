@@ -2383,6 +2383,7 @@ async def test_forward_proxy_connect_websocket():
             assert records[0]["request"]["path"] == "/v1/responses"
             assert records[0]["response"]["status"] == 101
             assert records[0]["response"]["body"]["status"] == "completed"
+            assert records[0]["response"]["body"]["output"][0]["content"][0]["text"] == "Hello over WSS"
             print("  OK: WS trace recorded correctly")
         finally:
             await server.stop()
