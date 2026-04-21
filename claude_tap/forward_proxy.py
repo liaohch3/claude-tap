@@ -35,6 +35,7 @@ from claude_tap.certs import CertificateAuthority
 from claude_tap.proxy import (
     HOP_BY_HOP,
     _build_record,
+    _get_ws_proxy_settings,
     filter_headers,
     reconstruct_ws_request_body,
     reconstruct_ws_response_body,
@@ -561,11 +562,21 @@ class ForwardProxyServer:
 
         log.info(f"{log_prefix} -> WS UPGRADE {path} (upstream={upstream_ws_url})")
 
+        ws_connect_kwargs: dict[str, object] = {}
+        proxy_settings = _get_ws_proxy_settings(upstream_ws_url) if self._session.trust_env else None
+        if proxy_settings:
+            proxy_url, proxy_auth = proxy_settings
+            ws_connect_kwargs["proxy"] = proxy_url
+            if proxy_auth is not None:
+                ws_connect_kwargs["proxy_auth"] = proxy_auth
+            log.info(f"{log_prefix} -> WS upstream via proxy {proxy_url}")
+
         try:
             upstream_ws = await self._session.ws_connect(
                 upstream_ws_url,
                 headers=fwd_headers,
                 protocols=protocols,
+                **ws_connect_kwargs,
             )
         except Exception as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)

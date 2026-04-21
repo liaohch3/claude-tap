@@ -21,6 +21,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from yarl import URL
 
 FAKE_UPSTREAM_PORT = 19199
 
@@ -2390,6 +2391,89 @@ async def test_forward_proxy_connect_websocket():
             await session.close()
 
     print("  test_forward_proxy_connect_websocket PASSED")
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_connect_websocket_honors_env_proxy(monkeypatch):
+    """Forward proxy should pass env-derived proxy settings into upstream ws_connect."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+    from claude_tap.trace import TraceWriter
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        trace_path = tmpdir / "trace_ws_proxy_args.jsonl"
+        ca_dir = tmpdir / "ca"
+
+        ca_cert_path, ca_key_path = ensure_ca(ca_dir)
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port = await _start_fake_wss_upstream(tmpdir)
+        writer = TraceWriter(trace_path)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False, trust_env=True)
+
+        monkeypatch.setattr(
+            "claude_tap.forward_proxy._get_ws_proxy_settings",
+            lambda _url: (URL("http://proxy.local:8080"), aiohttp.BasicAuth("user", "pass")),
+        )
+
+        ws_connect_calls: list[dict] = []
+        original_ws_connect = session.ws_connect
+
+        async def _spy_ws_connect(*args, **kwargs):
+            ws_connect_calls.append(dict(kwargs))
+            kwargs.pop("proxy", None)
+            kwargs.pop("proxy_auth", None)
+            return await original_ws_connect(*args, **kwargs)
+
+        session.ws_connect = _spy_ws_connect  # type: ignore[method-assign]
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+        )
+        proxy_port = await server.start()
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/v1/responses",
+                    proxy=f"http://127.0.0.1:{proxy_port}",
+                    ssl=ssl_ctx,
+                )
+                await ws.send_json({"model": "gpt-test", "input": "hello"})
+                while True:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                    ):
+                        break
+                await ws.close()
+
+            assert ws_connect_calls, "Expected upstream ws_connect to be called"
+            assert ws_connect_calls[0]["proxy"] == URL("http://proxy.local:8080")
+            assert ws_connect_calls[0]["proxy_auth"] is not None
+            assert ws_connect_calls[0]["proxy_auth"].login == "user"
+            assert ws_connect_calls[0]["proxy_auth"].password == "pass"
+        finally:
+            await server.stop()
+            await session.close()
 
 
 async def _start_fake_https_upstream(tmpdir: Path) -> int:
