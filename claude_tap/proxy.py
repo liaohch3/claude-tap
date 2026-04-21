@@ -97,6 +97,11 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
 
     # Detect WebSocket upgrade and route to WS proxy
     if request.headers.get("Upgrade", "").lower() == "websocket":
+        # When force_http is set (default for Codex), reject WebSocket upgrades
+        # with 426 so the client immediately falls back to HTTP streaming.
+        if request.app["trace_ctx"].get("force_http"):
+            log.info(f"Rejecting WebSocket upgrade on {request.path} (force_http); client will fallback to HTTP")
+            return web.Response(status=426, text="Upgrade Required")
         return await _handle_websocket(request)
 
     ctx: dict = request.app["trace_ctx"]
