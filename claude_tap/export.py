@@ -1,4 +1,4 @@
-"""Export trace JSONL files to Markdown or JSON format."""
+"""Export trace JSONL files to Markdown, JSON, or HTML format."""
 
 from __future__ import annotations
 
@@ -7,18 +7,25 @@ import json
 import sys
 from pathlib import Path
 
+from claude_tap.viewer import _generate_html_viewer
+
 
 def export_main(argv: list[str] | None = None) -> int:
     """Entry point for the export subcommand."""
     parser = argparse.ArgumentParser(
         prog="claude-tap export",
-        description="Export a trace JSONL file to Markdown or JSON.",
+        description="Export a trace JSONL file to Markdown, JSON, or HTML.",
     )
     parser.add_argument("trace_file", type=Path, help="Path to the .jsonl trace file")
-    parser.add_argument("-o", "--output", type=Path, help="Output file path (default: stdout)")
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="Output file path (default: stdout; for HTML, trace_file with .html suffix)",
+    )
     parser.add_argument(
         "--format",
-        choices=["markdown", "json"],
+        choices=["markdown", "json", "html"],
         default=None,
         help="Output format (default: inferred from -o extension, or markdown)",
     )
@@ -50,10 +57,25 @@ def export_main(argv: list[str] | None = None) -> int:
     # Determine format
     fmt = args.format
     if fmt is None:
-        if args.output and args.output.suffix == ".json":
-            fmt = "json"
+        if args.output:
+            suffix = args.output.suffix.lower()
+            if suffix == ".json":
+                fmt = "json"
+            elif suffix in {".html", ".htm"}:
+                fmt = "html"
+            else:
+                fmt = "markdown"
         else:
             fmt = "markdown"
+
+    if fmt == "html":
+        html_path = args.output or args.trace_file.with_suffix(".html")
+        _generate_html_viewer(args.trace_file, html_path)
+        if not html_path.exists():
+            print("Error: failed to generate HTML viewer", file=sys.stderr)
+            return 1
+        print(f"Exported {len(records)} turns to {html_path}")
+        return 0
 
     if fmt == "json":
         output = _export_json(records)

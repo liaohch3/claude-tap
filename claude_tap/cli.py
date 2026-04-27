@@ -509,6 +509,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap export trace.jsonl              Export to markdown\n"
             "  claude-tap export trace.jsonl -o out.md    Export to file\n"
             "  claude-tap export trace.jsonl --format json Export as JSON\n"
+            "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
             "\n"
             "homepage: https://github.com/liaohch3/claude-tap"
         ),
