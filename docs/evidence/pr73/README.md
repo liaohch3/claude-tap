@@ -11,12 +11,12 @@ This directory contains real evidence for PR #73. The screenshots were taken fro
 Command:
 
 ```bash
-cd /Users/liaohch3
-uv run --project /Users/liaohch3/src/github.com/liaohch3/claude-tap \
+cd <home>
+uv run --project <repo-root> \
   python -m claude_tap \
   --tap-client codex \
   --tap-proxy-mode forward \
-  --tap-output-dir /tmp/codex-forward-real \
+  --tap-output-dir <tmp-trace-dir> \
   --tap-no-open \
   --tap-no-update-check \
   -- exec "run pwd and reply with exactly the pwd" \
@@ -25,9 +25,9 @@ uv run --project /Users/liaohch3/src/github.com/liaohch3/claude-tap \
 
 Artifacts:
 
-- JSONL: `/tmp/codex-forward-real/2026-04-20/trace_011250.jsonl`
-- HTML: `/tmp/codex-forward-real/2026-04-20/trace_011250.html`
-- Log: `/tmp/codex-forward-real/2026-04-20/trace_011250.log`
+- JSONL: `<tmp-trace-dir>/2026-04-20/trace_011250.jsonl`
+- HTML: `<tmp-trace-dir>/2026-04-20/trace_011250.html`
+- Log: `<tmp-trace-dir>/2026-04-20/trace_011250.log`
 
 Observed in log:
 
@@ -44,15 +44,15 @@ Command:
 
 ```bash
 source ~/.zshrc
-cd /Users/liaohch3
+cd <home>
 cxx exec "run pwd and reply with exactly the pwd"
 ```
 
 Artifacts:
 
-- JSONL: `/Users/liaohch3/.claude-tap-traces/2026-04-20/trace_011853.jsonl`
-- HTML: `/Users/liaohch3/.claude-tap-traces/2026-04-20/trace_011853.html`
-- Log: `/Users/liaohch3/.claude-tap-traces/2026-04-20/trace_011853.log`
+- JSONL: `<trace-dir>/2026-04-20/trace_011853.jsonl`
+- HTML: `<trace-dir>/2026-04-20/trace_011853.html`
+- Log: `<trace-dir>/2026-04-20/trace_011853.log`
 
 Observed in log:
 
@@ -61,7 +61,7 @@ Observed in log:
 
 Observed behavior:
 
-- caller working directory remained `/Users/liaohch3`
+- caller working directory remained `<home>`
 - no `405 Method Not Allowed` websocket fallback noise
 - no `SSL connection is closed` terminal spam
 
@@ -71,15 +71,15 @@ Command:
 
 ```bash
 source ~/.zshrc
-cd /Users/liaohch3
+cd <home>
 cxx exec "run pwd and reply with exactly the pwd"
 ```
 
 Artifacts:
 
-- JSONL: `/Users/liaohch3/.claude-tap-traces/2026-04-20/trace_104528.jsonl`
-- HTML: `/Users/liaohch3/.claude-tap-traces/2026-04-20/trace_104528.html`
-- Log: `/Users/liaohch3/.claude-tap-traces/2026-04-20/trace_104528.log`
+- JSONL: `<trace-dir>/2026-04-20/trace_104528.jsonl`
+- HTML: `<trace-dir>/2026-04-20/trace_104528.html`
+- Log: `<trace-dir>/2026-04-20/trace_104528.log`
 
 Observed in log:
 
@@ -88,7 +88,7 @@ Observed in log:
 
 Observed in trace:
 
-- `response.body.output[0].content[0].text == "/Users/liaohch3"`
+- `response.body.output[0].content[0].text == "<home>"`
 
 Observed behavior:
 
@@ -98,10 +98,10 @@ Observed behavior:
 ## Screenshots
 
 - `pr73-direct-forward-websocket-fixed-output.png`
-  - Source viewer: `/tmp/codex-forward-real-fixed/2026-04-20/trace_112817.html`
+  - Source viewer: `<tmp-trace-dir-fixed>/2026-04-20/trace_112817.html`
   - Captures the repaired direct forward-mode run with websocket upgrade and visible final assistant output
 - `pr73-cxx-forward-websocket-fixed-output.png`
-  - Source viewer: `/Users/liaohch3/.claude-tap-traces/2026-04-20/trace_104528.html`
+  - Source viewer: `<trace-dir>/2026-04-20/trace_104528.html`
   - Captures the repaired alias run with visible final assistant output
 
 ## Local validation
@@ -117,9 +117,9 @@ uv run pytest tests/test_ws_proxy.py -k build_ws_record_merges_incremental_reque
 uv run pytest tests/test_responses_browser.py -x --timeout=120
 uv run python scripts/check_screenshots.py docs/evidence/pr73
 uv run python scripts/verify_screenshots.py \
-  /Users/liaohch3/.claude-tap-traces/2026-04-20/trace_011853.html \
-  /tmp/codex-forward-real/2026-04-20/trace_011250.html
-uv run python scripts/verify_screenshots.py /Users/liaohch3/.claude-tap-traces/2026-04-20/trace_104528.html
+  <trace-dir>/2026-04-20/trace_011853.html \
+  <tmp-trace-dir>/2026-04-20/trace_011250.html
+uv run python scripts/verify_screenshots.py <trace-dir>/2026-04-20/trace_104528.html
 ```
 
 Results:

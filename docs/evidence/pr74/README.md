@@ -12,7 +12,7 @@ Command:
 
 ```bash
 source ~/.zshrc
-cd /Users/liaohch3
+cd <home>
 cxx
 ```
 
@@ -24,9 +24,9 @@ say hello
 
 Artifacts:
 
-- JSONL: `/Users/liaohch3/.claude-tap-traces/2026-04-21/trace_162156.jsonl`
-- HTML: `/Users/liaohch3/.claude-tap-traces/2026-04-21/trace_162156.html`
-- Log: `/Users/liaohch3/.claude-tap-traces/2026-04-21/trace_162156.log`
+- JSONL: `<trace-dir>/2026-04-21/trace_162156.jsonl`
+- HTML: `<trace-dir>/2026-04-21/trace_162156.html`
+- Log: `<trace-dir>/2026-04-21/trace_162156.log`
 
 Observed in log:
 
@@ -43,7 +43,7 @@ Observed behavior:
 ## Screenshot
 
 - `pr74-cxx-first-message-no-reconnect.png`
-  - Source viewer: `/Users/liaohch3/.claude-tap-traces/2026-04-21/trace_162156.html`
+  - Source viewer: `<trace-dir>/2026-04-21/trace_162156.html`
   - Captures the real first-message websocket turn selected in the viewer
 
 ## Local validation
@@ -56,7 +56,7 @@ uv run ruff format --check .
 uv run pytest tests/ -x --timeout=60
 uv run pytest tests/test_e2e.py -k "forward_proxy_connect_websocket" -x --timeout=120
 uv run python scripts/check_screenshots.py docs/evidence/pr74
-uv run python scripts/verify_screenshots.py /Users/liaohch3/.claude-tap-traces/2026-04-21/trace_162156.html
+uv run python scripts/verify_screenshots.py <trace-dir>/2026-04-21/trace_162156.html
 ```
 
 Results:

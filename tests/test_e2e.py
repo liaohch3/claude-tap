@@ -40,7 +40,7 @@ req_body = json.dumps({
 }).encode()
 req = urllib.request.Request(url, data=req_body, headers={
     "Content-Type": "application/json",
-    "x-api-key": "sk-ant-test-key-12345678",
+    "x-api-key": "test-anthropic-key-12345678",
     "anthropic-version": "2023-06-01",
 })
 try:
@@ -64,7 +64,7 @@ req_body2 = json.dumps({
 }).encode()
 req2 = urllib.request.Request(url, data=req_body2, headers={
     "Content-Type": "application/json",
-    "x-api-key": "sk-ant-test-key-12345678",
+    "x-api-key": "test-anthropic-key-12345678",
     "anthropic-version": "2023-06-01",
 })
 try:
@@ -470,7 +470,7 @@ req_body = json.dumps({
 }).encode()
 req = urllib.request.Request(url, data=req_body, headers={
     "Content-Type": "application/json",
-    "x-api-key": "sk-ant-test-key-12345678",
+    "x-api-key": "test-anthropic-key-12345678",
     "anthropic-version": "2023-06-01",
 })
 try:
@@ -580,7 +580,7 @@ req_body = json.dumps({
 }).encode()
 req = urllib.request.Request(url, data=req_body, headers={
     "Content-Type": "application/json",
-    "x-api-key": "sk-ant-test-key-12345678",
+    "x-api-key": "test-anthropic-key-12345678",
     "anthropic-version": "2023-06-01",
 })
 try:
@@ -739,7 +739,7 @@ req_body = json.dumps({
 }).encode()
 req = urllib.request.Request(url, data=req_body, headers={
     "Content-Type": "application/json",
-    "x-api-key": "sk-ant-test-key-12345678",
+    "x-api-key": "test-anthropic-key-12345678",
     "anthropic-version": "2023-06-01",
 })
 try:
@@ -875,7 +875,7 @@ def send_request(idx):
     }).encode()
     req = urllib.request.Request(url, data=req_body, headers={
         "Content-Type": "application/json",
-        "x-api-key": "sk-ant-test-key-12345678",
+        "x-api-key": "test-anthropic-key-12345678",
         "anthropic-version": "2023-06-01",
     })
     try:
@@ -1242,7 +1242,7 @@ req_body = json.dumps({
 }).encode()
 req = urllib.request.Request(url, data=req_body, headers={
     "Content-Type": "application/json",
-    "Authorization": "Bearer sk-openai-test-key-12345678",
+    "Authorization": "Bearer sample",
 })
 try:
     with urllib.request.urlopen(req) as resp:
@@ -1385,8 +1385,8 @@ def test_filter_headers():
 
     headers = {
         "Content-Type": "application/json",
-        "x-api-key": "sk-ant-api03-very-long-secret-key-12345678",
-        "Authorization": "Bearer sk-ant-secret-token-abcdef",
+        "x-api-key": "test-redaction-api-key-12345678",
+        "Authorization": "Bearer sample",
         "Transfer-Encoding": "chunked",
         "Connection": "keep-alive",
         "X-Custom": "custom-value",
@@ -1403,9 +1403,9 @@ def test_filter_headers():
     # With redaction
     out = filter_headers(headers, redact_keys=True)
     assert out["x-api-key"].endswith("...")
-    assert "very-long-secret" not in out["x-api-key"]
+    assert "redaction-api-key" not in out["x-api-key"]
     assert out["Authorization"].endswith("...")
-    assert "secret-token" not in out["Authorization"]
+    assert "redaction-token" not in out["Authorization"]
     assert out["Content-Type"] == "application/json"
     assert out["X-Custom"] == "custom-value"
     print("  OK: secrets redacted")
@@ -1505,7 +1505,7 @@ req_body = json.dumps({
 }).encode()
 req = urllib.request.Request(url, data=req_body, headers={
     "Content-Type": "application/json",
-    "x-api-key": "sk-ant-test-key-12345678",
+    "x-api-key": "test-anthropic-key-12345678",
     "anthropic-version": "2023-06-01",
 })
 try:
@@ -2270,7 +2270,7 @@ async def test_forward_proxy_connect():
                         "messages": [{"role": "user", "content": "hello"}],
                     },
                     headers={
-                        "x-api-key": "sk-ant-test-key-12345678",
+                        "x-api-key": "test-anthropic-key-12345678",
                         "anthropic-version": "2023-06-01",
                     },
                 ) as resp:
