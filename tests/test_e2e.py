@@ -1161,10 +1161,12 @@ def _cmd_dev():
 ## ---------------------------------------------------------------------------
 
 
-def test_parse_args():
+def test_parse_args(monkeypatch, tmp_path):
     """Test that --tap-* flags are consumed by claude-tap and everything else
     is forwarded to claude via claude_args."""
     from claude_tap import parse_args
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
 
     # Basic: no args
     a = parse_args([])
@@ -2143,7 +2145,7 @@ def test_parse_args_proxy_mode():
 ## ---------------------------------------------------------------------------
 
 
-def test_codex_upstream_url_construction():
+def test_codex_upstream_url_construction(monkeypatch, tmp_path):
     """Verify that strip_path_prefix produces correct upstream URLs for all Codex backends.
 
     This is a regression guard for the bug where strip_path_prefix="/v1" combined
@@ -2153,6 +2155,8 @@ def test_codex_upstream_url_construction():
     See: docs/error-experience/entries/2026-03-10-codex-strip-prefix-url-mismatch.md
     """
     from claude_tap import parse_args
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
 
     def _build_upstream(target: str, strip_prefix: str, request_path: str) -> str:
         fwd_path = request_path
