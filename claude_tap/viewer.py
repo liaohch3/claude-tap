@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+
+from claude_tap.sse import SSEReassembler
 
 try:
     CLAUDE_TAP_VERSION = _pkg_version("claude-tap")
@@ -45,6 +48,79 @@ def _event_payload(event: dict) -> dict | None:
         except (json.JSONDecodeError, TypeError):
             return None
     return payload if isinstance(payload, dict) else None
+
+
+def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
+    """Extract Anthropic stream events from a decoded AWS EventStream body.
+
+    Bedrock invoke-with-response-stream responses are binary AWS EventStream
+    frames. Legacy traces may contain those bytes decoded as text with invalid
+    frame bytes replaced, but the JSON payloads inside the frames remain intact.
+    """
+    if not isinstance(body, str) or '"bytes"' not in body:
+        return []
+
+    events: list[dict] = []
+    decoder = json.JSONDecoder()
+    pos = 0
+    while True:
+        start = body.find('{"', pos)
+        if start < 0:
+            break
+        try:
+            frame, end = decoder.raw_decode(body[start:])
+        except json.JSONDecodeError:
+            pos = start + 1
+            continue
+        pos = start + end
+
+        if not isinstance(frame, dict):
+            continue
+        encoded = frame.get("bytes")
+        if not isinstance(encoded, str):
+            continue
+        try:
+            payload_bytes = base64.b64decode(encoded, validate=True)
+            payload = json.loads(payload_bytes)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        event_type = payload.get("type")
+        if isinstance(event_type, str) and event_type:
+            events.append({"event": event_type, "data": payload})
+
+    return events
+
+
+def _normalize_record_for_viewer(record_json: str) -> str:
+    """Normalize trace variants into the shape expected by viewer.html."""
+    try:
+        record = json.loads(record_json)
+    except (json.JSONDecodeError, TypeError):
+        return record_json
+    if not isinstance(record, dict):
+        return record_json
+
+    response = record.get("response")
+    if not isinstance(response, dict):
+        return record_json
+
+    events = _decode_bedrock_eventstream_events(response.get("body"))
+    if not events:
+        return record_json
+
+    reassembler = SSEReassembler()
+    for event in events:
+        reassembler.add_event(event["event"], event["data"])
+
+    reconstructed = reassembler.reconstruct()
+    if reconstructed:
+        response["body"] = reconstructed
+    response.setdefault("sse_events", events)
+
+    return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
 
 
 def _extract_request_messages(body: dict) -> list[dict]:
@@ -200,7 +276,7 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
             for line in f:
                 line = line.strip()
                 if line:
-                    records.append(line)
+                    records.append(_normalize_record_for_viewer(line))
 
     jsonl_path_js = json.dumps(str(trace_path.absolute()))
     html_path_js = json.dumps(str(html_path.absolute()))
