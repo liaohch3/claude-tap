@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -64,3 +65,75 @@ def test_export_help_mentions_html(capsys) -> None:
     help_text = capsys.readouterr().out
     assert "{markdown,json,html}" in help_text
     assert "for HTML" in help_text
+
+
+def _bedrock_frame(event: dict) -> str:
+    payload = json.dumps(event).encode("utf-8")
+    return json.dumps({"bytes": base64.b64encode(payload).decode("ascii")})
+
+
+def test_export_json_tolerates_null_request_body_and_stream_text_response(tmp_path, capsys) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    json_path = tmp_path / "trace.export.json"
+    records = [
+        {
+            "timestamp": "2026-04-28T12:00:00",
+            "turn": 2,
+            "request": {"method": "GET", "path": "/inference-profiles", "body": None},
+            "response": {"status": 200, "body": {"profiles": []}},
+        },
+        {
+            "timestamp": "2026-04-28T12:00:01",
+            "turn": 1,
+            "request": {
+                "method": "POST",
+                "path": "/model/test/invoke-with-response-stream",
+                "body": {"model": "claude-haiku-4-5", "messages": [{"role": "user", "content": "hello"}]},
+            },
+            "response": {
+                "status": 200,
+                "body": "".join(
+                    [
+                        _bedrock_frame(
+                            {
+                                "type": "message_start",
+                                "message": {"id": "msg_1", "type": "message", "role": "assistant", "content": []},
+                            }
+                        ),
+                        _bedrock_frame(
+                            {
+                                "type": "content_block_start",
+                                "index": 0,
+                                "content_block": {"type": "text", "text": ""},
+                            }
+                        ),
+                        _bedrock_frame(
+                            {
+                                "type": "content_block_delta",
+                                "index": 0,
+                                "delta": {"type": "text_delta", "text": "hello from stream"},
+                            }
+                        ),
+                        _bedrock_frame(
+                            {
+                                "type": "message_delta",
+                                "delta": {"stop_reason": "end_turn"},
+                                "usage": {"input_tokens": 4, "output_tokens": 3},
+                            }
+                        ),
+                    ]
+                ),
+            },
+        },
+    ]
+    trace_path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+    assert export_main([str(trace_path), "--format", "json", "-o", str(json_path)]) == 0
+
+    exported = json.loads(json_path.read_text(encoding="utf-8"))
+    assert [entry["turn"] for entry in exported] == [1, 2]
+    assert exported[0]["response"]["content"] == [{"type": "text", "text": "hello from stream"}]
+    assert exported[0]["response"]["usage"] == {"input_tokens": 4, "output_tokens": 3}
+    assert exported[1]["model"] is None
+    assert exported[1]["messages"] == []
+    assert f"Exported 2 turns to {json_path}" in capsys.readouterr().out

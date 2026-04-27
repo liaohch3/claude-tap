@@ -7,7 +7,38 @@ import json
 import sys
 from pathlib import Path
 
-from claude_tap.viewer import _generate_html_viewer
+from claude_tap.viewer import _generate_html_viewer, _normalize_record_for_viewer
+
+
+def _as_dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _normalize_record_for_export(record: object) -> dict | None:
+    if not isinstance(record, dict):
+        return None
+    try:
+        normalized = json.loads(_normalize_record_for_viewer(json.dumps(record, ensure_ascii=False)))
+    except (TypeError, json.JSONDecodeError):
+        return record
+    return normalized if isinstance(normalized, dict) else record
+
+
+def _request_body(record: dict) -> dict:
+    return _as_dict(_as_dict(record.get("request")).get("body"))
+
+
+def _response_body(record: dict) -> dict:
+    return _as_dict(_as_dict(record.get("response")).get("body"))
+
+
+def _usage_from(record: dict) -> dict:
+    return _as_dict(_response_body(record).get("usage"))
+
+
+def _turn_sort_key(record: dict) -> int:
+    turn = record.get("turn")
+    return turn if isinstance(turn, int) else 0
 
 
 def export_main(argv: list[str] | None = None) -> int:
@@ -43,7 +74,9 @@ def export_main(argv: list[str] | None = None) -> int:
             line = line.strip()
             if line:
                 try:
-                    records.append(json.loads(line))
+                    record = _normalize_record_for_export(json.loads(line))
+                    if record is not None:
+                        records.append(record)
                 except json.JSONDecodeError:
                     continue
 
@@ -52,7 +85,7 @@ def export_main(argv: list[str] | None = None) -> int:
         return 1
 
     # Sort by turn
-    records.sort(key=lambda r: r.get("turn", 0))
+    records.sort(key=_turn_sort_key)
 
     # Determine format
     fmt = args.format
@@ -104,12 +137,12 @@ def _export_markdown(records: list[dict]) -> str:
     models: set[str] = set()
 
     for r in records:
-        usage = r.get("response", {}).get("body", {}).get("usage", {})
+        usage = _usage_from(r)
         total_input += usage.get("input_tokens", 0)
         total_output += usage.get("output_tokens", 0)
         total_cache_read += usage.get("cache_read_input_tokens", 0)
         total_cache_create += usage.get("cache_creation_input_tokens", 0)
-        model = r.get("request", {}).get("body", {}).get("model", "")
+        model = _request_body(r).get("model", "")
         if model:
             models.add(model)
 
@@ -127,8 +160,8 @@ def _export_markdown(records: list[dict]) -> str:
     # Each turn
     for r in records:
         turn = r.get("turn", "?")
-        req_body = r.get("request", {}).get("body", {})
-        resp_body = r.get("response", {}).get("body", {})
+        req_body = _request_body(r)
+        resp_body = _response_body(r)
         model = req_body.get("model", "unknown")
         duration = r.get("duration_ms", 0)
 
@@ -137,31 +170,32 @@ def _export_markdown(records: list[dict]) -> str:
 
         # User messages (last message from request)
         messages = req_body.get("messages", [])
-        if messages:
+        if isinstance(messages, list) and messages:
             last_msg = messages[-1]
-            role = last_msg.get("role", "unknown")
-            lines.append(f"### {role.title()}\n")
-            content = last_msg.get("content", "")
-            if isinstance(content, str):
-                lines.append(content + "\n")
-            elif isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict):
-                        if block.get("type") == "text":
-                            lines.append(block.get("text", "") + "\n")
-                        elif block.get("type") == "tool_result":
-                            lines.append(f"**Tool Result** (`{block.get('tool_use_id', '')}`)\n")
-                            rc = block.get("content", "")
-                            if isinstance(rc, str):
-                                lines.append(f"```\n{rc[:2000]}\n```\n")
-                            elif isinstance(rc, list):
-                                for sub in rc:
-                                    if isinstance(sub, dict) and sub.get("type") == "text":
-                                        lines.append(f"```\n{sub.get('text', '')[:2000]}\n```\n")
+            if isinstance(last_msg, dict):
+                role = last_msg.get("role", "unknown")
+                lines.append(f"### {role.title()}\n")
+                content = last_msg.get("content", "")
+                if isinstance(content, str):
+                    lines.append(content + "\n")
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text":
+                                lines.append(block.get("text", "") + "\n")
+                            elif block.get("type") == "tool_result":
+                                lines.append(f"**Tool Result** (`{block.get('tool_use_id', '')}`)\n")
+                                rc = block.get("content", "")
+                                if isinstance(rc, str):
+                                    lines.append(f"```\n{rc[:2000]}\n```\n")
+                                elif isinstance(rc, list):
+                                    for sub in rc:
+                                        if isinstance(sub, dict) and sub.get("type") == "text":
+                                            lines.append(f"```\n{sub.get('text', '')[:2000]}\n```\n")
 
         # Response
         resp_content = resp_body.get("content", [])
-        if resp_content:
+        if isinstance(resp_content, list) and resp_content:
             lines.append("### Assistant\n")
             for block in resp_content:
                 if isinstance(block, dict):
@@ -180,7 +214,7 @@ def _export_markdown(records: list[dict]) -> str:
                             lines.append(f"<details>\n<summary>Thinking</summary>\n\n{thinking[:5000]}\n\n</details>\n")
 
         # Token usage
-        usage = resp_body.get("usage", {})
+        usage = _as_dict(resp_body.get("usage"))
         if usage:
             parts = []
             if usage.get("input_tokens"):
@@ -201,18 +235,18 @@ def _export_json(records: list[dict]) -> str:
     """Export records as cleaned-up JSON."""
     cleaned = []
     for r in records:
-        req_body = r.get("request", {}).get("body", {})
-        resp_body = r.get("response", {}).get("body", {})
+        req_body = _request_body(r)
+        resp_body = _response_body(r)
 
         entry = {
             "turn": r.get("turn"),
             "timestamp": r.get("timestamp"),
             "duration_ms": r.get("duration_ms"),
             "model": req_body.get("model"),
-            "messages": req_body.get("messages", []),
+            "messages": req_body.get("messages") if isinstance(req_body.get("messages"), list) else [],
             "response": {
-                "content": resp_body.get("content", []),
-                "usage": resp_body.get("usage", {}),
+                "content": resp_body.get("content") if isinstance(resp_body.get("content"), list) else [],
+                "usage": _as_dict(resp_body.get("usage")),
                 "stop_reason": resp_body.get("stop_reason"),
             },
         }
