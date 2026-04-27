@@ -21,6 +21,12 @@ def _bedrock_frame(payload: dict) -> str:
     return "\x00\x00binary-prefix" + json.dumps({"bytes": encoded, "p": "abcdefghijk"}) + "\ufffd"
 
 
+def _write_trace(trace_path, records: list[dict]) -> None:
+    with trace_path.open("w", encoding="utf-8") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+
 def test_normalize_record_for_viewer_decodes_bedrock_eventstream() -> None:
     body = "".join(
         [
@@ -92,13 +98,12 @@ def test_bedrock_invoke_path_is_primary_filter(tmp_path) -> None:
         "/mcp-registry/v0/servers",
         "/inference-profiles",
         "/auxiliary/one",
-        "/auxiliary/two",
-        "/auxiliary/three",
     ]
     trace_path = tmp_path / "trace.jsonl"
-    with trace_path.open("w", encoding="utf-8") as f:
-        for turn, path in enumerate(paths, 1):
-            record = {
+    _write_trace(
+        trace_path,
+        [
+            {
                 "timestamp": f"2026-04-27T09:15:{turn:02d}+00:00",
                 "request_id": f"req_{turn}",
                 "turn": turn,
@@ -115,7 +120,9 @@ def test_bedrock_invoke_path_is_primary_filter(tmp_path) -> None:
                 },
                 "response": {"status": 200, "headers": {}, "body": {"content": [], "usage": {}}},
             }
-            f.write(json.dumps(record) + "\n")
+            for turn, path in enumerate(paths, 1)
+        ],
+    )
 
     html_path = tmp_path / "trace.html"
     _generate_html_viewer(trace_path, html_path)
@@ -131,4 +138,55 @@ def test_bedrock_invoke_path_is_primary_filter(tmp_path) -> None:
 
     assert "invoke-with-response-stream" in chip_text
     assert sidebar_count == 1
-    assert "+5" in more_text
+    assert "+3" in more_text
+
+
+@pytest.mark.skipif(pw_missing, reason="playwright not installed")
+def test_bedrock_billing_header_does_not_become_task_label(tmp_path) -> None:
+    from playwright.sync_api import sync_playwright
+
+    from claude_tap.viewer import _generate_html_viewer
+
+    trace_path = tmp_path / "trace.jsonl"
+    _write_trace(
+        trace_path,
+        [
+            {
+                "timestamp": "2026-04-27T09:15:01+00:00",
+                "request_id": "req_1",
+                "turn": 1,
+                "duration_ms": 100,
+                "request": {
+                    "method": "POST",
+                    "path": "/model/global.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream",
+                    "headers": {},
+                    "body": {
+                        "system": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "x-anthropic-billing-header: cc_version=2.1.119.6a6; "
+                                    "cc_entrypoint=sdk-ts-e2b-runner;\n"
+                                    "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+                                ),
+                            }
+                        ],
+                        "messages": [{"role": "user", "content": [{"type": "text", "text": "ping"}]}],
+                    },
+                },
+                "response": {"status": 200, "headers": {}, "body": {"content": [], "usage": {}}},
+            }
+        ],
+    )
+
+    html_path = tmp_path / "trace.html"
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
+        label = page.locator(".sidebar-item .si-task").first.inner_text()
+        browser.close()
+
+    assert label == "Claude Agent"

@@ -1633,10 +1633,10 @@ function renderApp(preserveDetail) {
   entries.forEach(e => { const p = getPath(e); pathCounts[p] = (pathCounts[p] || 0) + 1; });
   const paths = Object.keys(pathCounts).sort();
   if (activePaths.size === 0) {
-    /* Few paths: activate all; many paths: activate only primary */
+    /* If the trace has main conversation paths, hide auxiliary setup calls by default. */
     const primaryPaths = paths.filter(isPathPrimary);
-    if (paths.length <= 5 || primaryPaths.length === 0) paths.forEach(p => activePaths.add(p));
-    else primaryPaths.forEach(p => activePaths.add(p));
+    if (primaryPaths.length > 0) primaryPaths.forEach(p => activePaths.add(p));
+    else paths.forEach(p => activePaths.add(p));
   }
   renderPathFilter(paths, pathCounts);
   renderTracePathBar();
@@ -2240,6 +2240,7 @@ function getTaskFingerprint(e) {
   let label = '';
   if (!sysText && !tools.length) label = 'simple';
   else if (lower.includes('claude code')) label = 'Claude Code';
+  else if (lower.includes('claude agent')) label = 'Claude Agent';
   else if (lower.includes('you are codex')) label = 'Codex';
   else if (lower.includes('openclaw')) label = 'OpenClaw';
   else if (lower.includes('subagent') || lower.includes('sub-agent')) label = 'Subagent';
@@ -2247,7 +2248,10 @@ function getTaskFingerprint(e) {
   else if (lower.includes('explore')) label = 'Explore';
   else if (lower.includes('plan')) label = 'Plan';
   else if (sysText) {
-    const firstLine = sysText.split('\n').find(l => l.trim()) || '';
+    const firstLine = sysText.split('\n').find(l => {
+      const line = l.trim().toLowerCase();
+      return line && !line.startsWith('x-anthropic-billing-header:');
+    }) || '';
     label = firstLine.slice(0, 20).trim() || (tools.length + ' tools');
   } else {
     label = tools.length + ' tools';
