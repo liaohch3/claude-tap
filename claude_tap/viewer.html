@@ -1219,12 +1219,13 @@ const I18N = {
     turn: "Turn", tok: "tok",
     btn_request_json: "Request JSON", btn_curl: "cURL", btn_diff: "Diff with Prev",
     section_system: "System Prompt", section_messages: "Messages", section_tools: "Tools",
-    section_response: "Response", section_usage: "Token Usage", section_sse: "SSE Events", section_json: "Full JSON",
+    section_context: "Request Context", section_response: "Response", section_usage: "Token Usage", section_sse: "SSE Events", section_json: "Full JSON",
     copy: "Copy", copied: "Copied!",
     params: "Parameters", required: "required",
     tok_input: "Input", tok_output: "Output", tok_cache_read: "Cache Read", tok_cache_create: "Cache Create",
     empty_state: "No entries for selected paths", no_prev: "No previous request",
     no_content: "No content", no_messages: "No messages in either request",
+    response_context_only: "No response output captured; showing request context only.",
     diff_unchanged: "previous messages unchanged", diff_msg_range: "message #1 ~ #",
     diff_new: "new", diff_removed: "removed", diff_added: "added", diff_changed: "changed",
     diff_no_change: "no change", diff_unchanged_lbl: "unchanged",
@@ -1243,12 +1244,13 @@ const I18N = {
     turn: "轮次", tok: "tok",
     btn_request_json: "请求 JSON", btn_curl: "cURL", btn_diff: "对比上次",
     section_system: "系统提示词", section_messages: "消息", section_tools: "工具",
-    section_response: "响应", section_usage: "Token 用量", section_sse: "SSE 事件", section_json: "完整 JSON",
+    section_context: "请求上下文", section_response: "响应", section_usage: "Token 用量", section_sse: "SSE 事件", section_json: "完整 JSON",
     copy: "复制", copied: "已复制！",
     params: "参数", required: "必填",
     tok_input: "输入", tok_output: "输出", tok_cache_read: "缓存读取", tok_cache_create: "缓存创建",
     empty_state: "当前路径下无条目", no_prev: "无前序请求",
     no_content: "无内容", no_messages: "两次请求均无消息",
+    response_context_only: "未捕获到响应输出；当前仅展示请求上下文。",
     diff_unchanged: "条前序消息未变化", diff_msg_range: "消息 #1 ~ #",
     diff_new: "新增", diff_removed: "移除", diff_added: "新增", diff_changed: "变化",
     diff_no_change: "无变化", diff_unchanged_lbl: "无变化",
@@ -2605,11 +2607,15 @@ function renderDetail(e) {
   const sysPrompt = extractSystem(reqBody);
   if (sysPrompt) html += section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt);
 
-  const msgs = getMessages(reqBody);
-  if (msgs && msgs.length) html += section(t('section_messages'), renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'));
-
   const respOutput = getResponseOutput(e);
-  if (respOutput?.content) html += section(t('section_response'), renderResponseContent(respOutput), true);
+  const msgs = getMessages(reqBody);
+  const contextOnly = shouldRenderRequestContext(e, reqBody, msgs, respOutput);
+  if (msgs && msgs.length) {
+    const title = contextOnly ? t('section_context') : t('section_messages');
+    html += section(title, renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'));
+  }
+
+  if (respOutput?.content || contextOnly) html += section(t('section_response'), renderResponseContent(respOutput, contextOnly), true);
 
   const streamEvents = getResponseEvents(e);
   if (streamEvents.length) html += section(t('section_sse'), renderSSEEvents(streamEvents), false, null, streamEvents.length + ' ' + t('badge_events'));
@@ -2678,6 +2684,14 @@ function getMessages(body) {
     }));
   }
   return [];
+}
+
+function shouldRenderRequestContext(entry, body, msgs, respOutput) {
+  if (!entry || !body || !Array.isArray(msgs) || msgs.length === 0) return false;
+  const path = getPath(entry);
+  if (!path.includes('/codex/responses')) return false;
+  if (!Array.isArray(body.input) || body.input.length === 0) return false;
+  return true;
 }
 
 // Extract token usage from response.body.usage or SSE response.completed event
@@ -2824,8 +2838,11 @@ function renderTools(tools) {
   }).join('');
 }
 
-function renderResponseContent(body) {
-  if (!body.content) return `<em style="color:var(--text-tertiary)">${t('no_content')}</em>`;
+function renderResponseContent(body, contextOnly = false) {
+  if (!body?.content) {
+    const msg = contextOnly ? t('response_context_only') : t('no_content');
+    return `<em style="color:var(--text-tertiary)">${msg}</em>`;
+  }
   return renderContent(body.content, 'assistant');
 }
 

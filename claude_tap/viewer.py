@@ -178,6 +178,10 @@ def _extract_metadata(record_json: str) -> dict | None:
     body = req.get("body") or {}
     resp = r.get("response") or {}
     resp_body = resp.get("body") or {}
+    if not isinstance(body, dict):
+        body = {}
+    if not isinstance(resp_body, dict):
+        resp_body = {}
     stream_events = _iter_response_events(resp)
 
     # Token usage — from response.body.usage or terminal stream event
