@@ -41,7 +41,7 @@ async def test_run_client_codex_reverse_injects_openai_base_url(monkeypatch) -> 
 
     assert code == 0
     assert captured["cmd"] == (
-        "codex",
+        "/tmp/codex",
         "-c",
         'openai_base_url="http://127.0.0.1:43123/v1"',
         "exec",
@@ -71,7 +71,7 @@ async def test_run_client_codex_reverse_respects_existing_openai_base_override(m
 
     assert code == 0
     assert captured["cmd"] == (
-        "codex",
+        "/tmp/codex",
         "-c",
         'openai_base_url="http://example.invalid/v1"',
         "exec",

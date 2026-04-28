@@ -29,9 +29,12 @@ from claude_tap.proxy import proxy_handler
 from claude_tap.trace import TraceWriter
 from claude_tap.viewer import _generate_html_viewer
 
-# Ensure print output is visible immediately (uv tool pipes stdout with full buffering)
+# Force UTF-8 + line-buffered stdout/stderr so emoji output works on Windows
+# consoles (GBK/cp936) and `uv tool` doesn't fully buffer our progress prints.
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(line_buffering=True)
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace", line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 log = logging.getLogger("claude-tap")
 
@@ -100,7 +103,10 @@ async def run_client(
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
 
-    if shutil.which(cfg.cmd) is None:
+    # asyncio.create_subprocess_exec uses CreateProcess on Windows, which only
+    # auto-appends `.exe`; resolve here so npm `.cmd`/`.bat` shims also work.
+    resolved_cmd = shutil.which(cfg.cmd)
+    if resolved_cmd is None:
         print(cfg.missing_help)
         return 1
 
@@ -155,8 +161,8 @@ async def run_client(
     for key in cfg.nesting_env_keys:
         env.pop(key, None)
 
-    cmd = [cfg.cmd] + cmd_args
-    print(f"\n🚀 Starting {cfg.label}: {' '.join(cmd)}")
+    cmd = [resolved_cmd] + cmd_args
+    print(f"\n🚀 Starting {cfg.label}: {' '.join([cfg.cmd, *cmd_args])}")
     if proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
         if ca_cert_path:
@@ -187,8 +193,9 @@ async def run_client(
     # --- Signal handling: graceful Ctrl+C / Ctrl+Z ---
     loop = asyncio.get_running_loop()
 
-    # Prevent Ctrl+Z from suspending the session
-    old_sigtstp = signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+    # SIGTSTP is Unix-only; on Windows the attribute is absent.
+    sigtstp = getattr(signal, "SIGTSTP", None)
+    old_sigtstp = signal.signal(sigtstp, signal.SIG_IGN) if sigtstp is not None else None
 
     sigint_count = 0
 
@@ -210,7 +217,8 @@ async def run_client(
 
     try:
         loop.add_signal_handler(signal.SIGINT, _handle_sigint)
-        loop.add_signal_handler(signal.SIGTSTP, _handle_sigtstp)
+        if sigtstp is not None:
+            loop.add_signal_handler(sigtstp, _handle_sigtstp)
     except (NotImplementedError, OSError):
         pass
 
@@ -228,15 +236,17 @@ async def run_client(
         signal.signal(signal.SIGTTOU, old_sigttou)
 
     # Restore original SIGTSTP handler and remove async signal handlers
-    signal.signal(signal.SIGTSTP, old_sigtstp)
+    if sigtstp is not None and old_sigtstp is not None:
+        signal.signal(sigtstp, old_sigtstp)
     try:
         loop.remove_signal_handler(signal.SIGINT)
     except (NotImplementedError, OSError):
         pass
-    try:
-        loop.remove_signal_handler(signal.SIGTSTP)
-    except (NotImplementedError, OSError):
-        pass
+    if sigtstp is not None:
+        try:
+            loop.remove_signal_handler(sigtstp)
+        except (NotImplementedError, OSError):
+            pass
 
     print(f"\n📋 {cfg.label} exited with code {code}")
     return code
@@ -415,9 +425,9 @@ async def async_main(args: argparse.Namespace):
         _generate_html_viewer(trace_path, html_path)
 
         # Register trace and cleanup old ones
-        trace_files = [str(trace_path.relative_to(output_dir)), str(log_path.relative_to(output_dir))]
+        trace_files = [_rel_posix(trace_path, output_dir), _rel_posix(log_path, output_dir)]
         if html_path.exists():
-            trace_files.append(str(html_path.relative_to(output_dir)))
+            trace_files.append(_rel_posix(html_path, output_dir))
         _register_trace(output_dir, ts, trace_files)
         if args.max_traces > 0:
             cleaned = _cleanup_traces(output_dir, args.max_traces)
@@ -447,7 +457,7 @@ async def async_main(args: argparse.Namespace):
         # Open viewer in browser (default: auto-open unless --tap-no-open)
         if args.open_viewer and html_path.exists():
             print("\n🌐 Opening viewer in browser...")
-            _open_browser(f"file://{html_path.absolute()}")
+            _open_browser(html_path.absolute().as_uri())
 
     return exit_code
 
@@ -653,7 +663,10 @@ def _start_background_update(installer: str) -> subprocess.Popen | None:
     """Start a background process to upgrade claude-tap."""
     try:
         if installer == "uv":
-            cmd = ["uv", "tool", "upgrade", "claude-tap"]
+            uv_path = shutil.which("uv")
+            if uv_path is None:
+                return None
+            cmd = [uv_path, "tool", "upgrade", "claude-tap"]
         else:
             cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
         return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -666,6 +679,11 @@ def _start_background_update(installer: str) -> subprocess.Popen | None:
 # ---------------------------------------------------------------------------
 
 _MANIFEST_FILE = ".cloudtap-manifest.json"
+
+
+def _rel_posix(path: Path, base: Path) -> str:
+    # Forward slashes so manifests stay portable when `.traces` is synced across OSes.
+    return path.relative_to(base).as_posix()
 
 
 def _load_manifest(output_dir: Path) -> dict:
@@ -740,12 +758,13 @@ def _cleanup_traces(output_dir: Path, max_traces: int) -> int:
 
 def _maybe_migrate_existing(output_dir: Path, manifest: dict) -> None:
     """Auto-register existing trace_*.jsonl files that are not yet in the manifest."""
-    known_files: set[str] = set()
-    for entry in manifest.get("traces", []):
-        known_files.update(entry.get("files", []))
+    # Normalize separators so manifests written by older Windows builds (with `\`) still match.
+    known_files: set[str] = {
+        f.replace("\\", "/") for entry in manifest.get("traces", []) for f in entry.get("files", [])
+    }
 
     for jsonl in sorted(output_dir.glob("**/trace_*.jsonl")):
-        rel = str(jsonl.relative_to(output_dir))
+        rel = _rel_posix(jsonl, output_dir)
         if rel in known_files or jsonl.name in known_files:
             continue
         stem = jsonl.stem
@@ -757,7 +776,7 @@ def _maybe_migrate_existing(output_dir: Path, manifest: dict) -> None:
         for suffix in [".log", ".html"]:
             companion = jsonl.with_suffix(suffix)
             if companion.exists():
-                files.append(str(companion.relative_to(output_dir)))
+                files.append(_rel_posix(companion, output_dir))
         manifest["traces"].append(
             {
                 "timestamp": ts,
