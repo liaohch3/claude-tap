@@ -425,9 +425,9 @@ async def async_main(args: argparse.Namespace):
         _generate_html_viewer(trace_path, html_path)
 
         # Register trace and cleanup old ones
-        trace_files = [str(trace_path.relative_to(output_dir)), str(log_path.relative_to(output_dir))]
+        trace_files = [_rel_posix(trace_path, output_dir), _rel_posix(log_path, output_dir)]
         if html_path.exists():
-            trace_files.append(str(html_path.relative_to(output_dir)))
+            trace_files.append(_rel_posix(html_path, output_dir))
         _register_trace(output_dir, ts, trace_files)
         if args.max_traces > 0:
             cleaned = _cleanup_traces(output_dir, args.max_traces)
@@ -457,7 +457,7 @@ async def async_main(args: argparse.Namespace):
         # Open viewer in browser (default: auto-open unless --tap-no-open)
         if args.open_viewer and html_path.exists():
             print("\n🌐 Opening viewer in browser...")
-            _open_browser(f"file://{html_path.absolute()}")
+            _open_browser(html_path.absolute().as_uri())
 
     return exit_code
 
@@ -663,7 +663,10 @@ def _start_background_update(installer: str) -> subprocess.Popen | None:
     """Start a background process to upgrade claude-tap."""
     try:
         if installer == "uv":
-            cmd = ["uv", "tool", "upgrade", "claude-tap"]
+            uv_path = shutil.which("uv")
+            if uv_path is None:
+                return None
+            cmd = [uv_path, "tool", "upgrade", "claude-tap"]
         else:
             cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
         return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -676,6 +679,11 @@ def _start_background_update(installer: str) -> subprocess.Popen | None:
 # ---------------------------------------------------------------------------
 
 _MANIFEST_FILE = ".cloudtap-manifest.json"
+
+
+def _rel_posix(path: Path, base: Path) -> str:
+    # Forward slashes so manifests stay portable when `.traces` is synced across OSes.
+    return path.relative_to(base).as_posix()
 
 
 def _load_manifest(output_dir: Path) -> dict:
@@ -750,12 +758,13 @@ def _cleanup_traces(output_dir: Path, max_traces: int) -> int:
 
 def _maybe_migrate_existing(output_dir: Path, manifest: dict) -> None:
     """Auto-register existing trace_*.jsonl files that are not yet in the manifest."""
-    known_files: set[str] = set()
-    for entry in manifest.get("traces", []):
-        known_files.update(entry.get("files", []))
+    # Normalize separators so manifests written by older Windows builds (with `\`) still match.
+    known_files: set[str] = {
+        f.replace("\\", "/") for entry in manifest.get("traces", []) for f in entry.get("files", [])
+    }
 
     for jsonl in sorted(output_dir.glob("**/trace_*.jsonl")):
-        rel = str(jsonl.relative_to(output_dir))
+        rel = _rel_posix(jsonl, output_dir)
         if rel in known_files or jsonl.name in known_files:
             continue
         stem = jsonl.stem
@@ -767,7 +776,7 @@ def _maybe_migrate_existing(output_dir: Path, manifest: dict) -> None:
         for suffix in [".log", ".html"]:
             companion = jsonl.with_suffix(suffix)
             if companion.exists():
-                files.append(str(companion.relative_to(output_dir)))
+                files.append(_rel_posix(companion, output_dir))
         manifest["traces"].append(
             {
                 "timestamp": ts,
