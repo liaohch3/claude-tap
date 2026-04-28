@@ -29,9 +29,12 @@ from claude_tap.proxy import proxy_handler
 from claude_tap.trace import TraceWriter
 from claude_tap.viewer import _generate_html_viewer
 
-# Ensure print output is visible immediately (uv tool pipes stdout with full buffering)
+# Force UTF-8 + line-buffered stdout/stderr so emoji output works on Windows
+# consoles (GBK/cp936) and `uv tool` doesn't fully buffer our progress prints.
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(line_buffering=True)
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace", line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 log = logging.getLogger("claude-tap")
 
@@ -100,7 +103,11 @@ async def run_client(
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
 
-    if shutil.which(cfg.cmd) is None:
+    # Resolve to absolute path: on Windows, npm shims like `claude.cmd` are not
+    # found by CreateProcess (used by asyncio.create_subprocess_exec), which
+    # only auto-appends `.exe`.
+    resolved_cmd = shutil.which(cfg.cmd)
+    if resolved_cmd is None:
         print(cfg.missing_help)
         return 1
 
@@ -155,8 +162,9 @@ async def run_client(
     for key in cfg.nesting_env_keys:
         env.pop(key, None)
 
-    cmd = [cfg.cmd] + cmd_args
-    print(f"\n🚀 Starting {cfg.label}: {' '.join(cmd)}")
+    cmd = [resolved_cmd] + cmd_args
+    display_cmd = " ".join([cfg.cmd, *cmd_args]).rstrip()
+    print(f"\n🚀 Starting {cfg.label}: {display_cmd}")
     if proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
         if ca_cert_path:
@@ -187,8 +195,9 @@ async def run_client(
     # --- Signal handling: graceful Ctrl+C / Ctrl+Z ---
     loop = asyncio.get_running_loop()
 
-    # Prevent Ctrl+Z from suspending the session
-    old_sigtstp = signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+    # SIGTSTP is Unix-only; on Windows the attribute is absent.
+    sigtstp = getattr(signal, "SIGTSTP", None)
+    old_sigtstp = signal.signal(sigtstp, signal.SIG_IGN) if sigtstp is not None else None
 
     sigint_count = 0
 
@@ -210,7 +219,8 @@ async def run_client(
 
     try:
         loop.add_signal_handler(signal.SIGINT, _handle_sigint)
-        loop.add_signal_handler(signal.SIGTSTP, _handle_sigtstp)
+        if sigtstp is not None:
+            loop.add_signal_handler(sigtstp, _handle_sigtstp)
     except (NotImplementedError, OSError):
         pass
 
@@ -228,15 +238,17 @@ async def run_client(
         signal.signal(signal.SIGTTOU, old_sigttou)
 
     # Restore original SIGTSTP handler and remove async signal handlers
-    signal.signal(signal.SIGTSTP, old_sigtstp)
+    if sigtstp is not None and old_sigtstp is not None:
+        signal.signal(sigtstp, old_sigtstp)
     try:
         loop.remove_signal_handler(signal.SIGINT)
     except (NotImplementedError, OSError):
         pass
-    try:
-        loop.remove_signal_handler(signal.SIGTSTP)
-    except (NotImplementedError, OSError):
-        pass
+    if sigtstp is not None:
+        try:
+            loop.remove_signal_handler(sigtstp)
+        except (NotImplementedError, OSError):
+            pass
 
     print(f"\n📋 {cfg.label} exited with code {code}")
     return code
