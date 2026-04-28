@@ -45,11 +45,7 @@ def _strip_sigtstp(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_run_client_does_not_touch_sigtstp_when_absent(monkeypatch) -> None:
-    """run_client must not crash on platforms where signal.SIGTSTP is unavailable."""
-    captured: dict[str, object] = {}
-
     async def fake_create_subprocess_exec(*cmd, **kwargs):
-        captured["cmd"] = cmd
         return _DummyProc()
 
     _strip_sigtstp(monkeypatch)
@@ -63,7 +59,6 @@ async def test_run_client_does_not_touch_sigtstp_when_absent(monkeypatch) -> Non
 
 @pytest.mark.asyncio
 async def test_run_client_passes_resolved_path_for_cmd_shim(monkeypatch) -> None:
-    """The .cmd shim path returned by shutil.which must be passed verbatim to subprocess."""
     captured: dict[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -82,8 +77,7 @@ async def test_run_client_passes_resolved_path_for_cmd_shim(monkeypatch) -> None
 
 
 def test_module_import_reconfigures_stdout_to_utf8() -> None:
-    """The cli module must coerce stdout/stderr to UTF-8 so emoji prints don't crash on GBK."""
-    import claude_tap.cli  # noqa: F401  (side effect)
+    import claude_tap.cli  # noqa: F401
 
     for stream in (sys.stdout, sys.stderr):
         encoding = getattr(stream, "encoding", "")

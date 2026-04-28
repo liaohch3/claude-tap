@@ -103,9 +103,8 @@ async def run_client(
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
 
-    # Resolve to absolute path: on Windows, npm shims like `claude.cmd` are not
-    # found by CreateProcess (used by asyncio.create_subprocess_exec), which
-    # only auto-appends `.exe`.
+    # asyncio.create_subprocess_exec uses CreateProcess on Windows, which only
+    # auto-appends `.exe`; resolve here so npm `.cmd`/`.bat` shims also work.
     resolved_cmd = shutil.which(cfg.cmd)
     if resolved_cmd is None:
         print(cfg.missing_help)
@@ -163,8 +162,7 @@ async def run_client(
         env.pop(key, None)
 
     cmd = [resolved_cmd] + cmd_args
-    display_cmd = " ".join([cfg.cmd, *cmd_args]).rstrip()
-    print(f"\n🚀 Starting {cfg.label}: {display_cmd}")
+    print(f"\n🚀 Starting {cfg.label}: {' '.join([cfg.cmd, *cmd_args])}")
     if proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
         if ca_cert_path:
