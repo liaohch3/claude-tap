@@ -84,6 +84,62 @@ claude-tap --tap-client codex -- --full-auto
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
 ```
 
+### OpenClaw
+
+[OpenClaw](https://github.com/openclaw-ai/openclaw) (npm: `openclaw`) is a self-hosted AI agent gateway. It routes API calls through [pi-ai](https://github.com/mariozechner/pi-ai) internally. The setup differs by model provider.
+
+**Step 1 — Start claude-tap in proxy-only mode**
+
+Pick the target that matches the model provider you want to trace:
+
+```bash
+# Anthropic models (Claude)
+claude-tap --tap-no-launch --tap-target https://api.anthropic.com --tap-port 19999 --tap-live
+
+# OpenAI Codex models (ChatGPT OAuth)
+claude-tap --tap-no-launch --tap-target https://chatgpt.com/backend-api --tap-port 19999 --tap-live
+```
+
+**Step 2 — Route traffic through the proxy**
+
+For **Anthropic** (Claude) models — add a provider override to OpenClaw's `models.json`. No source files need to be modified:
+
+```bash
+AGENT_DIR=~/.openclaw/agents/main/agent
+python3 -c "
+import json, sys
+path = '$AGENT_DIR/models.json'
+try:
+    cfg = json.load(open(path))
+except Exception:
+    cfg = {'providers': {}}
+cfg['providers']['anthropic'] = {'baseUrl': 'http://127.0.0.1:19999'}
+json.dump(cfg, open(path, 'w'), indent=2)
+print('Done')
+"
+```
+
+For **OpenAI Codex** models — the Codex provider uses a hardcoded endpoint that ignores `model.baseUrl`, so a one-line source patch is required:
+
+```bash
+PI_AI="$(npm root -g)/openclaw/node_modules/@mariozechner/pi-ai/dist"
+sed -i '' \
+  's|https://chatgpt.com/backend-api/codex/responses|http://127.0.0.1:19999/codex/responses|g' \
+  "$PI_AI/providers/openai-codex-responses.js"
+```
+
+**Step 3 — Restart OpenClaw with compile cache disabled**
+
+Node.js module compile cache will otherwise shadow the patched file:
+
+```bash
+NODE_DISABLE_COMPILE_CACHE=1 openclaw gateway --force
+```
+
+Traces will now appear in the live viewer for every conversation turn.
+
+> **Note for Codex users:** The source patch modifies a `node_modules` file and will be lost after `npm update openclaw`. Re-apply it after upgrading.
+
 ### Browser Preview
 
 ```bash
