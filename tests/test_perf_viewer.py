@@ -88,7 +88,7 @@ def _build_small_trace_html() -> str:
         ),
     ]
 
-    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w") as trace_f:
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w", encoding="utf-8") as trace_f:
         for e in entries:
             trace_f.write(json.dumps(e) + "\n")
         trace_path = Path(trace_f.name)

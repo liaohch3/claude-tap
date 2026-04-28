@@ -13,6 +13,12 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+# Force UTF-8 stdout/stderr so emoji output works on Windows GBK consoles.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+
 
 def verify_viewer_html(html_path: str) -> list[str]:
     issues: list[str] = []
@@ -21,7 +27,7 @@ def verify_viewer_html(html_path: str) -> list[str]:
         page = browser.new_page(viewport={"width": 1400, "height": 900})
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
-        page.goto(f"file://{Path(html_path).absolute()}", wait_until="domcontentloaded", timeout=15000)
+        page.goto(Path(html_path).absolute().as_uri(), wait_until="domcontentloaded", timeout=15000)
         page.wait_for_timeout(2000)
         if errors:
             issues.append(f"JS errors: {errors}")
