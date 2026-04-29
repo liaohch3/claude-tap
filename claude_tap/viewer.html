@@ -2716,7 +2716,7 @@ function getResponsesContinuationInfo(entry) {
   const previousId = payload.previous_response_id || body.previous_response_id;
   if (!previousId) return null;
   const messages = getMessages(body);
-  if (messages.length > 0) return null;
+  if (messages.some(message => message?.role === 'user')) return null;
   const headers = entry?.request?.headers || {};
   return {
     response_id: payload.id || '',
@@ -2732,22 +2732,61 @@ function getMessages(body) {
   if (!body) return [];
   if (Array.isArray(body.messages) && body.messages.length > 0) return body.messages;
   if (Array.isArray(body.input)) {
-    return body.input.filter(item => {
-      if (!item || typeof item !== 'object') return false;
-      if (typeof item.role !== 'string' || !item.role) return false;
-      return item.type === undefined || item.type === 'message';
-    }).map(item => ({
-      role: item.role || 'user',
-      content: Array.isArray(item.content)
-        ? item.content.map(c => {
-            if (!c || typeof c !== 'object') return c;
-            if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { type: 'text', text: c.text };
-            return c;
-          })
-        : item.content
-    }));
+    const normalized = [];
+    for (const item of body.input) {
+      if (!item || typeof item !== 'object') continue;
+      if ((item.type === undefined || item.type === 'message' || item.role) && typeof item.role === 'string' && item.role) {
+        appendMessage(normalized, {
+          role: item.role || 'user',
+          content: Array.isArray(item.content)
+            ? item.content.map(c => {
+                if (!c || typeof c !== 'object') return c;
+                if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { type: 'text', text: c.text };
+                return c;
+              })
+            : item.content
+        });
+        continue;
+      }
+      if (item.type === 'function_call') {
+        appendMessage(normalized, {
+          role: 'assistant',
+          content: [{ type: 'tool_use', name: item.name || 'function_call', input: parseJsonMaybe(item.arguments || {}) }]
+        });
+        continue;
+      }
+      if (item.type === 'function_call_output') {
+        appendMessage(normalized, {
+          role: 'tool',
+          content: [{ type: 'tool_result', tool_use_id: item.call_id || '', content: item.output || '' }]
+        });
+      }
+    }
+    return normalized;
   }
   return [];
+}
+
+function appendMessage(messages, message) {
+  if (!message || !message.role) return;
+  const content = normalizeMessageContent(message.content);
+  const previous = messages[messages.length - 1];
+  if (previous?.role === message.role && message.role !== 'tool') {
+    previous.content = normalizeMessageContent(previous.content).concat(content);
+    return;
+  }
+  messages.push({ role: message.role, content });
+}
+
+function normalizeMessageContent(content) {
+  if (Array.isArray(content)) return content;
+  if (content === undefined || content === null) return [];
+  return [{ type: 'text', text: String(content) }];
+}
+
+function parseJsonMaybe(value) {
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value); } catch(e) { return value; }
 }
 
 // Extract token usage from response.body.usage or SSE response.completed event
@@ -2774,7 +2813,7 @@ function normalizeResponseOutput(output) {
         else content.push(c);
       }
     } else if (item.type === 'function_call') {
-      content.push({ type: 'tool_use', name: item.name, input: item.arguments ? (typeof item.arguments === 'string' ? (() => { try { return JSON.parse(item.arguments); } catch(e) { return item.arguments; } })() : item.arguments) : {} });
+      content.push({ type: 'tool_use', name: item.name, input: item.arguments ? parseJsonMaybe(item.arguments) : {} });
     } else if (item.type === 'reasoning') {
       if (!item.summary) continue;
       const summaryText = Array.isArray(item.summary) ? item.summary.map(s => s?.text || '').join('\n') : (item.summary.text || JSON.stringify(item.summary));

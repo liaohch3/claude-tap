@@ -11,7 +11,7 @@ import pytest
 from aiohttp import web
 from yarl import URL
 
-from claude_tap.proxy import _build_ws_record, _get_ws_proxy_settings, proxy_handler
+from claude_tap.proxy import _build_ws_record, _build_ws_records, _get_ws_proxy_settings, proxy_handler
 from claude_tap.trace import TraceWriter
 
 
@@ -271,8 +271,33 @@ def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
             ),
             json.dumps(
                 {
+                    "type": "conversation.item.create",
+                    "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "input.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{"type": "input_text", "text": "follow instructions"}],
+                    },
+                }
+            ),
+            json.dumps(
+                {
                     "type": "response.create",
-                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+                    "response": {
+                        "previous_response_id": "resp_previous",
+                        "input": [
+                            {
+                                "type": "function_call_output",
+                                "call_id": "call_1",
+                                "output": "tool output",
+                            }
+                        ],
+                    },
                 }
             ),
             json.dumps(
@@ -329,11 +354,99 @@ def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
     )
 
     assert record["request"]["body"]["input"][0]["content"][0]["text"] == "hello"
-    assert record["request"]["body"]["input"][1]["type"] == "function_call_output"
+    assert record["request"]["body"]["input"][1]["role"] == "developer"
+    assert record["request"]["body"]["input"][2]["type"] == "function_call_output"
     assert record["request"]["body"]["previous_response_id"] == "resp_previous"
     assert record["request"]["body"]["tools"][0]["name"] == "exec_command"
+    assert record["request"]["ws_events"][1]["type"] == "conversation.item.create"
     assert record["response"]["body"]["usage"] == {"input_tokens": 10, "output_tokens": 2}
     assert record["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_FROM_WS"
+
+
+def test_build_ws_records_splits_multiplexed_responses_turns() -> None:
+    records = _build_ws_records(
+        req_id="req_ws",
+        turn=4,
+        duration_ms=50,
+        path_qs="/v1/responses",
+        req_headers={"Authorization": "Bearer test-token"},
+        client_messages=[
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "input": [
+                        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "first"}]}
+                    ],
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "previous_response_id": "resp_1",
+                    "input": [{"type": "function_call_output", "call_id": "call_1", "output": "tool output"}],
+                }
+            ),
+        ],
+        server_messages=[
+            json.dumps(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "exec_command",
+                        "arguments": "{}",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {"id": "resp_1", "status": "completed", "output": [], "usage": {"input_tokens": 1}},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "second answer"}],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_2",
+                        "previous_response_id": "resp_1",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {"input_tokens": 2},
+                    },
+                }
+            ),
+        ],
+        upstream_base_url="https://chatgpt.com/backend-api/codex",
+    )
+
+    assert len(records) == 2
+    assert records[0]["request_id"] == "req_ws_1"
+    assert records[0]["turn"] == 4
+    assert records[0]["request"]["body"]["input"][0]["content"][0]["text"] == "first"
+    assert records[0]["response"]["body"]["id"] == "resp_1"
+    assert records[0]["response"]["body"]["output"][0]["type"] == "function_call"
+    assert records[1]["request_id"] == "req_ws_2"
+    assert records[1]["turn"] == 5
+    assert records[1]["request"]["body"]["previous_response_id"] == "resp_1"
+    assert records[1]["request"]["body"]["input"][0]["type"] == "function_call_output"
+    assert records[1]["response"]["body"]["id"] == "resp_2"
+    assert records[1]["response"]["body"]["output"][0]["content"][0]["text"] == "second answer"
 
 
 # ---------------------------------------------------------------------------

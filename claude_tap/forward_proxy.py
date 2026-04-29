@@ -36,9 +36,8 @@ from claude_tap.proxy import (
     HOP_BY_HOP,
     _build_record,
     _get_ws_proxy_settings,
+    build_ws_records,
     filter_headers,
-    reconstruct_ws_request_body,
-    reconstruct_ws_response_body,
 )
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
@@ -712,28 +711,18 @@ class ForwardProxyServer:
             pass
 
         duration_ms = int((time.monotonic() - t0) * 1000)
-        record = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "request_id": req_id,
-            "turn": turn,
-            "duration_ms": duration_ms,
-            "transport": "websocket",
-            "request": {
-                "method": "WEBSOCKET",
-                "path": path,
-                "headers": filter_headers(headers, redact_keys=True),
-                "body": reconstruct_ws_request_body(client_messages),
-            },
-            "response": {
-                "status": 101,
-                "headers": {},
-                "body": None,
-                "ws_events": [json.loads(msg) if msg.startswith("{") else {"raw": msg} for msg in server_messages],
-            },
-            "upstream_base_url": upstream_base_url,
-        }
-        record["response"]["body"] = reconstruct_ws_response_body(record["response"]["ws_events"])
-        await self._writer.write(record)
+        records = build_ws_records(
+            req_id=req_id,
+            turn=turn,
+            duration_ms=duration_ms,
+            path_qs=path,
+            req_headers=headers,
+            client_messages=client_messages,
+            server_messages=server_messages,
+            upstream_base_url=upstream_base_url,
+        )
+        for record in records:
+            await self._writer.write(record)
         log.info(
             f"{log_prefix} <- WS closed ({duration_ms}ms, "
             f"{len(client_messages)} client→upstream, {len(server_messages)} upstream→client)"

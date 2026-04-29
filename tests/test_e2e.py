@@ -2356,7 +2356,31 @@ async def test_forward_proxy_connect_websocket():
                     proxy=proxy_url,
                     ssl=ssl_ctx,
                 )
-                await ws.send_json({"model": "gpt-test", "input": "hello"})
+                await ws.send_json(
+                    {
+                        "type": "conversation.item.create",
+                        "item": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "hello over forward ws"}],
+                        },
+                    }
+                )
+                await ws.send_json(
+                    {
+                        "type": "response.create",
+                        "response": {
+                            "model": "gpt-test",
+                            "input": [
+                                {
+                                    "type": "message",
+                                    "role": "developer",
+                                    "content": [{"type": "input_text", "text": "developer setup"}],
+                                }
+                            ],
+                        },
+                    }
+                )
 
                 received = []
                 while True:
@@ -2386,6 +2410,12 @@ async def test_forward_proxy_connect_websocket():
             assert records[0]["transport"] == "websocket"
             assert records[0]["request"]["method"] == "WEBSOCKET"
             assert records[0]["request"]["path"] == "/v1/responses"
+            assert records[0]["request"]["body"]["model"] == "gpt-test"
+            assert records[0]["request"]["body"]["input"][0]["role"] == "user"
+            assert records[0]["request"]["body"]["input"][0]["content"][0]["text"] == "hello over forward ws"
+            assert records[0]["request"]["body"]["input"][1]["role"] == "developer"
+            assert records[0]["request"]["ws_events"][0]["type"] == "conversation.item.create"
+            assert records[0]["request"]["ws_events"][1]["type"] == "response.create"
             assert records[0]["response"]["status"] == 101
             assert records[0]["response"]["body"]["status"] == "completed"
             assert records[0]["response"]["body"]["output"][0]["content"][0]["text"] == "Hello over WSS"

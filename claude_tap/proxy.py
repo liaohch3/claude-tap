@@ -536,7 +536,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
 
     duration_ms = int((time.monotonic() - t0) * 1000)
 
-    record = _build_ws_record(
+    records = _build_ws_records(
         req_id=req_id,
         turn=turn,
         duration_ms=duration_ms,
@@ -546,7 +546,8 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         server_messages=server_messages,
         upstream_base_url=target,
     )
-    await writer.write(record)
+    for record in records:
+        await writer.write(record)
 
     log.info(
         f"{log_prefix} ← WS closed ({duration_ms}ms, "
@@ -570,15 +571,10 @@ def _build_ws_record(
 ) -> dict:
     """Build a trace record for a WebSocket session."""
     req_body = _reconstruct_ws_request_body(client_messages)
+    request_ws_events = _parse_ws_messages(client_messages)
 
     # Parse server messages into structured events
-    ws_events: list[dict] = []
-    for msg in server_messages:
-        try:
-            parsed = json.loads(msg)
-            ws_events.append(parsed)
-        except (json.JSONDecodeError, ValueError):
-            ws_events.append({"raw": msg})
+    ws_events = _parse_ws_messages(server_messages)
 
     resp_body = _reconstruct_ws_response_body(ws_events)
 
@@ -602,11 +598,112 @@ def _build_ws_record(
     }
     if ws_events:
         record["response"]["ws_events"] = ws_events
+    if request_ws_events:
+        record["request"]["ws_events"] = request_ws_events
     if error:
         record["response"]["error"] = error
     if upstream_base_url:
         record["upstream_base_url"] = upstream_base_url
     return record
+
+
+def _build_ws_records(
+    req_id: str,
+    turn: int,
+    duration_ms: int,
+    path_qs: str,
+    req_headers: dict,
+    client_messages: list[str],
+    server_messages: list[str],
+    upstream_base_url: str,
+    error: str | None = None,
+) -> list[dict]:
+    """Build trace records for a WebSocket session.
+
+    Codex may multiplex several Responses requests over one WebSocket
+    connection. Emit one logical trace record per response.create/completed pair
+    so the sidebar reflects the real Responses turns instead of hiding them
+    inside a single connection record.
+    """
+    aggregate = _build_ws_record(
+        req_id=req_id,
+        turn=turn,
+        duration_ms=duration_ms,
+        path_qs=path_qs,
+        req_headers=req_headers,
+        client_messages=client_messages,
+        server_messages=server_messages,
+        upstream_base_url=upstream_base_url,
+        error=error,
+    )
+    if error:
+        return [aggregate]
+
+    request_events = aggregate.get("request", {}).get("ws_events") or []
+    response_events = aggregate.get("response", {}).get("ws_events") or []
+    create_indexes = [
+        idx
+        for idx, event in enumerate(request_events)
+        if isinstance(event, dict) and event.get("type") == "response.create"
+    ]
+    completed_indexes = [
+        idx
+        for idx, event in enumerate(response_events)
+        if isinstance(event, dict) and event.get("type") in {"response.completed", "response.done"}
+    ]
+
+    if len(create_indexes) <= 1 or len(create_indexes) != len(completed_indexes):
+        return [aggregate]
+
+    records: list[dict] = []
+    previous_create_end = 0
+    previous_completed_end = 0
+    for logical_idx, (create_idx, completed_idx) in enumerate(
+        zip(create_indexes, completed_indexes, strict=False), start=1
+    ):
+        request_segment = request_events[previous_create_end : create_idx + 1]
+        response_segment = response_events[previous_completed_end : completed_idx + 1]
+        previous_create_end = create_idx + 1
+        previous_completed_end = completed_idx + 1
+
+        req_body = _reconstruct_ws_request_body([json.dumps(event) for event in request_segment])
+        resp_body = _reconstruct_ws_response_body(response_segment)
+        record: dict = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "request_id": f"{req_id}_{logical_idx}",
+            "turn": turn + logical_idx - 1,
+            "duration_ms": duration_ms,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": path_qs,
+                "headers": filter_headers(req_headers, redact_keys=True),
+                "body": req_body,
+                "ws_events": request_segment,
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": resp_body,
+                "ws_events": response_segment,
+            },
+        }
+        if upstream_base_url:
+            record["upstream_base_url"] = upstream_base_url
+        records.append(record)
+
+    return records or [aggregate]
+
+
+def _parse_ws_messages(messages: list[str]) -> list[dict]:
+    events: list[dict] = []
+    for msg in messages:
+        try:
+            parsed = json.loads(msg)
+            events.append(parsed)
+        except (json.JSONDecodeError, ValueError):
+            events.append({"raw": msg})
+    return events
 
 
 def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
@@ -618,6 +715,9 @@ def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
         except (json.JSONDecodeError, ValueError):
             continue
         if not isinstance(parsed, dict):
+            continue
+        parsed = _normalize_ws_request_event(parsed)
+        if not parsed:
             continue
         if merged is None:
             merged = parsed.copy()
@@ -636,6 +736,20 @@ def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
             else:
                 merged.setdefault(key, value)
     return merged
+
+
+def _normalize_ws_request_event(event: dict) -> dict:
+    event_type = event.get("type")
+    if event_type in {"conversation.item.create", "input.item.create"}:
+        item = event.get("item")
+        if isinstance(item, dict):
+            return {"input": [item]}
+        return {}
+    if event_type == "response.create" and isinstance(event.get("response"), dict):
+        normalized = event["response"].copy()
+        normalized.setdefault("type", event_type)
+        return normalized
+    return event
 
 
 def _merge_json_lists(existing: list, incoming: list) -> list:
@@ -729,3 +843,33 @@ def reconstruct_ws_response_body(ws_events: list[dict]) -> dict | None:
 def reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
     """Public wrapper for websocket request-body reconstruction."""
     return _reconstruct_ws_request_body(client_messages)
+
+
+def parse_ws_messages(messages: list[str]) -> list[dict]:
+    """Public wrapper for websocket event parsing."""
+    return _parse_ws_messages(messages)
+
+
+def build_ws_records(
+    req_id: str,
+    turn: int,
+    duration_ms: int,
+    path_qs: str,
+    req_headers: dict,
+    client_messages: list[str],
+    server_messages: list[str],
+    upstream_base_url: str,
+    error: str | None = None,
+) -> list[dict]:
+    """Public wrapper for websocket trace record construction."""
+    return _build_ws_records(
+        req_id=req_id,
+        turn=turn,
+        duration_ms=duration_ms,
+        path_qs=path_qs,
+        req_headers=req_headers,
+        client_messages=client_messages,
+        server_messages=server_messages,
+        upstream_base_url=upstream_base_url,
+        error=error,
+    )
