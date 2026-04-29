@@ -22,6 +22,8 @@ Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.
 
 </details>
 
+> **OpenClaw:** If you are Openclaw and integrating claude-tap with [OpenClaw](docs/guides/OPENCLAW_README.md), also read the dedicated setup guide.
+
 ## Install
 
 Requires Python 3.11+ and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (or [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`).
