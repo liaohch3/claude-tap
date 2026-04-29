@@ -237,6 +237,28 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   margin-top: 2px; font-size: 12px; color: var(--text-secondary);
   white-space: pre-wrap; word-break: break-word;
 }
+.continuation-banner {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 14px; margin: 0 0 12px;
+  border: 1px solid var(--amber); border-left: 4px solid var(--amber);
+  border-radius: var(--radius-sm); background: var(--amber-bg);
+}
+.continuation-banner .cb-icon { color: var(--amber); font-size: 15px; line-height: 1.2; flex-shrink: 0; }
+.continuation-banner .cb-content { min-width: 0; }
+.continuation-banner .cb-title { font-size: 13px; font-weight: 700; color: var(--amber); line-height: 1.4; }
+.continuation-banner .cb-message {
+  margin-top: 2px; font-size: 12px; color: var(--text-secondary);
+  white-space: pre-wrap; word-break: break-word;
+}
+.continuation-banner .cb-meta {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 10px; margin-top: 10px; font-size: 11px;
+}
+.continuation-banner .cb-key { color: var(--text-tertiary); font-family: var(--mono); }
+.continuation-banner .cb-val {
+  color: var(--text); font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
 
 /* ─── Action bar ─── */
 .action-bar {
@@ -1225,6 +1247,8 @@ const I18N = {
     tok_input: "Input", tok_output: "Output", tok_cache_read: "Cache Read", tok_cache_create: "Cache Create",
     empty_state: "No entries for selected paths", no_prev: "No previous request",
     no_content: "No content", no_messages: "No messages in either request",
+    continuation_title: "Stateful Responses continuation",
+    continuation_message: "This request has previous_response_id but no captured user message history. The Responses input may be empty or contain only continuation items such as tool results, so the missing prompt/history may live in server-side state or an earlier uncaptured frame.",
     diff_unchanged: "previous messages unchanged", diff_msg_range: "message #1 ~ #",
     diff_new: "new", diff_removed: "removed", diff_added: "added", diff_changed: "changed",
     diff_no_change: "no change", diff_unchanged_lbl: "unchanged",
@@ -1249,6 +1273,8 @@ const I18N = {
     tok_input: "输入", tok_output: "输出", tok_cache_read: "缓存读取", tok_cache_create: "缓存创建",
     empty_state: "当前路径下无条目", no_prev: "无前序请求",
     no_content: "无内容", no_messages: "两次请求均无消息",
+    continuation_title: "有状态 Responses 续接",
+    continuation_message: "此请求包含 previous_response_id，但没有捕获到用户消息历史。Responses input 可能为空，或仅包含工具结果等续接项，因此缺失的提示词/历史可能位于服务端状态中，或位于更早但未捕获的帧中。",
     diff_unchanged: "条前序消息未变化", diff_msg_range: "消息 #1 ~ #",
     diff_new: "新增", diff_removed: "移除", diff_added: "新增", diff_changed: "变化",
     diff_no_change: "无变化", diff_unchanged_lbl: "无变化",
@@ -1273,6 +1299,8 @@ const I18N = {
     tok_input: "入力", tok_output: "出力", tok_cache_read: "キャッシュ読取", tok_cache_create: "キャッシュ作成",
     empty_state: "選択パスにエントリがありません", no_prev: "前回のリクエストなし",
     no_content: "コンテンツなし", no_messages: "両方のリクエストにメッセージなし",
+    continuation_title: "ステートフルな Responses 継続",
+    continuation_message: "このリクエストには previous_response_id がありますが、ユーザーメッセージ履歴はキャプチャされていません。Responses input は空、またはツール結果などの継続項目のみである可能性があり、欠落したプロンプト/履歴はサーバー側状態または以前の未キャプチャフレームにある可能性があります。",
     diff_unchanged: "件の前のメッセージは変更なし", diff_msg_range: "メッセージ #1 ~ #",
     diff_new: "新規", diff_removed: "削除", diff_added: "追加", diff_changed: "変更",
     diff_no_change: "変更なし", diff_unchanged_lbl: "変更なし",
@@ -1297,6 +1325,8 @@ const I18N = {
     tok_input: "입력", tok_output: "출력", tok_cache_read: "캐시 읽기", tok_cache_create: "캐시 생성",
     empty_state: "선택한 경로에 항목이 없습니다", no_prev: "이전 요청 없음",
     no_content: "내용 없음", no_messages: "두 요청 모두 메시지 없음",
+    continuation_title: "상태 저장 Responses 이어가기",
+    continuation_message: "이 요청에는 previous_response_id가 있지만 사용자 메시지 기록이 캡처되지 않았습니다. Responses input은 비어 있거나 도구 결과 같은 이어가기 항목만 포함할 수 있으므로 누락된 프롬프트/기록은 서버 측 상태나 이전에 캡처되지 않은 프레임에 있을 수 있습니다.",
     diff_unchanged: "개의 이전 메시지 변경 없음", diff_msg_range: "메시지 #1 ~ #",
     diff_new: "신규", diff_removed: "삭제", diff_added: "추가", diff_changed: "변경",
     diff_no_change: "변경 없음", diff_unchanged_lbl: "변경 없음",
@@ -1321,6 +1351,8 @@ const I18N = {
     tok_input: "Entrée", tok_output: "Sortie", tok_cache_read: "Lecture cache", tok_cache_create: "Création cache",
     empty_state: "Aucune entrée pour les chemins sélectionnés", no_prev: "Aucune requête précédente",
     no_content: "Pas de contenu", no_messages: "Aucun message dans les deux requêtes",
+    continuation_title: "Continuation Responses avec état",
+    continuation_message: "Cette requête contient previous_response_id mais aucun historique de messages utilisateur capturé. L'input Responses peut être vide ou ne contenir que des éléments de continuation comme des résultats d'outils; le prompt/l'historique manquant peut donc se trouver dans l'état serveur ou dans une trame antérieure non capturée.",
     diff_unchanged: "messages précédents inchangés", diff_msg_range: "message #1 ~ #",
     diff_new: "nouveau", diff_removed: "supprimé", diff_added: "ajouté", diff_changed: "modifié",
     diff_no_change: "aucun changement", diff_unchanged_lbl: "inchangé",
@@ -1345,6 +1377,8 @@ const I18N = {
     tok_input: "الإدخال", tok_output: "الإخراج", tok_cache_read: "قراءة التخزين", tok_cache_create: "إنشاء التخزين",
     empty_state: "لا توجد إدخالات للمسارات المحددة", no_prev: "لا يوجد طلب سابق",
     no_content: "لا يوجد محتوى", no_messages: "لا توجد رسائل في كلا الطلبين",
+    continuation_title: "استمرار Responses بحالة محفوظة",
+    continuation_message: "يحتوي هذا الطلب على previous_response_id ولكن لا يحتوي على سجل رسائل مستخدم ملتقط. قد يكون Responses input فارغاً أو يحتوي فقط على عناصر استمرار مثل نتائج الأدوات، لذلك قد يكون الموجه/السجل المفقود في حالة الخادم أو في إطار سابق لم يتم التقاطه.",
     diff_unchanged: "رسالة سابقة بدون تغيير", diff_msg_range: "الرسالة #1 ~ #",
     diff_new: "جديد", diff_removed: "محذوف", diff_added: "مضاف", diff_changed: "معدّل",
     diff_no_change: "بدون تغيير", diff_unchanged_lbl: "بدون تغيير",
@@ -1369,6 +1403,8 @@ const I18N = {
     tok_input: "Eingabe", tok_output: "Ausgabe", tok_cache_read: "Cache-Lesen", tok_cache_create: "Cache-Erstellen",
     empty_state: "Keine Einträge für ausgewählte Pfade", no_prev: "Keine vorherige Anfrage",
     no_content: "Kein Inhalt", no_messages: "Keine Nachrichten in beiden Anfragen",
+    continuation_title: "Zustandsbehaftete Responses-Fortsetzung",
+    continuation_message: "Diese Anfrage enthält previous_response_id, aber keinen erfassten Benutzer-Nachrichtenverlauf. Das Responses input kann leer sein oder nur Fortsetzungselemente wie Tool-Ergebnisse enthalten; der fehlende Prompt/Verlauf kann daher im serverseitigen Zustand oder in einem früheren nicht erfassten Frame liegen.",
     diff_unchanged: "vorherige Nachrichten unverändert", diff_msg_range: "Nachricht #1 ~ #",
     diff_new: "neu", diff_removed: "entfernt", diff_added: "hinzugefügt", diff_changed: "geändert",
     diff_no_change: "keine Änderung", diff_unchanged_lbl: "unverändert",
@@ -1393,6 +1429,8 @@ const I18N = {
     tok_input: "Ввод", tok_output: "Вывод", tok_cache_read: "Чтение кэша", tok_cache_create: "Создание кэша",
     empty_state: "Нет записей для выбранных путей", no_prev: "Нет предыдущего запроса",
     no_content: "Нет содержимого", no_messages: "Нет сообщений в обоих запросах",
+    continuation_title: "Состояние продолжения Responses",
+    continuation_message: "Этот запрос содержит previous_response_id, но не содержит захваченной истории пользовательских сообщений. Responses input может быть пустым или содержать только элементы продолжения, например результаты инструментов, поэтому отсутствующий промпт/история могут находиться в серверном состоянии или в более раннем незахваченном фрейме.",
     diff_unchanged: "предыдущих сообщений без изменений", diff_msg_range: "сообщение #1 ~ #",
     diff_new: "новое", diff_removed: "удалено", diff_added: "добавлено", diff_changed: "изменено",
     diff_no_change: "без изменений", diff_unchanged_lbl: "без изменений",
@@ -2589,6 +2627,8 @@ function renderDetail(e) {
   if (isError) {
     html += `<div class="error-banner"><div class="eb-icon">&#9888;</div><div class="eb-content"><div class="eb-title">HTTP ${statusCode}</div><div class="eb-message">${esc(errorMessage)}</div></div></div>`;
   }
+  const continuation = getResponsesContinuationInfo(e);
+  if (continuation) html += renderResponsesContinuationNotice(continuation);
 
   // Action bar
   html += `<div class="action-bar">
@@ -2657,6 +2697,36 @@ function getEventData(event) {
   return data && typeof data === 'object' ? data : null;
 }
 
+function getResponsePayload(entry) {
+  const body = entry?.response?.body;
+  if (body && typeof body === 'object') return body;
+  const response = entry?.response;
+  if (!response || typeof response !== 'object') return null;
+  if (response.output || response.content || response.usage || response.previous_response_id || response.id || response.error) return response;
+  return null;
+}
+
+function getResponsesContinuationInfo(entry) {
+  const body = entry?.request?.body;
+  if (!body || typeof body !== 'object') return null;
+  const path = entry?.request?.path || '';
+  const looksLikeResponses = path.endsWith('/v1/responses') || path === '/responses' || body.type === 'response.create' || Array.isArray(body.input);
+  if (!looksLikeResponses) return null;
+  const payload = getResponsePayload(entry) || {};
+  const previousId = payload.previous_response_id || body.previous_response_id;
+  if (!previousId) return null;
+  const messages = getMessages(body);
+  if (messages.length > 0) return null;
+  const headers = entry?.request?.headers || {};
+  return {
+    response_id: payload.id || '',
+    previous_response_id: previousId,
+    prompt_cache_key: body.prompt_cache_key || '',
+    session_id: headers.session_id || headers['session-id'] || '',
+    codex_version: headers.version || headers['x-codex-version'] || '',
+  };
+}
+
 // Normalize messages from Chat Completions (body.messages) or Responses API (body.input)
 function getMessages(body) {
   if (!body) return [];
@@ -2682,7 +2752,7 @@ function getMessages(body) {
 
 // Extract token usage from response.body.usage or SSE response.completed event
 function getUsage(entry) {
-  const u = entry?.response?.body?.usage;
+  const u = getResponsePayload(entry)?.usage;
   if (u) return u;
   const events = getResponseEvents(entry);
   for (let i = events.length - 1; i >= 0; i--) {
@@ -2735,7 +2805,7 @@ function reconstructOutputFromEvents(events) {
 
 // Extract response output from response.body.content or SSE response.completed event
 function getResponseOutput(entry) {
-  const body = entry?.response?.body;
+  const body = getResponsePayload(entry);
   if (body?.content) return body;
   const fromBody = normalizeResponseOutput(body?.output);
   if (fromBody) return fromBody;
@@ -2751,6 +2821,20 @@ function getResponseOutput(entry) {
   return null;
 }
 function renderSystemPrompt(text) { return `<div class="pre-text">${esc(text)}</div>`; }
+
+function renderResponsesContinuationNotice(info) {
+  const rows = [
+    ['previous_response_id', info.previous_response_id],
+    ['response_id', info.response_id],
+    ['prompt_cache_key', info.prompt_cache_key],
+    ['session_id', info.session_id],
+    ['codex_version', info.codex_version],
+  ].filter(([, value]) => value);
+  const meta = rows.length
+    ? `<div class="cb-meta">${rows.map(([key, value]) => `<div class="cb-key">${esc(key)}</div><div class="cb-val">${esc(value)}</div>`).join('')}</div>`
+    : '';
+  return `<div class="continuation-banner"><div class="cb-icon">&#9888;</div><div class="cb-content"><div class="cb-title">${esc(t('continuation_title'))}</div><div class="cb-message">${esc(t('continuation_message'))}</div>${meta}</div></div>`;
+}
 
 function renderMessages(msgs) {
   return msgs.map(m => {
