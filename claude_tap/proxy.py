@@ -570,15 +570,10 @@ def _build_ws_record(
 ) -> dict:
     """Build a trace record for a WebSocket session."""
     req_body = _reconstruct_ws_request_body(client_messages)
+    request_ws_events = _parse_ws_messages(client_messages)
 
     # Parse server messages into structured events
-    ws_events: list[dict] = []
-    for msg in server_messages:
-        try:
-            parsed = json.loads(msg)
-            ws_events.append(parsed)
-        except (json.JSONDecodeError, ValueError):
-            ws_events.append({"raw": msg})
+    ws_events = _parse_ws_messages(server_messages)
 
     resp_body = _reconstruct_ws_response_body(ws_events)
 
@@ -602,11 +597,24 @@ def _build_ws_record(
     }
     if ws_events:
         record["response"]["ws_events"] = ws_events
+    if request_ws_events:
+        record["request"]["ws_events"] = request_ws_events
     if error:
         record["response"]["error"] = error
     if upstream_base_url:
         record["upstream_base_url"] = upstream_base_url
     return record
+
+
+def _parse_ws_messages(messages: list[str]) -> list[dict]:
+    events: list[dict] = []
+    for msg in messages:
+        try:
+            parsed = json.loads(msg)
+            events.append(parsed)
+        except (json.JSONDecodeError, ValueError):
+            events.append({"raw": msg})
+    return events
 
 
 def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
@@ -618,6 +626,9 @@ def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
         except (json.JSONDecodeError, ValueError):
             continue
         if not isinstance(parsed, dict):
+            continue
+        parsed = _normalize_ws_request_event(parsed)
+        if not parsed:
             continue
         if merged is None:
             merged = parsed.copy()
@@ -636,6 +647,20 @@ def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
             else:
                 merged.setdefault(key, value)
     return merged
+
+
+def _normalize_ws_request_event(event: dict) -> dict:
+    event_type = event.get("type")
+    if event_type in {"conversation.item.create", "input.item.create"}:
+        item = event.get("item")
+        if isinstance(item, dict):
+            return {"input": [item]}
+        return {}
+    if event_type == "response.create" and isinstance(event.get("response"), dict):
+        normalized = event["response"].copy()
+        normalized.setdefault("type", event_type)
+        return normalized
+    return event
 
 
 def _merge_json_lists(existing: list, incoming: list) -> list:
@@ -729,3 +754,8 @@ def reconstruct_ws_response_body(ws_events: list[dict]) -> dict | None:
 def reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
     """Public wrapper for websocket request-body reconstruction."""
     return _reconstruct_ws_request_body(client_messages)
+
+
+def parse_ws_messages(messages: list[str]) -> list[dict]:
+    """Public wrapper for websocket event parsing."""
+    return _parse_ws_messages(messages)

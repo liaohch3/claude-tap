@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from claude_tap.viewer import _generate_html_viewer, _normalize_record_for_viewer
+from claude_tap.viewer import _backfill_responses_history_records, _generate_html_viewer, _normalize_record_for_viewer
 
 
 def _as_dict(value: object) -> dict:
@@ -86,6 +86,7 @@ def export_main(argv: list[str] | None = None) -> int:
 
     # Sort by turn
     records.sort(key=_turn_sort_key)
+    _backfill_responses_history_records(records)
 
     # Determine format
     fmt = args.format

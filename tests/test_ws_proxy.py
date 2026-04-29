@@ -271,8 +271,33 @@ def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
             ),
             json.dumps(
                 {
+                    "type": "conversation.item.create",
+                    "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "input.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{"type": "input_text", "text": "follow instructions"}],
+                    },
+                }
+            ),
+            json.dumps(
+                {
                     "type": "response.create",
-                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+                    "response": {
+                        "previous_response_id": "resp_previous",
+                        "input": [
+                            {
+                                "type": "function_call_output",
+                                "call_id": "call_1",
+                                "output": "tool output",
+                            }
+                        ],
+                    },
                 }
             ),
             json.dumps(
@@ -329,9 +354,11 @@ def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
     )
 
     assert record["request"]["body"]["input"][0]["content"][0]["text"] == "hello"
-    assert record["request"]["body"]["input"][1]["type"] == "function_call_output"
+    assert record["request"]["body"]["input"][1]["role"] == "developer"
+    assert record["request"]["body"]["input"][2]["type"] == "function_call_output"
     assert record["request"]["body"]["previous_response_id"] == "resp_previous"
     assert record["request"]["body"]["tools"][0]["name"] == "exec_command"
+    assert record["request"]["ws_events"][1]["type"] == "conversation.item.create"
     assert record["response"]["body"]["usage"] == {"input_tokens": 10, "output_tokens": 2}
     assert record["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_FROM_WS"
 
