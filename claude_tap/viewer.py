@@ -147,6 +147,185 @@ def _extract_request_messages(body: dict) -> list[dict]:
     return normalized
 
 
+def _json_list_item_key(item: object) -> str:
+    try:
+        return json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return repr(item)
+
+
+def _merge_json_lists(existing: list, incoming: list) -> list:
+    merged = list(existing)
+    seen = {_json_list_item_key(item) for item in merged}
+    for item in incoming:
+        key = _json_list_item_key(item)
+        if key in seen:
+            continue
+        merged.append(item)
+        seen.add(key)
+    return merged
+
+
+def _response_payloads(record: dict) -> list[dict]:
+    response = record.get("response")
+    if not isinstance(response, dict):
+        return []
+
+    payloads = []
+    body = response.get("body")
+    if isinstance(body, dict):
+        payloads.append(body)
+    if any(key in response for key in ("id", "previous_response_id", "output", "usage", "content")):
+        payloads.append(response)
+
+    for event in _iter_response_events(response):
+        payload = _event_payload(event)
+        if not isinstance(payload, dict):
+            continue
+        response_payload = payload.get("response")
+        if isinstance(response_payload, dict):
+            payloads.append(response_payload)
+        elif any(key in payload for key in ("id", "previous_response_id", "output", "usage", "content")):
+            payloads.append(payload)
+
+    return payloads
+
+
+def _response_ids(record: dict) -> list[str]:
+    ids = []
+    seen = set()
+    for payload in _response_payloads(record):
+        response_id = payload.get("id")
+        if isinstance(response_id, str) and response_id and response_id not in seen:
+            ids.append(response_id)
+            seen.add(response_id)
+    return ids
+
+
+def _previous_response_id(record: dict, body: dict) -> str:
+    value = body.get("previous_response_id")
+    if isinstance(value, str) and value:
+        return value
+    for payload in reversed(_response_payloads(record)):
+        value = payload.get("previous_response_id")
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _response_output_as_input_items(output: object) -> list[dict]:
+    if not isinstance(output, list):
+        return []
+    items = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type == "message":
+            role = item.get("role")
+            if not isinstance(role, str) or not role:
+                role = "assistant"
+            items.append(
+                {
+                    "type": "message",
+                    "role": role,
+                    "content": item.get("content", []),
+                }
+            )
+        elif item_type == "function_call":
+            items.append({k: v for k, v in item.items() if k in {"type", "call_id", "name", "arguments"}})
+        elif item_type == "function_call_output":
+            items.append({k: v for k, v in item.items() if k in {"type", "call_id", "output"}})
+    return items
+
+
+def _response_chain_inputs(record: dict, base_input: list) -> dict[str, list]:
+    inputs_by_id: dict[str, list] = {}
+    current_input = list(base_input)
+
+    for event in _iter_response_events(record.get("response") or {}):
+        if _event_type(event) not in ("response.completed", "response.done"):
+            continue
+        payload = _event_payload(event)
+        response_payload = payload.get("response") if isinstance(payload, dict) else None
+        if not isinstance(response_payload, dict):
+            response_payload = payload if isinstance(payload, dict) else None
+        if not isinstance(response_payload, dict):
+            continue
+
+        previous_id = response_payload.get("previous_response_id")
+        if isinstance(previous_id, str) and previous_id in inputs_by_id:
+            current_input = list(inputs_by_id[previous_id])
+
+        output_items = _response_output_as_input_items(response_payload.get("output"))
+        if output_items:
+            current_input = _merge_json_lists(current_input, output_items)
+
+        response_id = response_payload.get("id")
+        if isinstance(response_id, str) and response_id:
+            inputs_by_id[response_id] = list(current_input)
+
+    return inputs_by_id
+
+
+def _backfill_responses_history_records(records: list[dict]) -> list[dict]:
+    """Backfill Responses request input from earlier trace records.
+
+    Codex Responses continuations may send only a delta (for example a tool
+    result) and reference the unchanged prefix through previous_response_id.
+    When the referenced response is present in the same trace, preserve that
+    prefix in the current request body so the viewer/export can render message
+    history instead of looking like a prompt-less assistant response.
+    """
+    input_by_response_id: dict[str, list] = {}
+
+    for record in records:
+        request = record.get("request")
+        body = request.get("body") if isinstance(request, dict) else None
+        if not isinstance(body, dict):
+            continue
+
+        current_input = body.get("input")
+        current_input_list = current_input if isinstance(current_input, list) else []
+        previous_id = _previous_response_id(record, body)
+        previous_input = input_by_response_id.get(previous_id)
+        if previous_input is not None:
+            body["input"] = _merge_json_lists(previous_input, current_input_list)
+            current_input_list = body["input"]
+
+        chain_inputs = _response_chain_inputs(record, current_input_list)
+        if previous_input is None and previous_id in chain_inputs:
+            body["input"] = _merge_json_lists(chain_inputs[previous_id], current_input_list)
+            current_input_list = body["input"]
+
+        for response_id in _response_ids(record):
+            input_by_response_id[response_id] = list(current_input_list)
+        input_by_response_id.update(chain_inputs)
+
+    return records
+
+
+def _backfill_responses_history(record_jsons: list[str]) -> list[str]:
+    parsed_records: list[dict | None] = []
+    for record_json in record_jsons:
+        try:
+            record = json.loads(record_json)
+        except (json.JSONDecodeError, TypeError):
+            parsed_records.append(None)
+            continue
+        parsed_records.append(record if isinstance(record, dict) else None)
+
+    _backfill_responses_history_records([record for record in parsed_records if record is not None])
+
+    backfilled = []
+    for record_json, record in zip(record_jsons, parsed_records, strict=False):
+        if record is None:
+            backfilled.append(record_json)
+        else:
+            backfilled.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+    return backfilled
+
+
 def _extract_response_tool_names(output: list) -> list[str]:
     names: list[str] = []
     if not isinstance(output, list):
@@ -277,6 +456,7 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
                 line = line.strip()
                 if line:
                     records.append(_normalize_record_for_viewer(line))
+    records = _backfill_responses_history(records)
 
     jsonl_path_js = json.dumps(str(trace_path.absolute()))
     html_path_js = json.dumps(str(html_path.absolute()))

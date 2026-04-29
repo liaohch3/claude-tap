@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -93,3 +94,189 @@ def test_viewer_reconstructs_ws_output_from_output_item_done_when_completed_outp
     detail_text = responses_page.locator("#detail").inner_text()
 
     assert "Recovered from ws_events" in detail_text
+
+
+def test_viewer_warns_for_empty_input_responses_continuation(responses_page) -> None:
+    responses_page.evaluate(
+        """() => {
+          entries[0].request.headers = {
+            session_id: 'session_abc',
+            version: '0.122.0-alpha.1'
+          };
+          entries[0].request.body = {
+            type: 'response.create',
+            model: 'gpt-5.5',
+            instructions: 'You are Codex.',
+            input: [],
+            prompt_cache_key: 'cache_abc'
+          };
+          entries[0].response.body = {
+            id: 'resp_current',
+            previous_response_id: 'resp_previous',
+            output: [
+              { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Continuation answer' }] }
+            ],
+            usage: { input_tokens: 2, output_tokens: 3 }
+          };
+          renderDetail(entries[0]);
+        }"""
+    )
+
+    detail_text = responses_page.locator("#detail").inner_text()
+
+    assert "Stateful Responses continuation" in detail_text
+    assert "previous_response_id but no captured user message history" in detail_text
+    assert "resp_previous" in detail_text
+    assert "cache_abc" in detail_text
+    assert "0.122.0-alpha.1" in detail_text
+    assert "Continuation answer" in detail_text
+
+
+def test_viewer_warns_for_top_level_responses_continuation_payload(responses_page) -> None:
+    responses_page.evaluate(
+        """() => {
+          entries[0] = {
+            turn: 1,
+            request_id: 'req_top_level',
+            request: {
+              method: 'WEBSOCKET',
+              path: '/v1/responses',
+              headers: {},
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                input: [],
+                prompt_cache_key: 'cache_top_level'
+              }
+            },
+            response: {
+              id: 'resp_top_current',
+              previous_response_id: 'resp_top_previous',
+              output: [
+                { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Top-level answer' }] }
+              ]
+            }
+          };
+          renderDetail(entries[0]);
+        }"""
+    )
+
+    detail_text = responses_page.locator("#detail").inner_text()
+
+    assert "Stateful Responses continuation" in detail_text
+    assert "resp_top_previous" in detail_text
+    assert "cache_top_level" in detail_text
+    assert "Top-level answer" in detail_text
+
+
+def test_viewer_warns_for_tool_result_only_responses_continuation(responses_page) -> None:
+    responses_page.evaluate(
+        """() => {
+          entries[0].request.body = {
+            type: 'response.create',
+            model: 'gpt-5.5',
+            instructions: 'You are Codex.',
+            input: [
+              {
+                type: 'function_call_output',
+                call_id: 'call_123',
+                output: 'name = "claude-tap"'
+              }
+            ],
+            prompt_cache_key: 'cache_tool_result'
+          };
+          entries[0].response.body = {
+            id: 'resp_tool_current',
+            previous_response_id: 'resp_tool_previous',
+            output: [
+              { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'claude-tap' }] }
+            ],
+            usage: { input_tokens: 2, output_tokens: 3 }
+          };
+          renderDetail(entries[0]);
+        }"""
+    )
+
+    detail_text = responses_page.locator("#detail").inner_text()
+
+    assert "Stateful Responses continuation" in detail_text
+    assert "previous_response_id but no captured user message history" in detail_text
+    assert "resp_tool_previous" in detail_text
+    assert "cache_tool_result" in detail_text
+    assert "claude-tap" in detail_text
+
+
+def test_viewer_backfills_messages_from_previous_response_id(tmp_path) -> None:
+    trace_path = tmp_path / "responses-continuation.jsonl"
+    html_path = tmp_path / "responses-continuation.html"
+    records = [
+        {
+            "turn": 1,
+            "request_id": "req_prev",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/responses",
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "First prompt from trace"}]}],
+                },
+            },
+            "response": {
+                "status": 101,
+                "body": {
+                    "id": "resp_prev",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "First answer"}],
+                        }
+                    ],
+                },
+            },
+        },
+        {
+            "turn": 2,
+            "request_id": "req_next",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/responses",
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": "tool output",
+                        }
+                    ],
+                },
+            },
+            "response": {
+                "status": 101,
+                "body": {
+                    "id": "resp_next",
+                    "previous_response_id": "resp_prev",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "Second answer"}],
+                        }
+                    ],
+                },
+            },
+        },
+    ]
+    trace_path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+    _generate_html_viewer(trace_path, html_path)
+
+    html = html_path.read_text(encoding="utf-8")
+
+    assert html.count("First prompt from trace") == 2
+    assert "function_call_output" in html
+    assert "Second answer" in html

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from claude_tap.sse import SSEReassembler
-from claude_tap.viewer import _extract_metadata
+from claude_tap.viewer import _backfill_responses_history_records, _extract_metadata
 
 
 def test_sse_reassembler_reconstructs_openai_responses_completed_event() -> None:
@@ -68,3 +68,106 @@ def test_extract_metadata_supports_interleaved_responses_roles_without_type() ->
     assert meta["message_count"] == 3
     assert meta["input_tokens"] == 1
     assert meta["output_tokens"] == 1
+
+
+def test_backfill_responses_history_uses_previous_response_id_prefix() -> None:
+    records = [
+        {
+            "turn": 1,
+            "request": {
+                "path": "/v1/responses",
+                "body": {
+                    "model": "gpt-5.5",
+                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "First prompt"}]}],
+                },
+            },
+            "response": {"body": {"id": "resp_1", "status": "completed"}},
+        },
+        {
+            "turn": 2,
+            "request": {
+                "path": "/v1/responses",
+                "body": {
+                    "model": "gpt-5.5",
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": "tool output",
+                        }
+                    ],
+                },
+            },
+            "response": {"body": {"id": "resp_2", "previous_response_id": "resp_1", "status": "completed"}},
+        },
+    ]
+
+    _backfill_responses_history_records(records)
+
+    second_input = records[1]["request"]["body"]["input"]
+    assert second_input[0]["role"] == "user"
+    assert second_input[0]["content"][0]["text"] == "First prompt"
+    assert second_input[1]["type"] == "function_call_output"
+
+
+def test_backfill_responses_history_uses_same_record_response_chain() -> None:
+    records = [
+        {
+            "turn": 1,
+            "request": {
+                "path": "/v1/responses",
+                "body": {
+                    "model": "gpt-5.5",
+                    "input": [],
+                },
+            },
+            "response": {
+                "status": 101,
+                "body": {"id": "resp_2", "previous_response_id": "resp_1", "status": "completed"},
+                "ws_events": [
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_1",
+                            "status": "completed",
+                            "output": [
+                                {
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "content": [{"type": "output_text", "text": "First assistant prefix"}],
+                                },
+                                {
+                                    "type": "function_call",
+                                    "call_id": "call_1",
+                                    "name": "exec_command",
+                                    "arguments": "{}",
+                                },
+                            ],
+                        },
+                    },
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_2",
+                            "previous_response_id": "resp_1",
+                            "status": "completed",
+                            "output": [
+                                {
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "content": [{"type": "output_text", "text": "Final answer"}],
+                                }
+                            ],
+                        },
+                    },
+                ],
+            },
+        }
+    ]
+
+    _backfill_responses_history_records(records)
+
+    first_input = records[0]["request"]["body"]["input"]
+    assert first_input[0]["role"] == "assistant"
+    assert first_input[0]["content"][0]["text"] == "First assistant prefix"
+    assert first_input[1]["type"] == "function_call"

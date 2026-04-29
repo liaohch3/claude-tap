@@ -624,7 +624,9 @@ def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
             continue
         for key, value in parsed.items():
             if key in ("input", "tools"):
-                if value:
+                if isinstance(merged.get(key), list) and isinstance(value, list):
+                    merged[key] = _merge_json_lists(merged[key], value)
+                elif value:
                     merged[key] = value
                 else:
                     merged.setdefault(key, value)
@@ -634,6 +636,26 @@ def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
             else:
                 merged.setdefault(key, value)
     return merged
+
+
+def _merge_json_lists(existing: list, incoming: list) -> list:
+    """Append JSON-like list items while preserving order and removing exact duplicates."""
+    merged = list(existing)
+    seen = {_json_list_item_key(item) for item in merged}
+    for item in incoming:
+        key = _json_list_item_key(item)
+        if key in seen:
+            continue
+        merged.append(item)
+        seen.add(key)
+    return merged
+
+
+def _json_list_item_key(item: object) -> str:
+    try:
+        return json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return repr(item)
 
 
 def _reconstruct_ws_response_body(ws_events: list[dict]) -> dict | None:

@@ -275,6 +275,19 @@ def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
                     "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
                 }
             ),
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "previous_response_id": "resp_previous",
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": "tool output",
+                        }
+                    ],
+                }
+            ),
         ],
         server_messages=[
             json.dumps(
@@ -316,6 +329,8 @@ def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
     )
 
     assert record["request"]["body"]["input"][0]["content"][0]["text"] == "hello"
+    assert record["request"]["body"]["input"][1]["type"] == "function_call_output"
+    assert record["request"]["body"]["previous_response_id"] == "resp_previous"
     assert record["request"]["body"]["tools"][0]["name"] == "exec_command"
     assert record["response"]["body"]["usage"] == {"input_tokens": 10, "output_tokens": 2}
     assert record["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_FROM_WS"
