@@ -37,6 +37,7 @@ from claude_tap.proxy import (
     _build_record,
     _get_ws_proxy_settings,
     filter_headers,
+    parse_ws_messages,
     reconstruct_ws_request_body,
     reconstruct_ws_response_body,
 )
@@ -712,6 +713,8 @@ class ForwardProxyServer:
             pass
 
         duration_ms = int((time.monotonic() - t0) * 1000)
+        request_ws_events = parse_ws_messages(client_messages)
+        response_ws_events = parse_ws_messages(server_messages)
         record = {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "request_id": req_id,
@@ -728,10 +731,12 @@ class ForwardProxyServer:
                 "status": 101,
                 "headers": {},
                 "body": None,
-                "ws_events": [json.loads(msg) if msg.startswith("{") else {"raw": msg} for msg in server_messages],
+                "ws_events": response_ws_events,
             },
             "upstream_base_url": upstream_base_url,
         }
+        if request_ws_events:
+            record["request"]["ws_events"] = request_ws_events
         record["response"]["body"] = reconstruct_ws_response_body(record["response"]["ws_events"])
         await self._writer.write(record)
         log.info(
