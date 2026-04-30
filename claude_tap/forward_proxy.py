@@ -672,16 +672,19 @@ class ForwardProxyServer:
                 if msg.type == WSMsgType.TEXT:
                     server_messages.append(msg.data)
                     await ws_writer.send_frame(msg.data.encode("utf-8"), WSMsgType.TEXT)
+                    await writer.drain()
                 elif msg.type == WSMsgType.BINARY:
                     await ws_writer.send_frame(msg.data, WSMsgType.BINARY)
+                    await writer.drain()
                 elif msg.type == WSMsgType.PING:
                     payload = msg.data if isinstance(msg.data, (bytes, bytearray)) else b""
                     await ws_writer.send_frame(bytes(payload), WSMsgType.PING)
+                    await writer.drain()
                 elif msg.type == WSMsgType.PONG:
                     payload = msg.data if isinstance(msg.data, (bytes, bytearray)) else b""
                     await ws_writer.send_frame(bytes(payload), WSMsgType.PONG)
+                    await writer.drain()
                 elif msg.type == WSMsgType.CLOSE:
-                    await ws_writer.close(code=msg.data or 1000, message=msg.extra)
                     break
                 elif msg.type in (WSMsgType.CLOSING, WSMsgType.CLOSED, WSMsgType.ERROR):
                     break
@@ -691,14 +694,17 @@ class ForwardProxyServer:
             asyncio.create_task(_relay_client_to_upstream()),
             asyncio.create_task(_relay_upstream_to_client()),
         ]
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
+        _pump_task, client_task, server_task = tasks
+        await asyncio.wait((client_task, server_task), return_when=asyncio.FIRST_COMPLETED)
+        if client_task.done() and not server_task.done():
             try:
-                await task
-            except (asyncio.CancelledError, Exception):
+                await asyncio.wait_for(server_task, timeout=5)
+            except (TimeoutError, asyncio.CancelledError, Exception):
                 pass
-        for task in done:
+
+        for task in tasks:
+            if not task.done():
+                task.cancel()
             try:
                 await task
             except (asyncio.CancelledError, Exception):
@@ -707,7 +713,12 @@ class ForwardProxyServer:
         if not upstream_ws.closed:
             await upstream_ws.close()
         try:
+            if server_messages:
+                # Let queued data frames reach aiohttp clients before the close frame.
+                await writer.drain()
+                await asyncio.sleep(0.01)
             await ws_writer.close()
+            await writer.drain()
         except Exception:
             pass
 
