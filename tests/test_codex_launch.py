@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,46 @@ class _DummyProc:
 
     def kill(self) -> None:
         self.returncode = -9
+
+
+@pytest.mark.asyncio
+async def test_run_client_claude_internal_reverse_injects_anthropic_base_url(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/claude-internal")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["--version"], client="claude-internal", proxy_mode="reverse")
+
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/claude-internal", "--version")
+    assert captured["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:43123"
+
+
+@pytest.mark.asyncio
+async def test_run_client_claude_internal_forward_injects_proxy_settings(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/claude-internal")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["--version"], client="claude-internal", proxy_mode="forward")
+
+    assert code == 0
+    assert captured["cmd"][:2] == ("/tmp/claude-internal", "--settings")
+    settings = captured["cmd"][2]
+    assert json.loads(settings)["env"]["HTTPS_PROXY"] == "http://127.0.0.1:43123"
 
 
 @pytest.mark.asyncio

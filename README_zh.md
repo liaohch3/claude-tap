@@ -7,7 +7,7 @@
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 或 [Codex CLI](https://github.com/openai/codex) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、Claude Internal 或 [Codex CLI](https://github.com/openai/codex) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -24,7 +24,7 @@
 
 ## 安装
 
-需要 Python 3.11+ 和 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（使用 `--tap-client codex` 时需要 [Codex CLI](https://github.com/openai/codex)）。
+需要 Python 3.11+ 和 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（使用 `--tap-client codex` 时需要 [Codex CLI](https://github.com/openai/codex)；使用 `--tap-client claude-internal` 时需要内部 `claude-internal` 可执行文件）。
 
 ```bash
 # 推荐
@@ -56,6 +56,18 @@ claude-tap -- --dangerously-skip-permissions
 
 # 全功能组合：实时查看器 + 跳过权限确认 + 指定模型
 claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
+```
+
+### Claude Internal
+
+如果你的环境提供名为 `claude-internal` 的内部 Claude 客户端，可以显式选择它：
+
+```bash
+# 启动带 trace 的 Claude Internal
+claude-tap --tap-client claude-internal
+
+# 透传参数给 Claude Internal
+claude-tap --tap-client claude-internal -- --model claude-sonnet-4-6
 ```
 
 ### Codex CLI
@@ -111,6 +123,11 @@ claude-tap --tap-no-launch --tap-port 8080
 # 在另一个终端:
 ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 
+# Claude Internal
+claude-tap --tap-client claude-internal --tap-no-launch --tap-port 8080
+# 在另一个终端:
+ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude-internal
+
 # Codex CLI（OAuth）
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 8080
 # 在另一个终端:
@@ -143,7 +160,7 @@ claude-tap --tap-max-traces 10
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动的客户端: claude（默认）或 codex
+--tap-client CLIENT      启动的客户端: claude（默认）、claude-internal 或 codex
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               启动实时查看器（自动打开浏览器）
 --tap-live-port PORT     实时查看器端口（默认: 自动分配）
@@ -179,7 +196,7 @@ claude-tap --tap-max-traces 10
 
 **工作原理:**
 
-1. `claude-tap` 启动反向代理，并以对应服务商的 base URL 指向代理来启动所选客户端（`claude` 或 `codex`）
+1. `claude-tap` 启动反向代理，并以对应服务商的 base URL 指向代理来启动所选客户端（`claude`、`claude-internal` 或 `codex`）
 2. 所有 API 请求流经: 代理 → 上游 API → 代理返回
 3. SSE 流式响应实时转发（零额外延迟）
 4. 每个请求-响应对记录到 `trace.jsonl`

@@ -7,7 +7,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex CLI](https://github.com/openai/codex). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Claude Internal, or [Codex CLI](https://github.com/openai/codex). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -24,7 +24,7 @@ Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.
 
 ## Install
 
-Requires Python 3.11+ and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (or [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`).
+Requires Python 3.11+ and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (or [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`; or an internal `claude-internal` binary for `--tap-client claude-internal`).
 
 ```bash
 # Recommended
@@ -56,6 +56,18 @@ claude-tap -- --dangerously-skip-permissions
 
 # Full-power combo: live viewer + skip permissions + specific model
 claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
+```
+
+### Claude Internal
+
+If your environment provides the internal Claude client as `claude-internal`, select it explicitly:
+
+```bash
+# Launch Claude Internal with tracing
+claude-tap --tap-client claude-internal
+
+# Pass any flags through to Claude Internal
+claude-tap --tap-client claude-internal -- --model claude-sonnet-4-6
 ```
 
 ### Codex CLI
@@ -119,6 +131,11 @@ claude-tap --tap-no-launch --tap-port 8080
 # In another terminal:
 ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 
+# Claude Internal
+claude-tap --tap-client claude-internal --tap-no-launch --tap-port 8080
+# In another terminal:
+ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude-internal
+
 # Codex CLI (OAuth)
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 8080
 # In another terminal:
@@ -151,7 +168,7 @@ claude-tap --tap-max-traces 10
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default) or codex
+--tap-client CLIENT      Client to launch: claude (default), claude-internal, or codex
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
@@ -187,7 +204,7 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 
 **How it works:**
 
-1. `claude-tap` starts a reverse proxy and spawns the selected client (`claude` or `codex`) with the provider-specific base URL pointing to it
+1. `claude-tap` starts a reverse proxy and spawns the selected client (`claude`, `claude-internal`, or `codex`) with the provider-specific base URL pointing to it
 2. All API requests flow through the proxy → upstream API → back through proxy
 3. SSE streaming responses are forwarded in real-time (zero added latency)
 4. Each request-response pair is recorded to `trace.jsonl`

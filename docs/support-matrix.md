@@ -14,6 +14,7 @@ This document tracks all verified (client × auth × target × transport) combin
 | Client | Auth Mode | Target | strip_path_prefix | Transport | Status |
 |--------|-----------|--------|-------------------|-----------|--------|
 | Claude Code | API Key | `https://api.anthropic.com` | none | HTTP/SSE | Verified |
+| Claude Internal | Internal auth | `https://api.anthropic.com` | none | HTTP/SSE | Verified with fake upstream |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | HTTP/SSE | Verified |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
@@ -35,7 +36,7 @@ upstream: {target}/responses
 ### Decision Logic
 
 ```python
-strip = "/v1" if client == "codex" and "api.openai.com" not in target else ""
+strip = CLIENT_CONFIGS[client].strip_path_prefix_for_target(target)
 ```
 
 | Target contains `api.openai.com` | strip | Example |
@@ -47,8 +48,9 @@ strip = "/v1" if client == "codex" and "api.openai.com" not in target else ""
 
 ### Automated (CI)
 
-- `test_codex_upstream_url_construction` — verifies URL construction for all 5 matrix combinations
+- `test_codex_upstream_url_construction` — verifies URL construction for all configured client rows
 - `test_codex_client_reverse_proxy` — e2e with fake upstream (OAuth-like, with strip)
+- `test_claude_internal_client_reverse_proxy` — e2e with fake upstream (Claude-like, no strip)
 - `test_websocket_proxy_basic` — WS relay and trace recording
 
 ### Manual (pre-merge for proxy changes)
@@ -56,6 +58,10 @@ strip = "/v1" if client == "codex" and "api.openai.com" not in target else ""
 ```bash
 # API Key mode
 uv run python -m claude_tap --tap-client codex --tap-no-launch --tap-port 0
+# Verify log shows correct upstream URL
+
+# Claude Internal mode
+uv run python -m claude_tap --tap-client claude-internal --tap-no-launch --tap-port 0
 # Verify log shows correct upstream URL
 
 # OAuth mode

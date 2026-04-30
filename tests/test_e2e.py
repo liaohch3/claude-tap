@@ -417,6 +417,9 @@ def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout
     Returns the CompletedProcess."""
     env = os.environ.copy()
     env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+    repo_root = Path(__file__).resolve().parent.parent
+    existing_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(repo_root) if not existing_pythonpath else f"{repo_root}{os.pathsep}{existing_pythonpath}"
 
     cmd = [
         sys.executable,
@@ -1185,6 +1188,13 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.claude_args == []
     print("  OK: codex defaults")
 
+    # Claude Internal defaults
+    a = parse_args(["--tap-client", "claude-internal"])
+    assert a.client == "claude-internal"
+    assert a.target == "https://api.anthropic.com"
+    assert a.claude_args == []
+    print("  OK: claude-internal defaults")
+
     # Claude flags pass through
     a = parse_args(["-c"])
     assert a.claude_args == ["-c"]
@@ -1302,6 +1312,39 @@ def test_codex_client_reverse_proxy():
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "codex")
+
+
+def test_claude_internal_client_reverse_proxy():
+    """Test --tap-client claude-internal in reverse mode using ANTHROPIC_BASE_URL."""
+    stop_upstream, upstream_port = run_fake_upstream_in_thread()
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_claude_internal_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_claude_internal_")
+    fake_claude_internal = Path(fake_bin_dir) / "claude-internal"
+    fake_claude_internal.write_text(FAKE_CLAUDE_SCRIPT)
+    fake_claude_internal.chmod(fake_claude_internal.stat().st_mode | stat.S_IEXEC)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            upstream_port,
+            tap_client="claude-internal",
+        )
+
+        assert proc.returncode == 0, f"claude-internal mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
+        assert len(trace_files) == 1
+        records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
+        assert len(records) == 2
+        assert records[0]["request"]["path"] == "/v1/messages"
+        assert records[0]["upstream_base_url"] == f"http://127.0.0.1:{upstream_port}"
+        assert records[0]["request"]["body"]["model"] == "claude-test-model"
+        assert "ANTHROPIC_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert "Starting Claude Internal" in proc.stdout
+    finally:
+        stop_upstream()
+        _cleanup(trace_dir, fake_bin_dir, "claude-internal")
 
 
 ## ---------------------------------------------------------------------------
@@ -2155,6 +2198,7 @@ def test_codex_upstream_url_construction(monkeypatch, tmp_path):
     See: docs/error-experience/entries/2026-03-10-codex-strip-prefix-url-mismatch.md
     """
     from claude_tap import parse_args
+    from claude_tap.cli import CLIENT_CONFIGS
 
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
 
@@ -2166,37 +2210,43 @@ def test_codex_upstream_url_construction(monkeypatch, tmp_path):
 
     # Case 1: API Key mode — target=api.openai.com, should NOT strip /v1
     args = parse_args(["--tap-client", "codex"])
-    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    strip = CLIENT_CONFIGS[args.client].strip_path_prefix_for_target(args.target)
     url = _build_upstream(args.target, strip, "/v1/responses")
     assert url == "https://api.openai.com/v1/responses", f"API Key mode URL wrong: {url}"
     print("  OK: api.openai.com + /v1/responses → correct")
 
     # Case 2: OAuth mode — target=chatgpt.com, should strip /v1
     args = parse_args(["--tap-client", "codex", "--tap-target", "https://chatgpt.com/backend-api/codex"])
-    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    strip = CLIENT_CONFIGS[args.client].strip_path_prefix_for_target(args.target)
     url = _build_upstream(args.target, strip, "/v1/responses")
     assert url == "https://chatgpt.com/backend-api/codex/responses", f"OAuth mode URL wrong: {url}"
     print("  OK: chatgpt.com + /v1/responses → correct")
 
     # Case 3: API Key mode with /v1/models path
     args = parse_args(["--tap-client", "codex"])
-    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    strip = CLIENT_CONFIGS[args.client].strip_path_prefix_for_target(args.target)
     url = _build_upstream(args.target, strip, "/v1/models")
     assert url == "https://api.openai.com/v1/models", f"API Key models URL wrong: {url}"
     print("  OK: api.openai.com + /v1/models → correct")
 
     # Case 4: OAuth mode with /v1/models path
     args = parse_args(["--tap-client", "codex", "--tap-target", "https://chatgpt.com/backend-api/codex"])
-    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    strip = CLIENT_CONFIGS[args.client].strip_path_prefix_for_target(args.target)
     url = _build_upstream(args.target, strip, "/v1/models")
     assert url == "https://chatgpt.com/backend-api/codex/models", f"OAuth models URL wrong: {url}"
     print("  OK: chatgpt.com + /v1/models → correct")
 
     # Case 5: Claude client should never strip
     args = parse_args(["--tap-client", "claude"])
-    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    strip = CLIENT_CONFIGS[args.client].strip_path_prefix_for_target(args.target)
     assert strip == "", "Claude client should never strip path prefix"
     print("  OK: claude client has no strip prefix")
+
+    # Case 6: Claude Internal client should never strip
+    args = parse_args(["--tap-client", "claude-internal"])
+    strip = CLIENT_CONFIGS[args.client].strip_path_prefix_for_target(args.target)
+    assert strip == "", "Claude Internal client should never strip path prefix"
+    print("  OK: claude-internal client has no strip prefix")
 
     print("  test_codex_upstream_url_construction PASSED")
 

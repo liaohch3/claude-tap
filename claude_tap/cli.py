@@ -62,6 +62,11 @@ class ClientConfig:
     base_url_suffix: str  # appended to http://127.0.0.1:{port}
     default_target: str
     nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
+    inject_forward_proxy_settings: bool = False
+    config_base_url_key: str | None = None
+    strip_path_prefix: str = ""
+    strip_path_prefix_skip_target_contains: str | None = None
+    force_http: bool = False
 
     @property
     def missing_help(self) -> str:
@@ -71,6 +76,13 @@ class ClientConfig:
 
     def reverse_base_url(self, port: int) -> str:
         return f"http://127.0.0.1:{port}{self.base_url_suffix}"
+
+    def strip_path_prefix_for_target(self, target: str) -> str:
+        if not self.strip_path_prefix:
+            return ""
+        if self.strip_path_prefix_skip_target_contains and self.strip_path_prefix_skip_target_contains in target:
+            return ""
+        return self.strip_path_prefix
 
 
 CLIENT_CONFIGS: dict[str, ClientConfig] = {
@@ -82,6 +94,17 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_suffix="",
         default_target="https://api.anthropic.com",
         nesting_env_keys=("CLAUDECODE", "CLAUDE_CODE_SSE_PORT"),
+        inject_forward_proxy_settings=True,
+    ),
+    "claude-internal": ClientConfig(
+        cmd="claude-internal",
+        label="Claude Internal",
+        install_url="your internal Claude Code distribution channel",
+        base_url_env="ANTHROPIC_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.anthropic.com",
+        nesting_env_keys=("CLAUDECODE", "CLAUDE_CODE_SSE_PORT"),
+        inject_forward_proxy_settings=True,
     ),
     "codex": ClientConfig(
         cmd="codex",
@@ -90,6 +113,10 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="OPENAI_BASE_URL",
         base_url_suffix="/v1",
         default_target="https://api.openai.com",
+        config_base_url_key="openai_base_url",
+        strip_path_prefix="/v1",
+        strip_path_prefix_skip_target_contains="api.openai.com",
+        force_http=True,
     ),
 }
 
@@ -113,7 +140,9 @@ async def run_client(
     env = os.environ.copy()
 
     cmd_args = list(extra_args)
-    has_openai_base_override = _has_config_override(cmd_args, "openai_base_url")
+    has_config_base_override = cfg.config_base_url_key is not None and _has_config_override(
+        cmd_args, cfg.config_base_url_key
+    )
 
     if proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
@@ -130,7 +159,7 @@ async def run_client(
             env["SSL_CERT_FILE"] = str(ca_cert_path)
             env["CODEX_CA_CERTIFICATE"] = str(ca_cert_path)
 
-        if client == "claude":
+        if cfg.inject_forward_proxy_settings:
             # Claude Code may source proxy env from settings rather than process env.
             # Inject equivalent settings unless user already provided --settings.
             has_settings_arg = any(arg == "--settings" or arg.startswith("--settings=") for arg in cmd_args)
@@ -153,10 +182,10 @@ async def run_client(
         base_url = cfg.reverse_base_url(port)
         env[cfg.base_url_env] = base_url
         env["NO_PROXY"] = "127.0.0.1"
-        if client == "codex" and not has_openai_base_override:
+        if cfg.config_base_url_key and not has_config_base_override:
             # Newer Codex builds may ignore OPENAI_BASE_URL in OAuth/WebSocket mode
             # unless the same value is also supplied as a config override.
-            cmd_args = ["-c", f'openai_base_url="{base_url}"'] + cmd_args
+            cmd_args = ["-c", f'{cfg.config_base_url_key}="{base_url}"'] + cmd_args
 
     for key in cfg.nesting_env_keys:
         env.pop(key, None)
@@ -337,13 +366,14 @@ async def async_main(args: argparse.Namespace):
         print(f"   CA cert: {ca_cert_path}")
     else:
         app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
+        cfg = CLIENT_CONFIGS[args.client]
         app["trace_ctx"] = {
             "target_url": args.target,
             "writer": writer,
             "session": session,
             "turn_counter": 0,
-            "strip_path_prefix": "/v1" if args.client == "codex" and "api.openai.com" not in args.target else "",
-            "force_http": args.client == "codex",
+            "strip_path_prefix": cfg.strip_path_prefix_for_target(args.target),
+            "force_http": cfg.force_http,
         }
         app.router.add_route("*", "/{path_info:.*}", proxy_handler)
 
@@ -492,7 +522,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
-        description="Trace Claude Code or Codex API requests via a local proxy. "
+        description="Trace Claude Code, Claude Internal, or Codex API requests via a local proxy. "
         "All flags not listed below are forwarded to the selected client.",
         epilog=(
             "claude code:\n"
@@ -502,6 +532,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap -- -c                      Continue last conversation\n"
             "  claude-tap -- --dangerously-skip-permissions  Auto-accept tool calls\n"
             "  claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6\n"
+            "  claude-tap --tap-client claude-internal  Trace Claude Internal\n"
             "\n"
             "codex cli:\n"
             "  # API Key users (OPENAI_API_KEY) — default target works out of the box\n"
@@ -538,10 +569,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     proxy_group.add_argument(
         "--tap-client",
-        choices=["claude", "codex"],
+        choices=tuple(CLIENT_CONFIGS),
         default="claude",
         dest="client",
-        help="Client to launch (default: claude)",
+        help=f"Client to launch (default: claude; choices: {', '.join(CLIENT_CONFIGS)})",
     )
     proxy_group.add_argument(
         "--tap-target",
