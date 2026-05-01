@@ -62,6 +62,10 @@ class ClientConfig:
     base_url_suffix: str  # appended to http://127.0.0.1:{port}
     default_target: str
     nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
+    # Default proxy mode when --tap-proxy-mode is not explicitly set.
+    # Multi-provider clients (e.g. opencode) default to "forward" so that all
+    # provider traffic is captured regardless of which env var the client honors.
+    default_proxy_mode: str = "reverse"
 
     @property
     def missing_help(self) -> str:
@@ -90,6 +94,18 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="OPENAI_BASE_URL",
         base_url_suffix="/v1",
         default_target="https://api.openai.com",
+    ),
+    "opencode": ClientConfig(
+        cmd="opencode",
+        label="OpenCode",
+        install_url="https://opencode.ai/docs/",
+        # opencode is multi-provider; ANTHROPIC_BASE_URL is what reverse mode
+        # patches when the user explicitly opts out of forward mode. Forward
+        # proxy is the default and captures every provider transparently.
+        base_url_env="ANTHROPIC_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.anthropic.com",
+        default_proxy_mode="forward",
     ),
 }
 
@@ -522,6 +538,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # With model and full auto-approval\n"
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
             "\n"
+            "opencode (multi-provider; defaults to forward proxy mode):\n"
+            "  # Forward proxy captures every provider opencode talks to\n"
+            "  claude-tap --tap-client opencode\n"
+            "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
+            "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
+            "\n"
             "proxy-only mode (connect from another terminal):\n"
             "  claude-tap --tap-no-launch --tap-port 8080\n"
             "  # then: ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude\n"
@@ -553,7 +575,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     proxy_group.add_argument(
         "--tap-client",
-        choices=["claude", "codex"],
+        choices=["claude", "codex", "opencode"],
         default="claude",
         dest="client",
         help="Client to launch (default: claude)",
@@ -567,9 +589,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     proxy_group.add_argument(
         "--tap-proxy-mode",
         choices=["reverse", "forward"],
-        default="reverse",
+        default=None,
         dest="proxy_mode",
-        help="'reverse' sets provider base URL (default), 'forward' sets HTTPS_PROXY with CONNECT/TLS termination",
+        help=(
+            "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
+            "Default depends on the client: 'reverse' for claude/codex, 'forward' for opencode."
+        ),
     )
     proxy_group.add_argument(
         "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
@@ -636,6 +661,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             args.target = _detect_codex_target()
         else:
             args.target = CLIENT_CONFIGS[args.client].default_target
+    if args.proxy_mode is None:
+        args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
     return args
 
 
