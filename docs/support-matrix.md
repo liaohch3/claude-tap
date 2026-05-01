@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-03-10
+last_reviewed: 2026-05-02
 source_of_truth: AGENTS.md
 ---
 
@@ -18,6 +18,21 @@ This document tracks all verified (client × auth × target × transport) combin
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
+| OpenClaw | Provider creds via `~/.openclaw/openclaw.json` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
+| OpenClaw | Custom anthropic-messages provider (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
+
+## Default Proxy Mode by Client
+
+Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
+`--tap-proxy-mode` is omitted:
+
+| Client | Default mode | Reason |
+|--------|--------------|--------|
+| `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
+| `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
+| `openclaw` | `forward` | Multi-provider; built-in providers do not honor `*_BASE_URL` env vars, so HTTPS_PROXY capture is the only practical default |
+
+Users can always override with `--tap-proxy-mode {reverse,forward}`.
 
 ## URL Construction Rules
 

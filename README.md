@@ -7,7 +7,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex CLI](https://github.com/openai/codex). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), or [OpenClaw](https://github.com/openclaw/openclaw). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -82,6 +82,19 @@ claude-tap --tap-client codex -- --full-auto
 
 # OAuth + full auto + live viewer
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+```
+
+### OpenClaw
+
+OpenClaw is a multi-provider Node CLI agent. Because its built-in providers don't honor `*_BASE_URL` env vars, claude-tap defaults to **forward proxy** mode — it injects `HTTPS_PROXY` plus the local CA into the child process so any provider (Anthropic, OpenAI, custom) is captured.
+
+```bash
+# Default: forward proxy captures every upstream OpenClaw talks to
+claude-tap --tap-client openclaw -- run "hello"
+
+# Reverse mode is opt-in and only useful with a custom anthropic-messages provider
+# wired up in ~/.openclaw/openclaw.json that reads ANTHROPIC_BASE_URL
+claude-tap --tap-client openclaw --tap-proxy-mode reverse
 ```
 
 ### Browser Preview

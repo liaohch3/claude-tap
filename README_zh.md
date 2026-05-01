@@ -7,7 +7,7 @@
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 或 [Codex CLI](https://github.com/openai/codex) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex) 或 [OpenClaw](https://github.com/openclaw/openclaw) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -82,6 +82,19 @@ claude-tap --tap-client codex -- --full-auto
 
 # OAuth + 全自动 + 实时查看器
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+```
+
+### OpenClaw
+
+OpenClaw 是基于 Node 的多 provider CLI agent。由于它内置的 provider 不读取 `*_BASE_URL` 环境变量，claude-tap 默认使用 **forward proxy** 模式——通过向子进程注入 `HTTPS_PROXY` 与本地 CA，捕获它对接的任意 provider（Anthropic / OpenAI / 自定义）流量。
+
+```bash
+# 默认：forward proxy 捕获 OpenClaw 对接的所有上游
+claude-tap --tap-client openclaw -- run "hello"
+
+# 反向模式仅在 ~/.openclaw/openclaw.json 自定义了
+# 读取 ANTHROPIC_BASE_URL 的 anthropic-messages provider 时才有意义
+claude-tap --tap-client openclaw --tap-proxy-mode reverse
 ```
 
 ### 浏览器预览
