@@ -2053,6 +2053,27 @@ def test_parse_args_new_flags():
     print("  test_parse_args_new_flags PASSED")
 
 
+def test_parse_dashboard_args():
+    """Test standalone dashboard argument parsing."""
+    from claude_tap import parse_dashboard_args
+
+    a = parse_dashboard_args([])
+    assert a.output_dir == "./.traces"
+    assert a.live_port == 0
+    assert a.host == "127.0.0.1"
+    assert a.open_viewer is True
+
+    a = parse_dashboard_args(
+        ["--tap-output-dir", "/tmp/t", "--tap-live-port", "3000", "--tap-host", "0.0.0.0", "--tap-no-open"]
+    )
+    assert a.output_dir == "/tmp/t"
+    assert a.live_port == 3000
+    assert a.host == "0.0.0.0"
+    assert a.open_viewer is False
+
+    print("  test_parse_dashboard_args PASSED")
+
+
 ## ---------------------------------------------------------------------------
 ## Test: CA certificate generation
 ## ---------------------------------------------------------------------------
@@ -2779,3 +2800,35 @@ async def test_live_viewer_server():
 
         await server.stop()
         print("  test_live_viewer_server PASSED")
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_serves_viewer(monkeypatch):
+    """Test the dashboard command starts a standalone viewer server."""
+    import aiohttp
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    opened_urls: list[str] = []
+    monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        args = parse_dashboard_args(["--tap-output-dir", tmpdir, "--tap-live-port", "0"])
+        task = asyncio.create_task(dashboard_main(args))
+        try:
+            for _ in range(50):
+                if opened_urls:
+                    break
+                await asyncio.sleep(0.05)
+            assert opened_urls, "dashboard should open the browser"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(opened_urls[0]) as resp:
+                    assert resp.status == 200
+                    html = await resp.text()
+                    assert "LIVE_MODE = true" in html
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

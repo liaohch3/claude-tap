@@ -93,6 +93,10 @@ claude-tap --tap-no-open
 # Live mode — real-time viewer opens in browser while client runs
 claude-tap --tap-live
 claude-tap --tap-live --tap-live-port 3000    # fixed port for live viewer
+
+# Standalone dashboard — browse trace history without launching a client
+claude-tap dashboard
+claude-tap dashboard --tap-output-dir ./my-traces --tap-live-port 3000
 ```
 
 When the client exits, you can also manually open the generated viewer:

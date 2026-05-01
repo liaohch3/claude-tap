@@ -93,6 +93,10 @@ claude-tap --tap-no-open
 # 实时模式 — 客户端运行时在浏览器中实时查看
 claude-tap --tap-live
 claude-tap --tap-live --tap-live-port 3000    # 固定实时查看器端口
+
+# 独立 Dashboard — 不启动客户端，直接浏览历史 trace
+claude-tap dashboard
+claude-tap dashboard --tap-output-dir ./my-traces --tap-live-port 3000
 ```
 
 客户端退出后，也可以手动打开生成的查看器：

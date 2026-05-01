@@ -521,6 +521,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap export trace.jsonl --format json Export as JSON\n"
             "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
             "\n"
+            "dashboard:\n"
+            "  claude-tap dashboard                       Browse trace history\n"
+            "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
+            "\n"
             "homepage: https://github.com/liaohch3/claude-tap"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -622,6 +626,69 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         else:
             args.target = CLIENT_CONFIGS[args.client].default_target
     return args
+
+
+def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse arguments for the standalone dashboard command."""
+    parser = argparse.ArgumentParser(
+        prog="claude-tap dashboard",
+        description="Open a local claude-tap dashboard for browsing trace history.",
+    )
+    parser.add_argument(
+        "--tap-output-dir",
+        default="./.traces",
+        dest="output_dir",
+        help="Trace output directory to browse (default: ./.traces)",
+    )
+    parser.add_argument(
+        "--tap-live-port",
+        type=int,
+        default=0,
+        dest="live_port",
+        help="Dashboard server port (default: auto)",
+    )
+    parser.add_argument(
+        "--tap-host",
+        default="127.0.0.1",
+        dest="host",
+        help="Bind address (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--tap-no-open",
+        action="store_false",
+        dest="open_viewer",
+        default=True,
+        help="Don't auto-open the dashboard in a browser",
+    )
+    return parser.parse_args(argv)
+
+
+async def dashboard_main(args: argparse.Namespace) -> int:
+    """Run the standalone dashboard until interrupted."""
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now()
+    date_dir = output_dir / now.strftime("%Y-%m-%d")
+    date_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = date_dir / f"dashboard_{now.strftime('%H%M%S')}.jsonl"
+
+    server = LiveViewerServer(trace_path, port=args.live_port, host=args.host, output_dir=output_dir)
+    await server.start()
+    print(f"🌐 claude-tap dashboard: {server.url}")
+    print(f"📁 Trace directory: {output_dir}")
+    print("Press Ctrl+C to stop.")
+    if args.open_viewer:
+        _open_browser(server.url)
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await server.stop()
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -793,6 +860,14 @@ def main_entry() -> None:
         from claude_tap.export import export_main
 
         sys.exit(export_main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "dashboard":
+        args = parse_dashboard_args(sys.argv[2:])
+        try:
+            code = asyncio.run(dashboard_main(args))
+        except KeyboardInterrupt:
+            code = 0
+        sys.exit(code)
 
     args = parse_args()
     try:
