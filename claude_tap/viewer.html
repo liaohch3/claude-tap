@@ -2277,9 +2277,14 @@ function getTaskFingerprint(e) {
   const lower = sysText.toLowerCase();
   let label = '';
   if (!sysText && !tools.length) label = 'simple';
+  // Self-identification phrases win over generic substring matches: openclaw
+  // ships skills similar to Claude Code's, so its prompt may mention "Claude
+  // Code" deep inside an example list. Match the explicit "you are X" opener
+  // first to avoid mislabelling.
+  else if (lower.includes('you are openclaw')) label = 'OpenClaw';
+  else if (lower.includes('you are codex')) label = 'Codex';
   else if (lower.includes('claude code')) label = 'Claude Code';
   else if (lower.includes('claude agent')) label = 'Claude Agent';
-  else if (lower.includes('you are codex')) label = 'Codex';
   else if (lower.includes('openclaw')) label = 'OpenClaw';
   else if (lower.includes('subagent') || lower.includes('sub-agent')) label = 'Subagent';
   else if (lower.includes('bash')) label = 'Bash';
