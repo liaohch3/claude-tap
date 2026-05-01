@@ -14,6 +14,7 @@ from claude_tap.proxy import _is_allowed_path
         "/v1/responses",
         "/v1/chat/completions",
         "/v1/completions",
+        "/v1/engines/copilot-codex/completions",
         "/v1/models",
         "/v1/models/claude-3",
         "/v1/embeddings",

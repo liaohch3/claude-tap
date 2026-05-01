@@ -18,6 +18,7 @@ This document tracks all verified (client × auth × target × transport) combin
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
+| GitHub Copilot CLI | Copilot auth | `https://api.githubcopilot.com` | n/a | Forward proxy CONNECT/TLS | Supported |
 
 ## URL Construction Rules
 
@@ -37,6 +38,11 @@ upstream: {target}/responses
 ```python
 strip = "/v1" if client == "codex" and "api.openai.com" not in target else ""
 ```
+
+GitHub Copilot CLI does not use reverse proxy URL construction by default. It
+uses forward proxy mode so the client continues to call
+`https://api.githubcopilot.com` while `HTTPS_PROXY` routes traffic through
+`claude-tap`.
 
 | Target contains `api.openai.com` | strip | Example |
 |----------------------------------|-------|---------|
@@ -62,6 +68,10 @@ uv run python -m claude_tap --tap-client codex --tap-no-launch --tap-port 0
 uv run python -m claude_tap --tap-client codex \
   --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 0
 # Verify log shows correct upstream URL
+
+# GitHub Copilot CLI
+uv run python -m claude_tap --tap-client copilot --tap-no-launch --tap-port 0
+# In another terminal, set HTTPS_PROXY and NODE_EXTRA_CA_CERTS from the proxy output.
 ```
 
 ### Real E2E (optional, when auth is available)

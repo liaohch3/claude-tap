@@ -7,7 +7,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex CLI](https://github.com/openai/codex). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/getting-started-with-github-copilot-in-the-cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -24,7 +24,7 @@ Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.
 
 ## Install
 
-Requires Python 3.11+ and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (or [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`).
+Requires Python 3.11+ and one supported client: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/getting-started-with-github-copilot-in-the-cli).
 
 ```bash
 # Recommended
@@ -84,6 +84,21 @@ claude-tap --tap-client codex -- --full-auto
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
 ```
 
+### GitHub Copilot CLI
+
+GitHub Copilot CLI uses forward proxy mode by default because it does not expose a provider base URL setting.
+
+```bash
+# Basic — launch GitHub Copilot CLI with tracing
+claude-tap --tap-client copilot
+
+# Ask one prompt non-interactively
+claude-tap --tap-client copilot -- -p "Explain this repository"
+
+# Live viewer while Copilot runs
+claude-tap --tap-client copilot --tap-live
+```
+
 ### Browser Preview
 
 ```bash
@@ -128,6 +143,11 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
 claude-tap --tap-client codex --tap-no-launch --tap-port 8080
 # In another terminal:
 OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
+
+# GitHub Copilot CLI
+claude-tap --tap-client copilot --tap-no-launch --tap-port 8080
+# In another terminal:
+HTTPS_PROXY=http://127.0.0.1:8080 NODE_EXTRA_CA_CERTS=~/.claude-tap/ca.pem copilot
 ```
 
 ### Common Combos
@@ -138,6 +158,9 @@ claude-tap --tap-live -- --dangerously-skip-permissions
 
 # Trace Codex (OAuth) with live viewer and full auto
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+
+# Trace GitHub Copilot CLI with live viewer
+claude-tap --tap-client copilot --tap-live
 
 # Save traces to a custom directory
 claude-tap --tap-output-dir ./my-traces
@@ -151,7 +174,7 @@ claude-tap --tap-max-traces 10
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default) or codex
+--tap-client CLIENT      Client to launch: claude (default), codex, or copilot
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
@@ -163,7 +186,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse (default) or forward
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default is client-specific)
 ```
 
 ## Viewer Features
@@ -187,7 +210,7 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 
 **How it works:**
 
-1. `claude-tap` starts a reverse proxy and spawns the selected client (`claude` or `codex`) with the provider-specific base URL pointing to it
+1. `claude-tap` starts a reverse proxy for clients with base URL support, or a forward proxy for clients such as Copilot, then spawns the selected client
 2. All API requests flow through the proxy → upstream API → back through proxy
 3. SSE streaming responses are forwarded in real-time (zero added latency)
 4. Each request-response pair is recorded to `trace.jsonl`

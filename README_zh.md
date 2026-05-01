@@ -7,7 +7,7 @@
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 或 [Codex CLI](https://github.com/openai/codex) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex) 或 [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/getting-started-with-github-copilot-in-the-cli) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -24,7 +24,7 @@
 
 ## 安装
 
-需要 Python 3.11+ 和 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（使用 `--tap-client codex` 时需要 [Codex CLI](https://github.com/openai/codex)）。
+需要 Python 3.11+ 和一个受支持客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex) 或 [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli/getting-started-with-github-copilot-in-the-cli)。
 
 ```bash
 # 推荐
@@ -84,6 +84,21 @@ claude-tap --tap-client codex -- --full-auto
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
 ```
 
+### GitHub Copilot CLI
+
+GitHub Copilot CLI 默认使用 forward proxy 模式，因为它不提供类似 `ANTHROPIC_BASE_URL` 或 `OPENAI_BASE_URL` 的上游 base URL 配置。
+
+```bash
+# 基本用法 — 启动带 trace 的 GitHub Copilot CLI
+claude-tap --tap-client copilot
+
+# 非交互式提问
+claude-tap --tap-client copilot -- -p "Explain this repository"
+
+# 实时查看器
+claude-tap --tap-client copilot --tap-live
+```
+
 ### 浏览器预览
 
 ```bash
@@ -120,6 +135,11 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
 claude-tap --tap-client codex --tap-no-launch --tap-port 8080
 # 在另一个终端:
 OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
+
+# GitHub Copilot CLI
+claude-tap --tap-client copilot --tap-no-launch --tap-port 8080
+# 在另一个终端:
+HTTPS_PROXY=http://127.0.0.1:8080 NODE_EXTRA_CA_CERTS=~/.claude-tap/ca.pem copilot
 ```
 
 ### 常用组合
@@ -130,6 +150,9 @@ claude-tap --tap-live -- --dangerously-skip-permissions
 
 # 追踪 Codex（OAuth）：实时查看器 + 全自动
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+
+# 追踪 GitHub Copilot CLI：实时查看器
+claude-tap --tap-client copilot --tap-live
 
 # 自定义 trace 输出目录
 claude-tap --tap-output-dir ./my-traces
@@ -143,7 +166,7 @@ claude-tap --tap-max-traces 10
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动的客户端: claude（默认）或 codex
+--tap-client CLIENT      启动的客户端: claude（默认）、codex 或 copilot
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               启动实时查看器（自动打开浏览器）
 --tap-live-port PORT     实时查看器端口（默认: 自动分配）
@@ -155,7 +178,7 @@ claude-tap --tap-max-traces 10
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
---tap-proxy-mode MODE    代理模式: reverse（默认）或 forward
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认根据客户端选择）
 ```
 
 ## 查看器功能
@@ -179,7 +202,7 @@ claude-tap --tap-max-traces 10
 
 **工作原理:**
 
-1. `claude-tap` 启动反向代理，并以对应服务商的 base URL 指向代理来启动所选客户端（`claude` 或 `codex`）
+1. `claude-tap` 对支持 base URL 的客户端启动反向代理，对 Copilot 等客户端启动正向代理，然后启动所选客户端
 2. 所有 API 请求流经: 代理 → 上游 API → 代理返回
 3. SSE 流式响应实时转发（零额外延迟）
 4. 每个请求-响应对记录到 `trace.jsonl`

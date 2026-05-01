@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_tap.cli import _has_config_override, run_client
+from claude_tap.cli import _has_config_override, parse_args, run_client
 
 
 class _DummyProc:
@@ -98,6 +98,55 @@ async def test_run_client_codex_forward_sets_rust_tls_ca_env(monkeypatch) -> Non
     assert captured["env"]["HTTPS_PROXY"] == "http://127.0.0.1:43123"
     assert captured["env"]["SSL_CERT_FILE"] == str(ca_path)
     assert captured["env"]["CODEX_CA_CERTIFICATE"] == str(ca_path)
+
+
+@pytest.mark.asyncio
+async def test_run_client_copilot_forward_sets_node_ca_env(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    ca_path = Path("/tmp/test-ca.pem")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/copilot")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["-p", "hello"], client="copilot", proxy_mode="forward", ca_cert_path=ca_path)
+
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/copilot", "-p", "hello")
+    assert captured["env"]["HTTPS_PROXY"] == "http://127.0.0.1:43123"
+    assert captured["env"]["NODE_EXTRA_CA_CERTS"] == str(ca_path)
+
+
+@pytest.mark.asyncio
+async def test_run_client_copilot_reverse_is_rejected(monkeypatch) -> None:
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        raise AssertionError("Copilot reverse mode should fail before spawning")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    code = await run_client(43123, [], client="copilot", proxy_mode="reverse")
+
+    assert code == 1
+
+
+def test_parse_args_copilot_defaults_to_forward() -> None:
+    args = parse_args(["--tap-client", "copilot"])
+
+    assert args.client == "copilot"
+    assert args.target == "https://api.githubcopilot.com"
+    assert args.proxy_mode == "forward"
+
+
+def test_parse_args_copilot_respects_explicit_proxy_mode() -> None:
+    args = parse_args(["--tap-client", "copilot", "--tap-proxy-mode", "reverse"])
+
+    assert args.client == "copilot"
+    assert args.proxy_mode == "reverse"
 
 
 def test_has_config_override_detects_cli_forms() -> None:

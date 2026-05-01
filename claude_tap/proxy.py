@@ -66,6 +66,7 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/responses",
     "/v1/chat/completions",
     "/v1/completions",
+    "/v1/engines",
     "/v1/models",
     "/v1/embeddings",
     # OpenAI Responses API (after strip_path_prefix removes /v1)

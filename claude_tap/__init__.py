@@ -1,8 +1,8 @@
-"""claude-tap: Proxy to trace Claude Code API requests.
+"""claude-tap: Proxy to trace AI CLI API requests.
 
-A CLI tool that wraps Claude Code with a local proxy (reverse or forward)
-to intercept and record all API requests. Useful for studying Claude Code's
-Context Engineering.
+A CLI tool that wraps Claude Code, Codex CLI, or GitHub Copilot CLI with a local
+proxy (reverse or forward) to intercept and record all API requests. Useful for
+studying AI CLI Context Engineering.
 """
 
 from __future__ import annotations

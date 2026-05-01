@@ -58,9 +58,10 @@ class ClientConfig:
     cmd: str
     label: str
     install_url: str
-    base_url_env: str
+    base_url_env: str | None
     base_url_suffix: str  # appended to http://127.0.0.1:{port}
     default_target: str
+    default_proxy_mode: str = "reverse"
     nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
 
     @property
@@ -91,6 +92,15 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_suffix="/v1",
         default_target="https://api.openai.com",
     ),
+    "copilot": ClientConfig(
+        cmd="copilot",
+        label="GitHub Copilot CLI",
+        install_url="https://docs.github.com/en/copilot/github-copilot-in-the-cli/getting-started-with-github-copilot-in-the-cli",
+        base_url_env=None,
+        base_url_suffix="",
+        default_target="https://api.githubcopilot.com",
+        default_proxy_mode="forward",
+    ),
 }
 
 
@@ -102,6 +112,10 @@ async def run_client(
     ca_cert_path: Path | None = None,
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
+
+    if proxy_mode == "reverse" and cfg.base_url_env is None:
+        print(f"\nError: {cfg.label} does not support reverse proxy mode. Use --tap-proxy-mode forward.\n")
+        return 1
 
     # asyncio.create_subprocess_exec uses CreateProcess on Windows, which only
     # auto-appends `.exe`; resolve here so npm `.cmd`/`.bat` shims also work.
@@ -151,7 +165,8 @@ async def run_client(
         # Don't set provider-specific base URL in forward mode
     else:
         base_url = cfg.reverse_base_url(port)
-        env[cfg.base_url_env] = base_url
+        if cfg.base_url_env is not None:
+            env[cfg.base_url_env] = base_url
         env["NO_PROXY"] = "127.0.0.1"
         if client == "codex" and not has_openai_base_override:
             # Newer Codex builds may ignore OPENAI_BASE_URL in OAuth/WebSocket mode
@@ -168,7 +183,8 @@ async def run_client(
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     else:
-        print(f"   {cfg.base_url_env}={cfg.reverse_base_url(port)}")
+        if cfg.base_url_env is not None:
+            print(f"   {cfg.base_url_env}={cfg.reverse_base_url(port)}")
     print()
 
     # Give child its own process group and make it the foreground group
@@ -492,7 +508,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
-        description="Trace Claude Code or Codex API requests via a local proxy. "
+        description="Trace Claude Code, Codex, or GitHub Copilot CLI API requests via a local proxy. "
         "All flags not listed below are forwarded to the selected client.",
         epilog=(
             "claude code:\n"
@@ -510,6 +526,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex\n"
             "  # With model and full auto-approval\n"
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
+            "\n"
+            "github copilot cli:\n"
+            "  claude-tap --tap-client copilot\n"
+            '  claude-tap --tap-client copilot --tap-live -- -p "Explain this repository"\n'
             "\n"
             "proxy-only mode (connect from another terminal):\n"
             "  claude-tap --tap-no-launch --tap-port 8080\n"
@@ -538,7 +558,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     proxy_group.add_argument(
         "--tap-client",
-        choices=["claude", "codex"],
+        choices=sorted(CLIENT_CONFIGS),
         default="claude",
         dest="client",
         help="Client to launch (default: claude)",
@@ -552,9 +572,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     proxy_group.add_argument(
         "--tap-proxy-mode",
         choices=["reverse", "forward"],
-        default="reverse",
+        default=None,
         dest="proxy_mode",
-        help="'reverse' sets provider base URL (default), 'forward' sets HTTPS_PROXY with CONNECT/TLS termination",
+        help="'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination (default: client-specific)",
     )
     proxy_group.add_argument(
         "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
@@ -621,6 +641,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             args.target = _detect_codex_target()
         else:
             args.target = CLIENT_CONFIGS[args.client].default_target
+    if args.proxy_mode is None:
+        args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
     return args
 
 
