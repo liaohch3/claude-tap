@@ -1,4 +1,5 @@
 ---
+name: codex-e2e-test
 description: Run real E2E tests against Codex CLI (OpenAI Responses API) through claude-tap proxy
 tags: testing, e2e, codex, responses-api
 ---
