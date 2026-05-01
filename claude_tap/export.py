@@ -7,7 +7,12 @@ import json
 import sys
 from pathlib import Path
 
-from claude_tap.viewer import _backfill_responses_history_records, _generate_html_viewer, _normalize_record_for_viewer
+from claude_tap.viewer import (
+    _backfill_responses_history_records,
+    _extract_request_messages,
+    _generate_html_viewer,
+    _normalize_record_for_viewer,
+)
 
 
 def _as_dict(value: object) -> dict:
@@ -39,6 +44,60 @@ def _usage_from(record: dict) -> dict:
 def _turn_sort_key(record: dict) -> int:
     turn = record.get("turn")
     return turn if isinstance(turn, int) else 0
+
+
+def _parse_tool_input(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _text_from_block(block: dict) -> str:
+    text = block.get("text")
+    if isinstance(text, str):
+        return text
+    return ""
+
+
+def _export_response_content(resp_body: dict) -> list[dict]:
+    content = resp_body.get("content")
+    if isinstance(content, list):
+        return content
+
+    output = resp_body.get("output")
+    if not isinstance(output, list):
+        return []
+
+    normalized: list[dict] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type == "message":
+            for block in item.get("content") or []:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type in {"output_text", "text"}:
+                    text = _text_from_block(block)
+                    if text:
+                        normalized.append({"type": "text", "text": text})
+                elif block_type == "reasoning_text":
+                    text = _text_from_block(block)
+                    if text:
+                        normalized.append({"type": "thinking", "thinking": text})
+        elif item_type == "function_call":
+            normalized.append(
+                {
+                    "type": "tool_use",
+                    "name": item.get("name") or "function_call",
+                    "input": _parse_tool_input(item.get("arguments") or {}),
+                }
+            )
+    return normalized
 
 
 def export_main(argv: list[str] | None = None) -> int:
@@ -170,8 +229,8 @@ def _export_markdown(records: list[dict]) -> str:
         lines.append(f"**Model**: `{model}` | **Duration**: {duration}ms\n")
 
         # User messages (last message from request)
-        messages = req_body.get("messages", [])
-        if isinstance(messages, list) and messages:
+        messages = _extract_request_messages(req_body)
+        if messages:
             last_msg = messages[-1]
             if isinstance(last_msg, dict):
                 role = last_msg.get("role", "unknown")
@@ -182,7 +241,7 @@ def _export_markdown(records: list[dict]) -> str:
                 elif isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict):
-                            if block.get("type") == "text":
+                            if block.get("type") in {"text", "input_text", "output_text"}:
                                 lines.append(block.get("text", "") + "\n")
                             elif block.get("type") == "tool_result":
                                 lines.append(f"**Tool Result** (`{block.get('tool_use_id', '')}`)\n")
@@ -195,8 +254,8 @@ def _export_markdown(records: list[dict]) -> str:
                                             lines.append(f"```\n{sub.get('text', '')[:2000]}\n```\n")
 
         # Response
-        resp_content = resp_body.get("content", [])
-        if isinstance(resp_content, list) and resp_content:
+        resp_content = _export_response_content(resp_body)
+        if resp_content:
             lines.append("### Assistant\n")
             for block in resp_content:
                 if isinstance(block, dict):
@@ -244,9 +303,9 @@ def _export_json(records: list[dict]) -> str:
             "timestamp": r.get("timestamp"),
             "duration_ms": r.get("duration_ms"),
             "model": req_body.get("model"),
-            "messages": req_body.get("messages") if isinstance(req_body.get("messages"), list) else [],
+            "messages": _extract_request_messages(req_body),
             "response": {
-                "content": resp_body.get("content") if isinstance(resp_body.get("content"), list) else [],
+                "content": _export_response_content(resp_body),
                 "usage": _as_dict(resp_body.get("usage")),
                 "stop_reason": resp_body.get("stop_reason"),
             },

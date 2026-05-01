@@ -137,3 +137,125 @@ def test_export_json_tolerates_null_request_body_and_stream_text_response(tmp_pa
     assert exported[1]["model"] is None
     assert exported[1]["messages"] == []
     assert f"Exported 2 turns to {json_path}" in capsys.readouterr().out
+
+
+def test_export_json_includes_backfilled_responses_messages_and_output(tmp_path, capsys) -> None:
+    trace_path = tmp_path / "responses.jsonl"
+    json_path = tmp_path / "responses.export.json"
+    records = [
+        {
+            "timestamp": "2026-04-28T12:00:00",
+            "turn": 1,
+            "request": {
+                "body": {
+                    "model": "gpt-5.5",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "first prompt"}],
+                        }
+                    ],
+                }
+            },
+            "response": {
+                "body": {
+                    "id": "resp_1",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "first answer"}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 5, "output_tokens": 3},
+                }
+            },
+        },
+        {
+            "timestamp": "2026-04-28T12:00:01",
+            "turn": 2,
+            "request": {
+                "body": {
+                    "model": "gpt-5.5",
+                    "previous_response_id": "resp_1",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "second prompt"}],
+                        }
+                    ],
+                }
+            },
+            "response": {
+                "body": {
+                    "id": "resp_2",
+                    "output": [
+                        {"type": "function_call", "name": "exec_command", "arguments": '{"cmd":"pwd"}'},
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "second answer"}],
+                        },
+                    ],
+                    "usage": {"input_tokens": 8, "output_tokens": 4},
+                }
+            },
+        },
+    ]
+    trace_path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+    assert export_main([str(trace_path), "--format", "json", "-o", str(json_path)]) == 0
+
+    exported = json.loads(json_path.read_text(encoding="utf-8"))
+    assert [message["role"] for message in exported[1]["messages"]] == ["user", "assistant", "user"]
+    assert exported[1]["messages"][0]["content"][0]["text"] == "first prompt"
+    assert exported[1]["messages"][1]["content"][0]["text"] == "first answer"
+    assert exported[1]["messages"][2]["content"][0]["text"] == "second prompt"
+    assert exported[1]["response"]["content"] == [
+        {"type": "tool_use", "name": "exec_command", "input": {"cmd": "pwd"}},
+        {"type": "text", "text": "second answer"},
+    ]
+    assert f"Exported 2 turns to {json_path}" in capsys.readouterr().out
+
+
+def test_export_markdown_includes_responses_input_and_output_text(tmp_path, capsys) -> None:
+    trace_path = tmp_path / "responses.jsonl"
+    md_path = tmp_path / "responses.md"
+    record = {
+        "timestamp": "2026-04-28T12:00:00",
+        "turn": 1,
+        "request": {
+            "body": {
+                "model": "gpt-5.5",
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "summarize export behavior"}],
+                    }
+                ],
+            }
+        },
+        "response": {
+            "body": {
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "export includes responses"}],
+                    }
+                ],
+                "usage": {"input_tokens": 5, "output_tokens": 4},
+            }
+        },
+    }
+    trace_path.write_text(json.dumps(record), encoding="utf-8")
+
+    assert export_main([str(trace_path), "--format", "markdown", "-o", str(md_path)]) == 0
+
+    markdown = md_path.read_text(encoding="utf-8")
+    assert "summarize export behavior" in markdown
+    assert "export includes responses" in markdown
+    assert f"Exported 1 turns to {md_path}" in capsys.readouterr().out
