@@ -100,3 +100,108 @@ async def test_run_client_openclaw_reverse_sets_anthropic_base_url(monkeypatch) 
     assert captured["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:43123"
     # Reverse mode for openclaw must not inject a codex-only -c flag
     assert captured["cmd"] == ("/tmp/openclaw", "run", "hello")
+
+
+# ---------------------------------------------------------------------------
+# argv rewrite: openclaw 2026.4+ delegates `gateway start` to launchd/systemd
+# which spawns the gateway in a fresh env, breaking HTTPS_PROXY inheritance.
+# We rewrite to `gateway run` (foreground) so the spawned process is our child
+# and inherits the injected env.
+# ---------------------------------------------------------------------------
+
+
+async def _capture_cmd(monkeypatch) -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/openclaw")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_run_client_openclaw_rewrites_gateway_start_to_gateway_run(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(43123, ["gateway", "start"], client="openclaw", proxy_mode="forward")
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/openclaw", "gateway", "run")
+
+
+@pytest.mark.asyncio
+async def test_run_client_openclaw_rewrite_preserves_trailing_flags(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(
+        43123,
+        ["gateway", "start", "--allow-unconfigured", "--port", "18789"],
+        client="openclaw",
+        proxy_mode="forward",
+    )
+    assert code == 0
+    assert captured["cmd"] == (
+        "/tmp/openclaw",
+        "gateway",
+        "run",
+        "--allow-unconfigured",
+        "--port",
+        "18789",
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_client_openclaw_gateway_run_passthrough_unchanged(monkeypatch) -> None:
+    # Already-foreground invocations must not be touched
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(43123, ["gateway", "run"], client="openclaw", proxy_mode="forward")
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/openclaw", "gateway", "run")
+
+
+@pytest.mark.asyncio
+async def test_run_client_openclaw_other_subcommands_unchanged(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(43123, ["tui"], client="openclaw", proxy_mode="forward")
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/openclaw", "tui")
+
+
+@pytest.mark.asyncio
+async def test_run_client_openclaw_agent_local_unchanged(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(
+        43123,
+        ["agent", "--local", "--agent", "main", "--message", "hi"],
+        client="openclaw",
+        proxy_mode="forward",
+    )
+    assert code == 0
+    assert captured["cmd"] == (
+        "/tmp/openclaw",
+        "agent",
+        "--local",
+        "--agent",
+        "main",
+        "--message",
+        "hi",
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_client_codex_not_affected_by_openclaw_rewrite(monkeypatch) -> None:
+    # The rewrite must only fire for openclaw — codex `gateway start` (hypothetical) stays raw
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/codex")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["gateway", "start"], client="codex", proxy_mode="forward")
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/codex", "gateway", "start")

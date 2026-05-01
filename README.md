@@ -88,9 +88,18 @@ claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex
 
 OpenClaw is a multi-provider Node CLI agent. Because its built-in providers don't honor `*_BASE_URL` env vars, claude-tap defaults to **forward proxy** mode — it injects `HTTPS_PROXY` plus the local CA into the child process so any provider (Anthropic, OpenAI, custom) is captured.
 
+OpenClaw is daemon-architected: a long-running gateway holds credentials and makes LLM calls. So depending on what you want to do, two patterns:
+
 ```bash
-# Default: forward proxy captures every upstream OpenClaw talks to
-claude-tap --tap-client openclaw -- run "hello"
+# A) One-shot — agent --local runs an embedded turn in the same process. Simplest.
+claude-tap --tap-client openclaw -- agent --local --agent main --message "hi"
+
+# B) Chat mode — gateway must run in foreground under tap. claude-tap auto-rewrites
+#    `gateway start` (which on 2026.4+ delegates to launchd/systemd) to `gateway run`
+#    (foreground), so the spawned gateway is our child and inherits the proxy env.
+claude-tap --tap-client openclaw -- gateway start
+# in another terminal — connect the TUI to the foregrounded gateway
+openclaw tui
 
 # Reverse mode is opt-in and only useful with a custom anthropic-messages provider
 # wired up in ~/.openclaw/openclaw.json that reads ANTHROPIC_BASE_URL

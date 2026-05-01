@@ -34,6 +34,21 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 
 Users can always override with `--tap-proxy-mode {reverse,forward}`.
 
+## Subcommand Argv Rewrites
+
+Some clients delegate to OS service managers (launchd / systemd / schtasks) for
+their long-running daemons. The spawned daemon does **not** inherit the
+proxy/CA env we inject, so trace capture would silently fail. claude-tap
+detects these patterns and rewrites the argv to the foreground equivalent:
+
+| Client | Detected argv | Rewritten to | Reason |
+|--------|---------------|--------------|--------|
+| `openclaw` | `gateway start [...]` | `gateway run [...]` | `gateway start` (2026.4+) is a launchd/systemd shim; `gateway run` is the foreground equivalent and accepts the same flags. |
+
+The rewrite is logged loudly at process start so users can spot it and pass
+`--tap-no-launch` + run the original command themselves if they actually want
+the daemonised behaviour (and accept that no traffic will be captured).
+
 ## URL Construction Rules
 
 The proxy constructs upstream URLs as: `target + forwarded_path`

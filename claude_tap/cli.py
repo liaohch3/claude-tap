@@ -129,6 +129,7 @@ async def run_client(
     env = os.environ.copy()
 
     cmd_args = list(extra_args)
+    cmd_args = _maybe_rewrite_openclaw_gateway_start(client, cmd_args)
     has_openai_base_override = _has_config_override(cmd_args, "openai_base_url")
 
     if proxy_mode == "forward":
@@ -266,6 +267,26 @@ async def run_client(
 
     print(f"\n📋 {cfg.label} exited with code {code}")
     return code
+
+
+def _maybe_rewrite_openclaw_gateway_start(client: str, args: list[str]) -> list[str]:
+    """Rewrite ``openclaw gateway start`` → ``openclaw gateway run`` so the
+    gateway runs as our child process and inherits the proxy/CA env.
+
+    openclaw 2026.4+ delegates ``gateway start`` to launchd/systemd/schtasks,
+    which spawn the gateway in a fresh environment that does not inherit
+    HTTPS_PROXY or NODE_EXTRA_CA_CERTS — making trace capture impossible.
+    ``gateway run`` is the foreground equivalent and accepts the same flags.
+    """
+    if client != "openclaw" or args[:2] != ["gateway", "start"]:
+        return args
+    print(
+        "ℹ️  rewriting `openclaw gateway start` → `openclaw gateway run` so the\n"
+        "   gateway runs in foreground under claude-tap and its outbound LLM\n"
+        "   traffic is captured. The launchd/systemd-managed daemon would not\n"
+        "   inherit HTTPS_PROXY/NODE_EXTRA_CA_CERTS."
+    )
+    return ["gateway", "run"] + args[2:]
 
 
 def _has_config_override(args: list[str], key: str) -> bool:
@@ -528,7 +549,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
             "\n"
             "openclaw (multi-provider; defaults to forward proxy):\n"
-            "  claude-tap --tap-client openclaw -- run \"hello\"\n"
+            "  # one-shot agent call (captures the LLM round-trip)\n"
+            "  claude-tap --tap-client openclaw -- agent --local --agent main --message \"hi\"\n"
+            "  # chat mode: gateway must run in foreground under tap, then connect tui from another terminal\n"
+            "  claude-tap --tap-client openclaw -- gateway start  # auto-rewritten to `gateway run`\n"
             "  # force reverse mode (only useful with a custom anthropic-messages provider)\n"
             "  claude-tap --tap-client openclaw --tap-proxy-mode reverse\n"
             "\n"

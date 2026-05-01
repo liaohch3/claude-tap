@@ -88,9 +88,18 @@ claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex
 
 OpenClaw 是基于 Node 的多 provider CLI agent。由于它内置的 provider 不读取 `*_BASE_URL` 环境变量，claude-tap 默认使用 **forward proxy** 模式——通过向子进程注入 `HTTPS_PROXY` 与本地 CA，捕获它对接的任意 provider（Anthropic / OpenAI / 自定义）流量。
 
+OpenClaw 是 daemon 架构——常驻的 gateway 进程持有凭据并发起 LLM 调用。按用途分两种姿势：
+
 ```bash
-# 默认：forward proxy 捕获 OpenClaw 对接的所有上游
-claude-tap --tap-client openclaw -- run "hello"
+# A) 单次调用 —— agent --local 把 agent 嵌进当前进程跑一轮，最简
+claude-tap --tap-client openclaw -- agent --local --agent main --message "hi"
+
+# B) Chat 模式 —— gateway 必须前台跑在 tap 下。claude-tap 会自动把
+#    `gateway start`（2026.4+ 会委托给 launchd/systemd）改写为 `gateway run`
+#    （前台版），这样新起的 gateway 是我们的子进程，能继承代理环境
+claude-tap --tap-client openclaw -- gateway start
+# 另一个终端 —— 用 TUI 连前台的 gateway
+openclaw tui
 
 # 反向模式仅在 ~/.openclaw/openclaw.json 自定义了
 # 读取 ANTHROPIC_BASE_URL 的 anthropic-messages provider 时才有意义
