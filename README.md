@@ -91,10 +91,9 @@ Hermes Agent is a multi-provider Python AI agent (Nous Portal, OpenRouter, NVIDI
 Hermes has two interaction patterns:
 
 ```bash
-# A) One-shot — `hermes` runs the foreground TUI; LLM calls go through the forward proxy
-claude-tap --tap-client hermes
-# or with a single prompt:
-claude-tap --tap-client hermes -- -p "hi"
+# A) Interactive TUI — `hermes` runs the foreground TUI; LLM calls go through the forward proxy.
+#    Type messages in the TUI, watch traces in the live viewer.
+claude-tap --tap-client hermes --tap-live
 
 # B) Gateway mode — gateway must run in foreground under tap. claude-tap auto-rewrites
 #    `gateway start` (which on recent hermes versions delegates to systemd / launchd)

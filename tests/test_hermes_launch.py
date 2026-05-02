@@ -92,7 +92,7 @@ async def test_run_client_hermes_forward_sets_python_ca_env(monkeypatch) -> None
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
-    code = await run_client(43123, ["-p", "hi"], client="hermes", proxy_mode="forward", ca_cert_path=ca_path)
+    code = await run_client(43123, ["chat"], client="hermes", proxy_mode="forward", ca_cert_path=ca_path)
 
     assert code == 0
     env = captured["env"]
@@ -184,9 +184,9 @@ async def test_run_client_hermes_gateway_run_passthrough_unchanged(monkeypatch) 
 @pytest.mark.asyncio
 async def test_run_client_hermes_other_subcommands_unchanged(monkeypatch) -> None:
     captured = await _capture_cmd(monkeypatch)
-    code = await run_client(43123, ["-p", "hi"], client="hermes", proxy_mode="forward")
+    code = await run_client(43123, ["chat"], client="hermes", proxy_mode="forward")
     assert code == 0
-    assert captured["cmd"] == ("/tmp/hermes", "-p", "hi")
+    assert captured["cmd"] == ("/tmp/hermes", "chat")
 
 
 @pytest.mark.asyncio
@@ -211,9 +211,9 @@ async def test_run_client_hermes_reverse_sets_openai_base_url(monkeypatch) -> No
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
-    code = await run_client(43123, ["-p", "hi"], client="hermes", proxy_mode="reverse")
+    code = await run_client(43123, ["chat"], client="hermes", proxy_mode="reverse")
 
     assert code == 0
     assert captured["env"]["OPENAI_BASE_URL"] == "http://127.0.0.1:43123/v1"
     # Reverse mode for hermes must not inject the codex-only -c flag
-    assert captured["cmd"] == ("/tmp/hermes", "-p", "hi")
+    assert captured["cmd"] == ("/tmp/hermes", "chat")

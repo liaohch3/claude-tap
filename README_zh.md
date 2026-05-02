@@ -91,10 +91,9 @@ Hermes Agent 是基于 Python 的多 provider AI agent（Nous Portal / OpenRoute
 Hermes 有两种使用姿势：
 
 ```bash
-# A) 一次性 — 直接前台跑 hermes（TUI 模式），forward 代理透明捕获 LLM 调用
-claude-tap --tap-client hermes
-# 或带一个 prompt：
-claude-tap --tap-client hermes -- -p "hi"
+# A) 交互式 TUI — 直接前台跑 hermes，forward 代理透明捕获 LLM 调用。
+#    在 TUI 里输入消息，配合 --tap-live 实时看 trace。
+claude-tap --tap-client hermes --tap-live
 
 # B) Gateway 模式 — gateway 必须前台跑在 tap 下。claude-tap 会自动把
 #    `gateway start`（最近版本会委托给 systemd / launchd）改写为 `gateway run`
