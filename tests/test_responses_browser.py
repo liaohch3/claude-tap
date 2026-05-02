@@ -27,7 +27,7 @@ def responses_html_file() -> Path:
     html_path.unlink(missing_ok=True)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def responses_page(responses_html_file: Path):
     from playwright.sync_api import sync_playwright
 
@@ -35,6 +35,28 @@ def responses_page(responses_html_file: Path):
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"file://{responses_html_file}", timeout=10000)
+        page.wait_for_selector(".sidebar-item", timeout=5000)
+        yield page
+        browser.close()
+
+
+@pytest.fixture(scope="module")
+def codex_ws_multi_html_file() -> Path:
+    trace_path = Path(__file__).parent / "fixtures" / "codex_ws_multi_response_trace.jsonl"
+    html_path = Path(tempfile.mktemp(suffix=".html"))
+    _generate_html_viewer(trace_path, html_path)
+    yield html_path
+    html_path.unlink(missing_ok=True)
+
+
+@pytest.fixture()
+def codex_ws_multi_page(codex_ws_multi_html_file: Path):
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"file://{codex_ws_multi_html_file}", timeout=10000)
         page.wait_for_selector(".sidebar-item", timeout=5000)
         yield page
         browser.close()
@@ -53,6 +75,66 @@ def test_viewer_renders_codex_responses_messages_usage_and_response(responses_pa
     assert "Hello! How can I help?" in detail_text
     assert "500" in detail_text
     assert "10" in detail_text
+
+
+def test_viewer_treats_codex_forward_websocket_path_as_primary(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => ({
+          tier: pathTier('/backend-api/codex/responses'),
+          primary: isPathPrimary('/backend-api/codex/responses')
+        })"""
+    )
+
+    assert result == {"tier": 0, "primary": True}
+
+
+def test_viewer_expands_codex_websocket_session_into_response_entries(codex_ws_multi_page) -> None:
+    result = codex_ws_multi_page.evaluate(
+        """() => ({
+          entries: entries.length,
+          derived: entries.filter(e => e.derived_from_websocket).length,
+          sidebar: document.querySelectorAll('.sidebar-item').length,
+          banners: document.querySelectorAll('.continuation-banner').length,
+          turns: entries.map(e => e.turn),
+          previousIds: entries.map(e => e.request.body.previous_response_id || ''),
+          responseIds: entries.map(e => e.response.body.id || ''),
+          hasPrompt: entries.map(e => JSON.stringify(e.request.body).includes('你好，调用一个工具，然后结束')),
+          usage: entries.map(e => getUsage(e)?.total_tokens || 0),
+          messages: entries.map(e => getMessages(e.request.body).map(m => m.role)),
+          responseTypes: entries.map(e => (getResponseOutput(e)?.content || []).map(c => c.type))
+        })"""
+    )
+
+    assert result == {
+        "entries": 2,
+        "derived": 2,
+        "sidebar": 2,
+        "banners": 0,
+        "turns": ["14.1", "14.2"],
+        "previousIds": ["resp_prefetch", "resp_tool"],
+        "responseIds": ["resp_tool", "resp_final"],
+        "hasPrompt": [True, True],
+        "usage": [24, 35],
+        "messages": [["developer", "user", "user"], ["developer", "user", "user", "assistant", "tool"]],
+        "responseTypes": [["tool_use"], ["text"]],
+    }
+
+    codex_ws_multi_page.locator(".sidebar-item").nth(0).click()
+    tool_call_detail = codex_ws_multi_page.locator("#detail").inner_text()
+    assert "Sanitized project rules." in tool_call_detail
+    assert "你好，调用一个工具，然后结束" in tool_call_detail
+    assert "exec_command" in tool_call_detail
+    assert "FINAL_OK" not in tool_call_detail
+
+    codex_ws_multi_page.locator(".sidebar-item").nth(1).click()
+    final_detail = codex_ws_multi_page.locator("#detail").inner_text()
+    assert "Sanitized project rules." in final_detail
+    assert "你好，调用一个工具，然后结束" in final_detail
+    assert "/workspace/project" in final_detail
+    assert "exec_command" in final_detail
+    assert "FINAL_OK" in final_detail
+    assert "Responses continuation" not in final_detail
+    assert "有状态 Responses 续接" not in final_detail
 
 
 def test_viewer_omits_empty_reasoning_blocks_for_zero_reasoning_tokens(responses_page) -> None:

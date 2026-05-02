@@ -342,8 +342,7 @@ async def async_main(args: argparse.Namespace):
             "writer": writer,
             "session": session,
             "turn_counter": 0,
-            "strip_path_prefix": "/v1" if args.client == "codex" and "api.openai.com" not in args.target else "",
-            "force_http": args.client == "codex",
+            **_reverse_proxy_trace_options(args.client, args.target),
         }
         app.router.add_route("*", "/{path_info:.*}", proxy_handler)
 
@@ -463,6 +462,13 @@ async def async_main(args: argparse.Namespace):
 
 
 _CODEX_CHATGPT_TARGET = "https://chatgpt.com/backend-api/codex"
+
+
+def _reverse_proxy_trace_options(client: str, target: str) -> dict[str, object]:
+    return {
+        "strip_path_prefix": "/v1" if client == "codex" and "api.openai.com" not in target else "",
+        "force_http": False,
+    }
 
 
 def _detect_codex_target() -> str:

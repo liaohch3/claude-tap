@@ -723,6 +723,7 @@ class ForwardProxyServer:
                 "path": path,
                 "headers": filter_headers(headers, redact_keys=True),
                 "body": reconstruct_ws_request_body(client_messages),
+                "ws_events": [json.loads(msg) if msg.startswith("{") else {"raw": msg} for msg in client_messages],
             },
             "response": {
                 "status": 101,
