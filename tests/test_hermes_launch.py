@@ -122,3 +122,98 @@ async def test_run_client_codex_forward_still_sets_existing_ca_env(monkeypatch) 
     env = captured["env"]
     assert env["SSL_CERT_FILE"] == str(ca_path)
     assert env["CODEX_CA_CERTIFICATE"] == str(ca_path)
+
+
+# ---------------------------------------------------------------------------
+# argv rewrite: hermes recent versions delegate `gateway start` to launchd /
+# systemd, which spawns the gateway in a fresh env that does NOT inherit
+# HTTPS_PROXY / CA. We rewrite to `gateway run` (foreground) so the spawned
+# process is our child and inherits the injected env.
+# ---------------------------------------------------------------------------
+
+
+async def _capture_cmd(monkeypatch, which: str = "/tmp/hermes") -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: which)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_rewrites_gateway_start_to_gateway_run(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(43123, ["gateway", "start"], client="hermes", proxy_mode="forward")
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/hermes", "gateway", "run")
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_rewrite_preserves_trailing_flags(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(
+        43123,
+        ["gateway", "start", "--profile", "coder", "--replace"],
+        client="hermes",
+        proxy_mode="forward",
+    )
+    assert code == 0
+    assert captured["cmd"] == (
+        "/tmp/hermes",
+        "gateway",
+        "run",
+        "--profile",
+        "coder",
+        "--replace",
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_gateway_run_passthrough_unchanged(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(43123, ["gateway", "run"], client="hermes", proxy_mode="forward")
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/hermes", "gateway", "run")
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_other_subcommands_unchanged(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(43123, ["-p", "hi"], client="hermes", proxy_mode="forward")
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/hermes", "-p", "hi")
+
+
+@pytest.mark.asyncio
+async def test_run_client_codex_not_affected_by_hermes_rewrite(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch, which="/tmp/codex")
+    code = await run_client(43123, ["gateway", "start"], client="codex", proxy_mode="forward")
+    assert code == 0
+    # The hermes rewrite must not fire for codex
+    assert captured["cmd"] == ("/tmp/codex", "gateway", "start")
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_reverse_sets_openai_base_url(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/hermes")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["-p", "hi"], client="hermes", proxy_mode="reverse")
+
+    assert code == 0
+    assert captured["env"]["OPENAI_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    # Reverse mode for hermes must not inject the codex-only -c flag
+    assert captured["cmd"] == ("/tmp/hermes", "-p", "hi")

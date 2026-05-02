@@ -129,6 +129,7 @@ async def run_client(
     env = os.environ.copy()
 
     cmd_args = list(extra_args)
+    cmd_args = _maybe_rewrite_hermes_gateway_start(client, cmd_args)
     has_openai_base_override = _has_config_override(cmd_args, "openai_base_url")
 
     if proxy_mode == "forward":
@@ -269,6 +270,31 @@ async def run_client(
 
     print(f"\n📋 {cfg.label} exited with code {code}")
     return code
+
+
+def _maybe_rewrite_hermes_gateway_start(client: str, cmd_args: list[str]) -> list[str]:
+    """Rewrite ``hermes gateway start`` to ``hermes gateway run``.
+
+    Recent hermes versions delegate ``gateway start`` to systemd / launchd,
+    which spawn the gateway in a fresh env that does NOT inherit the
+    HTTPS_PROXY / CA env we inject — trace capture would silently fail.
+    ``gateway run`` is the foreground equivalent (it's exactly what the
+    systemd unit's ``ExecStart=`` invokes), so the spawned process is our
+    child and inherits the injected env.
+    """
+    if client != "hermes":
+        return cmd_args
+    if len(cmd_args) >= 2 and cmd_args[0] == "gateway" and cmd_args[1] == "start":
+        print(
+            "ℹ️  Rewriting `hermes gateway start` to `hermes gateway run` so the "
+            "gateway runs in the foreground under claude-tap. Recent hermes "
+            "versions delegate `gateway start` to systemd / launchd, which spawns "
+            "the gateway in a fresh env that does NOT inherit the proxy / CA env "
+            "we inject — trace capture would silently fail. Pass --tap-no-launch "
+            "and start the gateway yourself if you want the daemonised behaviour."
+        )
+        return ["gateway", "run"] + cmd_args[2:]
+    return cmd_args
 
 
 def _has_config_override(args: list[str], key: str) -> bool:
