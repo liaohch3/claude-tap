@@ -174,6 +174,73 @@ async def test_run_client_hermes_rewrite_preserves_trailing_flags(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_run_client_hermes_rewrite_after_long_global_option(monkeypatch) -> None:
+    # `hermes --profile work gateway start` is the documented shape;
+    # the rewrite must skip the leading global option before matching.
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(
+        43123,
+        ["--profile", "work", "gateway", "start"],
+        client="hermes",
+        proxy_mode="forward",
+    )
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/hermes", "--profile", "work", "gateway", "run")
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_rewrite_after_short_profile_option(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(
+        43123,
+        ["-p", "work", "gateway", "start"],
+        client="hermes",
+        proxy_mode="forward",
+    )
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/hermes", "-p", "work", "gateway", "run")
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_rewrite_after_profile_equals_form(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(
+        43123,
+        ["--profile=work", "gateway", "start"],
+        client="hermes",
+        proxy_mode="forward",
+    )
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/hermes", "--profile=work", "gateway", "run")
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_rewrite_after_boolean_global_flag(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(
+        43123,
+        ["--ignore-user-config", "gateway", "start"],
+        client="hermes",
+        proxy_mode="forward",
+    )
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/hermes", "--ignore-user-config", "gateway", "run")
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_rewrite_with_global_option_and_trailing_flags(monkeypatch) -> None:
+    captured = await _capture_cmd(monkeypatch)
+    code = await run_client(
+        43123,
+        ["--profile", "work", "gateway", "start", "--replace"],
+        client="hermes",
+        proxy_mode="forward",
+    )
+    assert code == 0
+    assert captured["cmd"] == ("/tmp/hermes", "--profile", "work", "gateway", "run", "--replace")
+
+
+@pytest.mark.asyncio
 async def test_run_client_hermes_gateway_run_passthrough_unchanged(monkeypatch) -> None:
     captured = await _capture_cmd(monkeypatch)
     code = await run_client(43123, ["gateway", "run"], client="hermes", proxy_mode="forward")

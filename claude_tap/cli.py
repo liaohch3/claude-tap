@@ -272,8 +272,12 @@ async def run_client(
     return code
 
 
+_HERMES_GLOBAL_OPTS_WITH_VALUE = {"--profile", "-p"}
+_HERMES_GLOBAL_BOOLEAN_OPTS = {"--ignore-user-config", "--accept-hooks"}
+
+
 def _maybe_rewrite_hermes_gateway_start(client: str, cmd_args: list[str]) -> list[str]:
-    """Rewrite ``hermes gateway start`` to ``hermes gateway run``.
+    """Rewrite ``hermes [global-opts] gateway start`` to ``... gateway run``.
 
     Recent hermes versions delegate ``gateway start`` to systemd / launchd,
     which spawn the gateway in a fresh env that does NOT inherit the
@@ -281,10 +285,27 @@ def _maybe_rewrite_hermes_gateway_start(client: str, cmd_args: list[str]) -> lis
     ``gateway run`` is the foreground equivalent (it's exactly what the
     systemd unit's ``ExecStart=`` invokes), so the spawned process is our
     child and inherits the injected env.
+
+    Hermes' CLI shape is ``hermes [global-options] <command> [...]``, so the
+    rewrite skips any recognised leading global options before matching
+    ``gateway start``.
     """
     if client != "hermes":
         return cmd_args
-    if len(cmd_args) >= 2 and cmd_args[0] == "gateway" and cmd_args[1] == "start":
+    i = 0
+    while i < len(cmd_args):
+        arg = cmd_args[i]
+        if arg in _HERMES_GLOBAL_OPTS_WITH_VALUE and i + 1 < len(cmd_args):
+            i += 2
+            continue
+        if "=" in arg and arg.split("=", 1)[0] in _HERMES_GLOBAL_OPTS_WITH_VALUE:
+            i += 1
+            continue
+        if arg in _HERMES_GLOBAL_BOOLEAN_OPTS:
+            i += 1
+            continue
+        break
+    if i + 1 < len(cmd_args) and cmd_args[i] == "gateway" and cmd_args[i + 1] == "start":
         print(
             "ℹ️  Rewriting `hermes gateway start` to `hermes gateway run` so the "
             "gateway runs in the foreground under claude-tap. Recent hermes "
@@ -293,7 +314,7 @@ def _maybe_rewrite_hermes_gateway_start(client: str, cmd_args: list[str]) -> lis
             "we inject — trace capture would silently fail. Pass --tap-no-launch "
             "and start the gateway yourself if you want the daemonised behaviour."
         )
-        return ["gateway", "run"] + cmd_args[2:]
+        return cmd_args[:i] + ["gateway", "run"] + cmd_args[i + 2 :]
     return cmd_args
 
 
