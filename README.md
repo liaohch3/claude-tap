@@ -101,6 +101,14 @@ When the client exits, you can also manually open the generated viewer:
 open .traces/trace_*.html
 ```
 
+You can also regenerate a self-contained HTML viewer from an existing JSONL trace:
+
+```bash
+claude-tap export .traces/trace_20260228_141557.jsonl -o trace.html
+# or:
+claude-tap export .traces/trace_20260228_141557.jsonl --format html
+```
+
 ### Proxy-Only Mode
 
 Start the proxy without launching a client — useful for custom setups or connecting from a separate terminal:

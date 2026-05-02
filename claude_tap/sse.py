@@ -37,11 +37,14 @@ class SSEReassembler:
                     data = json.loads(raw_data)
                 except (json.JSONDecodeError, ValueError):
                     data = raw_data
-                event_record = {"event": self._current_event, "data": data}
-                self.events.append(event_record)
-                self._accumulate(self._current_event, data)
+                self.add_event(self._current_event, data)
                 self._current_event = None
                 self._current_data_lines = []
+
+    def add_event(self, event_type: str, data) -> None:
+        """Append an already-parsed stream event and update the snapshot."""
+        self.events.append({"event": event_type, "data": data})
+        self._accumulate(event_type, data)
 
     def _accumulate(self, event_type: str, data) -> None:
         """Accumulate an SSE event into the message snapshot.

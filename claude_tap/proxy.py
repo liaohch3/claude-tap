@@ -95,10 +95,8 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         log.debug(f"Blocked non-API path: {request.method} {request.path}")
         return web.Response(status=404, text="Not Found")
 
-    # Detect WebSocket upgrade and route to WS proxy
+    # Detect WebSocket upgrade and route to WS proxy.
     if request.headers.get("Upgrade", "").lower() == "websocket":
-        # When force_http is set (default for Codex), reject WebSocket upgrades
-        # with 426 so the client immediately falls back to HTTP streaming.
         if request.app["trace_ctx"].get("force_http"):
             log.info(f"Rejecting WebSocket upgrade on {request.path} (force_http); client will fallback to HTTP")
             return web.Response(status=426, text="Upgrade Required")
@@ -581,6 +579,7 @@ def _build_ws_record(
             ws_events.append({"raw": msg})
 
     resp_body = _reconstruct_ws_response_body(ws_events)
+    req_events = _parse_ws_messages(client_messages)
 
     record: dict = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -602,11 +601,24 @@ def _build_ws_record(
     }
     if ws_events:
         record["response"]["ws_events"] = ws_events
+    if req_events:
+        record["request"]["ws_events"] = req_events
     if error:
         record["response"]["error"] = error
     if upstream_base_url:
         record["upstream_base_url"] = upstream_base_url
     return record
+
+
+def _parse_ws_messages(messages: list[str]) -> list[dict]:
+    parsed_messages: list[dict] = []
+    for msg in messages:
+        try:
+            parsed = json.loads(msg)
+            parsed_messages.append(parsed if isinstance(parsed, dict) else {"raw": parsed})
+        except (json.JSONDecodeError, ValueError):
+            parsed_messages.append({"raw": msg})
+    return parsed_messages
 
 
 def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
@@ -624,7 +636,9 @@ def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
             continue
         for key, value in parsed.items():
             if key in ("input", "tools"):
-                if value:
+                if isinstance(merged.get(key), list) and isinstance(value, list):
+                    merged[key] = _merge_json_lists(merged[key], value)
+                elif value:
                     merged[key] = value
                 else:
                     merged.setdefault(key, value)
@@ -634,6 +648,26 @@ def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
             else:
                 merged.setdefault(key, value)
     return merged
+
+
+def _merge_json_lists(existing: list, incoming: list) -> list:
+    """Append JSON-like list items while preserving order and removing exact duplicates."""
+    merged = list(existing)
+    seen = {_json_list_item_key(item) for item in merged}
+    for item in incoming:
+        key = _json_list_item_key(item)
+        if key in seen:
+            continue
+        merged.append(item)
+        seen.add(key)
+    return merged
+
+
+def _json_list_item_key(item: object) -> str:
+    try:
+        return json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return repr(item)
 
 
 def _reconstruct_ws_response_body(ws_events: list[dict]) -> dict | None:

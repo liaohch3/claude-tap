@@ -111,7 +111,7 @@ def _build_test_html() -> str:
 def html_file():
     """Write test HTML to a temp file."""
     html = _build_test_html()
-    with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w") as f:
+    with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8") as f:
         f.write(html)
         return Path(f.name)
 
