@@ -24,7 +24,7 @@ Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.
 
 ## Install
 
-Requires Python 3.11+ and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (or [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`).
+Requires Python 3.11+ and the client you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`, or [Hermes Agent](https://github.com/NousResearch/hermes-agent) for `--tap-client hermes`.
 
 ```bash
 # Recommended
@@ -187,7 +187,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse (default) or forward
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex, forward for hermes)
 ```
 
 ## Viewer Features

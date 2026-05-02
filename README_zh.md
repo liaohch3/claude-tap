@@ -24,7 +24,7 @@
 
 ## 安装
 
-需要 Python 3.11+ 和 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（使用 `--tap-client codex` 时需要 [Codex CLI](https://github.com/openai/codex)）。
+需要 Python 3.11+ 以及要追踪的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)（默认）、[Codex CLI](https://github.com/openai/codex)（`--tap-client codex` 时）、或 [Hermes Agent](https://github.com/NousResearch/hermes-agent)（`--tap-client hermes` 时）。
 
 ```bash
 # 推荐
@@ -177,7 +177,7 @@ claude-tap --tap-max-traces 10
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
---tap-proxy-mode MODE    代理模式: reverse（默认）或 forward
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex 用 reverse，hermes 用 forward）
 ```
 
 ## 查看器功能
