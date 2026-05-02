@@ -77,3 +77,48 @@ def test_parse_args_codex_default_unchanged() -> None:
     args = parse_args(["--tap-client", "codex"])
     assert args.client == "codex"
     assert args.proxy_mode == "reverse"
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_forward_sets_python_ca_env(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    ca_path = Path("/tmp/test-ca.pem")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/hermes")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["-p", "hi"], client="hermes", proxy_mode="forward", ca_cert_path=ca_path)
+
+    assert code == 0
+    env = captured["env"]
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:43123"
+    # hermes uses httpx/requests; both honor SSL_CERT_FILE; requests also reads REQUESTS_CA_BUNDLE
+    assert env["SSL_CERT_FILE"] == str(ca_path)
+    assert env["REQUESTS_CA_BUNDLE"] == str(ca_path)
+
+
+@pytest.mark.asyncio
+async def test_run_client_codex_forward_still_sets_existing_ca_env(monkeypatch) -> None:
+    """Regression: codex still gets SSL_CERT_FILE and CODEX_CA_CERTIFICATE."""
+    captured: dict[str, object] = {}
+    ca_path = Path("/tmp/test-ca.pem")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/codex")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["exec", "hi"], client="codex", proxy_mode="forward", ca_cert_path=ca_path)
+
+    assert code == 0
+    env = captured["env"]
+    assert env["SSL_CERT_FILE"] == str(ca_path)
+    assert env["CODEX_CA_CERTIFICATE"] == str(ca_path)

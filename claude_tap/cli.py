@@ -145,6 +145,9 @@ async def run_client(
             # Codex is a Rust binary; NODE_EXTRA_CA_CERTS does not affect its TLS stack.
             env["SSL_CERT_FILE"] = str(ca_cert_path)
             env["CODEX_CA_CERTIFICATE"] = str(ca_cert_path)
+            # hermes is Python (httpx + requests); SSL_CERT_FILE covers httpx,
+            # REQUESTS_CA_BUNDLE covers the requests library.
+            env["REQUESTS_CA_BUNDLE"] = str(ca_cert_path)
 
         if client == "claude":
             # Claude Code may source proxy env from settings rather than process env.
