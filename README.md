@@ -7,7 +7,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex CLI](https://github.com/openai/codex). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), or [Hermes Agent](https://github.com/NousResearch/hermes-agent). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -84,6 +84,31 @@ claude-tap --tap-client codex -- --full-auto
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
 ```
 
+### Hermes Agent
+
+Hermes Agent is a multi-provider Python AI agent (Nous Portal, OpenRouter, NVIDIA NIM, Xiaomi MiMo, GLM, Kimi, MiniMax, Hugging Face, OpenAI, Anthropic, custom). Because it can talk to any of these providers — and `httpx` / `requests` both honor `HTTPS_PROXY` natively — claude-tap defaults to **forward proxy** mode for hermes: it injects `HTTPS_PROXY` plus the local CA into the child process so any provider is captured.
+
+Hermes has two interaction patterns:
+
+```bash
+# A) One-shot — `hermes` runs the foreground TUI; LLM calls go through the forward proxy
+claude-tap --tap-client hermes
+# or with a single prompt:
+claude-tap --tap-client hermes -- -p "hi"
+
+# B) Gateway mode — gateway must run in foreground under tap. claude-tap auto-rewrites
+#    `gateway start` (which on recent hermes versions delegates to systemd / launchd)
+#    to `gateway run` (foreground), so the spawned gateway is our child and inherits
+#    the proxy env.
+claude-tap --tap-client hermes -- gateway start
+# in another terminal — connect the TUI to the foregrounded gateway
+hermes
+
+# Reverse mode is opt-in and only useful when ~/.hermes is configured with an
+# OpenAI-compatible provider that reads OPENAI_BASE_URL.
+claude-tap --tap-client hermes --tap-proxy-mode reverse
+```
+
 ### Browser Preview
 
 ```bash
@@ -151,7 +176,7 @@ claude-tap --tap-max-traces 10
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default) or codex
+--tap-client CLIENT      Client to launch: claude (default), codex, or hermes
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
