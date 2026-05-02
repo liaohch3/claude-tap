@@ -554,7 +554,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     proxy_group.add_argument(
         "--tap-client",
-        choices=["claude", "codex"],
+        choices=sorted(CLIENT_CONFIGS.keys()),
         default="claude",
         dest="client",
         help="Client to launch (default: claude)",
@@ -568,9 +568,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     proxy_group.add_argument(
         "--tap-proxy-mode",
         choices=["reverse", "forward"],
-        default="reverse",
+        default=None,
         dest="proxy_mode",
-        help="'reverse' sets provider base URL (default), 'forward' sets HTTPS_PROXY with CONNECT/TLS termination",
+        help="'reverse' sets provider base URL (default for claude/codex), 'forward' sets HTTPS_PROXY with CONNECT/TLS termination (default for hermes)",
     )
     proxy_group.add_argument(
         "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
@@ -632,6 +632,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # 127.0.0.1 otherwise (launching the client locally).
     if args.host is None:
         args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
+    if args.proxy_mode is None:
+        args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
     if args.target is None:
         if args.client == "codex":
             args.target = _detect_codex_target()

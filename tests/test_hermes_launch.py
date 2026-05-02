@@ -53,3 +53,27 @@ def test_claude_default_proxy_mode_unchanged() -> None:
 
 def test_codex_default_proxy_mode_unchanged() -> None:
     assert CLIENT_CONFIGS["codex"].default_proxy_mode == "reverse"
+
+
+def test_parse_args_hermes_defaults_to_forward_mode() -> None:
+    args = parse_args(["--tap-client", "hermes"])
+    assert args.client == "hermes"
+    assert args.proxy_mode == "forward"
+
+
+def test_parse_args_hermes_explicit_reverse_overrides_default() -> None:
+    args = parse_args(["--tap-client", "hermes", "--tap-proxy-mode", "reverse"])
+    assert args.client == "hermes"
+    assert args.proxy_mode == "reverse"
+
+
+def test_parse_args_claude_default_unchanged() -> None:
+    args = parse_args([])
+    assert args.client == "claude"
+    assert args.proxy_mode == "reverse"
+
+
+def test_parse_args_codex_default_unchanged() -> None:
+    args = parse_args(["--tap-client", "codex"])
+    assert args.client == "codex"
+    assert args.proxy_mode == "reverse"
