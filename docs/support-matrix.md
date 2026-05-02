@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-03-10
+last_reviewed: 2026-05-02
 source_of_truth: AGENTS.md
 ---
 
@@ -18,6 +18,36 @@ This document tracks all verified (client × auth × target × transport) combin
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
+| Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
+| Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
+
+## Default Proxy Mode by Client
+
+Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
+`--tap-proxy-mode` is omitted:
+
+| Client | Default mode | Reason |
+|--------|--------------|--------|
+| `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
+| `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
+| `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
+
+Users can always override with `--tap-proxy-mode {reverse,forward}`.
+
+## Subcommand Argv Rewrites
+
+Some clients delegate to OS service managers (launchd / systemd / schtasks) for
+their long-running daemons. The spawned daemon does **not** inherit the
+proxy / CA env we inject, so trace capture would silently fail. claude-tap
+detects these patterns and rewrites the argv to the foreground equivalent:
+
+| Client | Detected argv | Rewritten to | Reason |
+|--------|---------------|--------------|--------|
+| `hermes` | `gateway start [...]` | `gateway run [...]` | Recent hermes versions delegate `gateway start` to systemd / launchd; `gateway run` is the foreground equivalent and is exactly what the systemd unit's `ExecStart=` itself invokes. |
+
+The rewrite is logged loudly at process start so users can spot it and pass
+`--tap-no-launch` + run the original command themselves if they actually want
+the daemonised behaviour (and accept that no traffic will be captured).
 
 ## URL Construction Rules
 
@@ -50,6 +80,7 @@ strip = "/v1" if client == "codex" and "api.openai.com" not in target else ""
 - `test_codex_upstream_url_construction` — verifies URL construction for all 5 matrix combinations
 - `test_codex_client_reverse_proxy` — e2e with fake upstream (OAuth-like, with strip)
 - `test_websocket_proxy_basic` — WS relay and trace recording
+- `test_hermes_*` — registration, parse_args default-mode resolution, forward/reverse env, argv rewrite
 
 ### Manual (pre-merge for proxy changes)
 
