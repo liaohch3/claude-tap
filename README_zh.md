@@ -7,7 +7,7 @@
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 或 [Codex CLI](https://github.com/openai/codex) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex) 或 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -84,6 +84,29 @@ claude-tap --tap-client codex -- --full-auto
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
 ```
 
+### Hermes Agent
+
+Hermes Agent 是基于 Python 的多 provider AI agent（Nous Portal / OpenRouter / NVIDIA NIM / 小米 MiMo / GLM / Kimi / MiniMax / Hugging Face / OpenAI / Anthropic / 自定义）。由于它能对接任意 provider，且 `httpx`、`requests` 都默认认 `HTTPS_PROXY` 环境变量，claude-tap 默认对 hermes 使用 **forward proxy** 模式——通过向子进程注入 `HTTPS_PROXY` 与本地 CA，捕获它对接的任意 provider 流量。
+
+Hermes 有两种使用姿势：
+
+```bash
+# A) 一次性 — 直接前台跑 hermes（TUI 模式），forward 代理透明捕获 LLM 调用
+claude-tap --tap-client hermes
+# 或带一个 prompt：
+claude-tap --tap-client hermes -- -p "hi"
+
+# B) Gateway 模式 — gateway 必须前台跑在 tap 下。claude-tap 会自动把
+#    `gateway start`（最近版本会委托给 systemd / launchd）改写为 `gateway run`
+#    （前台版），这样新起的 gateway 是我们的子进程，能继承代理环境
+claude-tap --tap-client hermes -- gateway start
+# 另一个终端 — 用 TUI 连前台的 gateway
+hermes
+
+# 反向模式仅在 ~/.hermes 配了一个读 OPENAI_BASE_URL 的 OpenAI 兼容 provider 时才有用
+claude-tap --tap-client hermes --tap-proxy-mode reverse
+```
+
 ### 浏览器预览
 
 ```bash
@@ -143,7 +166,7 @@ claude-tap --tap-max-traces 10
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动的客户端: claude（默认）或 codex
+--tap-client CLIENT      启动的客户端: claude（默认）/ codex / hermes
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               启动实时查看器（自动打开浏览器）
 --tap-live-port PORT     实时查看器端口（默认: 自动分配）
