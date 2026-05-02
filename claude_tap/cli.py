@@ -62,6 +62,10 @@ class ClientConfig:
     base_url_suffix: str  # appended to http://127.0.0.1:{port}
     default_target: str
     nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
+    # Default proxy mode when --tap-proxy-mode is not explicitly set.
+    # Multi-provider clients (e.g. hermes) default to "forward" so that all
+    # provider traffic is captured regardless of which env var the client honors.
+    default_proxy_mode: str = "reverse"
 
     @property
     def missing_help(self) -> str:
@@ -90,6 +94,18 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="OPENAI_BASE_URL",
         base_url_suffix="/v1",
         default_target="https://api.openai.com",
+    ),
+    "hermes": ClientConfig(
+        cmd="hermes",
+        label="Hermes Agent",
+        install_url="https://github.com/NousResearch/hermes-agent",
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+        # hermes is a Python 3.11+ multi-provider agent; reverse mode requires
+        # a user-configured OpenAI-compatible provider in ~/.hermes that honors
+        # OPENAI_BASE_URL. Default to forward proxy capture.
+        default_proxy_mode="forward",
     ),
 }
 
