@@ -33,6 +33,9 @@ jobs:
           echo "tag=$next" >> "$GITHUB_OUTPUT"
           echo "Next version: $next"
 
+      - name: Check changelog entry for next version
+        run: python scripts/check_changelog.py --tag "${{ steps.version.outputs.tag }}"
+
       - name: Create and push tag
         run: |
           tag="${{ steps.version.outputs.tag }}"

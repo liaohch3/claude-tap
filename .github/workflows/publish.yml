@@ -20,12 +20,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install ruff
       - run: ruff check .
       - run: ruff format --check .
+      - run: python scripts/check_changelog.py --tag "${{ inputs.tag || github.ref_name }}"
       - run: pip install -e ".[dev]"
       - run: python -m pytest tests/ -x --timeout=60
 
@@ -47,14 +49,6 @@ jobs:
 
       - name: Set up Python
         run: uv python install 3.13
-
-      - name: Sync version from tag into pyproject.toml
-        run: |
-          tag="${{ inputs.tag || github.ref_name }}"
-          version="${tag#v}"
-          echo "Publishing version $version"
-          sed -i "s/^version = \".*\"/version = \"$version\"/" pyproject.toml
-          grep '^version' pyproject.toml
 
       - name: Build package
         run: uv build

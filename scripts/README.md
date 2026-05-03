@@ -31,3 +31,19 @@ python scripts/translate_i18n.py --model google/gemini-2.5-flash
 python scripts/translate_i18n.py --target cli --dry-run
 python scripts/translate_i18n.py --file claude_tap/cli.py --object-name I18N --dry-run
 ```
+
+## `check_changelog.py`
+
+Ensure release tags are documented in `CHANGELOG.md`.
+
+CI checks the latest repository tag, auto-release checks the next tag before creating it, and publish checks the exact tag being published.
+
+### Usage
+
+```bash
+# Check latest release tag known to git
+python scripts/check_changelog.py
+
+# Check an explicit release tag
+python scripts/check_changelog.py --tag v0.1.40
+```
