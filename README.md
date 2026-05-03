@@ -243,6 +243,10 @@ uv run ruff format --check .
 uv run pytest tests/ -x --timeout=60
 ```
 
+## Contributing
+
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) for setup, validation, pull request expectations, and trace redaction guidance.
+
 ## License
 
 MIT

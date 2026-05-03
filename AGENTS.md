@@ -1,3 +1,7 @@
+# Maintainer Automation Notes
+
+External contributors should start with [`CONTRIBUTING.md`](CONTRIBUTING.md). This file documents stricter maintainer and agent automation workflows; it is not the public contribution checklist.
+
 # AGENTS 索引
 
 本文件是贡献者规则的入口。详细策略文本位于 `docs/standards/*.md`。
