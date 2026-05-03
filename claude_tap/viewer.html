@@ -1450,6 +1450,31 @@ function buildStubEntry(meta, rawIdx) {
   };
 }
 
+function toolDisplayName(td) {
+  if (!td || typeof td !== 'object') return '';
+  const candidates = [
+    td.name,
+    td.function && typeof td.function === 'object' ? td.function.name : null,
+    td.id,
+    td.type
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'string' && value) return value;
+  }
+  return '';
+}
+
+function toolDescription(td) {
+  if (!td || typeof td !== 'object') return '';
+  const desc = td.description || (td.function && typeof td.function === 'object' ? td.function.description : '');
+  return typeof desc === 'string' ? desc : '';
+}
+
+function toolSchema(td) {
+  if (!td || typeof td !== 'object') return {};
+  return td.input_schema || td.parameters || (td.function && typeof td.function === 'object' ? td.function.parameters : null) || {};
+}
+
 function getFullEntry(entry) {
   if (!entry._isStub) return entry;
   const idx = entry._rawIdx;
@@ -2175,7 +2200,7 @@ function matchSearch(e, q) {
     if (turn.includes(q)) return true;
     const tools = e.request?.body?.tools || [];
     for (const td of tools) {
-      if ((td.name || '').toLowerCase().includes(q)) return true;
+      if (toolDisplayName(td).toLowerCase().includes(q)) return true;
     }
     const rc = e.response?.body?.content;
     if (Array.isArray(rc)) {
@@ -2196,8 +2221,8 @@ function matchSearch(e, q) {
   }
   const tools = body?.tools || [];
   for (const td of tools) {
-    if ((td.name || '').toLowerCase().includes(q)) return true;
-    if ((td.description || '').toLowerCase().includes(q)) return true;
+    if (toolDisplayName(td).toLowerCase().includes(q)) return true;
+    if (toolDescription(td).toLowerCase().includes(q)) return true;
   }
   const ro = getResponseOutput(e);
   const rc = ro?.content;
@@ -2521,7 +2546,7 @@ function getTaskFingerprint(e) {
   }
   // Tool names sorted for stable fingerprint
   const tools = body.tools || [];
-  const toolKey = tools.map(t => t.name).sort().join(',');
+  const toolKey = tools.map(toolDisplayName).sort().join(',');
   // Build fingerprint from full system prompt + tool set
   const fp = sysText + '|' + toolKey;
   // Derive a short label from system prompt content
@@ -3147,9 +3172,9 @@ function renderContent(content, role) {
 
 function renderTools(tools) {
   return tools.map(td => {
-    const name = td.name || 'unknown', desc = td.description || '';
+    const name = toolDisplayName(td) || 'unknown', desc = toolDescription(td);
     const shortDesc = desc.split('\n')[0].substring(0, 120);
-    const schema = td.input_schema || td.parameters || {};
+    const schema = toolSchema(td);
     const props = schema.properties || {};
     const required = new Set(schema.required || []);
     let paramsHtml = '';
@@ -3585,8 +3610,8 @@ function structuralDiff(oldB, newB) {
   d.oldSystemText = oldSys;
   d.newSystemText = newSys;
   // Tools — find added/removed by name
-  const oldTools = (oldB.tools || []).map(x => x.name);
-  const newTools = (newB.tools || []).map(x => x.name);
+  const oldTools = (oldB.tools || []).map(toolDisplayName);
+  const newTools = (newB.tools || []).map(toolDisplayName);
   const oldSet = new Set(oldTools), newSet = new Set(newTools);
   d.addedTools = newTools.filter(n => !oldSet.has(n));
   d.removedTools = oldTools.filter(n => !newSet.has(n));
