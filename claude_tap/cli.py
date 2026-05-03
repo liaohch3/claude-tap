@@ -153,6 +153,11 @@ async def run_client(
         base_url = cfg.reverse_base_url(port)
         env[cfg.base_url_env] = base_url
         env["NO_PROXY"] = "127.0.0.1"
+        if client == "claude":
+            has_settings_arg = any(arg == "--settings" or arg.startswith("--settings=") for arg in cmd_args)
+            if not has_settings_arg:
+                settings_payload = {"env": {cfg.base_url_env: base_url}}
+                cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
         if client == "codex" and not has_openai_base_override:
             # Newer Codex builds may ignore OPENAI_BASE_URL in OAuth/WebSocket mode
             # unless the same value is also supplied as a config override.
