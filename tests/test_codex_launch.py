@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_tap.cli import _has_config_override, _reverse_proxy_trace_options, run_client
+from claude_tap.cli import _has_config_override, _reverse_proxy_trace_options, parse_args, run_client
 
 
 class _DummyProc:
@@ -105,6 +105,17 @@ def test_has_config_override_detects_cli_forms() -> None:
     assert _has_config_override(["--config", 'openai_base_url="http://127.0.0.1:1/v1"'], "openai_base_url") is True
     assert _has_config_override(['--config=openai_base_url="http://127.0.0.1:1/v1"'], "openai_base_url") is True
     assert _has_config_override(["exec", "hello"], "openai_base_url") is False
+
+
+def test_parse_args_codex_auto_detects_chatgpt_target(monkeypatch, tmp_path) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text('{"auth_mode":"chatgpt"}\n', encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    args = parse_args(["--tap-client", "codex"])
+
+    assert args.target == "https://chatgpt.com/backend-api/codex"
 
 
 def test_codex_reverse_trace_options_allow_websocket() -> None:

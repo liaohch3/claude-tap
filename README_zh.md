@@ -7,7 +7,7 @@
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 或 [Codex CLI](https://github.com/openai/codex) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 或 [Codex CLI](https://github.com/openai/codex) 的 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、使用 token——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -67,11 +67,16 @@ Codex CLI 支持两种认证方式，对应不同的上游目标：
 | **OAuth**（ChatGPT 付费套餐） | `codex login` | `https://chatgpt.com/backend-api/codex` | ChatGPT Plus/Pro/Team 用户默认方式 |
 | **API Key** | 设置 `OPENAI_API_KEY` | `https://api.openai.com`（默认） | 通过 OpenAI Platform 按量付费 |
 
+`claude-tap` 会尽量根据 Codex 的认证状态自动识别 target。
+
 ```bash
-# OAuth 用户（ChatGPT Plus/Pro/Team）— 需指定 target
+# OAuth 用户（ChatGPT Plus/Pro/Team）— `codex login` 后通常会自动识别
+claude-tap --tap-client codex
+
+# 如果无法读取 Codex auth 文件，可以显式指定 target
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex
 
-# API Key 用户 — 默认 target 即可
+# API Key 用户 — 默认 OpenAI API target 即可
 claude-tap --tap-client codex
 
 # 指定模型
@@ -81,7 +86,7 @@ claude-tap --tap-client codex -- --model codex-mini-latest
 claude-tap --tap-client codex -- --full-auto
 
 # OAuth + 全自动 + 实时查看器
-claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+claude-tap --tap-client codex --tap-live -- --full-auto
 ```
 
 ### 浏览器预览
@@ -98,7 +103,15 @@ claude-tap --tap-live --tap-live-port 3000    # 固定实时查看器端口
 客户端退出后，也可以手动打开生成的查看器：
 
 ```bash
-open .traces/trace_*.html
+open .traces/*/trace_*.html
+```
+
+也可以从已有 JSONL trace 重新生成自包含 HTML 查看器：
+
+```bash
+claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
+# 或：
+claude-tap export .traces/2026-02-28/trace_141557.jsonl --format html
 ```
 
 ### 纯代理模式
@@ -114,49 +127,15 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 # Codex CLI（OAuth）
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 8080
 # 在另一个终端:
-OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
 
 # Codex CLI（API Key）
 claude-tap --tap-client codex --tap-no-launch --tap-port 8080
 # 在另一个终端:
-OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
 ```
 
-### 常用组合
-
-```bash
-# 追踪 Claude Code：实时查看器 + 自动批准
-claude-tap --tap-live -- --dangerously-skip-permissions
-
-# 追踪 Codex（OAuth）：实时查看器 + 全自动
-claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
-
-# 自定义 trace 输出目录
-claude-tap --tap-output-dir ./my-traces
-
-# 仅保留最近 10 次 trace
-claude-tap --tap-max-traces 10
-```
-
-### CLI 选项
-
-除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
-
-```
---tap-client CLIENT      启动的客户端: claude（默认）或 codex
---tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
---tap-live               启动实时查看器（自动打开浏览器）
---tap-live-port PORT     实时查看器端口（默认: 自动分配）
---tap-no-open            退出后不自动打开 HTML 查看器（默认开启）
---tap-output-dir DIR     Trace 输出目录（默认: ./.traces）
---tap-port PORT          代理端口（默认: 自动分配）
---tap-host HOST          绑定地址（默认: 127.0.0.1，--tap-no-launch 模式下为 0.0.0.0）
---tap-no-launch          仅启动代理，不启动客户端
---tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
---tap-no-update-check    禁用启动时的 PyPI 更新检查
---tap-no-auto-update     仅检查更新，不自动下载
---tap-proxy-mode MODE    代理模式: reverse（默认）或 forward
-```
+运行 `claude-tap --help` 查看完整选项。非 `--tap-*` 参数会透传给所选客户端。
 
 ## 查看器功能
 
@@ -164,7 +143,7 @@ claude-tap --tap-max-traces 10
 
 - **结构化 Diff** — 对比相邻请求的变化：新增/删除的消息、system prompt diff、字符级高亮
 - **路径过滤** — 按 API 端点筛选（如仅显示 `/v1/messages`）
-- **模型分组** — 侧边栏按模型分组（Opus > Sonnet > Haiku）
+- **模型分组** — 侧边栏按模型分组，并对 Claude 系列模型做优先排序
 - **Token 用量分析** — 输入 / 输出 / 缓存读取 / 缓存创建
 - **工具检查器** — 可展开的卡片，显示工具名称、描述和参数 schema
 - **全文搜索** — 搜索消息、工具、prompt 和响应
@@ -180,13 +159,21 @@ claude-tap --tap-max-traces 10
 **工作原理:**
 
 1. `claude-tap` 启动反向代理，并以对应服务商的 base URL 指向代理来启动所选客户端（`claude` 或 `codex`）
-2. 所有 API 请求流经: 代理 → 上游 API → 代理返回
-3. SSE 流式响应实时转发（零额外延迟）
-4. 每个请求-响应对记录到 `trace.jsonl`
+2. 支持的 API 请求流经: 代理 → 上游 API → 代理返回
+3. SSE 和 WebSocket 流会在收到 chunk/message 时实时转发，代理开销很低
+4. 每个请求-响应对或 WebSocket 会话记录到按日期保存的 `trace_*.jsonl`
 5. 退出时生成自包含的 HTML 查看器
 6. 实时模式（可选）通过 SSE 向浏览器广播更新
 
-**核心特性:** 🔒 API key 自动脱敏 · ⚡ 零延迟 · 📦 自包含查看器 · 🔄 实时模式
+**核心特性:** 🔒 常见认证 header 自动脱敏 · ⚡ 低开销流式转发 · 📦 自包含查看器 · 🔄 实时模式
+
+## 社区
+
+[![Star History Chart](https://api.star-history.com/svg?repos=liaohch3/claude-tap&type=Date)](https://www.star-history.com/#liaohch3/claude-tap&Date)
+
+<a href="https://github.com/liaohch3/claude-tap/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=liaohch3/claude-tap" alt="贡献者" />
+</a>
 
 ## 许可证
 
