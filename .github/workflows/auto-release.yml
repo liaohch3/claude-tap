@@ -6,14 +6,14 @@ on:
 
 jobs:
   auto-release:
-    # Skip release-maintenance commits to avoid loops.
+    # Skip explicit non-release commits to avoid loops.
     if: >
       !startsWith(github.event.head_commit.message, 'chore: bump version') &&
-      !startsWith(github.event.head_commit.message, 'chore: update changelog') &&
       !contains(github.event.head_commit.message, '[skip release]')
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
       actions: write
     steps:
       - uses: actions/checkout@v4
@@ -37,19 +37,48 @@ jobs:
           echo "Next version: $next"
 
       - name: Update changelog for next version
+        id: changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ steps.version.outputs.tag }}"
           version="${tag#v}"
           python scripts/update_changelog.py --version "$version"
-          if ! git diff --quiet CHANGELOG.md; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add CHANGELOG.md
-            git commit -m "chore: update changelog for $tag [skip release]"
-            git push origin HEAD:main
+          if git diff --quiet CHANGELOG.md; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
+          branch="release/${tag}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add CHANGELOG.md
+          git commit -m "chore: update changelog for $tag"
+          git push --force-with-lease origin "$branch"
+
+          pr_number="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // ""')"
+          if [ -n "$pr_number" ]; then
+            echo "Release changelog PR #$pr_number already exists"
+          else
+            pr_url="$(gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "chore: update changelog for $tag" \
+              --body "Auto-generated release changelog for $tag. Auto-merge will continue the release after checks pass.")"
+            pr_number="${pr_url##*/}"
+          fi
+
+          auto_merge_enabled="$(gh pr view "$pr_number" --json autoMergeRequest --jq '.autoMergeRequest != null')"
+          if [ "$auto_merge_enabled" = "true" ]; then
+            echo "Auto-merge is already enabled for release changelog PR #$pr_number"
+          else
+            gh pr merge "$pr_number" --auto --squash --delete-branch
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
       - name: Create and push tag
+        if: steps.changelog.outputs.changed == 'false'
         run: |
           tag="${{ steps.version.outputs.tag }}"
           git tag "$tag"
@@ -57,6 +86,7 @@ jobs:
           echo "Created tag $tag"
 
       - name: Trigger publish workflow
+        if: steps.changelog.outputs.changed == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

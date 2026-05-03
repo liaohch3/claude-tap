@@ -67,7 +67,7 @@ git config core.hooksPath .githooks
 |------|-----------|------|
 | `check_legibility.py` | `legibility-check` | 文档可读性检查（CI: `legibility.yml`） |
 | `check_changelog.py` | `legibility-check` | publish 阶段校验 release tag 与 `CHANGELOG.md` 覆盖 |
-| `update_changelog.py` | `legibility-check` | auto-release 发 tag 前自动补齐 `CHANGELOG.md` release section |
+| `update_changelog.py` | `legibility-check` | auto-release 发 tag 前自动补齐 `CHANGELOG.md` release section，分支保护下会走 auto-merge release PR |
 | `check_screenshots.py` | `screenshot-validation` | 截图质量检查（CI: `ci.yml`） |
 | `check_screenshots.sh` | `screenshot-validation` | 检查 git staged 图片的 shell 包装 |
 | `verify_screenshots.py` | `screenshot-validation` | Playwright viewer HTML 渲染验证 |

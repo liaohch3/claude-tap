@@ -36,7 +36,7 @@ python scripts/translate_i18n.py --file claude_tap/cli.py --object-name I18N --d
 
 Ensure release tags are documented in `CHANGELOG.md`.
 
-CI checks the latest repository tag, auto-release checks the next tag before creating it, and publish checks the exact tag being published.
+Publish checks the exact tag being published.
 
 ### Usage
 
@@ -52,7 +52,7 @@ python scripts/check_changelog.py --tag v0.1.40
 
 Insert a release section in `CHANGELOG.md` when one is missing.
 
-Auto-release uses this before tagging so normal feature/fix PRs are not blocked by changelog bookkeeping.
+Auto-release uses this before tagging so normal feature/fix PRs are not blocked by changelog bookkeeping. If the main branch is protected, auto-release opens a changelog PR, enables auto-merge, and publishes after that PR is merged.
 
 ### Usage
 
