@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package versions are now derived from git tags via `setuptools-scm`, so local
   builds and PyPI releases use the same version source.
 - PyPI publishing no longer mutates `pyproject.toml` during the release job.
-- CI and publish workflows now validate changelog coverage so released tags stay documented.
+- Auto-release can insert missing changelog sections before tagging, and publish
+  still verifies that the exact tag being published is documented.
 
 ## [0.1.39] - 2026-05-02
 

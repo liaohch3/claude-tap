@@ -6,8 +6,11 @@ on:
 
 jobs:
   auto-release:
-    # Skip version-bump-only commits to avoid loops
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    # Skip release-maintenance commits to avoid loops.
+    if: >
+      !startsWith(github.event.head_commit.message, 'chore: bump version') &&
+      !startsWith(github.event.head_commit.message, 'chore: update changelog') &&
+      !contains(github.event.head_commit.message, '[skip release]')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,8 +36,18 @@ jobs:
           echo "tag=$next" >> "$GITHUB_OUTPUT"
           echo "Next version: $next"
 
-      - name: Check changelog entry for next version
-        run: python scripts/check_changelog.py --tag "${{ steps.version.outputs.tag }}"
+      - name: Update changelog for next version
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          version="${tag#v}"
+          python scripts/update_changelog.py --version "$version"
+          if ! git diff --quiet CHANGELOG.md; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add CHANGELOG.md
+            git commit -m "chore: update changelog for $tag [skip release]"
+            git push origin HEAD:main
+          fi
 
       - name: Create and push tag
         run: |

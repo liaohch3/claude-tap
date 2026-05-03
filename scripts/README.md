@@ -47,3 +47,16 @@ python scripts/check_changelog.py
 # Check an explicit release tag
 python scripts/check_changelog.py --tag v0.1.40
 ```
+
+## `update_changelog.py`
+
+Insert a release section in `CHANGELOG.md` when one is missing.
+
+Auto-release uses this before tagging so normal feature/fix PRs are not blocked by changelog bookkeeping.
+
+### Usage
+
+```bash
+python scripts/update_changelog.py --version 0.1.40
+python scripts/update_changelog.py --version 0.1.40 --date 2026-05-03
+```
