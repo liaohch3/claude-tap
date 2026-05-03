@@ -75,6 +75,11 @@ def test_viewer_renders_codex_responses_messages_usage_and_response(responses_pa
     assert "Hello! How can I help?" in detail_text
     assert "500" in detail_text
     assert "10" in detail_text
+    responses_page.locator(".section-header", has_text="Tools").click()
+    tools_text = responses_page.locator(".section", has_text="Tools").first.inner_text()
+    assert "exec_command" in tools_text
+    assert "web_search" in tools_text
+    assert "unknown" not in tools_text.lower()
 
 
 def test_viewer_treats_codex_forward_websocket_path_as_primary(responses_page) -> None:
