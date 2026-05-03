@@ -163,6 +163,18 @@ def _extract_response_tool_names(output: list) -> list[str]:
     return names
 
 
+def _tool_display_name(tool: dict) -> str:
+    for value in (
+        tool.get("name"),
+        (tool.get("function") or {}).get("name") if isinstance(tool.get("function"), dict) else None,
+        tool.get("id"),
+        tool.get("type"),
+    ):
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _extract_metadata(record_json: str) -> dict | None:
     """Extract sidebar-relevant metadata from a raw JSON record string.
 
@@ -212,7 +224,7 @@ def _extract_metadata(record_json: str) -> dict | None:
 
     # Tool names from request
     tools = body.get("tools") or []
-    tool_names = [t.get("name", "") for t in tools if isinstance(t, dict)]
+    tool_names = [_tool_display_name(t) for t in tools if isinstance(t, dict)]
 
     # Response tool names (tool_use blocks in response content)
     response_tool_names = []
