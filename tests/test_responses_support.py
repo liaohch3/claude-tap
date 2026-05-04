@@ -99,3 +99,29 @@ def test_extract_metadata_supports_interleaved_responses_roles_without_type() ->
     assert meta["message_count"] == 3
     assert meta["input_tokens"] == 1
     assert meta["output_tokens"] == 1
+
+
+def test_extract_metadata_ignores_list_response_body() -> None:
+    record = {
+        "turn": 1,
+        "request_id": "req_1",
+        "timestamp": "2026-03-17T00:00:00Z",
+        "duration_ms": 10,
+        "request": {
+            "method": "POST",
+            "path": "/v1/messages",
+            "body": {
+                "model": "claude-opus-4-6",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        },
+        "response": {"status": 200, "body": [{"type": "text", "text": "hello"}]},
+    }
+
+    meta = _extract_metadata(json.dumps(record))
+
+    assert meta is not None
+    assert meta["message_count"] == 1
+    assert meta["input_tokens"] == 0
+    assert meta["output_tokens"] == 0
+    assert meta["error_message"] == ""
