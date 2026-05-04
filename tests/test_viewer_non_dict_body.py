@@ -141,6 +141,36 @@ def test_html_viewer_inline_path_escapes_script_close_in_string_body(tmp_path: P
     assert "<\\/script>" in data_block
 
 
+def test_extract_metadata_recognizes_openai_function_tool_shape() -> None:
+    """opencode (Chat Completions) sends tools wrapped as
+    {type:"function", function:{name,description,parameters}}. The sidebar
+    metadata extractor must read names from `function.name`, not just `name`."""
+    rec = {
+        "request_id": "req_oc",
+        "turn": 1,
+        "timestamp": "2026-05-04T16:00:00+00:00",
+        "duration_ms": 100,
+        "request": {
+            "method": "POST",
+            "path": "/zen/v1/chat/completions",
+            "body": {
+                "model": "hy3-preview-free",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {"type": "function", "function": {"name": "question", "description": "ask"}},
+                    {"type": "function", "function": {"name": "bash", "description": "run"}},
+                    # Defensive: a flat-Anthropic-shape tool mixed in must still resolve.
+                    {"name": "edit", "description": "edit"},
+                ],
+            },
+        },
+        "response": {"status": 200, "body": {"usage": {}, "content": []}},
+    }
+    meta = _extract_metadata(json.dumps(rec))
+    assert meta is not None
+    assert meta["tool_names"] == ["question", "bash", "edit"]
+
+
 def test_html_viewer_lazy_path_still_escapes_script_close(tmp_path: Path) -> None:
     """Regression: lazy path (> LAZY_THRESHOLD) embeds records in a
     <script type="text/plain" id="trace-raw"> block. Same </script> hazard."""

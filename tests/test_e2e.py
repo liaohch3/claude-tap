@@ -1450,12 +1450,20 @@ def test_sse_reassembler():
     assert len(r.events) == 6
     print("  OK: basic SSE parsing")
 
-    # Orphan data line (no event: prefix) — should be ignored
+    # Bare data line (no event: prefix) — must be emitted as a default-type
+    # event so OpenAI Chat Completions streams (which never send event: headers)
+    # don't get silently dropped.
     r2 = SSEReassembler()
     r2.feed_bytes(b'data: {"orphan": true}\n\n')
-    assert len(r2.events) == 0
+    # Bare data lines (no event: prefix) are emitted as default-type events.
+    # OpenAI Chat Completions streams use exactly this shape — the previous
+    # "ignored" behavior silently dropped every such response body.
+    assert len(r2.events) == 1
+    assert r2.events[0]["event"] == "message"
+    assert r2.events[0]["data"] == {"orphan": True}
+    # Snapshot reconstruction stays a no-op for non-Anthropic/Responses schemas.
     assert r2.reconstruct() is None
-    print("  OK: orphan data ignored")
+    print("  OK: bare data emitted as default-type event")
 
     # Partial chunks (data split across feed_bytes calls)
     r3 = SSEReassembler()
