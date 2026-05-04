@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.1.42] - 2026-05-04
+
+### Changed
+- docs: fix README accuracy (#107)
+- Add missing skill names to local skill metadata (#93)
 ## [0.1.41] - 2026-05-03
 
 ### Fixed
