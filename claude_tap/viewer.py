@@ -294,6 +294,14 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
                 if line:
                     records.append(_normalize_record_for_viewer(line))
 
+    # Escape </ sequences so embedded record JSON cannot prematurely close the
+    # surrounding <script> / <script type="text/plain"> blocks. Forward-proxy
+    # mode can capture arbitrary HTTPS upstreams whose bodies legitimately
+    # contain </script>; without this, the browser closes the data block early
+    # and renders the captured HTML as page content. JSON's \/ is a valid
+    # escape for /, so the parsed JSON value is unchanged.
+    records = [rec.replace("</", "<\\/") for rec in records]
+
     jsonl_path_js = json.dumps(str(trace_path.absolute()))
     html_path_js = json.dumps(str(html_path.absolute()))
     version_js = json.dumps(CLAUDE_TAP_VERSION)
@@ -310,9 +318,7 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
 
         meta_js = json.dumps(meta_list, separators=(",", ":"))
 
-        # Escape </ sequences in raw JSONL to prevent premature </script> close.
-        # In JSON, \/ is a valid escape for /, so replacing </ with <\/ is safe.
-        raw_lines = "\n".join(rec.replace("</", "<\\/") for rec in records)
+        raw_lines = "\n".join(records)
 
         data_js = (
             f"const EMBEDDED_TRACE_META = {meta_js};\n"
