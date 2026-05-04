@@ -75,7 +75,14 @@ async def test_run_client_passes_resolved_path_for_cmd_shim(monkeypatch) -> None
 
     code = await run_client(43123, ["--version"], client="claude", proxy_mode="reverse")
     assert code == 0
-    assert captured["cmd"] == (shim_path, "--version")
+    cmd = captured["cmd"]
+    assert cmd[0] == shim_path, "resolved .cmd shim path must be preserved"
+    assert cmd[1] == "--settings", "--settings must be injected before forwarded args"
+    import json
+
+    injected = json.loads(cmd[2])
+    assert injected == {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:43123"}}
+    assert cmd[3:] == ("--version",), "original args must follow --settings payload"
 
 
 def test_module_import_reconfigures_stdout_to_utf8() -> None:
