@@ -53,13 +53,53 @@ def filter_headers(headers: dict[str, str], *, redact_keys: bool = False) -> dic
 
 
 # ---------------------------------------------------------------------------
+# Path allowlist – only forward requests to known API endpoints.
+# Scanners / crawlers hitting the proxy with paths like /etc/passwd, /swagger,
+# /metrics etc. are rejected with 404 without forwarding or recording.
+# ---------------------------------------------------------------------------
+
+ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
+    # Anthropic API (Claude Code)
+    "/v1/messages",
+    "/v1/complete",
+    # OpenAI API (Codex CLI)
+    "/v1/responses",
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/v1/models",
+    "/v1/embeddings",
+    # OpenAI Responses API (after strip_path_prefix removes /v1)
+    "/responses",
+    "/chat/completions",
+    "/completions",
+    "/models",
+    "/embeddings",
+)
+
+
+def _is_allowed_path(path: str) -> bool:
+    """Check whether the request path matches a known API endpoint."""
+    # Strip query string for matching
+    clean = path.split("?", 1)[0].rstrip("/")
+    return any(clean == prefix or clean.startswith(prefix + "/") for prefix in ALLOWED_PATH_PREFIXES)
+
+
+# ---------------------------------------------------------------------------
 # Proxy handler
 # ---------------------------------------------------------------------------
 
 
 async def proxy_handler(request: web.Request) -> web.StreamResponse:
-    # Detect WebSocket upgrade and route to WS proxy
+    # Reject requests to unknown paths (scanner/crawler protection)
+    if not _is_allowed_path(request.path):
+        log.debug(f"Blocked non-API path: {request.method} {request.path}")
+        return web.Response(status=404, text="Not Found")
+
+    # Detect WebSocket upgrade and route to WS proxy.
     if request.headers.get("Upgrade", "").lower() == "websocket":
+        if request.app["trace_ctx"].get("force_http"):
+            log.info(f"Rejecting WebSocket upgrade on {request.path} (force_http); client will fallback to HTTP")
+            return web.Response(status=426, text="Upgrade Required")
         return await _handle_websocket(request)
 
     ctx: dict = request.app["trace_ctx"]
@@ -107,7 +147,9 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
 
     model = req_body.get("model", "") if isinstance(req_body, dict) else ""
     log_prefix = f"[Turn {turn}]"
-    log.info(f"{log_prefix} → {request.method} {request.path} (model={model}, stream={is_streaming})")
+    log.info(
+        f"{log_prefix} → {request.method} {request.path} (model={model}, stream={is_streaming}, upstream={upstream_url})"
+    )
 
     # Request identity encoding from upstream to avoid client-side zstd decode issues
     # and to simplify SSE/text reconstruction.
@@ -398,9 +440,9 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         ws_connect_kwargs["proxy"] = proxy_url
         if proxy_auth is not None:
             ws_connect_kwargs["proxy_auth"] = proxy_auth
-        log.info(f"{log_prefix} → WS UPGRADE {request.path_qs} (via proxy {proxy_url})")
+        log.info(f"{log_prefix} → WS UPGRADE {request.path_qs} (upstream={upstream_ws_url}, via proxy {proxy_url})")
     else:
-        log.info(f"{log_prefix} → WS UPGRADE {request.path_qs}")
+        log.info(f"{log_prefix} → WS UPGRADE {request.path_qs} (upstream={upstream_ws_url})")
 
     # Connect to upstream first — if it fails, return HTTP 502 before upgrading
     try:
@@ -525,35 +567,19 @@ def _build_ws_record(
     error: str | None = None,
 ) -> dict:
     """Build a trace record for a WebSocket session."""
-    # Parse client messages to find request body
-    req_body = None
-    for msg in client_messages:
-        try:
-            parsed = json.loads(msg)
-            if req_body is None:
-                req_body = parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
+    req_body = _reconstruct_ws_request_body(client_messages)
 
     # Parse server messages into structured events
     ws_events: list[dict] = []
-    resp_body = None
     for msg in server_messages:
         try:
             parsed = json.loads(msg)
             ws_events.append(parsed)
-            # Terminal events carry the final response
-            if parsed.get("type") in ("response.completed", "response.done"):
-                resp_body = parsed.get("response", parsed)
         except (json.JSONDecodeError, ValueError):
             ws_events.append({"raw": msg})
 
-    # Fallback: use response.created if no terminal event seen
-    if resp_body is None:
-        for evt in ws_events:
-            if isinstance(evt, dict) and evt.get("type") == "response.created":
-                resp_body = evt.get("response", evt)
-                break
+    resp_body = _reconstruct_ws_response_body(ws_events)
+    req_events = _parse_ws_messages(client_messages)
 
     record: dict = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -575,8 +601,143 @@ def _build_ws_record(
     }
     if ws_events:
         record["response"]["ws_events"] = ws_events
+    if req_events:
+        record["request"]["ws_events"] = req_events
     if error:
         record["response"]["error"] = error
     if upstream_base_url:
         record["upstream_base_url"] = upstream_base_url
     return record
+
+
+def _parse_ws_messages(messages: list[str]) -> list[dict]:
+    parsed_messages: list[dict] = []
+    for msg in messages:
+        try:
+            parsed = json.loads(msg)
+            parsed_messages.append(parsed if isinstance(parsed, dict) else {"raw": parsed})
+        except (json.JSONDecodeError, ValueError):
+            parsed_messages.append({"raw": msg})
+    return parsed_messages
+
+
+def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
+    """Merge client WebSocket messages into the most complete request body."""
+    merged: dict | None = None
+    for msg in client_messages:
+        try:
+            parsed = json.loads(msg)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        if merged is None:
+            merged = parsed.copy()
+            continue
+        for key, value in parsed.items():
+            if key in ("input", "tools"):
+                if isinstance(merged.get(key), list) and isinstance(value, list):
+                    merged[key] = _merge_json_lists(merged[key], value)
+                elif value:
+                    merged[key] = value
+                else:
+                    merged.setdefault(key, value)
+                continue
+            if value not in (None, "", [], {}):
+                merged[key] = value
+            else:
+                merged.setdefault(key, value)
+    return merged
+
+
+def _merge_json_lists(existing: list, incoming: list) -> list:
+    """Append JSON-like list items while preserving order and removing exact duplicates."""
+    merged = list(existing)
+    seen = {_json_list_item_key(item) for item in merged}
+    for item in incoming:
+        key = _json_list_item_key(item)
+        if key in seen:
+            continue
+        merged.append(item)
+        seen.add(key)
+    return merged
+
+
+def _json_list_item_key(item: object) -> str:
+    try:
+        return json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return repr(item)
+
+
+def _reconstruct_ws_response_body(ws_events: list[dict]) -> dict | None:
+    """Build a best-effort response body from WS events.
+
+    Recent Codex versions may emit multiple response.completed events and keep
+    the actual assistant text inside response.output_item.done rather than the
+    terminal response payload. Reconstruct a richer body for traces/viewer use.
+    """
+    merged: dict | None = None
+    output_items: dict[int, dict] = {}
+
+    for event in ws_events:
+        if not isinstance(event, dict):
+            continue
+
+        event_type = event.get("type")
+        payload = event.get("response", event)
+        if isinstance(payload, dict) and event_type in (
+            "response.created",
+            "response.in_progress",
+            "response.completed",
+            "response.done",
+        ):
+            if merged is None:
+                merged = payload.copy()
+            else:
+                for key, value in payload.items():
+                    if key == "output":
+                        if value:
+                            merged[key] = value
+                        else:
+                            merged.setdefault(key, value)
+                        continue
+                    if key == "usage":
+                        if value:
+                            merged[key] = value
+                        else:
+                            merged.setdefault(key, value)
+                        continue
+                    if value not in (None, "", [], {}):
+                        merged[key] = value
+                    else:
+                        merged.setdefault(key, value)
+
+        if event_type == "response.output_item.done":
+            item = event.get("item")
+            output_index = event.get("output_index")
+            if isinstance(item, dict) and isinstance(output_index, int):
+                output_items[output_index] = item
+
+    if output_items:
+        ordered_output = [output_items[idx] for idx in sorted(output_items)]
+        if merged is None:
+            merged = {"output": ordered_output}
+        elif not merged.get("output"):
+            merged["output"] = ordered_output
+
+    return merged
+
+
+def reconstruct_ws_response_body(ws_events: list[dict]) -> dict | None:
+    """Public wrapper for websocket response-body reconstruction.
+
+    Forward and reverse proxy code paths both need identical reconstruction
+    behavior so viewer output stays consistent across transport modes.
+    """
+    return _reconstruct_ws_response_body(ws_events)
+
+
+def reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
+    """Public wrapper for websocket request-body reconstruction."""
+    return _reconstruct_ws_request_body(client_messages)

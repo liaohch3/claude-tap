@@ -58,9 +58,45 @@ Before spawning agents or running automated retry loops:
 9. **Check for proxy bypass.** Libraries often have `NO_PROXY`, `proxy=None`,
    or per-request proxy overrides that silently skip the system proxy.
 
+## Proxy URL Construction Verification
+
+10. **Verify the final upstream URL, not just the forwarded path.** When
+    modifying path stripping, target URL, or route logic, add an assertion or
+    log line that prints the fully constructed upstream URL. Confirm it matches
+    the real API endpoint. Fake upstreams in unit tests only verify internal
+    consistency — they cannot catch URL mismatches with real APIs.
+
+11. **Enumerate all (client × auth × target) combinations.** Before changing
+    URL handling, draw a matrix of every supported configuration:
+
+    ```
+                  api.openai.com    chatgpt.com/backend-api/codex
+    strip /v1     ✗ 404             ✓
+    no strip      ✓                 ✗ wrong path
+    conditional   ✓                 ✓  ← correct
+    ```
+
+    Every cell must be verified — either by automated test or real E2E run.
+
+12. **Run real E2E after any proxy/routing change.** Unit tests with fake
+    upstreams are necessary but not sufficient. After proxy changes, run at
+    least one real request through the proxy using tmux:
+
+    ```bash
+    # Example: verify Codex through proxy
+    tmux new-session -d -s verify \
+      "uv run python -m claude_tap --tap-client codex --tap-target TARGET --tap-no-launch --tap-port 0"
+    # Then launch client in another window and send a test message
+    ```
+
+13. **Don't attribute failures to "environment" without evidence.** When a
+    request fails through the proxy, first print/log the constructed upstream
+    URL. Only blame network/environment after confirming the URL is correct.
+    See: `docs/error-experience/entries/2026-03-10-codex-strip-prefix-url-mismatch.md`
+
 ## Post-Debug
 
-10. **Write the experience doc.** Every non-trivial debugging session produces
+14. **Write the experience doc.** Every non-trivial debugging session produces
     an entry in `docs/error-experience/entries/`. Include:
     - What broke
     - What you tried (and why it didn't work)

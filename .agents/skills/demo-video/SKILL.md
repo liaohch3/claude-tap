@@ -1,3 +1,9 @@
+---
+name: demo-video
+description: Generate demo assets (GIF/MP4) from real tmux E2E runs and viewer screenshots using asciinema and Playwright
+user_invocable: true
+---
+
 # Skill: Demo Video Generation
 
 Generate demo assets from a real tmux E2E run and viewer screenshots.

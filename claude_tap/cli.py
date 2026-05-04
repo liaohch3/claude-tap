@@ -15,6 +15,7 @@ import threading
 import urllib.error
 import urllib.request
 import webbrowser
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,9 +29,12 @@ from claude_tap.proxy import proxy_handler
 from claude_tap.trace import TraceWriter
 from claude_tap.viewer import _generate_html_viewer
 
-# Ensure print output is visible immediately (uv tool pipes stdout with full buffering)
+# Force UTF-8 + line-buffered stdout/stderr so emoji output works on Windows
+# consoles (GBK/cp936) and `uv tool` doesn't fully buffer our progress prints.
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(line_buffering=True)
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace", line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 log = logging.getLogger("claude-tap")
 
@@ -47,37 +51,69 @@ def _open_browser(url: str) -> None:
     threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
 
 
-async def run_claude(
+@dataclass(frozen=True)
+class ClientConfig:
+    """Per-client configuration for supported AI CLI tools."""
+
+    cmd: str
+    label: str
+    install_url: str
+    base_url_env: str
+    base_url_suffix: str  # appended to http://127.0.0.1:{port}
+    default_target: str
+    nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
+
+    @property
+    def missing_help(self) -> str:
+        return (
+            f"\nError: '{self.cmd}' command not found in PATH.\nPlease install {self.label} first: {self.install_url}\n"
+        )
+
+    def reverse_base_url(self, port: int) -> str:
+        return f"http://127.0.0.1:{port}{self.base_url_suffix}"
+
+
+CLIENT_CONFIGS: dict[str, ClientConfig] = {
+    "claude": ClientConfig(
+        cmd="claude",
+        label="Claude Code",
+        install_url="https://docs.anthropic.com/en/docs/claude-code",
+        base_url_env="ANTHROPIC_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.anthropic.com",
+        nesting_env_keys=("CLAUDECODE", "CLAUDE_CODE_SSE_PORT"),
+    ),
+    "codex": ClientConfig(
+        cmd="codex",
+        label="Codex CLI",
+        install_url="https://github.com/openai/codex",
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+    ),
+}
+
+
+async def run_client(
     port: int,
     extra_args: list[str],
     client: str = "claude",
     proxy_mode: str = "reverse",
     ca_cert_path: Path | None = None,
 ) -> int:
-    if client == "claude":
-        client_cmd = "claude"
-        client_label = "Claude Code"
-        missing_help = (
-            "\nError: 'claude' command not found in PATH.\n"
-            "Please install Claude Code first: "
-            "https://docs.anthropic.com/en/docs/claude-code\n"
-        )
-    else:
-        client_cmd = "codex"
-        client_label = "Codex CLI"
-        missing_help = (
-            "\nError: 'codex' command not found in PATH.\n"
-            "Please install Codex CLI first: "
-            "https://github.com/openai/codex\n"
-        )
+    cfg = CLIENT_CONFIGS[client]
 
-    if shutil.which(client_cmd) is None:
-        print(missing_help)
+    # asyncio.create_subprocess_exec uses CreateProcess on Windows, which only
+    # auto-appends `.exe`; resolve here so npm `.cmd`/`.bat` shims also work.
+    resolved_cmd = shutil.which(cfg.cmd)
+    if resolved_cmd is None:
+        print(cfg.missing_help)
         return 1
 
     env = os.environ.copy()
 
     cmd_args = list(extra_args)
+    has_openai_base_override = _has_config_override(cmd_args, "openai_base_url")
 
     if proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
@@ -90,6 +126,9 @@ async def run_claude(
         env["all_proxy"] = proxy_url
         if ca_cert_path:
             env["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
+            # Codex is a Rust binary; NODE_EXTRA_CA_CERTS does not affect its TLS stack.
+            env["SSL_CERT_FILE"] = str(ca_cert_path)
+            env["CODEX_CA_CERTIFICATE"] = str(ca_cert_path)
 
         if client == "claude":
             # Claude Code may source proxy env from settings rather than process env.
@@ -111,28 +150,30 @@ async def run_claude(
                 cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
         # Don't set provider-specific base URL in forward mode
     else:
-        if client == "claude":
-            env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
-        else:
-            env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
+        base_url = cfg.reverse_base_url(port)
+        env[cfg.base_url_env] = base_url
         env["NO_PROXY"] = "127.0.0.1"
+        if client == "claude":
+            has_settings_arg = any(arg == "--settings" or arg.startswith("--settings=") for arg in cmd_args)
+            if not has_settings_arg:
+                settings_payload = {"env": {cfg.base_url_env: base_url}}
+                cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
+        if client == "codex" and not has_openai_base_override:
+            # Newer Codex builds may ignore OPENAI_BASE_URL in OAuth/WebSocket mode
+            # unless the same value is also supplied as a config override.
+            cmd_args = ["-c", f'openai_base_url="{base_url}"'] + cmd_args
 
-    if client == "claude":
-        # Bypass Claude Code nesting detection
-        env.pop("CLAUDECODE", None)
-        env.pop("CLAUDE_CODE_SSE_PORT", None)
+    for key in cfg.nesting_env_keys:
+        env.pop(key, None)
 
-    cmd = [client_cmd] + cmd_args
-    print(f"\n🚀 Starting {client_label}: {' '.join(cmd)}")
+    cmd = [resolved_cmd] + cmd_args
+    print(f"\n🚀 Starting {cfg.label}: {' '.join([cfg.cmd, *cmd_args])}")
     if proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     else:
-        if client == "claude":
-            print(f"   ANTHROPIC_BASE_URL=http://127.0.0.1:{port}")
-        else:
-            print(f"   OPENAI_BASE_URL=http://127.0.0.1:{port}/v1")
+        print(f"   {cfg.base_url_env}={cfg.reverse_base_url(port)}")
     print()
 
     # Give child its own process group and make it the foreground group
@@ -157,8 +198,9 @@ async def run_claude(
     # --- Signal handling: graceful Ctrl+C / Ctrl+Z ---
     loop = asyncio.get_running_loop()
 
-    # Prevent Ctrl+Z from suspending the session
-    old_sigtstp = signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+    # SIGTSTP is Unix-only; on Windows the attribute is absent.
+    sigtstp = getattr(signal, "SIGTSTP", None)
+    old_sigtstp = signal.signal(sigtstp, signal.SIG_IGN) if sigtstp is not None else None
 
     sigint_count = 0
 
@@ -168,7 +210,7 @@ async def run_claude(
         if sigint_count == 1:
             if proc.returncode is None:
                 proc.terminate()
-                print(f"\n⏳ Shutting down {client_label}... (Ctrl+C again to force)")
+                print(f"\n⏳ Shutting down {cfg.label}... (Ctrl+C again to force)")
         else:
             if proc.returncode is None:
                 proc.kill()
@@ -176,11 +218,12 @@ async def run_claude(
     def _handle_sigtstp():
         if proc.returncode is None:
             proc.terminate()
-            print(f"\n⏳ Shutting down {client_label}...")
+            print(f"\n⏳ Shutting down {cfg.label}...")
 
     try:
         loop.add_signal_handler(signal.SIGINT, _handle_sigint)
-        loop.add_signal_handler(signal.SIGTSTP, _handle_sigtstp)
+        if sigtstp is not None:
+            loop.add_signal_handler(sigtstp, _handle_sigtstp)
     except (NotImplementedError, OSError):
         pass
 
@@ -198,32 +241,58 @@ async def run_claude(
         signal.signal(signal.SIGTTOU, old_sigttou)
 
     # Restore original SIGTSTP handler and remove async signal handlers
-    signal.signal(signal.SIGTSTP, old_sigtstp)
+    if sigtstp is not None and old_sigtstp is not None:
+        signal.signal(sigtstp, old_sigtstp)
     try:
         loop.remove_signal_handler(signal.SIGINT)
     except (NotImplementedError, OSError):
         pass
-    try:
-        loop.remove_signal_handler(signal.SIGTSTP)
-    except (NotImplementedError, OSError):
-        pass
+    if sigtstp is not None:
+        try:
+            loop.remove_signal_handler(sigtstp)
+        except (NotImplementedError, OSError):
+            pass
 
-    print(f"\n📋 {client_label} exited with code {code}")
+    print(f"\n📋 {cfg.label} exited with code {code}")
     return code
+
+
+def _has_config_override(args: list[str], key: str) -> bool:
+    """Return True when argv already contains a matching -c/--config override."""
+    prefixes = (f"{key}=",)
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-c", "--config"):
+            if i + 1 < len(args) and args[i + 1].startswith(prefixes):
+                return True
+            i += 2
+            continue
+        if arg.startswith("--config="):
+            value = arg.split("=", 1)[1]
+            if value.startswith(prefixes):
+                return True
+        i += 1
+    return False
 
 
 async def async_main(args: argparse.Namespace):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    trace_path = output_dir / f"trace_{ts}.jsonl"
-    log_path = output_dir / f"trace_{ts}.log"
+    now = datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H%M%S")
+    ts = now.strftime("%Y%m%d_%H%M%S")  # kept for manifest compatibility
+    date_dir = output_dir / date_str
+    date_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = date_dir / f"trace_{time_str}.jsonl"
+    log_path = date_dir / f"trace_{time_str}.log"
 
     # Start live viewer server if requested
     live_server: LiveViewerServer | None = None
     if args.live_viewer:
-        live_server = LiveViewerServer(trace_path, port=args.live_port, host=args.host)
+        live_server = LiveViewerServer(trace_path, port=args.live_port, host=args.host, output_dir=output_dir)
         await live_server.start()
         print(f"🌐 Live viewer: {live_server.url}")
         _open_browser(live_server.url)
@@ -241,6 +310,11 @@ async def async_main(args: argparse.Namespace):
     aiohttp_server_log = logging.getLogger("aiohttp.server")
     aiohttp_server_log.addHandler(file_handler)
     aiohttp_server_log.propagate = False
+    # uvloop emits TLS shutdown warnings through the asyncio logger.
+    # Keep them in the trace log rather than printing them into the client TUI.
+    asyncio_log = logging.getLogger("asyncio")
+    asyncio_log.addHandler(file_handler)
+    asyncio_log.propagate = False
 
     # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY) for
     # outbound upstream requests. This is important when users route traffic
@@ -273,7 +347,7 @@ async def async_main(args: argparse.Namespace):
             "writer": writer,
             "session": session,
             "turn_counter": 0,
-            "strip_path_prefix": "/v1" if args.client == "codex" else "",
+            **_reverse_proxy_trace_options(args.client, args.target),
         }
         app.router.add_route("*", "/{path_info:.*}", proxy_handler)
 
@@ -308,7 +382,7 @@ async def async_main(args: argparse.Namespace):
     try:
         if not args.no_launch:
             try:
-                exit_code = await run_claude(
+                exit_code = await run_client(
                     actual_port,
                     args.claude_args,
                     client=args.client,
@@ -355,9 +429,9 @@ async def async_main(args: argparse.Namespace):
         _generate_html_viewer(trace_path, html_path)
 
         # Register trace and cleanup old ones
-        trace_files = [trace_path.name, log_path.name]
+        trace_files = [_rel_posix(trace_path, output_dir), _rel_posix(log_path, output_dir)]
         if html_path.exists():
-            trace_files.append(html_path.name)
+            trace_files.append(_rel_posix(html_path, output_dir))
         _register_trace(output_dir, ts, trace_files)
         if args.max_traces > 0:
             cleaned = _cleanup_traces(output_dir, args.max_traces)
@@ -387,9 +461,37 @@ async def async_main(args: argparse.Namespace):
         # Open viewer in browser (default: auto-open unless --tap-no-open)
         if args.open_viewer and html_path.exists():
             print("\n🌐 Opening viewer in browser...")
-            _open_browser(f"file://{html_path.absolute()}")
+            _open_browser(html_path.absolute().as_uri())
 
     return exit_code
+
+
+_CODEX_CHATGPT_TARGET = "https://chatgpt.com/backend-api/codex"
+
+
+def _reverse_proxy_trace_options(client: str, target: str) -> dict[str, object]:
+    return {
+        "strip_path_prefix": "/v1" if client == "codex" and "api.openai.com" not in target else "",
+        "force_http": False,
+    }
+
+
+def _detect_codex_target() -> str:
+    """Auto-detect the correct upstream target for Codex CLI.
+
+    Reads ``~/.codex/auth.json`` (or ``$CODEX_HOME/auth.json``) to determine
+    the auth mode.  ChatGPT OAuth users (``codex login``) need the chatgpt.com
+    backend; API-key users use api.openai.com.
+    """
+    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    auth_file = codex_home / "auth.json"
+    try:
+        data = json.loads(auth_file.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("auth_mode") == "chatgpt":
+            return _CODEX_CHATGPT_TARGET
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+    return CLIENT_CONFIGS["codex"].default_target
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -403,82 +505,118 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="claude-tap",
         description="Trace Claude Code or Codex API requests via a local proxy. "
         "All flags not listed below are forwarded to the selected client.",
+        epilog=(
+            "claude code:\n"
+            "  claude-tap                            Basic tracing\n"
+            "  claude-tap --tap-live                 Real-time viewer in browser\n"
+            "  claude-tap -- --model claude-opus-4-6  Pass flags to Claude Code\n"
+            "  claude-tap -- -c                      Continue last conversation\n"
+            "  claude-tap -- --dangerously-skip-permissions  Auto-accept tool calls\n"
+            "  claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6\n"
+            "\n"
+            "codex cli:\n"
+            "  # Target is auto-detected from Codex auth state when possible\n"
+            "  claude-tap --tap-client codex\n"
+            "  # If auto-detection cannot read Codex auth, specify OAuth target explicitly\n"
+            "  claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex\n"
+            "  # With model and full auto-approval\n"
+            "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
+            "\n"
+            "proxy-only mode (connect from another terminal):\n"
+            "  claude-tap --tap-no-launch --tap-port 8080\n"
+            "  # then: ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude\n"
+            "\n"
+            "export traces:\n"
+            "  claude-tap export trace.jsonl              Export to markdown\n"
+            "  claude-tap export trace.jsonl -o out.md    Export to file\n"
+            "  claude-tap export trace.jsonl --format json Export as JSON\n"
+            "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
+            "\n"
+            "dashboard:\n"
+            "  claude-tap dashboard                       Browse trace history\n"
+            "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
+            "\n"
+            "homepage: https://github.com/liaohch3/claude-tap"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     tap_parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
-    tap_parser.add_argument(
-        "--tap-output-dir", default="./.traces", dest="output_dir", help="Trace output directory (default: ./.traces)"
-    )
-    tap_parser.add_argument("--tap-port", type=int, default=0, dest="port", help="Proxy port (default: 0 = auto)")
-    tap_parser.add_argument(
+
+    # -- Proxy options --
+    proxy_group = tap_parser.add_argument_group("proxy options")
+    proxy_group.add_argument("--tap-port", type=int, default=0, dest="port", help="Proxy port (default: auto)")
+    proxy_group.add_argument(
         "--tap-host",
         default=None,
         dest="host",
-        help="Bind address for proxy and live viewer (default: 0.0.0.0 in --tap-no-launch mode, 127.0.0.1 otherwise)",
+        help="Bind address (default: 127.0.0.1, or 0.0.0.0 with --tap-no-launch)",
     )
-    tap_parser.add_argument(
+    proxy_group.add_argument(
         "--tap-client",
         choices=["claude", "codex"],
         default="claude",
         dest="client",
         help="Client to launch (default: claude)",
     )
-    tap_parser.add_argument(
+    proxy_group.add_argument(
         "--tap-target",
         default=None,
         dest="target",
-        help="Upstream API URL (default: provider-specific)",
+        help="Upstream API URL (default: auto-detected from auth state)",
     )
-    tap_parser.add_argument(
+    proxy_group.add_argument(
         "--tap-proxy-mode",
         choices=["reverse", "forward"],
         default="reverse",
         dest="proxy_mode",
-        help="Proxy mode: 'reverse' sets provider base URL (default), "
-        "'forward' sets HTTPS_PROXY with CONNECT/TLS termination",
+        help="'reverse' sets provider base URL (default), 'forward' sets HTTPS_PROXY with CONNECT/TLS termination",
     )
-    tap_parser.add_argument(
+    proxy_group.add_argument(
         "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
     )
-    tap_parser.add_argument(
-        "--tap-open",
-        action="store_true",
-        dest="open_viewer",
-        default=True,
-        help="Open HTML viewer in browser after exit (default: on)",
-    )
-    tap_parser.add_argument(
+
+    # -- Viewer options --
+    viewer_group = tap_parser.add_argument_group("viewer options")
+    viewer_group.add_argument(
         "--tap-no-open",
         action="store_false",
         dest="open_viewer",
+        default=True,
         help="Don't auto-open HTML viewer after exit",
     )
-    tap_parser.add_argument(
+    viewer_group.add_argument(
         "--tap-live",
         action="store_true",
         dest="live_viewer",
         help="Start real-time viewer server (auto-opens browser)",
     )
-    tap_parser.add_argument(
+    viewer_group.add_argument(
         "--tap-live-port",
         type=int,
         default=0,
         dest="live_port",
         help="Port for live viewer server (default: auto)",
     )
-    tap_parser.add_argument(
+
+    # -- Storage & update options --
+    storage_group = tap_parser.add_argument_group("storage and update options")
+    storage_group.add_argument(
+        "--tap-output-dir", default="./.traces", dest="output_dir", help="Trace output directory (default: ./.traces)"
+    )
+    storage_group.add_argument(
         "--tap-max-traces",
         type=int,
         default=50,
         dest="max_traces",
         help="Max trace sessions to keep (default: 50, 0 = unlimited)",
     )
-    tap_parser.add_argument(
+    storage_group.add_argument(
         "--tap-no-update-check",
         action="store_true",
         dest="no_update_check",
         help="Disable PyPI update check on startup",
     )
-    tap_parser.add_argument(
+    storage_group.add_argument(
         "--tap-no-auto-update",
         action="store_true",
         dest="no_auto_update",
@@ -494,10 +632,74 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.host is None:
         args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
     if args.target is None:
-        args.target = (
-            "https://api.anthropic.com" if args.client == "claude" else "https://chatgpt.com/backend-api/codex"
-        )
+        if args.client == "codex":
+            args.target = _detect_codex_target()
+        else:
+            args.target = CLIENT_CONFIGS[args.client].default_target
     return args
+
+
+def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse arguments for the standalone dashboard command."""
+    parser = argparse.ArgumentParser(
+        prog="claude-tap dashboard",
+        description="Open a local claude-tap dashboard for browsing trace history.",
+    )
+    parser.add_argument(
+        "--tap-output-dir",
+        default="./.traces",
+        dest="output_dir",
+        help="Trace output directory to browse (default: ./.traces)",
+    )
+    parser.add_argument(
+        "--tap-live-port",
+        type=int,
+        default=0,
+        dest="live_port",
+        help="Dashboard server port (default: auto)",
+    )
+    parser.add_argument(
+        "--tap-host",
+        default="127.0.0.1",
+        dest="host",
+        help="Bind address (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--tap-no-open",
+        action="store_false",
+        dest="open_viewer",
+        default=True,
+        help="Don't auto-open the dashboard in a browser",
+    )
+    return parser.parse_args(argv)
+
+
+async def dashboard_main(args: argparse.Namespace) -> int:
+    """Run the standalone dashboard until interrupted."""
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now()
+    date_dir = output_dir / now.strftime("%Y-%m-%d")
+    date_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = date_dir / f"dashboard_{now.strftime('%H%M%S')}.jsonl"
+
+    server = LiveViewerServer(trace_path, port=args.live_port, host=args.host, output_dir=output_dir)
+    await server.start()
+    print(f"🌐 claude-tap dashboard: {server.url}")
+    print(f"📁 Trace directory: {output_dir}")
+    print("Press Ctrl+C to stop.")
+    if args.open_viewer:
+        _open_browser(server.url)
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await server.stop()
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -539,7 +741,10 @@ def _start_background_update(installer: str) -> subprocess.Popen | None:
     """Start a background process to upgrade claude-tap."""
     try:
         if installer == "uv":
-            cmd = ["uv", "tool", "upgrade", "claude-tap"]
+            uv_path = shutil.which("uv")
+            if uv_path is None:
+                return None
+            cmd = [uv_path, "tool", "upgrade", "claude-tap"]
         else:
             cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
         return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -552,6 +757,11 @@ def _start_background_update(installer: str) -> subprocess.Popen | None:
 # ---------------------------------------------------------------------------
 
 _MANIFEST_FILE = ".cloudtap-manifest.json"
+
+
+def _rel_posix(path: Path, base: Path) -> str:
+    # Forward slashes so manifests stay portable when `.traces` is synced across OSes.
+    return path.relative_to(base).as_posix()
 
 
 def _load_manifest(output_dir: Path) -> dict:
@@ -601,11 +811,20 @@ def _cleanup_traces(output_dir: Path, max_traces: int) -> int:
     to_remove = traces[: len(traces) - max_traces]
     removed = 0
     for entry in to_remove:
+        parents_to_check: set[Path] = set()
         for fname in entry.get("files", []):
             fpath = output_dir / fname
             if fpath.exists():
+                parents_to_check.add(fpath.parent)
                 try:
                     fpath.unlink()
+                except OSError:
+                    pass
+        # Remove empty date subdirectories
+        for parent in parents_to_check:
+            if parent != output_dir and parent.is_dir() and not any(parent.iterdir()):
+                try:
+                    parent.rmdir()
                 except OSError:
                     pass
         traces.remove(entry)
@@ -617,20 +836,25 @@ def _cleanup_traces(output_dir: Path, max_traces: int) -> int:
 
 def _maybe_migrate_existing(output_dir: Path, manifest: dict) -> None:
     """Auto-register existing trace_*.jsonl files that are not yet in the manifest."""
-    known_files: set[str] = set()
-    for entry in manifest.get("traces", []):
-        known_files.update(entry.get("files", []))
+    # Normalize separators so manifests written by older Windows builds (with `\`) still match.
+    known_files: set[str] = {
+        f.replace("\\", "/") for entry in manifest.get("traces", []) for f in entry.get("files", [])
+    }
 
-    for jsonl in sorted(output_dir.glob("trace_*.jsonl")):
-        if jsonl.name in known_files:
+    for jsonl in sorted(output_dir.glob("**/trace_*.jsonl")):
+        rel = _rel_posix(jsonl, output_dir)
+        if rel in known_files or jsonl.name in known_files:
             continue
         stem = jsonl.stem
         ts = stem.replace("trace_", "", 1)
-        files = [jsonl.name]
+        # Prefix with date dir if present
+        if jsonl.parent != output_dir:
+            ts = jsonl.parent.name.replace("-", "") + "_" + ts
+        files = [rel]
         for suffix in [".log", ".html"]:
             companion = jsonl.with_suffix(suffix)
             if companion.exists():
-                files.append(companion.name)
+                files.append(_rel_posix(companion, output_dir))
         manifest["traces"].append(
             {
                 "timestamp": ts,
@@ -647,6 +871,14 @@ def main_entry() -> None:
         from claude_tap.export import export_main
 
         sys.exit(export_main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "dashboard":
+        args = parse_dashboard_args(sys.argv[2:])
+        try:
+            code = asyncio.run(dashboard_main(args))
+        except KeyboardInterrupt:
+            code = 0
+        sys.exit(code)
 
     args = parse_args()
     try:

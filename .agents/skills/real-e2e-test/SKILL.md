@@ -1,4 +1,5 @@
 ---
+name: real-e2e-test
 description: Run real E2E tests against Claude CLI in pytest and tmux modes
 tags: testing, e2e, integration, tmux
 ---

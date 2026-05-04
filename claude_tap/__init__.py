@@ -17,8 +17,10 @@ from claude_tap.cli import (
     _save_manifest,
     _version_tuple,
     async_main,
+    dashboard_main,
     main_entry,
     parse_args,
+    parse_dashboard_args,
 )
 from claude_tap.forward_proxy import ForwardProxyServer
 from claude_tap.live import LiveViewerServer
@@ -37,7 +39,9 @@ __all__ = [
     "_version_tuple",
     "main_entry",
     "parse_args",
+    "parse_dashboard_args",
     "async_main",
+    "dashboard_main",
     "CertificateAuthority",
     "ensure_ca",
     "ForwardProxyServer",

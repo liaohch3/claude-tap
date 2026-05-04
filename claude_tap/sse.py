@@ -37,11 +37,14 @@ class SSEReassembler:
                     data = json.loads(raw_data)
                 except (json.JSONDecodeError, ValueError):
                     data = raw_data
-                event_record = {"event": self._current_event, "data": data}
-                self.events.append(event_record)
-                self._accumulate(self._current_event, data)
+                self.add_event(self._current_event, data)
                 self._current_event = None
                 self._current_data_lines = []
+
+    def add_event(self, event_type: str, data) -> None:
+        """Append an already-parsed stream event and update the snapshot."""
+        self.events.append({"event": event_type, "data": data})
+        self._accumulate(event_type, data)
 
     def _accumulate(self, event_type: str, data) -> None:
         """Accumulate an SSE event into the message snapshot.
@@ -54,6 +57,12 @@ class SSEReassembler:
         try:
             if event_type == "message_start":
                 self._snapshot = copy.deepcopy(data.get("message", {}))
+            elif event_type in ("response.created", "response.completed", "response.done"):
+                response = data.get("response")
+                if isinstance(response, dict):
+                    self._snapshot = copy.deepcopy(response)
+                elif event_type in ("response.completed", "response.done"):
+                    self._snapshot = copy.deepcopy(data)
             elif self._snapshot is None:
                 return
             elif event_type == "content_block_start":

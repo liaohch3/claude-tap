@@ -11,7 +11,7 @@ import pytest
 from aiohttp import web
 from yarl import URL
 
-from claude_tap.proxy import _get_ws_proxy_settings, proxy_handler
+from claude_tap.proxy import _build_ws_record, _get_ws_proxy_settings, proxy_handler
 from claude_tap.trace import TraceWriter
 
 
@@ -145,6 +145,8 @@ async def test_websocket_proxy_basic(trace_dir):
         assert r["request"]["method"] == "WEBSOCKET"
         assert r["request"]["path"] == "/v1/responses"
         assert r["request"]["body"]["model"] == "gpt-test"
+        assert r["request"]["ws_events"][0]["model"] == "gpt-test"
+        assert r["request"]["ws_events"][0]["input"] == "hello"
         assert r["response"]["status"] == 101
         assert len(r["response"]["ws_events"]) == 4
         assert r["response"]["body"]["status"] == "completed"
@@ -250,6 +252,95 @@ async def test_websocket_upstream_failure(trace_dir):
     finally:
         await proxy_session.close()
         await proxy_runner.cleanup()
+
+
+def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
+    record = _build_ws_record(
+        req_id="req_test",
+        turn=1,
+        duration_ms=25,
+        path_qs="/v1/responses",
+        req_headers={"Authorization": "Bearer test-token"},
+        client_messages=[
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "model": "gpt-5.4",
+                    "instructions": "You are Codex.",
+                    "input": [],
+                    "tools": [{"type": "function", "name": "exec_command"}],
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "input": [
+                        {"role": "user", "content": [{"type": "input_text", "text": "你好，调用一个工具，然后结束"}]}
+                    ],
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "previous_response_id": "resp_previous",
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call_1",
+                            "output": "tool output",
+                        }
+                    ],
+                }
+            ),
+        ],
+        server_messages=[
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {"input_tokens": 10, "output_tokens": 0},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 1,
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "HELLO_FROM_WS"}],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {"input_tokens": 10, "output_tokens": 2},
+                    },
+                }
+            ),
+        ],
+        upstream_base_url="https://chatgpt.com/backend-api/codex",
+    )
+
+    assert record["request"]["body"]["input"][0]["content"][0]["text"] == "你好，调用一个工具，然后结束"
+    assert record["request"]["body"]["input"][1]["type"] == "function_call_output"
+    assert record["request"]["body"]["previous_response_id"] == "resp_previous"
+    assert record["request"]["body"]["tools"][0]["name"] == "exec_command"
+    assert len(record["request"]["ws_events"]) == 3
+    assert record["request"]["ws_events"][1]["input"][0]["content"][0]["text"] == "你好，调用一个工具，然后结束"
+    assert record["request"]["ws_events"][2]["input"][0]["type"] == "function_call_output"
+    assert record["response"]["body"]["usage"] == {"input_tokens": 10, "output_tokens": 2}
+    assert record["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_FROM_WS"
 
 
 # ---------------------------------------------------------------------------

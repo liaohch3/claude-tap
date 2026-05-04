@@ -98,7 +98,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 /* ─── Header ─── */
 .header {
   display: flex; align-items: center; gap: 16px;
-  padding: 0 20px; height: 52px;
+  padding: 0 20px; min-height: 52px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0; z-index: 10;
@@ -114,7 +114,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   padding: 1px 6px; line-height: 1.4;
 }
 .header .divider { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; }
-.path-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.path-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; flex: 1 1 0; }
+.filter-chip-toggle {
+  font-size: 11px; font-family: var(--sans); padding: 4px 10px; border-radius: 20px;
+  border: 1px dashed var(--border); background: var(--bg); color: var(--text-tertiary);
+  cursor: pointer; transition: all .15s; white-space: nowrap; line-height: 1;
+}
+.filter-chip-toggle:hover { border-color: var(--blue); color: var(--blue); }
 .filter-chip {
   font-size: 12px; font-family: var(--mono); padding: 4px 10px; border-radius: 20px;
   border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary);
@@ -215,7 +221,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 
 /* ─── Detail ─── */
-.detail { flex: 1; overflow-y: auto; padding: 20px 28px; background: var(--bg); }
+.detail { flex: 1; overflow-y: auto; padding: 12px 20px; background: var(--bg); }
 .detail::-webkit-scrollbar { width: 6px; }
 .detail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .error-banner {
@@ -231,45 +237,67 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   margin-top: 2px; font-size: 12px; color: var(--text-secondary);
   white-space: pre-wrap; word-break: break-word;
 }
+.continuation-banner {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 14px; margin: 0 0 12px;
+  border: 1px solid var(--amber); border-left: 4px solid var(--amber);
+  border-radius: var(--radius-sm); background: var(--amber-bg);
+}
+.continuation-banner .cb-icon { color: var(--amber); font-size: 15px; line-height: 1.2; flex-shrink: 0; }
+.continuation-banner .cb-content { min-width: 0; }
+.continuation-banner .cb-title { font-size: 13px; font-weight: 700; color: var(--amber); line-height: 1.4; }
+.continuation-banner .cb-message {
+  margin-top: 2px; font-size: 12px; color: var(--text-secondary);
+  white-space: pre-wrap; word-break: break-word;
+}
+.continuation-banner .cb-meta {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 10px; margin-top: 10px; font-size: 11px;
+}
+.continuation-banner .cb-key { color: var(--text-tertiary); font-family: var(--mono); }
+.continuation-banner .cb-val {
+  color: var(--text); font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
 
 /* ─── Action bar ─── */
 .action-bar {
-  display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  position: sticky; top: 10px; z-index: 6;
+  display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  position: sticky; top: 6px; z-index: 6;
   width: fit-content; max-width: 100%;
-  margin: 0 0 14px;
-  padding: 7px 8px;
+  margin: 0 0 8px;
+  padding: 4px 6px;
   border: 1px solid var(--border);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.82);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08), var(--shadow-sm);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
 }
 .act-btn {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 12px; padding: 7px 10px; border-radius: 8px;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; padding: 4px 8px; border-radius: 6px;
   border: none; background: transparent;
   color: var(--text-secondary); cursor: pointer; font-family: var(--sans);
   transition: all .15s;
 }
 .act-btn:hover { background: var(--bg-hover); color: var(--blue); }
 .act-btn:active { transform: translateY(1px); }
-.act-btn svg { width: 14px; height: 14px; }
+.act-btn svg { width: 12px; height: 12px; }
 [data-theme="dark"] .action-bar {
-  background: rgba(22, 27, 34, 0.78);
+  background: rgba(22, 27, 34, 0.82);
   border-color: #3a4048;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4), var(--shadow-sm);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 /* ─── Section ─── */
 .section {
-  margin-bottom: 12px; border: 1px solid var(--border);
+  margin-bottom: 8px; border: 1px solid var(--border);
   border-radius: var(--radius); overflow: hidden;
   background: var(--bg-card); box-shadow: var(--shadow-sm);
 }
 .section-header {
-  display: flex; align-items: center; padding: 10px 16px;
+  display: flex; align-items: center; padding: 8px 12px;
   cursor: pointer; user-select: none; gap: 8px;
   transition: background .1s;
 }
@@ -379,11 +407,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 
 /* ─── Token usage ─── */
-.token-bar { display: flex; gap: 20px; font-size: 13px; padding: 8px 0 12px; flex-wrap: wrap; border-bottom: 1px solid var(--border-light); margin-bottom: 8px; }
-.tok-item { display: flex; align-items: center; gap: 6px; }
-.tok-dot { width: 8px; height: 8px; border-radius: 50%; }
-.tok-label { color: var(--text-tertiary); font-size: 12px; }
-.tok-val { color: var(--text); font-weight: 600; font-family: var(--mono); font-size: 13px; }
+.token-bar { display: flex; gap: 12px; font-size: 11px; padding: 4px 0 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.tok-item { display: flex; align-items: center; gap: 4px; }
+.tok-dot { width: 6px; height: 6px; border-radius: 50%; }
+.tok-label { color: var(--text-tertiary); font-size: 11px; }
+.tok-val { color: var(--text-secondary); font-weight: 600; font-family: var(--mono); font-size: 11px; }
 
 /* ─── JSON viewer ─── */
 .json-view {
@@ -1019,6 +1047,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   .sidebar-item { min-height: 44px; padding: 12px 16px; }
   .sidebar-group-header { min-height: 44px; }
 }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 </style>
 </head>
 <body>
@@ -1034,6 +1063,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   <div class="stats" id="stats" style="display:none">
     <div class="stat-group"><span id="label-turns">Turns</span> <span class="stat-val" id="stat-turns">0</span></div>
     <div class="stat-group"><span id="label-tokens">Tokens</span> <span class="stat-val" id="stat-tokens">0</span></div>
+    <div class="stat-group" id="stat-input-group" style="display:none"><span style="color:var(--blue)">&#9679;</span><span>In</span> <span class="stat-val" id="stat-input">0</span></div>
+    <div class="stat-group" id="stat-output-group" style="display:none"><span style="color:var(--green)">&#9679;</span><span>Out</span> <span class="stat-val" id="stat-output">0</span></div>
+    <div class="stat-group" id="stat-cache-read-group" style="display:none"><span style="color:var(--cyan)">&#9679;</span><span>Cache R</span> <span class="stat-val" id="stat-cache-read">0</span></div>
+    <div class="stat-group" id="stat-cache-write-group" style="display:none"><span style="color:var(--amber)">&#9679;</span><span>Cache W</span> <span class="stat-val" id="stat-cache-write">0</span></div>
     <div class="stat-group"><span id="label-time">Time</span> <span class="stat-val" id="stat-duration">0s</span></div>
     <div id="live-status" style="display:none;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:500;align-items:center;gap:6px;"></div>
   </div>
@@ -1051,7 +1084,6 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 </div>
 
 <div class="trace-path-bar" id="trace-path-bar"></div>
-<div id="token-summary-bar" style="display:none;padding:6px 16px;background:var(--bg-card);border-bottom:1px solid var(--border);font-size:12px;font-family:var(--mono);display:none;gap:16px;align-items:center;flex-wrap:wrap"></div>
 <div class="global-search-overlay" id="global-search-overlay">
   <div class="global-search-box">
     <input type="text" id="global-search-input" placeholder="Find in trace">
@@ -1072,6 +1104,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     </div>
   </div>
   <div id="sidebar-wrap" style="display:none;display:flex;flex-direction:column">
+    <div id="date-picker" style="display:none;padding:6px 12px;border-bottom:1px solid var(--border);font-size:13px;align-items:center;gap:8px;">
+      <label style="color:var(--text-secondary);white-space:nowrap;">Date:</label>
+      <select id="date-select" onchange="onDateChange(this.value)" style="flex:1;padding:3px 6px;border-radius:4px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-size:13px;cursor:pointer;"></select>
+    </div>
     <div class="search-bar" id="search-bar">
       <span class="search-icon">&#128269;</span>
       <input type="text" id="search-input" placeholder="Search messages, tools, prompts..." oninput="onSearch(this.value)">
@@ -1097,6 +1133,257 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 const $ = s => document.querySelector(s);
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
 let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
+
+function cloneJson(value) {
+  if (value === undefined || value === null) return value;
+  try { return JSON.parse(JSON.stringify(value)); } catch(e) { return value; }
+}
+
+function isCodexResponsesWebSocketEntry(entry) {
+  if (entry?.transport !== 'websocket') return false;
+  const path = entry?.request?.path || '';
+  return path.endsWith('/backend-api/codex/responses') || path.endsWith('/v1/responses') || path === '/responses';
+}
+
+function getResponseIdFromEvent(event) {
+  const data = getEventData(event);
+  return data?.response?.id || data?.item?.id || data?.item_id || '';
+}
+
+function responseEventMatchesId(event, responseId) {
+  if (!responseId) return false;
+  const data = getEventData(event);
+  if (data?.response?.id === responseId) return true;
+  const itemId = data?.item?.id || data?.item_id || '';
+  return itemId.includes(responseId.slice(5, 25));
+}
+
+function splitWebSocketResponseEvents(events) {
+  const groups = [];
+  let current = null;
+  for (const event of events || []) {
+    const type = getEventType(event);
+    if (type === 'response.created') {
+      if (current && current.events.length) groups.push(current);
+      current = { responseId: getResponseIdFromEvent(event), events: [event] };
+      continue;
+    }
+    if (!current) continue;
+    if (responseEventMatchesId(event, current.responseId) || type.startsWith('response.')) {
+      current.events.push(event);
+    }
+    if (type === 'response.completed') {
+      groups.push(current);
+      current = null;
+    }
+  }
+  if (current && current.events.length) groups.push(current);
+  return groups.filter(group => group.events.some(event => getEventType(event) === 'response.completed'));
+}
+
+function completedResponseFromEvents(events) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (getEventType(events[i]) !== 'response.completed') continue;
+    const data = getEventData(events[i]);
+    if (data?.response && typeof data.response === 'object') return data.response;
+  }
+  return null;
+}
+
+function hasOutputItemEvent(events) {
+  return events.some(event => getEventType(event) === 'response.output_item.done');
+}
+
+function isDisplayableWebSocketResponseGroup(group) {
+  const completed = completedResponseFromEvents(group.events);
+  if (!completed) return false;
+  return !(completed.generate === false && !hasOutputItemEvent(group.events) && (completed.usage?.output_tokens || 0) === 0);
+}
+
+function responseCreatedFromEvents(events) {
+  for (const event of events) {
+    if (getEventType(event) !== 'response.created') continue;
+    const data = getEventData(event);
+    if (data?.response && typeof data.response === 'object') return data.response;
+  }
+  return null;
+}
+
+function mergeWebSocketResponseGroups(groups) {
+  const events = [];
+  for (const group of groups) events.push(...group.events);
+  return { responseId: groups.map(group => group.responseId).filter(Boolean).join('+'), events };
+}
+
+function normalizeWebSocketDerivedInput(input) {
+  if (!Array.isArray(input)) return input;
+  return input.map(item => {
+    if (!item || typeof item !== 'object' || item.type !== 'function_call_output') return item;
+    return {
+      type: 'message',
+      role: 'tool',
+      content: [{ type: 'tool_result', tool_use_id: item.call_id || '', content: item.output || '' }]
+    };
+  });
+}
+
+function webSocketOutputMessages(events) {
+  const messages = [];
+  const items = [];
+  for (const event of events || []) {
+    if (getEventType(event) !== 'response.output_item.done') continue;
+    const data = getEventData(event);
+    if (data?.item && Number.isInteger(data.output_index)) items.push({ outputIndex: data.output_index, item: data.item });
+  }
+  items.sort((a, b) => a.outputIndex - b.outputIndex);
+  for (const { item } of items) {
+    if (item.type === 'function_call') {
+      let input = item.arguments || {};
+      if (typeof input === 'string') {
+        try { input = JSON.parse(input); } catch(e) {}
+      }
+      messages.push({
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: item.call_id || item.id || '', name: item.name || '', input }]
+      });
+    } else if (item.type === 'message') {
+      messages.push({
+        type: 'message',
+        role: item.role || 'assistant',
+        content: Array.isArray(item.content) ? item.content : []
+      });
+    }
+  }
+  return messages;
+}
+
+function isToolResultInputItem(item) {
+  if (!item || typeof item !== 'object') return false;
+  if (item.type === 'function_call_output') return true;
+  if (item.role !== 'tool') return false;
+  const content = Array.isArray(item.content) ? item.content : [];
+  return content.some(block => block?.type === 'tool_result');
+}
+
+function uniqueMessages(messages) {
+  const seen = new Set();
+  const unique = [];
+  for (const message of messages) {
+    let key;
+    try { key = JSON.stringify(message); } catch(e) { key = String(message); }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(message);
+  }
+  return unique;
+}
+
+function regularMessagesFromBody(body) {
+  const normalized = normalizeWebSocketDerivedInput(Array.isArray(body?.input) ? body.input : []);
+  return normalized.filter(item => !isToolResultInputItem(item));
+}
+
+function buildWebSocketHistoryInput(input, priorGroups, priorRequestBodies) {
+  const normalized = normalizeWebSocketDerivedInput(Array.isArray(input) ? input : []);
+  const regularMessages = uniqueMessages([
+    ...(priorRequestBodies || []).flatMap(regularMessagesFromBody),
+    ...normalized.filter(item => !isToolResultInputItem(item))
+  ]);
+  const toolResults = normalized.filter(isToolResultInputItem);
+  const priorOutputs = (priorGroups || []).flatMap(group => webSocketOutputMessages(group.events));
+  return [...regularMessages, ...priorOutputs, ...toolResults];
+}
+
+function requestBodiesForWebSocketEntry(entry) {
+  const events = entry?.request?.ws_events;
+  if (Array.isArray(events) && events.length) {
+    return events
+      .map(event => getEventData(event))
+      .filter(event => event && typeof event === 'object');
+  }
+  return [];
+}
+
+function previousResponseIdForGroup(group) {
+  const created = responseCreatedFromEvents(group.events);
+  const completed = completedResponseFromEvents(group.events);
+  return created?.previous_response_id || completed?.previous_response_id || '';
+}
+
+function requestBodyForWebSocketGroup(entry, groups, idx) {
+  const requestBodies = requestBodiesForWebSocketEntry(entry);
+  const previousId = previousResponseIdForGroup(groups[idx]);
+  if (previousId) {
+    const matched = requestBodies.find(body => body?.previous_response_id === previousId);
+    if (matched) return matched;
+  }
+  const nonPrefetchBodies = requestBodies.filter(body => body?.generate !== false);
+  if (nonPrefetchBodies[idx]) return nonPrefetchBodies[idx];
+  if (requestBodies[idx]) return requestBodies[idx];
+  return idx === 0 ? bodyWithoutToolResultOnlyInput(entry.request?.body) : entry.request?.body;
+}
+
+function bodyWithoutToolResultOnlyInput(body) {
+  const next = cloneJson(body || {}) || {};
+  if (Array.isArray(next.input) && next.input.every(item => item?.type === 'function_call_output')) {
+    next.input = [];
+  }
+  return next;
+}
+
+function buildWebSocketResponseEntry(entry, groups, idx) {
+  const group = groups[idx];
+  const completed = completedResponseFromEvents(group.events) || {};
+  const created = responseCreatedFromEvents(group.events) || {};
+  const priorGroups = groups.slice(0, idx);
+  const priorRequestBodies = priorGroups.map((_, priorIdx) => requestBodyForWebSocketGroup(entry, groups, priorIdx));
+  const requestSource = requestBodyForWebSocketGroup(entry, groups, idx);
+  const requestBody = cloneJson(requestSource || {}) || {};
+  const source = Object.keys(completed).length ? completed : created;
+  for (const key of ['model', 'instructions', 'tools', 'previous_response_id', 'prompt_cache_key', 'tool_choice', 'parallel_tool_calls', 'text', 'reasoning']) {
+    if (source[key] !== undefined && source[key] !== null) requestBody[key] = source[key];
+  }
+  requestBody.input = buildWebSocketHistoryInput(requestBody.input, priorGroups, priorRequestBodies);
+  const createdAt = completed.created_at || created.created_at;
+  const completedAt = completed.completed_at;
+  const durationMs = createdAt && completedAt ? Math.max(0, (completedAt - createdAt) * 1000) : entry.duration_ms;
+  return {
+    ...cloneJson(entry),
+    request_id: `${entry.request_id || 'ws'}:${idx + 1}`,
+    turn: `${entry.turn || '?'}.${idx + 1}`,
+    duration_ms: durationMs,
+    timestamp: createdAt ? new Date(createdAt * 1000).toISOString() : entry.timestamp,
+    derived_from_websocket: true,
+    websocket_response_index: idx + 1,
+    request: {
+      ...(cloneJson(entry.request) || {}),
+      body: requestBody,
+    },
+    response: {
+      ...(cloneJson(entry.response) || {}),
+      body: cloneJson(completed),
+      ws_events: group.events,
+    },
+  };
+}
+
+function expandWebSocketResponseEntries(rawEntries) {
+  const expanded = [];
+  for (const entry of rawEntries || []) {
+    if (!isCodexResponsesWebSocketEntry(entry)) {
+      expanded.push(entry);
+      continue;
+    }
+    const groups = splitWebSocketResponseEvents(entry.response?.ws_events || []).filter(isDisplayableWebSocketResponseGroup);
+    if (groups.length <= 1) {
+      expanded.push(entry);
+      continue;
+    }
+    groups.forEach((group, idx) => expanded.push(buildWebSocketResponseEntry(entry, groups, idx)));
+  }
+  return expanded;
+}
 
 /* ─── Lazy loading infrastructure ─── */
 const LAZY_THRESHOLD = 50;
@@ -1163,6 +1450,31 @@ function buildStubEntry(meta, rawIdx) {
   };
 }
 
+function toolDisplayName(td) {
+  if (!td || typeof td !== 'object') return '';
+  const candidates = [
+    td.name,
+    td.function && typeof td.function === 'object' ? td.function.name : null,
+    td.id,
+    td.type
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'string' && value) return value;
+  }
+  return '';
+}
+
+function toolDescription(td) {
+  if (!td || typeof td !== 'object') return '';
+  const desc = td.description || (td.function && typeof td.function === 'object' ? td.function.description : '');
+  return typeof desc === 'string' ? desc : '';
+}
+
+function toolSchema(td) {
+  if (!td || typeof td !== 'object') return {};
+  return td.input_schema || td.parameters || (td.function && typeof td.function === 'object' ? td.function.parameters : null) || {};
+}
+
 function getFullEntry(entry) {
   if (!entry._isStub) return entry;
   const idx = entry._rawIdx;
@@ -1205,12 +1517,15 @@ const I18N = {
     turn: "Turn", tok: "tok",
     btn_request_json: "Request JSON", btn_curl: "cURL", btn_diff: "Diff with Prev",
     section_system: "System Prompt", section_messages: "Messages", section_tools: "Tools",
-    section_response: "Response", section_usage: "Token Usage", section_sse: "SSE Events", section_json: "Full JSON",
+    section_context: "Request Context", section_response: "Response", section_usage: "Token Usage", section_sse: "SSE Events", section_json: "Full JSON",
     copy: "Copy", copied: "Copied!",
     params: "Parameters", required: "required",
     tok_input: "Input", tok_output: "Output", tok_cache_read: "Cache Read", tok_cache_create: "Cache Create",
     empty_state: "No entries for selected paths", no_prev: "No previous request",
     no_content: "No content", no_messages: "No messages in either request",
+    response_context_only: "No response output captured; showing request context only.",
+    continuation_title: "Stateful Responses continuation",
+    continuation_message: "This request has previous_response_id but no captured user message history. The Responses input may be empty or contain only continuation items such as tool results, so the missing prompt/history may live in server-side state or an earlier uncaptured frame.",
     diff_unchanged: "previous messages unchanged", diff_msg_range: "message #1 ~ #",
     diff_new: "new", diff_removed: "removed", diff_added: "added", diff_changed: "changed",
     diff_no_change: "no change", diff_unchanged_lbl: "unchanged",
@@ -1218,6 +1533,7 @@ const I18N = {
     diff_chars: "chars", diff_tools_unchanged: "tools, unchanged", diff_trailing: "trailing messages unchanged",
     badge_messages: "messages", badge_tools: "tools", badge_events: "events",
     search_placeholder: "Search messages, tools, prompts...",
+    filter_more: "more", filter_less: "Show less",
     diff_sys_old: "Previous", diff_sys_new: "Current",
     diff_fallback_warning: "No exact thread match found — showing closest same-model request",
     diff_select_target: "Compare against:", diff_select_auto: "Auto",
@@ -1228,12 +1544,15 @@ const I18N = {
     turn: "轮次", tok: "tok",
     btn_request_json: "请求 JSON", btn_curl: "cURL", btn_diff: "对比上次",
     section_system: "系统提示词", section_messages: "消息", section_tools: "工具",
-    section_response: "响应", section_usage: "Token 用量", section_sse: "SSE 事件", section_json: "完整 JSON",
+    section_context: "请求上下文", section_response: "响应", section_usage: "Token 用量", section_sse: "SSE 事件", section_json: "完整 JSON",
     copy: "复制", copied: "已复制！",
     params: "参数", required: "必填",
     tok_input: "输入", tok_output: "输出", tok_cache_read: "缓存读取", tok_cache_create: "缓存创建",
     empty_state: "当前路径下无条目", no_prev: "无前序请求",
     no_content: "无内容", no_messages: "两次请求均无消息",
+    response_context_only: "未捕获到响应输出；当前仅展示请求上下文。",
+    continuation_title: "有状态 Responses 续接",
+    continuation_message: "此请求包含 previous_response_id，但没有捕获到用户消息历史。Responses input 可能为空，或仅包含工具结果等续接项，因此缺失的提示词/历史可能位于服务端状态中，或位于更早但未捕获的帧中。",
     diff_unchanged: "条前序消息未变化", diff_msg_range: "消息 #1 ~ #",
     diff_new: "新增", diff_removed: "移除", diff_added: "新增", diff_changed: "变化",
     diff_no_change: "无变化", diff_unchanged_lbl: "无变化",
@@ -1241,6 +1560,7 @@ const I18N = {
     diff_chars: "字符", diff_tools_unchanged: "个工具，无变化", diff_trailing: "末尾消息无变化",
     badge_messages: "条消息", badge_tools: "个工具", badge_events: "个事件",
     search_placeholder: "搜索消息、工具、提示词...",
+    filter_more: "更多", filter_less: "收起",
     diff_sys_old: "上次", diff_sys_new: "本次",
     diff_fallback_warning: "未找到精确线程匹配 — 显示最近的同模型请求",
     diff_select_target: "对比对象：", diff_select_auto: "自动",
@@ -1257,6 +1577,8 @@ const I18N = {
     tok_input: "入力", tok_output: "出力", tok_cache_read: "キャッシュ読取", tok_cache_create: "キャッシュ作成",
     empty_state: "選択パスにエントリがありません", no_prev: "前回のリクエストなし",
     no_content: "コンテンツなし", no_messages: "両方のリクエストにメッセージなし",
+    continuation_title: "ステートフルな Responses 継続",
+    continuation_message: "このリクエストには previous_response_id がありますが、ユーザーメッセージ履歴はキャプチャされていません。Responses input は空、またはツール結果などの継続項目のみである可能性があり、欠落したプロンプト/履歴はサーバー側状態または以前の未キャプチャフレームにある可能性があります。",
     diff_unchanged: "件の前のメッセージは変更なし", diff_msg_range: "メッセージ #1 ~ #",
     diff_new: "新規", diff_removed: "削除", diff_added: "追加", diff_changed: "変更",
     diff_no_change: "変更なし", diff_unchanged_lbl: "変更なし",
@@ -1264,6 +1586,7 @@ const I18N = {
     diff_chars: "文字", diff_tools_unchanged: "個のツール、変更なし", diff_trailing: "末尾メッセージ変更なし",
     badge_messages: "件のメッセージ", badge_tools: "個のツール", badge_events: "件のイベント",
     search_placeholder: "メッセージ、ツール、プロンプトを検索...",
+    filter_more: "他", filter_less: "折りたたむ",
     diff_sys_old: "前回", diff_sys_new: "今回",
     diff_fallback_warning: "正確なスレッド一致が見つかりません — 同モデルの直近のリクエストを表示",
     diff_select_target: "比較対象：", diff_select_auto: "自動",
@@ -1280,6 +1603,8 @@ const I18N = {
     tok_input: "입력", tok_output: "출력", tok_cache_read: "캐시 읽기", tok_cache_create: "캐시 생성",
     empty_state: "선택한 경로에 항목이 없습니다", no_prev: "이전 요청 없음",
     no_content: "내용 없음", no_messages: "두 요청 모두 메시지 없음",
+    continuation_title: "상태 저장 Responses 이어가기",
+    continuation_message: "이 요청에는 previous_response_id가 있지만 사용자 메시지 기록이 캡처되지 않았습니다. Responses input은 비어 있거나 도구 결과 같은 이어가기 항목만 포함할 수 있으므로 누락된 프롬프트/기록은 서버 측 상태나 이전에 캡처되지 않은 프레임에 있을 수 있습니다.",
     diff_unchanged: "개의 이전 메시지 변경 없음", diff_msg_range: "메시지 #1 ~ #",
     diff_new: "신규", diff_removed: "삭제", diff_added: "추가", diff_changed: "변경",
     diff_no_change: "변경 없음", diff_unchanged_lbl: "변경 없음",
@@ -1287,6 +1612,7 @@ const I18N = {
     diff_chars: "자", diff_tools_unchanged: "개 도구, 변경 없음", diff_trailing: "마지막 메시지 변경 없음",
     badge_messages: "개 메시지", badge_tools: "개 도구", badge_events: "개 이벤트",
     search_placeholder: "메시지, 도구, 프롬프트 검색...",
+    filter_more: "더보기", filter_less: "접기",
     diff_sys_old: "이전", diff_sys_new: "현재",
     diff_fallback_warning: "정확한 스레드 일치를 찾을 수 없습니다 — 가장 가까운 동일 모델 요청을 표시",
     diff_select_target: "비교 대상：", diff_select_auto: "자동",
@@ -1303,6 +1629,8 @@ const I18N = {
     tok_input: "Entrée", tok_output: "Sortie", tok_cache_read: "Lecture cache", tok_cache_create: "Création cache",
     empty_state: "Aucune entrée pour les chemins sélectionnés", no_prev: "Aucune requête précédente",
     no_content: "Pas de contenu", no_messages: "Aucun message dans les deux requêtes",
+    continuation_title: "Continuation Responses avec état",
+    continuation_message: "Cette requête contient previous_response_id mais aucun historique de messages utilisateur capturé. L'input Responses peut être vide ou ne contenir que des éléments de continuation comme des résultats d'outils; le prompt/l'historique manquant peut donc se trouver dans l'état serveur ou dans une trame antérieure non capturée.",
     diff_unchanged: "messages précédents inchangés", diff_msg_range: "message #1 ~ #",
     diff_new: "nouveau", diff_removed: "supprimé", diff_added: "ajouté", diff_changed: "modifié",
     diff_no_change: "aucun changement", diff_unchanged_lbl: "inchangé",
@@ -1310,6 +1638,7 @@ const I18N = {
     diff_chars: "car.", diff_tools_unchanged: "outils, inchangés", diff_trailing: "messages finaux inchangés",
     badge_messages: "messages", badge_tools: "outils", badge_events: "événements",
     search_placeholder: "Rechercher messages, outils, prompts...",
+    filter_more: "plus", filter_less: "Réduire",
     diff_sys_old: "Précédent", diff_sys_new: "Actuel",
     diff_fallback_warning: "Aucune correspondance de fil exacte trouvée — affichage de la requête du même modèle la plus proche",
     diff_select_target: "Comparer avec :", diff_select_auto: "Auto",
@@ -1326,6 +1655,8 @@ const I18N = {
     tok_input: "الإدخال", tok_output: "الإخراج", tok_cache_read: "قراءة التخزين", tok_cache_create: "إنشاء التخزين",
     empty_state: "لا توجد إدخالات للمسارات المحددة", no_prev: "لا يوجد طلب سابق",
     no_content: "لا يوجد محتوى", no_messages: "لا توجد رسائل في كلا الطلبين",
+    continuation_title: "استمرار Responses بحالة محفوظة",
+    continuation_message: "يحتوي هذا الطلب على previous_response_id ولكن لا يحتوي على سجل رسائل مستخدم ملتقط. قد يكون Responses input فارغاً أو يحتوي فقط على عناصر استمرار مثل نتائج الأدوات، لذلك قد يكون الموجه/السجل المفقود في حالة الخادم أو في إطار سابق لم يتم التقاطه.",
     diff_unchanged: "رسالة سابقة بدون تغيير", diff_msg_range: "الرسالة #1 ~ #",
     diff_new: "جديد", diff_removed: "محذوف", diff_added: "مضاف", diff_changed: "معدّل",
     diff_no_change: "بدون تغيير", diff_unchanged_lbl: "بدون تغيير",
@@ -1333,6 +1664,7 @@ const I18N = {
     diff_chars: "حرف", diff_tools_unchanged: "أداة، بدون تغيير", diff_trailing: "الرسائل الأخيرة بدون تغيير",
     badge_messages: "رسالة", badge_tools: "أداة", badge_events: "حدث",
     search_placeholder: "بحث في الرسائل والأدوات والموجهات...",
+    filter_more: "المزيد", filter_less: "تقليص",
     diff_sys_old: "السابق", diff_sys_new: "الحالي",
     diff_fallback_warning: "لم يتم العثور على تطابق دقيق للخيط — عرض أقرب طلب لنفس النموذج",
     diff_select_target: "مقارنة مع:", diff_select_auto: "تلقائي",
@@ -1349,6 +1681,8 @@ const I18N = {
     tok_input: "Eingabe", tok_output: "Ausgabe", tok_cache_read: "Cache-Lesen", tok_cache_create: "Cache-Erstellen",
     empty_state: "Keine Einträge für ausgewählte Pfade", no_prev: "Keine vorherige Anfrage",
     no_content: "Kein Inhalt", no_messages: "Keine Nachrichten in beiden Anfragen",
+    continuation_title: "Zustandsbehaftete Responses-Fortsetzung",
+    continuation_message: "Diese Anfrage enthält previous_response_id, aber keinen erfassten Benutzer-Nachrichtenverlauf. Das Responses input kann leer sein oder nur Fortsetzungselemente wie Tool-Ergebnisse enthalten; der fehlende Prompt/Verlauf kann daher im serverseitigen Zustand oder in einem früheren nicht erfassten Frame liegen.",
     diff_unchanged: "vorherige Nachrichten unverändert", diff_msg_range: "Nachricht #1 ~ #",
     diff_new: "neu", diff_removed: "entfernt", diff_added: "hinzugefügt", diff_changed: "geändert",
     diff_no_change: "keine Änderung", diff_unchanged_lbl: "unverändert",
@@ -1356,6 +1690,7 @@ const I18N = {
     diff_chars: "Zeichen", diff_tools_unchanged: "Werkzeuge, unverändert", diff_trailing: "letzte Nachrichten unverändert",
     badge_messages: "Nachrichten", badge_tools: "Werkzeuge", badge_events: "Ereignisse",
     search_placeholder: "Nachrichten, Werkzeuge, Prompts suchen...",
+    filter_more: "mehr", filter_less: "Weniger",
     diff_sys_old: "Vorherige", diff_sys_new: "Aktuelle",
     diff_fallback_warning: "Keine exakte Thread-Übereinstimmung gefunden — zeige nächste Anfrage desselben Modells",
     diff_select_target: "Vergleichen mit:", diff_select_auto: "Auto",
@@ -1372,6 +1707,8 @@ const I18N = {
     tok_input: "Ввод", tok_output: "Вывод", tok_cache_read: "Чтение кэша", tok_cache_create: "Создание кэша",
     empty_state: "Нет записей для выбранных путей", no_prev: "Нет предыдущего запроса",
     no_content: "Нет содержимого", no_messages: "Нет сообщений в обоих запросах",
+    continuation_title: "Состояние продолжения Responses",
+    continuation_message: "Этот запрос содержит previous_response_id, но не содержит захваченной истории пользовательских сообщений. Responses input может быть пустым или содержать только элементы продолжения, например результаты инструментов, поэтому отсутствующий промпт/история могут находиться в серверном состоянии или в более раннем незахваченном фрейме.",
     diff_unchanged: "предыдущих сообщений без изменений", diff_msg_range: "сообщение #1 ~ #",
     diff_new: "новое", diff_removed: "удалено", diff_added: "добавлено", diff_changed: "изменено",
     diff_no_change: "без изменений", diff_unchanged_lbl: "без изменений",
@@ -1379,6 +1716,7 @@ const I18N = {
     diff_chars: "симв.", diff_tools_unchanged: "инструм., без изменений", diff_trailing: "последние сообщения без изменений",
     badge_messages: "сообщений", badge_tools: "инструм.", badge_events: "событий",
     search_placeholder: "Поиск сообщений, инструментов, промптов...",
+    filter_more: "ещё", filter_less: "Свернуть",
     diff_sys_old: "Предыдущий", diff_sys_new: "Текущий",
     diff_fallback_warning: "Точное совпадение потока не найдено — показан ближайший запрос той же модели",
     diff_select_target: "Сравнить с:", diff_select_auto: "Авто",
@@ -1459,43 +1797,48 @@ function initLang() {
 let liveEventSource = null;
 let liveConnected = false;
 let currentDetailRequestId = null;
+let liveRecords = [];
+let viewingDate = null; // null = live, string = historical date
+let liveRenderTimer = null;
+const liveSeenIds = new Set();
 
 function initLiveMode() {
   const statusEl = $('#live-status');
   statusEl.style.display = 'flex';
   updateLiveStatus('connecting');
 
-  let renderTimer = null;
-
   liveEventSource = new EventSource('/events');
 
   liveEventSource.onopen = () => {
     liveConnected = true;
-    updateLiveStatus('connected');
+    updateLiveStatus('connected', liveRecords.length);
   };
 
   liveEventSource.onmessage = (event) => {
     try {
       const record = JSON.parse(event.data);
-      entries.push(record);
-      updateLiveStatus('connected', entries.length);
-      // Debounce rendering so initial batch of history records renders once
-      clearTimeout(renderTimer);
-      renderTimer = setTimeout(() => renderApp(true), 50);
+      // Deduplicate: SSE replays full history on each reconnect
+      const id = record.request_id || record.req_id;
+      if (id && liveSeenIds.has(id)) return;
+      if (id) liveSeenIds.add(id);
+
+      liveRecords.push(record);
+      if (!viewingDate) {
+        entries.push(...expandWebSocketResponseEntries([record]));
+        updateLiveStatus('connected', entries.length);
+        clearTimeout(liveRenderTimer);
+        liveRenderTimer = setTimeout(() => renderApp(true), 50);
+      }
     } catch (e) {
       console.error('Failed to parse SSE data:', e);
     }
   };
 
+  // EventSource auto-reconnects on transient errors;
+  // only update status indicator here.
   liveEventSource.onerror = () => {
     liveConnected = false;
     updateLiveStatus('disconnected');
-    // Attempt reconnect after 3 seconds
-    setTimeout(() => {
-      if (!liveConnected && liveEventSource.readyState === EventSource.CLOSED) {
-        initLiveMode();
-      }
-    }, 3000);
   };
 }
 
@@ -1515,16 +1858,49 @@ function updateLiveStatus(status, count) {
   el.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:${c.dot};${status === 'connected' ? 'animation:pulse 2s infinite;' : ''}"></span>${labels[status]}${countText}`;
 }
 
-// Add pulse animation for live indicator
-const pulseStyle = document.createElement('style');
-pulseStyle.textContent = '@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }';
-document.head.appendChild(pulseStyle);
+async function fetchDates() {
+  try {
+    const resp = await fetch('/api/dates');
+    const data = await resp.json();
+    const sel = $('#date-select');
+    if (!sel || !data.dates) return;
+    sel.innerHTML = '<option value="live">Live (current session)</option>';
+    for (const d of data.dates) {
+      sel.insertAdjacentHTML('beforeend', `<option value="${d}">${d}</option>`);
+    }
+    if (data.has_legacy) {
+      sel.insertAdjacentHTML('beforeend', '<option value="legacy">Legacy (flat)</option>');
+    }
+    const picker = $('#date-picker');
+    if (picker) picker.style.display = 'flex';
+  } catch (e) {
+    console.error('Failed to fetch dates:', e);
+  }
+}
+
+async function onDateChange(value) {
+  if (value === 'live') {
+    viewingDate = null;
+    entries = expandWebSocketResponseEntries(liveRecords.slice());
+    renderApp(true);
+    return;
+  }
+  viewingDate = value;
+  try {
+    const resp = await fetch('/api/traces/' + encodeURIComponent(value));
+    entries = expandWebSocketResponseEntries(await resp.json());
+    renderApp();
+  } catch (e) {
+    console.error('Failed to load traces for date:', value, e);
+  }
+}
 
 if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
-  entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? EMBEDDED_TRACE_DATA : [];
+  entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? expandWebSocketResponseEntries(EMBEDDED_TRACE_DATA) : [];
   document.addEventListener('DOMContentLoaded', () => {
     initTheme(); initLang(); initGlobalSearch();
     initLiveMode();
+    fetchDates();
     if (entries.length) renderApp();
     else {
       // Show waiting state
@@ -1537,7 +1913,7 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
   entries = EMBEDDED_TRACE_META.map((meta, i) => buildStubEntry(meta, i));
   document.addEventListener('DOMContentLoaded', () => { initTheme(); initLang(); initGlobalSearch(); renderApp(); });
 } else if (typeof EMBEDDED_TRACE_DATA !== 'undefined' && EMBEDDED_TRACE_DATA.length) {
-  entries = EMBEDDED_TRACE_DATA;
+  entries = expandWebSocketResponseEntries(EMBEDDED_TRACE_DATA);
   document.addEventListener('DOMContentLoaded', () => { initTheme(); initLang(); initGlobalSearch(); renderApp(); });
 } else {
   document.addEventListener('DOMContentLoaded', () => {
@@ -1553,7 +1929,7 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
 function loadFile(file) {
   const reader = new FileReader();
   reader.onload = () => {
-    entries = reader.result.trim().split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+    entries = expandWebSocketResponseEntries(reader.result.trim().split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean));
     if (!entries.length) { alert('No valid entries found / 未找到有效条目'); return; }
     renderApp();
   };
@@ -1573,7 +1949,9 @@ function renderApp(preserveDetail) {
   entries.forEach(e => { const p = getPath(e); pathCounts[p] = (pathCounts[p] || 0) + 1; });
   const paths = Object.keys(pathCounts).sort();
   if (activePaths.size === 0) {
-    if (paths.includes('/v1/messages')) activePaths.add('/v1/messages');
+    /* If the trace has main conversation paths, hide auxiliary setup calls by default. */
+    const primaryPaths = paths.filter(isPathPrimary);
+    if (primaryPaths.length > 0) primaryPaths.forEach(p => activePaths.add(p));
     else paths.forEach(p => activePaths.add(p));
   }
   renderPathFilter(paths, pathCounts);
@@ -1660,20 +2038,64 @@ function copyToClipboard(text, btn, copiedLabel = null) {
   });
 }
 
+let pathFilterExpanded = false;
+
+/*
+ * Path priority tiers:
+ *   primary   – core AI conversation endpoints, always visible
+ *   secondary – useful auxiliary APIs (MCP, models, token counting), collapsed behind "+N more"
+ *   noise     – plugin manifests, bot APIs, asset downloads, version checks — hidden by default
+ */
+const PRIMARY_PATH_PREFIXES = ['/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions'];
+const SECONDARY_PATH_PREFIXES = ['/v1/mcp', '/v1/models', '/v1/embeddings', '/responses', '/models', '/chat/completions', '/completions'];
+function isBedrockInvokePath(p) {
+  return p.startsWith('/model/') && (p.endsWith('/invoke') || p.endsWith('/invoke-with-response-stream'));
+}
+function pathTier(p) {
+  if (isBedrockInvokePath(p)) return 0;
+  if (PRIMARY_PATH_PREFIXES.some(pfx => p.startsWith(pfx))) return 0;
+  if (SECONDARY_PATH_PREFIXES.some(pfx => p.startsWith(pfx))) return 1;
+  return 2;
+}
+function isPathPrimary(p) { return pathTier(p) === 0; }
+
 function renderPathFilter(paths, pathCounts) {
   const c = $('#path-filter'); c.innerHTML = '';
-  paths.forEach(p => {
-    const chip = document.createElement('button');
-    chip.className = 'filter-chip' + (activePaths.has(p) ? ' active' : '');
-    chip.innerHTML = `${esc(p)}<span class="chip-count">${pathCounts[p]}</span>`;
-    chip.onclick = () => {
-      if (activePaths.has(p)) activePaths.delete(p); else activePaths.add(p);
-      if (activePaths.size === 0) activePaths.add(p);
-      chip.classList.toggle('active');
-      applyFilter();
-    };
-    c.appendChild(chip);
-  });
+  const buckets = [[], [], []]; /* primary, secondary, noise */
+  paths.forEach(p => buckets[pathTier(p)].push(p));
+  buckets.forEach(b => b.sort((a, bb) => pathCounts[bb] - pathCounts[a]));
+
+  /* Always show primary */
+  buckets[0].forEach(p => c.appendChild(makeFilterChip(p, pathCounts[p])));
+
+  const hiddenPaths = [...buckets[1], ...buckets[2]];
+  if (hiddenPaths.length > 0) {
+    if (pathFilterExpanded) {
+      buckets[1].forEach(p => c.appendChild(makeFilterChip(p, pathCounts[p])));
+      buckets[2].forEach(p => c.appendChild(makeFilterChip(p, pathCounts[p])));
+    }
+    const toggle = document.createElement('button');
+    toggle.className = 'filter-chip-toggle';
+    toggle.textContent = pathFilterExpanded ? t('filter_less') : `+${hiddenPaths.length} ${t('filter_more')}`;
+    toggle.onclick = () => { pathFilterExpanded = !pathFilterExpanded; renderPathFilter(paths, pathCounts); };
+    c.appendChild(toggle);
+  }
+}
+
+function makeFilterChip(p, count) {
+  const chip = document.createElement('button');
+  chip.className = 'filter-chip' + (activePaths.has(p) ? ' active' : '');
+  /* Truncate long paths: show last 40 chars with ellipsis */
+  const label = p.length > 40 ? '\u2026' + p.slice(-39) : p;
+  chip.innerHTML = `<span title="${esc(p)}">${esc(label)}</span><span class="chip-count">${count}</span>`;
+  chip.title = p;
+  chip.onclick = () => {
+    if (activePaths.has(p)) activePaths.delete(p); else activePaths.add(p);
+    if (activePaths.size === 0) activePaths.add(p);
+    chip.classList.toggle('active');
+    applyFilter();
+  };
+  return chip;
 }
 
 function applyFilter(preserveDetail) {
@@ -1704,20 +2126,18 @@ function applyFilter(preserveDetail) {
   $('#stat-turns').textContent = filtered.length;
   $('#stat-tokens').textContent = totalTokens.toLocaleString();
   $('#stat-duration').textContent = fmtDuration(totalDuration);
-  // Token summary bar
-  const tsb = $('#token-summary-bar');
+  // Token breakdown in header
   if (totalTokens > 0) {
-    let parts = [
-      `<span style="color:var(--blue)">⬤</span> Input: <b>${sumInput.toLocaleString()}</b>`,
-      `<span style="color:var(--green)">⬤</span> Output: <b>${sumOutput.toLocaleString()}</b>`,
-    ];
-    if (sumCacheRead) parts.push(`<span style="color:var(--cyan)">⬤</span> Cache Read: <b>${sumCacheRead.toLocaleString()}</b>`);
-    if (sumCacheCreate) parts.push(`<span style="color:var(--amber)">⬤</span> Cache Write: <b>${sumCacheCreate.toLocaleString()}</b>`);
-    parts.push(`Total: <b>${totalTokens.toLocaleString()}</b>`);
-    tsb.innerHTML = parts.join('<span style="color:var(--border);margin:0 4px">|</span>');
-    tsb.style.display = 'flex';
+    $('#stat-input').textContent = sumInput.toLocaleString();
+    $('#stat-input-group').style.display = 'flex';
+    $('#stat-output').textContent = sumOutput.toLocaleString();
+    $('#stat-output-group').style.display = 'flex';
+    if (sumCacheRead) { $('#stat-cache-read').textContent = sumCacheRead.toLocaleString(); $('#stat-cache-read-group').style.display = 'flex'; }
+    else { $('#stat-cache-read-group').style.display = 'none'; }
+    if (sumCacheCreate) { $('#stat-cache-write').textContent = sumCacheCreate.toLocaleString(); $('#stat-cache-write-group').style.display = 'flex'; }
+    else { $('#stat-cache-write-group').style.display = 'none'; }
   } else {
-    tsb.style.display = 'none';
+    ['stat-input-group','stat-output-group','stat-cache-read-group','stat-cache-write-group'].forEach(id => $('#'+id).style.display = 'none');
   }
   renderToolFilter();
   renderSidebar(preserveDetail);
@@ -1782,7 +2202,7 @@ function matchSearch(e, q) {
     if (turn.includes(q)) return true;
     const tools = e.request?.body?.tools || [];
     for (const td of tools) {
-      if ((td.name || '').toLowerCase().includes(q)) return true;
+      if (toolDisplayName(td).toLowerCase().includes(q)) return true;
     }
     const rc = e.response?.body?.content;
     if (Array.isArray(rc)) {
@@ -1803,8 +2223,8 @@ function matchSearch(e, q) {
   }
   const tools = body?.tools || [];
   for (const td of tools) {
-    if ((td.name || '').toLowerCase().includes(q)) return true;
-    if ((td.description || '').toLowerCase().includes(q)) return true;
+    if (toolDisplayName(td).toLowerCase().includes(q)) return true;
+    if (toolDescription(td).toLowerCase().includes(q)) return true;
   }
   const ro = getResponseOutput(e);
   const rc = ro?.content;
@@ -1879,7 +2299,7 @@ function getEntrySearchText(entry) {
   (body?.tools || []).forEach(td => parts.push(JSON.stringify(td)));
   const output = getResponseOutput(resolved);
   if (output?.content) parts.push(msgToText({ role: 'assistant', content: output.content }));
-  (resolved.response?.sse_events || []).forEach(ev => parts.push(JSON.stringify(ev)));
+  getResponseEvents(resolved).forEach(ev => parts.push(JSON.stringify(ev)));
   parts.push(JSON.stringify(resolved));
   const text = parts.join('\n').toLowerCase();
   globalSearchState.textCache.set(entry.request_id, text);
@@ -2128,7 +2548,7 @@ function getTaskFingerprint(e) {
   }
   // Tool names sorted for stable fingerprint
   const tools = body.tools || [];
-  const toolKey = tools.map(t => t.name).sort().join(',');
+  const toolKey = tools.map(toolDisplayName).sort().join(',');
   // Build fingerprint from full system prompt + tool set
   const fp = sysText + '|' + toolKey;
   // Derive a short label from system prompt content
@@ -2136,6 +2556,7 @@ function getTaskFingerprint(e) {
   let label = '';
   if (!sysText && !tools.length) label = 'simple';
   else if (lower.includes('claude code')) label = 'Claude Code';
+  else if (lower.includes('claude agent')) label = 'Claude Agent';
   else if (lower.includes('you are codex')) label = 'Codex';
   else if (lower.includes('openclaw')) label = 'OpenClaw';
   else if (lower.includes('subagent') || lower.includes('sub-agent')) label = 'Subagent';
@@ -2143,7 +2564,10 @@ function getTaskFingerprint(e) {
   else if (lower.includes('explore')) label = 'Explore';
   else if (lower.includes('plan')) label = 'Plan';
   else if (sysText) {
-    const firstLine = sysText.split('\n').find(l => l.trim()) || '';
+    const firstLine = sysText.split('\n').find(l => {
+      const line = l.trim().toLowerCase();
+      return line && !line.startsWith('x-anthropic-billing-header:');
+    }) || '';
     label = firstLine.slice(0, 20).trim() || (tools.length + ' tools');
   } else {
     label = tools.length + ' tools';
@@ -2430,9 +2854,48 @@ function selectEntry(idx, opts) {
 }
 
 /* ─── Detail ─── */
+// Persist section collapse state across turn switches.
+// Key: section title text, Value: true = open, false = collapsed.
+const sectionCollapseState = {};
+
+function saveSectionStates() {
+  const d = $('#detail');
+  if (!d) return;
+  d.querySelectorAll('.section').forEach(sec => {
+    const titleEl = sec.querySelector('.section-header .title');
+    const bodyEl = sec.querySelector('.section-body');
+    if (titleEl && bodyEl) {
+      sectionCollapseState[titleEl.textContent] = bodyEl.classList.contains('open');
+    }
+  });
+}
+
+function restoreSectionStates() {
+  const d = $('#detail');
+  if (!d) return;
+  d.querySelectorAll('.section').forEach(sec => {
+    const titleEl = sec.querySelector('.section-header .title');
+    const bodyEl = sec.querySelector('.section-body');
+    const chevron = sec.querySelector('.chevron');
+    if (!titleEl || !bodyEl || !chevron) return;
+    const key = titleEl.textContent;
+    if (key in sectionCollapseState) {
+      const shouldBeOpen = sectionCollapseState[key];
+      if (shouldBeOpen && !bodyEl.classList.contains('open')) {
+        bodyEl.classList.add('open');
+        chevron.classList.add('open');
+      } else if (!shouldBeOpen && bodyEl.classList.contains('open')) {
+        bodyEl.classList.remove('open');
+        chevron.classList.remove('open');
+      }
+    }
+  });
+}
+
 function renderDetail(e) {
+  saveSectionStates();
   currentDetailRequestId = e.request_id;
-  const d = $('#detail'); d.scrollTop = 0;
+  const d = $('#detail');
   const reqBody = e.request?.body, respBody = e.response?.body, usage = getUsage(e);
   const statusCode = getResponseStatus(e);
   const isError = statusCode >= 400;
@@ -2442,6 +2905,8 @@ function renderDetail(e) {
   if (isError) {
     html += `<div class="error-banner"><div class="eb-icon">&#9888;</div><div class="eb-content"><div class="eb-title">HTTP ${statusCode}</div><div class="eb-message">${esc(errorMessage)}</div></div></div>`;
   }
+  const continuation = getResponsesContinuationInfo(e);
+  if (continuation) html += renderResponsesContinuationNotice(continuation);
 
   // Action bar
   html += `<div class="action-bar">
@@ -2458,19 +2923,24 @@ function renderDetail(e) {
   const sysPrompt = extractSystem(reqBody);
   if (sysPrompt) html += section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt);
 
+  const respOutput = getResponseOutput(e);
   const msgs = getMessages(reqBody);
-  if (msgs && msgs.length) html += section(t('section_messages'), renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'));
+  const contextOnly = shouldRenderRequestContext(e, reqBody, msgs, respOutput);
+  if (msgs && msgs.length) {
+    const title = contextOnly ? t('section_context') : t('section_messages');
+    html += section(title, renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'));
+  }
 
-  const respOutput = respBody?.content ? respBody : getResponseOutput(e);
-  if (respOutput?.content) html += section(t('section_response'), renderResponseContent(respOutput), true);
+  if (respOutput?.content || contextOnly) html += section(t('section_response'), renderResponseContent(respOutput, contextOnly), true);
 
-  const sseEvents = e.response?.sse_events;
-  if (sseEvents && sseEvents.length) html += section(t('section_sse'), renderSSEEvents(sseEvents), false, null, sseEvents.length + ' ' + t('badge_events'));
+  const streamEvents = getResponseEvents(e);
+  if (streamEvents.length) html += section(t('section_sse'), renderSSEEvents(streamEvents), false, null, streamEvents.length + ' ' + t('badge_events'));
 
   html += section(t('section_json'), `<div class="json-view">${syntaxHL(e)}</div>`, false, JSON.stringify(e, null, 2));
 
   d.innerHTML = html;
   bindSections(d);
+  restoreSectionStates();
   if (globalSearchState.open && globalSearchState.query) {
     const target = getTargetForGlobalMatch(globalSearchState.currentMatch);
     const localIndex = target && target.requestId === e.request_id ? target.localIndex : 0;
@@ -2488,75 +2958,181 @@ function extractSystem(body) {
   return null;
 }
 
+function getResponseEvents(entry) {
+  const sse = entry?.response?.sse_events;
+  if (Array.isArray(sse) && sse.length > 0) return sse;
+  const ws = entry?.response?.ws_events;
+  return Array.isArray(ws) ? ws : [];
+}
+
+function getEventType(event) {
+  if (!event || typeof event !== 'object') return '';
+  return typeof event.event === 'string' ? event.event : (typeof event.type === 'string' ? event.type : '');
+}
+
+function getEventData(event) {
+  if (!event || typeof event !== 'object') return null;
+  let data = Object.prototype.hasOwnProperty.call(event, 'data') ? event.data : event;
+  if (typeof data === 'string') {
+    try { data = JSON.parse(data); } catch(e) { return null; }
+  }
+  return data && typeof data === 'object' ? data : null;
+}
+
+function getResponsePayload(entry) {
+  const body = entry?.response?.body;
+  if (body && typeof body === 'object') return body;
+  const response = entry?.response;
+  if (!response || typeof response !== 'object') return null;
+  if (response.output || response.content || response.usage || response.previous_response_id || response.id || response.error) return response;
+  return null;
+}
+
+function getResponsesContinuationInfo(entry) {
+  if (entry?.derived_from_websocket) return null;
+  const body = entry?.request?.body;
+  if (!body || typeof body !== 'object') return null;
+  const path = entry?.request?.path || '';
+  const looksLikeResponses = path.endsWith('/v1/responses') || path === '/responses' || body.type === 'response.create' || Array.isArray(body.input);
+  if (!looksLikeResponses) return null;
+  const payload = getResponsePayload(entry) || {};
+  const previousId = payload.previous_response_id || body.previous_response_id;
+  if (!previousId) return null;
+  const messages = getMessages(body).filter(m => m.role === 'user' || m.role === 'tool');
+  if (messages.length > 0) return null;
+  const headers = entry?.request?.headers || {};
+  return {
+    response_id: payload.id || '',
+    previous_response_id: previousId,
+    prompt_cache_key: body.prompt_cache_key || '',
+    session_id: headers.session_id || headers['session-id'] || '',
+    codex_version: headers.version || headers['x-codex-version'] || '',
+  };
+}
+
 // Normalize messages from Chat Completions (body.messages) or Responses API (body.input)
 function getMessages(body) {
   if (!body) return [];
   if (Array.isArray(body.messages) && body.messages.length > 0) return body.messages;
   if (Array.isArray(body.input)) {
-    return body.input.filter(item => item.type === 'message').map(item => ({
+    const messages = body.input.filter(item => {
+      if (!item || typeof item !== 'object') return false;
+      if (typeof item.role !== 'string' || !item.role) return false;
+      return item.type === undefined || item.type === 'message';
+    }).map(item => ({
       role: item.role || 'user',
       content: Array.isArray(item.content)
-        ? item.content.map(c => c.type === 'input_text' ? { type: 'text', text: c.text } : c)
+        ? item.content.map(c => {
+            if (!c || typeof c !== 'object') return c;
+            if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { type: 'text', text: c.text };
+            if (c.type === 'tool_use') return c;
+            if (c.type === 'tool_result') return c;
+            return c;
+          })
         : item.content
     }));
+    const hasDeveloperMessage = messages.some(m => m.role === 'developer' || m.role === 'system');
+    if (!hasDeveloperMessage && typeof body.instructions === 'string' && body.instructions.trim()) {
+      return [{ role: 'developer', content: [{ type: 'text', text: body.instructions }] }, ...messages];
+    }
+    return messages;
   }
   return [];
 }
 
+function shouldRenderRequestContext(entry, body, msgs, respOutput) {
+  if (!entry || !body || !Array.isArray(msgs) || msgs.length === 0) return false;
+  const path = getPath(entry);
+  if (!path.includes('/codex/responses')) return false;
+  if (!Array.isArray(body.input) || body.input.length === 0) return false;
+  return true;
+}
+
 // Extract token usage from response.body.usage or SSE response.completed event
 function getUsage(entry) {
-  const u = entry?.response?.body?.usage;
+  const u = getResponsePayload(entry)?.usage;
   if (u) return u;
-  const sse = entry?.response?.sse_events;
-  if (Array.isArray(sse)) {
-    for (let i = sse.length - 1; i >= 0; i--) {
-      if (sse[i].event === 'response.completed') {
-        let data = sse[i].data;
-        if (typeof data === 'string') { try { data = JSON.parse(data); } catch(e) { continue; } }
-        if (data?.response?.usage) return data.response.usage;
-      }
-    }
+  const events = getResponseEvents(entry);
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (getEventType(events[i]) !== 'response.completed') continue;
+    const data = getEventData(events[i]);
+    if (data?.response?.usage) return data.response.usage;
   }
   return null;
 }
 
+function normalizeResponseOutput(output) {
+  if (!Array.isArray(output) || output.length === 0) return null;
+  const content = [];
+  for (const item of output) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'message' && Array.isArray(item.content)) {
+      for (const c of item.content) {
+        if (c?.type === 'output_text') content.push({ type: 'text', text: c.text });
+        else content.push(c);
+      }
+    } else if (item.type === 'function_call') {
+      content.push({ type: 'tool_use', name: item.name, input: item.arguments ? (typeof item.arguments === 'string' ? (() => { try { return JSON.parse(item.arguments); } catch(e) { return item.arguments; } })() : item.arguments) : {} });
+    } else if (item.type === 'reasoning') {
+      if (!item.summary) continue;
+      const summaryText = Array.isArray(item.summary) ? item.summary.map(s => s?.text || '').join('\n') : (item.summary.text || JSON.stringify(item.summary));
+      if (summaryText.trim()) content.push({ type: 'thinking', thinking: summaryText });
+    }
+  }
+  return content.length > 0 ? { content } : null;
+}
+
+function reconstructOutputFromEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) return null;
+  const outputItems = [];
+  for (const ev of events) {
+    if (getEventType(ev) !== 'response.output_item.done') continue;
+    const data = getEventData(ev);
+    const item = data?.item;
+    const outputIndex = data?.output_index;
+    if (!item || typeof item !== 'object' || !Number.isInteger(outputIndex)) continue;
+    outputItems.push({ outputIndex, item });
+  }
+  if (outputItems.length === 0) return null;
+  return normalizeResponseOutput(
+    outputItems
+      .sort((a, b) => a.outputIndex - b.outputIndex)
+      .map(({ item }) => item)
+  );
+}
+
 // Extract response output from response.body.content or SSE response.completed event
 function getResponseOutput(entry) {
-  const body = entry?.response?.body;
+  const body = getResponsePayload(entry);
   if (body?.content) return body;
-  const sse = entry?.response?.sse_events;
-  if (Array.isArray(sse)) {
-    for (let i = sse.length - 1; i >= 0; i--) {
-      if (sse[i].event === 'response.completed') {
-        let data = sse[i].data;
-        if (typeof data === 'string') { try { data = JSON.parse(data); } catch(e) { continue; } }
-        const output = data?.response?.output;
-        if (Array.isArray(output) && output.length > 0) {
-          // Convert Responses API output to content blocks for rendering
-          const content = [];
-          for (const item of output) {
-            if (item.type === 'message' && Array.isArray(item.content)) {
-              for (const c of item.content) {
-                if (c.type === 'output_text') content.push({ type: 'text', text: c.text });
-                else content.push(c);
-              }
-            } else if (item.type === 'function_call') {
-              content.push({ type: 'tool_use', name: item.name, input: item.arguments ? (typeof item.arguments === 'string' ? (() => { try { return JSON.parse(item.arguments); } catch(e) { return item.arguments; } })() : item.arguments) : {} });
-            } else if (item.type === 'reasoning') {
-              if (item.summary) {
-                const summaryText = Array.isArray(item.summary) ? item.summary.map(s => s.text || '').join('\n') : (item.summary.text || JSON.stringify(item.summary));
-                content.push({ type: 'thinking', thinking: summaryText });
-              }
-            }
-          }
-          if (content.length > 0) return { content };
-        }
-      }
-    }
+  const fromBody = normalizeResponseOutput(body?.output);
+  if (fromBody) return fromBody;
+  const events = getResponseEvents(entry);
+  const fromItems = reconstructOutputFromEvents(events);
+  if (fromItems) return fromItems;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (getEventType(events[i]) !== 'response.completed') continue;
+    const data = getEventData(events[i]);
+    const normalized = normalizeResponseOutput(data?.response?.output);
+    if (normalized) return normalized;
   }
   return null;
 }
 function renderSystemPrompt(text) { return `<div class="pre-text">${esc(text)}</div>`; }
+
+function renderResponsesContinuationNotice(info) {
+  const rows = [
+    ['previous_response_id', info.previous_response_id],
+    ['response_id', info.response_id],
+    ['prompt_cache_key', info.prompt_cache_key],
+    ['session_id', info.session_id],
+    ['codex_version', info.codex_version],
+  ].filter(([, value]) => value);
+  const meta = rows.length
+    ? `<div class="cb-meta">${rows.map(([key, value]) => `<div class="cb-key">${esc(key)}</div><div class="cb-val">${esc(value)}</div>`).join('')}</div>`
+    : '';
+  return `<div class="continuation-banner"><div class="cb-icon">&#9888;</div><div class="cb-content"><div class="cb-title">${esc(t('continuation_title'))}</div><div class="cb-message">${esc(t('continuation_message'))}</div>${meta}</div></div>`;
+}
 
 function renderMessages(msgs) {
   return msgs.map(m => {
@@ -2571,7 +3147,11 @@ function renderContent(content, role) {
   if (!Array.isArray(content)) return `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
   return content.map(block => {
     if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') { const txt = block.text || ''; if (!txt.trim()) return ''; return `<div class="content-block">${esc(txt)}</div>`; }
-    if (block.type === 'thinking') return `<div class="content-block"><span class="thinking-label">thinking</span><div class="pre-text">${esc(block.thinking || '')}</div></div>`;
+    if (block.type === 'thinking') {
+      const thinking = block.thinking || '';
+      if (!thinking.trim()) return '';
+      return `<div class="content-block"><span class="thinking-label">thinking</span><div class="pre-text">${esc(thinking)}</div></div>`;
+    }
     if (block.type === 'tool_use') return `<div class="content-block"><span class="tool-use-label">${esc(block.name || 'tool_use')}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre></div>`;
     if (block.type === 'tool_result') {
       const rc = block.content;
@@ -2606,9 +3186,9 @@ function renderContent(content, role) {
 
 function renderTools(tools) {
   return tools.map(td => {
-    const name = td.name || 'unknown', desc = td.description || '';
+    const name = toolDisplayName(td) || 'unknown', desc = toolDescription(td);
     const shortDesc = desc.split('\n')[0].substring(0, 120);
-    const schema = td.input_schema || td.parameters || {};
+    const schema = toolSchema(td);
     const props = schema.properties || {};
     const required = new Set(schema.required || []);
     let paramsHtml = '';
@@ -2626,8 +3206,11 @@ function renderTools(tools) {
   }).join('');
 }
 
-function renderResponseContent(body) {
-  if (!body.content) return `<em style="color:var(--text-tertiary)">${t('no_content')}</em>`;
+function renderResponseContent(body, contextOnly = false) {
+  if (!body?.content) {
+    const msg = contextOnly ? t('response_context_only') : t('no_content');
+    return `<em style="color:var(--text-tertiary)">${msg}</em>`;
+  }
   return renderContent(body.content, 'assistant');
 }
 
@@ -2645,9 +3228,11 @@ function renderTokenUsage(u) {
 
 function renderSSEEvents(events) {
   return events.map(e => {
-    const data = typeof e.data === 'string' ? e.data : JSON.stringify(e.data);
+    const eventType = getEventType(e) || 'event';
+    const payload = Object.prototype.hasOwnProperty.call(e, 'data') ? e.data : e;
+    const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
     const short = data.length > 200 ? data.substring(0, 200) + '...' : data;
-    return `<div class="sse-event"><span class="sse-type">${esc(e.event)}</span><span class="sse-data">${esc(short)}</span></div>`;
+    return `<div class="sse-event"><span class="sse-type">${esc(eventType)}</span><span class="sse-data">${esc(short)}</span></div>`;
   }).join('');
 }
 
@@ -3042,8 +3627,8 @@ function structuralDiff(oldB, newB) {
   d.oldSystemText = oldSys;
   d.newSystemText = newSys;
   // Tools — find added/removed by name
-  const oldTools = (oldB.tools || []).map(x => x.name);
-  const newTools = (newB.tools || []).map(x => x.name);
+  const oldTools = (oldB.tools || []).map(toolDisplayName);
+  const newTools = (newB.tools || []).map(toolDisplayName);
   const oldSet = new Set(oldTools), newSet = new Set(newTools);
   d.addedTools = newTools.filter(n => !oldSet.has(n));
   d.removedTools = oldTools.filter(n => !newSet.has(n));

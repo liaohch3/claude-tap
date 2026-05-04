@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+
+from claude_tap.sse import SSEReassembler
 
 try:
     CLAUDE_TAP_VERSION = _pkg_version("claude-tap")
@@ -13,6 +16,163 @@ except Exception:
 
 # Threshold: traces with more entries than this use lazy mode
 LAZY_THRESHOLD = 50
+
+
+def _iter_response_events(resp: dict) -> list[dict]:
+    """Return stream events from SSE or WebSocket traces."""
+    if not isinstance(resp, dict):
+        return []
+    events = resp.get("sse_events")
+    if isinstance(events, list) and events:
+        return events
+    events = resp.get("ws_events")
+    if isinstance(events, list):
+        return events
+    return []
+
+
+def _event_type(event: dict) -> str:
+    if not isinstance(event, dict):
+        return ""
+    value = event.get("event") or event.get("type")
+    return value if isinstance(value, str) else ""
+
+
+def _event_payload(event: dict) -> dict | None:
+    if not isinstance(event, dict):
+        return None
+    payload = event.get("data", event)
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
+    """Extract Anthropic stream events from a decoded AWS EventStream body.
+
+    Bedrock invoke-with-response-stream responses are binary AWS EventStream
+    frames. Legacy traces may contain those bytes decoded as text with invalid
+    frame bytes replaced, but the JSON payloads inside the frames remain intact.
+    """
+    if not isinstance(body, str) or '"bytes"' not in body:
+        return []
+
+    events: list[dict] = []
+    decoder = json.JSONDecoder()
+    pos = 0
+    while True:
+        start = body.find('{"', pos)
+        if start < 0:
+            break
+        try:
+            frame, end = decoder.raw_decode(body[start:])
+        except json.JSONDecodeError:
+            pos = start + 1
+            continue
+        pos = start + end
+
+        if not isinstance(frame, dict):
+            continue
+        encoded = frame.get("bytes")
+        if not isinstance(encoded, str):
+            continue
+        try:
+            payload_bytes = base64.b64decode(encoded, validate=True)
+            payload = json.loads(payload_bytes)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        event_type = payload.get("type")
+        if isinstance(event_type, str) and event_type:
+            events.append({"event": event_type, "data": payload})
+
+    return events
+
+
+def _normalize_record_for_viewer(record_json: str) -> str:
+    """Normalize trace variants into the shape expected by viewer.html."""
+    try:
+        record = json.loads(record_json)
+    except (json.JSONDecodeError, TypeError):
+        return record_json
+    if not isinstance(record, dict):
+        return record_json
+
+    response = record.get("response")
+    if not isinstance(response, dict):
+        return record_json
+
+    events = _decode_bedrock_eventstream_events(response.get("body"))
+    if not events:
+        return record_json
+
+    reassembler = SSEReassembler()
+    for event in events:
+        reassembler.add_event(event["event"], event["data"])
+
+    reconstructed = reassembler.reconstruct()
+    if reconstructed:
+        response["body"] = reconstructed
+    response.setdefault("sse_events", events)
+
+    return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+
+
+def _extract_request_messages(body: dict) -> list[dict]:
+    if not isinstance(body, dict):
+        return []
+    msgs = body.get("messages")
+    if isinstance(msgs, list) and msgs:
+        return [msg for msg in msgs if isinstance(msg, dict)]
+
+    inp = body.get("input")
+    if not isinstance(inp, list):
+        return []
+
+    normalized = []
+    for item in inp:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") not in (None, "message") and "role" not in item:
+            continue
+        role = item.get("role")
+        if not isinstance(role, str) or not role:
+            continue
+        normalized.append({"role": role, "content": item.get("content")})
+    return normalized
+
+
+def _extract_response_tool_names(output: list) -> list[str]:
+    names: list[str] = []
+    if not isinstance(output, list):
+        return names
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "message":
+            for c in item.get("content") or []:
+                if isinstance(c, dict) and c.get("type") == "tool_use":
+                    names.append(c.get("name", ""))
+        elif item.get("type") == "function_call":
+            names.append(item.get("name", ""))
+    return names
+
+
+def _tool_display_name(tool: dict) -> str:
+    for value in (
+        tool.get("name"),
+        (tool.get("function") or {}).get("name") if isinstance(tool.get("function"), dict) else None,
+        tool.get("id"),
+        tool.get("type"),
+    ):
+        if isinstance(value, str) and value:
+            return value
+    return ""
 
 
 def _extract_metadata(record_json: str) -> dict | None:
@@ -30,23 +190,23 @@ def _extract_metadata(record_json: str) -> dict | None:
     body = req.get("body") or {}
     resp = r.get("response") or {}
     resp_body = resp.get("body") or {}
+    if not isinstance(body, dict):
+        body = {}
+    if not isinstance(resp_body, dict):
+        resp_body = {}
+    stream_events = _iter_response_events(resp)
 
-    # Token usage — from response.body.usage or SSE response.completed
+    # Token usage — from response.body.usage or terminal stream event
     usage = resp_body.get("usage") or {}
     if not usage:
-        sse = resp.get("sse_events") or []
-        for ev in reversed(sse):
-            if ev.get("event") == "response.completed":
-                data = ev.get("data")
-                if isinstance(data, str):
-                    try:
-                        data = json.loads(data)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                if isinstance(data, dict):
-                    usage = (data.get("response") or {}).get("usage") or {}
-                    if usage:
-                        break
+        for ev in reversed(stream_events):
+            if _event_type(ev) != "response.completed":
+                continue
+            data = _event_payload(ev)
+            if isinstance(data, dict):
+                usage = (data.get("response") or {}).get("usage") or {}
+                if usage:
+                    break
 
     # System prompt hint (first 200 chars)
     sys_text = ""
@@ -64,45 +224,32 @@ def _extract_metadata(record_json: str) -> dict | None:
         sys_text = body["instructions"]
 
     # Messages
-    msgs = body.get("messages") or []
-    if not msgs:
-        inp = body.get("input") or []
-        msgs = [item for item in inp if isinstance(item, dict) and item.get("type") == "message"]
+    msgs = _extract_request_messages(body)
 
     # Tool names from request
     tools = body.get("tools") or []
-    tool_names = [t.get("name", "") for t in tools if isinstance(t, dict)]
+    tool_names = [_tool_display_name(t) for t in tools if isinstance(t, dict)]
 
     # Response tool names (tool_use blocks in response content)
     response_tool_names = []
     # Try response.body.content first
     rc = resp_body.get("content") or []
-    if not rc:
-        # Try SSE response.completed
-        sse = resp.get("sse_events") or []
-        for ev in reversed(sse):
-            if ev.get("event") == "response.completed":
-                data = ev.get("data")
-                if isinstance(data, str):
-                    try:
-                        data = json.loads(data)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                if isinstance(data, dict):
-                    output = (data.get("response") or {}).get("output") or []
-                    for item in output:
-                        if isinstance(item, dict):
-                            if item.get("type") == "message":
-                                for c in item.get("content") or []:
-                                    if isinstance(c, dict) and c.get("type") == "tool_use":
-                                        response_tool_names.append(c.get("name", ""))
-                            elif item.get("type") == "function_call":
-                                response_tool_names.append(item.get("name", ""))
-                    break
-    else:
+    if rc:
         for block in rc:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 response_tool_names.append(block.get("name", ""))
+    else:
+        response_tool_names.extend(_extract_response_tool_names(resp_body.get("output") or []))
+    if not response_tool_names:
+        for ev in reversed(stream_events):
+            if _event_type(ev) != "response.completed":
+                continue
+            data = _event_payload(ev)
+            if isinstance(data, dict):
+                response_tool_names.extend(
+                    _extract_response_tool_names((data.get("response") or {}).get("output") or [])
+                )
+                break
 
     # Error info
     error_msg = ""
@@ -145,7 +292,7 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
             for line in f:
                 line = line.strip()
                 if line:
-                    records.append(line)
+                    records.append(_normalize_record_for_viewer(line))
 
     jsonl_path_js = json.dumps(str(trace_path.absolute()))
     html_path_js = json.dumps(str(html_path.absolute()))

@@ -4,20 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from datetime import date
 from pathlib import Path
 
 from aiohttp import web
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class LiveViewerServer:
     """HTTP server for real-time trace viewing via SSE."""
 
-    def __init__(self, trace_path: Path, port: int = 0, host: str = "127.0.0.1"):
+    def __init__(self, trace_path: Path, port: int = 0, host: str = "127.0.0.1", output_dir: Path | None = None):
         self.trace_path = trace_path
         self.port = port
         self.host = host
+        self.output_dir = output_dir
         self._sse_clients: list[web.StreamResponse] = []
         self._records: list[dict] = []
+        self._current_date: str = date.today().isoformat()
         self._lock = asyncio.Lock()
         self._runner: web.AppRunner | None = None
         self._actual_port: int = 0
@@ -29,6 +35,8 @@ class LiveViewerServer:
         app.router.add_get("/", self._handle_index)
         app.router.add_get("/events", self._handle_sse)
         app.router.add_get("/records", self._handle_records)
+        app.router.add_get("/api/dates", self._handle_dates)
+        app.router.add_get("/api/traces/{date}", self._handle_traces_by_date)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -58,6 +66,13 @@ class LiveViewerServer:
     async def broadcast(self, record: dict) -> None:
         """Broadcast a new record to all connected SSE clients."""
         async with self._lock:
+            # Cross-midnight: clear in-memory records when the date changes.
+            # Previous records are already persisted in the JSONL file and
+            # accessible via the date picker.
+            today = date.today().isoformat()
+            if today != self._current_date:
+                self._records.clear()
+                self._current_date = today
             self._records.append(record)
 
         data = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
@@ -144,3 +159,49 @@ class LiveViewerServer:
         """Return all records as JSON array."""
         async with self._lock:
             return web.json_response(self._records)
+
+    async def _handle_dates(self, request: web.Request) -> web.Response:
+        """Return available trace dates (descending)."""
+        if not self.output_dir or not self.output_dir.is_dir():
+            return web.json_response({"dates": [], "has_legacy": False})
+        dates_set: set[str] = set()
+        has_legacy = False
+        for item in sorted(self.output_dir.iterdir(), reverse=True):
+            if item.is_dir() and _DATE_RE.match(item.name):
+                if any(item.glob("trace_*.jsonl")):
+                    dates_set.add(item.name)
+            elif item.is_file() and item.name.startswith("trace_") and item.suffix == ".jsonl":
+                has_legacy = True
+        # Always include today so cross-midnight sessions are visible
+        dates_set.add(date.today().isoformat())
+        dates = sorted(dates_set, reverse=True)
+        return web.json_response({"dates": dates, "has_legacy": has_legacy})
+
+    async def _handle_traces_by_date(self, request: web.Request) -> web.Response:
+        """Return combined trace records for a given date."""
+        date = request.match_info["date"]
+        if not self.output_dir or not self.output_dir.is_dir():
+            return web.json_response([])
+
+        if date == "legacy":
+            trace_dir = self.output_dir
+            pattern = "trace_*.jsonl"
+        elif _DATE_RE.match(date):
+            trace_dir = self.output_dir / date
+            pattern = "trace_*.jsonl"
+        else:
+            return web.Response(status=400, text="Invalid date format")
+
+        if not trace_dir.is_dir():
+            return web.json_response([])
+
+        records = []
+        for jsonl in sorted(trace_dir.glob(pattern)):
+            try:
+                for line in jsonl.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line:
+                        records.append(json.loads(line))
+            except (OSError, json.JSONDecodeError):
+                continue
+        return web.json_response(records)

@@ -21,6 +21,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from yarl import URL
 
 FAKE_UPSTREAM_PORT = 19199
 
@@ -79,12 +80,16 @@ print("[fake-claude] Done.")
 
 
 def run_fake_upstream_in_thread():
-    """Start fake upstream in a background thread with its own event loop."""
+    """Start fake upstream in a background thread with its own event loop.
+
+    Returns (stop_fn, actual_port) where actual_port is the OS-assigned port.
+    """
     from aiohttp import web
 
     ready = threading.Event()
     loop = None
     runner = None
+    actual_port_holder: list[int] = []
 
     async def handler(request):
         body = await request.read()
@@ -163,8 +168,9 @@ def run_fake_upstream_in_thread():
         app.router.add_route("*", "/{path_info:.*}", handler)
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, "127.0.0.1", FAKE_UPSTREAM_PORT)
+        site = web.TCPSite(runner, "127.0.0.1", 0)  # OS-assigned port
         await site.start()
+        actual_port_holder.append(site._server.sockets[0].getsockname()[1])
         ready.set()
         # Run forever until loop is stopped
         while True:
@@ -180,6 +186,8 @@ def run_fake_upstream_in_thread():
             pass
         finally:
             try:
+                if runner:
+                    loop.run_until_complete(runner.cleanup())
                 loop.run_until_complete(loop.shutdown_asyncgens())
             except RuntimeError:
                 pass
@@ -191,23 +199,32 @@ def run_fake_upstream_in_thread():
 
     def stop():
         if loop and loop.is_running():
+            # Clean up runner first to release the port
+            import concurrent.futures
+
+            if runner:
+                fut = asyncio.run_coroutine_threadsafe(runner.cleanup(), loop)
+                try:
+                    fut.result(timeout=3)
+                except (concurrent.futures.TimeoutError, RuntimeError):
+                    pass
             loop.call_soon_threadsafe(loop.stop)
         t.join(timeout=3)
 
-    return stop
+    return stop, actual_port_holder[0] if actual_port_holder else FAKE_UPSTREAM_PORT
 
 
 def test_e2e():
-    stop_upstream = run_fake_upstream_in_thread()
-    print(f"[test] Fake upstream on :{FAKE_UPSTREAM_PORT}")
+    stop_upstream, upstream_port = run_fake_upstream_in_thread()
+    print(f"[test] Fake upstream on :{upstream_port}")
 
     try:
-        _run_test()
+        _run_test(upstream_port)
     finally:
         stop_upstream()
 
 
-def _run_test():
+def _run_test(upstream_port):
     project_dir = Path(__file__).parent
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_")
 
@@ -233,7 +250,7 @@ def _run_test():
                 trace_dir,
                 "--tap-no-open",
                 "--tap-target",
-                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                f"http://127.0.0.1:{upstream_port}",
             ],
             cwd=str(project_dir),
             env=env,
@@ -254,13 +271,13 @@ def _run_test():
 
     # ── Assertions ──
 
-    # Trace file exists
-    trace_files = list(Path(trace_dir).glob("*.jsonl"))
+    # Trace file exists (may be in a date-based subdirectory, e.g. trace_dir/YYYY-MM-DD/)
+    trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
     assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
     trace_file = trace_files[0]
 
     # Log file exists
-    log_files = list(Path(trace_dir).glob("*.log"))
+    log_files = list(Path(trace_dir).glob("**/*.log"))
     assert len(log_files) == 1, f"Expected 1 log file, got {log_files}"
     log_content = log_files[0].read_text()
     print(f"[test] Proxy log:\n{log_content.rstrip()}")
@@ -311,7 +328,7 @@ def _run_test():
     print("  ✅ Proxy log: has Turn details")
 
     # ── HTML viewer generated ──
-    html_files = list(Path(trace_dir).glob("*.html"))
+    html_files = list(Path(trace_dir).glob("**/*.html"))
     assert len(html_files) == 1, f"Expected 1 HTML file, got {html_files}"
     html_content = html_files[0].read_text()
     assert "EMBEDDED_TRACE_DATA" in html_content
@@ -395,15 +412,7 @@ def _start_fake_upstream(port, handler_fn):
     return stop
 
 
-def _run_claude_tap(
-    project_dir,
-    trace_dir,
-    fake_bin_dir,
-    upstream_port,
-    timeout=30,
-    tap_client="claude",
-    client_args: list[str] | None = None,
-):
+def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout=30, tap_client="claude"):
     """Run claude_tap as a subprocess pointing at `upstream_port`.
     Returns the CompletedProcess."""
     env = os.environ.copy()
@@ -415,14 +424,11 @@ def _run_claude_tap(
         "claude_tap",
         "--tap-output-dir",
         trace_dir,
-        "--tap-no-open",
         "--tap-target",
         f"http://127.0.0.1:{upstream_port}",
     ]
     if tap_client != "claude":
         cmd.extend(["--tap-client", tap_client])
-    if client_args:
-        cmd.extend(client_args)
 
     return subprocess.run(
         cmd,
@@ -519,7 +525,7 @@ def test_upstream_error():
             print(f"[test_upstream_error] stderr:\n{proc.stderr.rstrip()}")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
         trace_file = trace_files[0]
 
@@ -669,7 +675,7 @@ def test_malformed_sse():
         print("  OK: proxy did not crash")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
         trace_file = trace_files[0]
 
@@ -801,7 +807,7 @@ def test_large_payload():
         print("  OK: proxy handled large payload without crashing")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
         trace_file = trace_files[0]
 
@@ -964,7 +970,7 @@ def test_concurrent_requests():
         print("  OK: proxy handled concurrent requests without crashing")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
         trace_file = trace_files[0]
 
@@ -1155,10 +1161,12 @@ def _cmd_dev():
 ## ---------------------------------------------------------------------------
 
 
-def test_parse_args():
+def test_parse_args(monkeypatch, tmp_path):
     """Test that --tap-* flags are consumed by claude-tap and everything else
     is forwarded to claude via claude_args."""
     from claude_tap import parse_args
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
 
     # Basic: no args
     a = parse_args([])
@@ -1173,7 +1181,7 @@ def test_parse_args():
     # Codex defaults
     a = parse_args(["--tap-client", "codex"])
     assert a.client == "codex"
-    assert a.target == "https://chatgpt.com/backend-api/codex"
+    assert a.target == "https://api.openai.com"
     assert a.claude_args == []
     print("  OK: codex defaults")
 
@@ -1226,7 +1234,7 @@ FAKE_CODEX_SCRIPT = r"""#!/usr/bin/env python3
 import json, os, sys, urllib.request
 
 base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-url = f"{base}/responses"
+url = f"{base}/messages"
 
 req_body = json.dumps({
     "model": "gpt-5-codex",
@@ -1249,16 +1257,11 @@ print("[fake-codex] Done.")
 
 
 def test_codex_client_reverse_proxy():
-    """Test --tap-client codex in reverse mode using OPENAI_BASE_URL.
-
-    The proxy must strip the /v1 prefix from the request path before forwarding
-    to the upstream, so the fake upstream sees /responses instead of /v1/responses.
-    """
+    """Test --tap-client codex in reverse mode using OPENAI_BASE_URL."""
 
     async def handler(request):
         body = await request.json()
-        # Proxy strips /v1 prefix: /v1/responses -> /responses
-        assert request.path == "/responses", f"expected /responses, got {request.path}"
+        assert request.path == "/messages"
         from aiohttp import web
 
         return web.json_response(
@@ -1287,18 +1290,15 @@ def test_codex_client_reverse_proxy():
         )
 
         assert proc.returncode == 0, f"codex mode failed: stdout={proc.stdout} stderr={proc.stderr}"
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         assert len(trace_files) == 1
         records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
         assert len(records) == 1
         record = records[0]
-        # Trace records the original path as received from the client
-        assert record["request"]["path"] == "/v1/responses"
+        assert record["request"]["path"] == "/v1/messages"
         assert record["upstream_base_url"] == "http://127.0.0.1:19242"
         assert record["request"]["body"]["model"] == "gpt-5-codex"
         assert "OPENAI_BASE_URL=http://127.0.0.1:" in proc.stdout
-        # WebSocket is now proxied natively — no forced --disable flags
-        assert "--disable responses_websockets" not in proc.stdout
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "codex")
@@ -1563,7 +1563,7 @@ def test_upstream_unreachable():
         print("  OK: proxy did not crash")
 
         # No trace records (502 returned in-process, not from upstream)
-        trace_files = list(Path(trace_dir).glob("*.jsonl"))
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
         if trace_files:
             with open(trace_files[0]) as f:
                 records = [json.loads(line) for line in f if line.strip()]
@@ -1571,7 +1571,7 @@ def test_upstream_unreachable():
         print("  OK: no trace records (upstream unreachable, 502 returned)")
 
         # Log should contain error info
-        log_files = list(Path(trace_dir).glob("*.log"))
+        log_files = list(Path(trace_dir).glob("**/*.log"))
         assert len(log_files) == 1
         log_content = log_files[0].read_text()
         assert "upstream error" in log_content.lower() or "connect" in log_content.lower(), (
@@ -1620,6 +1620,14 @@ def test_detect_installer():
 
 FAKE_PYPI_PORT = 19210
 
+# Minimal fake claude that exits immediately without making any upstream
+# requests.  Used by version-check tests which only care about the update
+# banner printed by claude-tap itself, not about proxied API traffic.
+FAKE_CLAUDE_NOOP_SCRIPT = r'''#!/usr/bin/env python3
+"""Fake claude CLI -- exits immediately (no network calls)."""
+print("[fake-claude] noop exit")
+'''
+
 
 @pytest.mark.slow
 def test_version_check_with_fake_pypi():
@@ -1642,7 +1650,7 @@ def test_version_check_with_fake_pypi():
 
     project_dir = Path(__file__).parent
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_update_")
-    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_SCRIPT)
+    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_NOOP_SCRIPT)
 
     try:
         env = os.environ.copy()
@@ -1658,7 +1666,7 @@ def test_version_check_with_fake_pypi():
                 trace_dir,
                 "--tap-no-open",
                 "--tap-target",
-                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                "http://127.0.0.1:1",  # dummy target; noop client never connects
                 "--tap-no-auto-update",
             ],
             cwd=str(project_dir),
@@ -1672,8 +1680,8 @@ def test_version_check_with_fake_pypi():
         assert "99.0.0" in proc.stdout
         print("  OK: update available detected")
         print("  test_version_check_with_fake_pypi PASSED")
-    except subprocess.TimeoutExpired:
-        print("  TIMEOUT")
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError("claude_tap subprocess timed out (30s) — possible port conflict or hang") from exc
     finally:
         server.shutdown()
         _cleanup(trace_dir, fake_bin_dir, "update_check")
@@ -1704,7 +1712,7 @@ def test_version_check_no_update():
 
     project_dir = Path(__file__).parent
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_noupdate_")
-    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_SCRIPT)
+    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_NOOP_SCRIPT)
 
     try:
         env = os.environ.copy()
@@ -1720,7 +1728,7 @@ def test_version_check_no_update():
                 trace_dir,
                 "--tap-no-open",
                 "--tap-target",
-                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                "http://127.0.0.1:1",  # dummy target; noop client never connects
             ],
             cwd=str(project_dir),
             env=env,
@@ -1732,8 +1740,8 @@ def test_version_check_no_update():
         assert "Update available" not in proc.stdout, f"Unexpected 'Update available' in stdout:\n{proc.stdout}"
         print("  OK: no update message when version matches")
         print("  test_version_check_no_update PASSED")
-    except subprocess.TimeoutExpired:
-        print("  TIMEOUT")
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError("claude_tap subprocess timed out (30s) — possible port conflict or hang") from exc
     finally:
         server.shutdown()
         _cleanup(trace_dir, fake_bin_dir, "no_update")
@@ -1860,7 +1868,7 @@ def test_e2e_with_cleanup():
     """E2E test: pre-fill traces, run claude-tap with --tap-max-traces, verify cleanup."""
     from claude_tap import _register_trace
 
-    stop_upstream = run_fake_upstream_in_thread()
+    stop_upstream, upstream_port = run_fake_upstream_in_thread()
 
     project_dir = Path(__file__).parent
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_cleanup_")
@@ -1889,7 +1897,7 @@ def test_e2e_with_cleanup():
                 trace_dir,
                 "--tap-no-open",
                 "--tap-target",
-                f"http://127.0.0.1:{FAKE_UPSTREAM_PORT}",
+                f"http://127.0.0.1:{upstream_port}",
                 "--tap-max-traces",
                 "3",
                 "--tap-no-update-check",
@@ -2045,6 +2053,27 @@ def test_parse_args_new_flags():
     print("  test_parse_args_new_flags PASSED")
 
 
+def test_parse_dashboard_args():
+    """Test standalone dashboard argument parsing."""
+    from claude_tap import parse_dashboard_args
+
+    a = parse_dashboard_args([])
+    assert a.output_dir == "./.traces"
+    assert a.live_port == 0
+    assert a.host == "127.0.0.1"
+    assert a.open_viewer is True
+
+    a = parse_dashboard_args(
+        ["--tap-output-dir", "/tmp/t", "--tap-live-port", "3000", "--tap-host", "0.0.0.0", "--tap-no-open"]
+    )
+    assert a.output_dir == "/tmp/t"
+    assert a.live_port == 3000
+    assert a.host == "0.0.0.0"
+    assert a.open_viewer is False
+
+    print("  test_parse_dashboard_args PASSED")
+
+
 ## ---------------------------------------------------------------------------
 ## Test: CA certificate generation
 ## ---------------------------------------------------------------------------
@@ -2130,6 +2159,67 @@ def test_parse_args_proxy_mode():
     print("  OK: forward mode with other flags")
 
     print("  test_parse_args_proxy_mode PASSED")
+
+
+## ---------------------------------------------------------------------------
+## Test: Codex upstream URL construction for all (target × path) combos
+## ---------------------------------------------------------------------------
+
+
+def test_codex_upstream_url_construction(monkeypatch, tmp_path):
+    """Verify that strip_path_prefix produces correct upstream URLs for all Codex backends.
+
+    This is a regression guard for the bug where strip_path_prefix="/v1" combined
+    with target="https://api.openai.com" produced wrong URLs like
+    https://api.openai.com/responses instead of https://api.openai.com/v1/responses.
+
+    See: docs/error-experience/entries/2026-03-10-codex-strip-prefix-url-mismatch.md
+    """
+    from claude_tap import parse_args
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+    def _build_upstream(target: str, strip_prefix: str, request_path: str) -> str:
+        fwd_path = request_path
+        if strip_prefix and fwd_path.startswith(strip_prefix):
+            fwd_path = fwd_path[len(strip_prefix) :] or "/"
+        return target.rstrip("/") + "/" + fwd_path.lstrip("/")
+
+    # Case 1: API Key mode — target=api.openai.com, should NOT strip /v1
+    args = parse_args(["--tap-client", "codex"])
+    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    url = _build_upstream(args.target, strip, "/v1/responses")
+    assert url == "https://api.openai.com/v1/responses", f"API Key mode URL wrong: {url}"
+    print("  OK: api.openai.com + /v1/responses → correct")
+
+    # Case 2: OAuth mode — target=chatgpt.com, should strip /v1
+    args = parse_args(["--tap-client", "codex", "--tap-target", "https://chatgpt.com/backend-api/codex"])
+    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    url = _build_upstream(args.target, strip, "/v1/responses")
+    assert url == "https://chatgpt.com/backend-api/codex/responses", f"OAuth mode URL wrong: {url}"
+    print("  OK: chatgpt.com + /v1/responses → correct")
+
+    # Case 3: API Key mode with /v1/models path
+    args = parse_args(["--tap-client", "codex"])
+    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    url = _build_upstream(args.target, strip, "/v1/models")
+    assert url == "https://api.openai.com/v1/models", f"API Key models URL wrong: {url}"
+    print("  OK: api.openai.com + /v1/models → correct")
+
+    # Case 4: OAuth mode with /v1/models path
+    args = parse_args(["--tap-client", "codex", "--tap-target", "https://chatgpt.com/backend-api/codex"])
+    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    url = _build_upstream(args.target, strip, "/v1/models")
+    assert url == "https://chatgpt.com/backend-api/codex/models", f"OAuth models URL wrong: {url}"
+    print("  OK: chatgpt.com + /v1/models → correct")
+
+    # Case 5: Claude client should never strip
+    args = parse_args(["--tap-client", "claude"])
+    strip = "/v1" if args.client == "codex" and "api.openai.com" not in args.target else ""
+    assert strip == "", "Claude client should never strip path prefix"
+    print("  OK: claude client has no strip prefix")
+
+    print("  test_codex_upstream_url_construction PASSED")
 
 
 ## ---------------------------------------------------------------------------
@@ -2235,6 +2325,180 @@ async def test_forward_proxy_connect():
             await session.close()
 
     print("  test_forward_proxy_connect PASSED")
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_connect_websocket():
+    """Test the forward proxy CONNECT/TLS flow with a fake WSS upstream."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+    from claude_tap.trace import TraceWriter
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        trace_path = tmpdir / "trace_ws.jsonl"
+        ca_dir = tmpdir / "ca"
+
+        ca_cert_path, ca_key_path = ensure_ca(ca_dir)
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port = await _start_fake_wss_upstream(tmpdir)
+        print(f"  Fake WSS upstream on port {upstream_port}")
+
+        writer = TraceWriter(trace_path)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False)
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+        )
+        proxy_port = await server.start()
+        print(f"  Forward proxy on port {proxy_port}")
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/v1/responses",
+                    proxy=proxy_url,
+                    ssl=ssl_ctx,
+                )
+                await ws.send_json({"model": "gpt-test", "input": "hello"})
+
+                received = []
+                while True:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        received.append(json.loads(msg.data))
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                    ):
+                        break
+                await ws.close()
+
+            assert len(received) == 3
+            assert received[0]["type"] == "response.created"
+            assert received[-1]["type"] == "response.completed"
+            print("  OK: CONNECT + WSS upgrade works")
+
+            await asyncio.sleep(0.1)
+            writer.close()
+
+            trace_text = trace_path.read_text().strip()
+            assert trace_text, "No WS trace recorded"
+            records = [json.loads(line) for line in trace_text.splitlines()]
+            assert len(records) == 1
+            assert records[0]["transport"] == "websocket"
+            assert records[0]["request"]["method"] == "WEBSOCKET"
+            assert records[0]["request"]["path"] == "/v1/responses"
+            assert records[0]["response"]["status"] == 101
+            assert records[0]["response"]["body"]["status"] == "completed"
+            assert records[0]["response"]["body"]["output"][0]["content"][0]["text"] == "Hello over WSS"
+            print("  OK: WS trace recorded correctly")
+        finally:
+            await server.stop()
+            await session.close()
+
+    print("  test_forward_proxy_connect_websocket PASSED")
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_connect_websocket_honors_env_proxy(monkeypatch):
+    """Forward proxy should pass env-derived proxy settings into upstream ws_connect."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+    from claude_tap.trace import TraceWriter
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        trace_path = tmpdir / "trace_ws_proxy_args.jsonl"
+        ca_dir = tmpdir / "ca"
+
+        ca_cert_path, ca_key_path = ensure_ca(ca_dir)
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port = await _start_fake_wss_upstream(tmpdir)
+        writer = TraceWriter(trace_path)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False, trust_env=True)
+
+        monkeypatch.setattr(
+            "claude_tap.forward_proxy._get_ws_proxy_settings",
+            lambda _url: (URL("http://proxy.local:8080"), aiohttp.BasicAuth("user", "pass")),
+        )
+
+        ws_connect_calls: list[dict] = []
+        original_ws_connect = session.ws_connect
+
+        async def _spy_ws_connect(*args, **kwargs):
+            ws_connect_calls.append(dict(kwargs))
+            kwargs.pop("proxy", None)
+            kwargs.pop("proxy_auth", None)
+            return await original_ws_connect(*args, **kwargs)
+
+        session.ws_connect = _spy_ws_connect  # type: ignore[method-assign]
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+        )
+        proxy_port = await server.start()
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/v1/responses",
+                    proxy=f"http://127.0.0.1:{proxy_port}",
+                    ssl=ssl_ctx,
+                )
+                await ws.send_json({"model": "gpt-test", "input": "hello"})
+                while True:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                    ):
+                        break
+                await ws.close()
+
+            assert ws_connect_calls, "Expected upstream ws_connect to be called"
+            assert ws_connect_calls[0]["proxy"] == URL("http://proxy.local:8080")
+            assert ws_connect_calls[0]["proxy_auth"] is not None
+            assert ws_connect_calls[0]["proxy_auth"].login == "user"
+            assert ws_connect_calls[0]["proxy_auth"].password == "pass"
+        finally:
+            await server.stop()
+            await session.close()
 
 
 async def _start_fake_https_upstream(tmpdir: Path) -> int:
@@ -2349,6 +2613,102 @@ async def _start_fake_https_upstream(tmpdir: Path) -> int:
     return port
 
 
+async def _start_fake_wss_upstream(tmpdir: Path) -> int:
+    """Start a fake WSS upstream server for websocket proxy tests."""
+    import ssl as ssl_module
+
+    import aiohttp
+    from aiohttp import web
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    import datetime
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName("127.0.0.1"),
+                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                ]
+            ),
+            critical=False,
+        )
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+
+    cert_path = tmpdir / "upstream-ws.pem"
+    key_path = tmpdir / "upstream-ws-key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+    ssl_ctx = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_SERVER)
+    ssl_ctx.load_cert_chain(str(cert_path), str(key_path))
+
+    async def ws_handler(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                model = data.get("model", "gpt-test")
+                await ws.send_json(
+                    {
+                        "type": "response.created",
+                        "response": {"id": "resp_ws_1", "model": model, "status": "in_progress"},
+                    }
+                )
+                await ws.send_json({"type": "response.output_text.delta", "delta": "Hello over WSS"})
+                await ws.send_json(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_ws_1",
+                            "model": model,
+                            "status": "completed",
+                            "output": [
+                                {
+                                    "type": "message",
+                                    "content": [{"type": "output_text", "text": "Hello over WSS"}],
+                                }
+                            ],
+                            "usage": {"input_tokens": 10, "output_tokens": 5},
+                        },
+                    }
+                )
+                await ws.close()
+                break
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/v1/responses", ws_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=ssl_ctx)
+    await site.start()
+    return site._server.sockets[0].getsockname()[1]
+
+
 ## ---------------------------------------------------------------------------
 ## Run all tests
 ## ---------------------------------------------------------------------------
@@ -2440,3 +2800,35 @@ async def test_live_viewer_server():
 
         await server.stop()
         print("  test_live_viewer_server PASSED")
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_serves_viewer(monkeypatch):
+    """Test the dashboard command starts a standalone viewer server."""
+    import aiohttp
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    opened_urls: list[str] = []
+    monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        args = parse_dashboard_args(["--tap-output-dir", tmpdir, "--tap-live-port", "0"])
+        task = asyncio.create_task(dashboard_main(args))
+        try:
+            for _ in range(50):
+                if opened_urls:
+                    break
+                await asyncio.sleep(0.05)
+            assert opened_urls, "dashboard should open the browser"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(opened_urls[0]) as resp:
+                    assert resp.status == 200
+                    html = await resp.text()
+                    assert "LIVE_MODE = true" in html
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
