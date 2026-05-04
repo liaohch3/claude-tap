@@ -128,8 +128,16 @@ class SSEReassembler:
 
     def _accumulate_chat_completion_chunk(self, data: dict) -> None:
         choices = data.get("choices") or []
+        usage = data.get("usage")
+
+        # Some providers send a final usage-only chunk: {"choices": [],
+        # "usage": {...}}. Process the usage and bail out — there is no
+        # delta body to apply.
         if not isinstance(choices, list) or not choices:
+            if isinstance(usage, dict) and self._snapshot is not None:
+                self._merge_chat_completion_usage(usage)
             return
+
         choice = choices[0] if isinstance(choices[0], dict) else {}
         delta = choice.get("delta") or {}
         finish_reason = choice.get("finish_reason")
@@ -147,7 +155,9 @@ class SSEReassembler:
                     }
                 ],
                 # Anthropic-shape mirror so the viewer's renderResponseContent
-                # picks it up without schema-specific code.
+                # picks it up without schema-specific code. content[0] is the
+                # leading text block; tool_use blocks (mirrored from
+                # msg.tool_calls) follow.
                 "content": [{"type": "text", "text": ""}],
             }
 
@@ -182,20 +192,50 @@ class SSEReassembler:
                     fn["name"] = (fn.get("name") or "") + fn_delta["name"]
                 if isinstance(fn_delta.get("arguments"), str):
                     fn["arguments"] = (fn.get("arguments") or "") + fn_delta["arguments"]
+            # Mirror this tool call into the Anthropic-shape `content` array
+            # so the viewer (which only reads body.content) can render
+            # tool-only responses, and so the sidebar's response_tool_names
+            # extractor sees the call.
+            self._mirror_tool_call_to_content(idx, existing)
 
         if finish_reason:
             self._snapshot["choices"][0]["finish_reason"] = finish_reason
 
-        # Usage typically arrives only on the final chunk. Keep both naming
-        # schemes so existing Anthropic-oriented stat code still works.
-        usage = data.get("usage")
         if isinstance(usage, dict):
-            merged = dict(usage)
-            if "prompt_tokens" in usage and "input_tokens" not in usage:
-                merged["input_tokens"] = usage["prompt_tokens"]
-            if "completion_tokens" in usage and "output_tokens" not in usage:
-                merged["output_tokens"] = usage["completion_tokens"]
-            self._snapshot["usage"] = merged
+            self._merge_chat_completion_usage(usage)
+
+    def _mirror_tool_call_to_content(self, idx: int, tc: dict) -> None:
+        """Sync one accumulated tool_call into the `content` array as a
+        tool_use block. content[0] is the leading text block, so tool_use
+        blocks live at content[idx + 1]."""
+        content = self._snapshot["content"]
+        target = idx + 1
+        while len(content) <= target:
+            content.append({"type": "tool_use", "id": "", "name": "", "input": {}})
+        block = content[target]
+        if tc.get("id"):
+            block["id"] = tc["id"]
+        fn = tc.get("function") or {}
+        if fn.get("name"):
+            block["name"] = fn["name"]
+        args_str = fn.get("arguments", "")
+        if args_str:
+            try:
+                block["input"] = json.loads(args_str)
+            except (json.JSONDecodeError, ValueError):
+                # Arguments are still streaming; leave the previously parsed
+                # input (or {}) until a complete JSON arrives.
+                pass
+
+    def _merge_chat_completion_usage(self, usage: dict) -> None:
+        """Merge an OpenAI-shape usage dict into the snapshot, exposing both
+        prompt/completion and input/output token names for downstream code."""
+        merged = dict(usage)
+        if "prompt_tokens" in usage and "input_tokens" not in usage:
+            merged["input_tokens"] = usage["prompt_tokens"]
+        if "completion_tokens" in usage and "output_tokens" not in usage:
+            merged["output_tokens"] = usage["completion_tokens"]
+        self._snapshot["usage"] = merged
 
     def reconstruct(self) -> dict | None:
         if self._snapshot is None:

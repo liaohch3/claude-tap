@@ -85,6 +85,86 @@ def test_chat_completions_tool_call_accumulation() -> None:
     assert msg["tool_calls"][0]["function"]["arguments"] == '{"city":"SF"}'
     assert snap["choices"][0]["finish_reason"] == "tool_calls"
 
+    # Tool call must also be mirrored into Anthropic-shape `content` so the
+    # viewer (which only reads body.content) can render the tool call.
+    tool_use_blocks = [b for b in snap["content"] if b.get("type") == "tool_use"]
+    assert len(tool_use_blocks) == 1
+    assert tool_use_blocks[0]["id"] == "call_1"
+    assert tool_use_blocks[0]["name"] == "get_weather"
+    assert tool_use_blocks[0]["input"] == {"city": "SF"}
+
+
+def test_chat_completions_tool_only_response_renders_via_content() -> None:
+    """Pure tool-call responses (no text) must still surface the tool call
+    through `content`, otherwise the viewer's Response section is blank and
+    the sidebar's response_tool_names extractor sees nothing."""
+    r = SSEReassembler()
+    r.feed_bytes(
+        b'data: {"id":"c2","choices":[{"delta":{"role":"assistant","tool_calls":'
+        b'[{"index":0,"id":"call_a","type":"function","function":'
+        b'{"name":"search","arguments":"{\\"q\\":\\"go\\"}"}}]}}]}\n\n'
+        b'data: {"id":"c2","choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    snap = r.reconstruct()
+    assert snap is not None
+    # Text mirror is empty (no delta.content was sent).
+    text_blocks = [b for b in snap["content"] if b.get("type") == "text"]
+    assert text_blocks and text_blocks[0]["text"] == ""
+    # tool_use block carries the call so viewer/export can render it.
+    tool_use = [b for b in snap["content"] if b.get("type") == "tool_use"]
+    assert len(tool_use) == 1
+    assert tool_use[0]["name"] == "search"
+    assert tool_use[0]["input"] == {"q": "go"}
+
+
+def test_chat_completions_parallel_tool_calls_each_mirror() -> None:
+    """When a single delta carries multiple tool_calls (parallel calls),
+    every entry must end up as its own tool_use block in `content`."""
+    r = SSEReassembler()
+    r.feed_bytes(
+        b'data: {"id":"c3","choices":[{"delta":{"role":"assistant","tool_calls":['
+        b'{"index":0,"id":"a","type":"function","function":{"name":"f1","arguments":"{}"}},'
+        b'{"index":1,"id":"b","type":"function","function":{"name":"f2","arguments":"{}"}}'
+        b"]}}]}\n\n"
+        b'data: {"id":"c3","choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    snap = r.reconstruct()
+    assert snap is not None
+    tool_use = [b for b in snap["content"] if b.get("type") == "tool_use"]
+    names = [b["name"] for b in tool_use]
+    assert names == ["f1", "f2"]
+    ids = [b["id"] for b in tool_use]
+    assert ids == ["a", "b"]
+
+
+def test_chat_completions_usage_only_final_chunk_is_captured() -> None:
+    """Some providers send a final chunk with empty `choices` and only
+    `usage` populated; that token info must still land in the snapshot."""
+    r = SSEReassembler()
+    r.feed_bytes(
+        b'data: {"id":"c4","model":"hy3","choices":[{"delta":{"role":"assistant","content":"hi"}}]}\n\n'
+        b'data: {"id":"c4","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+        b'data: {"id":"c4","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    snap = r.reconstruct()
+    assert snap is not None
+    assert snap["usage"]["prompt_tokens"] == 10
+    assert snap["usage"]["completion_tokens"] == 2
+    # Dual naming applied so Anthropic-oriented stat code keeps working.
+    assert snap["usage"]["input_tokens"] == 10
+    assert snap["usage"]["output_tokens"] == 2
+
+
+def test_chat_completions_usage_only_chunk_without_prior_snapshot_is_skipped() -> None:
+    """Edge case: if a usage-only chunk arrives before any choices have set
+    up the snapshot, it is dropped (no body context to attach to)."""
+    r = SSEReassembler()
+    r.feed_bytes(b'data: {"choices":[],"usage":{"prompt_tokens":1}}\n\n')
+    assert r.reconstruct() is None
+
 
 def test_chat_completions_done_sentinel_is_filtered() -> None:
     r = SSEReassembler()
