@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.44] - 2026-05-04
+
+### Changed
+- feat(cli): add standalone dashboard command
+- fix(viewer): label Codex responses input as request context
 ## [0.1.43] - 2026-05-04
 
 ### Changed
