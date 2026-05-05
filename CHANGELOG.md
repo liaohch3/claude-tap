@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.45] - 2026-05-05
+
+### Changed
+- feat(cli): add opencode client support
+- fix(ci): use release bot token for auto release
 ## [0.1.44] - 2026-05-04
 
 ### Changed
