@@ -16,9 +16,19 @@ jobs:
       pull-requests: write
       actions: write
     steps:
+      - name: Validate release bot token
+        env:
+          RELEASE_BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_BOT_TOKEN" ]; then
+            echo "::error::RELEASE_BOT_TOKEN secret is required for release automation"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
 
       - name: Calculate next patch version
         id: version
@@ -39,7 +49,7 @@ jobs:
       - name: Update changelog for next version
         id: changelog
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
         run: |
           tag="${{ steps.version.outputs.tag }}"
           version="${tag#v}"
@@ -71,10 +81,9 @@ jobs:
 
           auto_merge_enabled="$(gh pr view "$pr_number" --json autoMergeRequest --jq '.autoMergeRequest != null')"
           if [ "$auto_merge_enabled" = "true" ]; then
-            echo "Auto-merge is already enabled for release changelog PR #$pr_number"
-          else
-            gh pr merge "$pr_number" --auto --squash --delete-branch
+            gh pr merge "$pr_number" --disable-auto
           fi
+          gh pr merge "$pr_number" --auto --squash --delete-branch
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
@@ -88,7 +97,7 @@ jobs:
       - name: Trigger publish workflow
         if: steps.changelog.outputs.changed == 'false'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
         run: |
           tag="${{ steps.version.outputs.tag }}"
           gh workflow run publish.yml --field tag="$tag"
