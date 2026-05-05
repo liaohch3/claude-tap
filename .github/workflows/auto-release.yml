@@ -14,7 +14,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write
     steps:
       - name: Validate release bot token
         env:
@@ -93,12 +92,3 @@ jobs:
           git tag "$tag"
           git push origin "$tag"
           echo "Created tag $tag"
-
-      - name: Trigger publish workflow
-        if: steps.changelog.outputs.changed == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
-        run: |
-          tag="${{ steps.version.outputs.tag }}"
-          gh workflow run publish.yml --field tag="$tag"
-          echo "Triggered publish.yml for $tag"
