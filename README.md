@@ -111,15 +111,22 @@ claude-tap --tap-client opencode --tap-proxy-mode reverse
 Hermes Agent is a multi-provider Python AI agent (Nous Portal, OpenRouter, NVIDIA NIM, Xiaomi MiMo, GLM, Kimi, MiniMax, Hugging Face, OpenAI, Anthropic, custom). Because it can talk to any of these providers — and `httpx` / `requests` both honor `HTTPS_PROXY` natively — claude-tap defaults to **forward proxy** mode for hermes: it injects `HTTPS_PROXY` plus the local CA into the child process so any provider is captured.
 
 ```bash
-# Interactive TUI — `hermes` runs the foreground TUI; LLM calls go through the forward proxy.
+# Interactive TUI — the recommended way for local trace capture.
 claude-tap --tap-client hermes --tap-live
+
+# Gateway mode — captures LLM calls triggered by incoming platform messages (Slack, Telegram, etc.).
+# Requires a messaging platform configured in ~/.hermes/.env.
+# claude-tap auto-rewrites `gateway start` → `gateway run` so the gateway runs in the
+# foreground and inherits HTTPS_PROXY; without this, the daemon spawned by systemd/launchd
+# would not go through the proxy and no traces would be recorded.
+claude-tap --tap-client hermes -- gateway start
 
 # Reverse mode is opt-in and only useful when ~/.hermes is configured with an
 # OpenAI-compatible provider that reads OPENAI_BASE_URL.
 claude-tap --tap-client hermes --tap-proxy-mode reverse
 ```
 
-> **Note:** `hermes gateway` is a messaging-platform bot gateway (Telegram, etc.), not an LLM proxy. It only makes LLM calls when incoming platform messages arrive, so running it under claude-tap without a configured messaging platform will produce no traces. Use the TUI mode above for local trace capture.
+> **Note:** Gateway mode only produces traces when a configured messaging platform (Slack, Telegram, etc.) delivers a message to the bot. Without an active platform integration, the gateway makes no LLM calls and no traces are recorded.
 
 ### Browser Preview
 
