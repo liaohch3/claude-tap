@@ -108,23 +108,15 @@ claude-tap --tap-client opencode --tap-proxy-mode reverse
 
 Hermes Agent 是基于 Python 的多 provider AI agent（Nous Portal / OpenRouter / NVIDIA NIM / 小米 MiMo / GLM / Kimi / MiniMax / Hugging Face / OpenAI / Anthropic / 自定义）。由于它能对接任意 provider，且 `httpx`、`requests` 都默认认 `HTTPS_PROXY` 环境变量，claude-tap 默认对 hermes 使用 **forward proxy** 模式——通过向子进程注入 `HTTPS_PROXY` 与本地 CA，捕获它对接的任意 provider 流量。
 
-Hermes 有两种使用姿势：
-
 ```bash
-# A) 交互式 TUI — 直接前台跑 hermes，forward 代理透明捕获 LLM 调用。
-#    在 TUI 里输入消息，配合 --tap-live 实时看 trace。
+# 交互式 TUI — 直接前台跑 hermes，forward 代理透明捕获 LLM 调用。
 claude-tap --tap-client hermes --tap-live
-
-# B) Gateway 模式 — gateway 必须前台跑在 tap 下。claude-tap 会自动把
-#    `gateway start`（最近版本会委托给 systemd / launchd）改写为 `gateway run`
-#    （前台版），这样新起的 gateway 是我们的子进程，能继承代理环境
-claude-tap --tap-client hermes -- gateway start
-# 另一个终端 — 用 TUI 连前台的 gateway
-hermes
 
 # 反向模式仅在 ~/.hermes 配了一个读 OPENAI_BASE_URL 的 OpenAI 兼容 provider 时才有用
 claude-tap --tap-client hermes --tap-proxy-mode reverse
 ```
+
+> **注意：** `hermes gateway` 是消息平台 bot 网关（Telegram 等），不是 LLM 代理网关。只有外部平台消息进来时才会触发 LLM 调用，未配置消息平台时运行它不会产生任何 trace。本地抓 trace 请使用上面的 TUI 模式。
 
 ### 浏览器预览
 

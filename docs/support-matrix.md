@@ -52,6 +52,11 @@ The rewrite is logged loudly at process start so users can spot it and pass
 `--tap-no-launch` + run the original command themselves if they actually want
 the daemonised behaviour (and accept that no traffic will be captured).
 
+> **Note:** `hermes gateway` is a messaging-platform bot gateway (Telegram, etc.), not an LLM proxy.
+> It only makes LLM calls when incoming platform messages arrive. Without a configured messaging
+> platform the gateway produces no LLM traffic, so no traces are recorded. Use the TUI mode
+> (`claude-tap --tap-client hermes`) for local trace capture.
+
 ## URL Construction Rules
 
 The proxy constructs upstream URLs as: `target + forwarded_path`
