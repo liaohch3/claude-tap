@@ -1,0 +1,56 @@
+name: Feature request
+description: Propose an improvement or new capability.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the user problem first. Avoid including private prompts, raw traces, or generated viewer files.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: This request does not include secrets or private trace data.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow is blocked or painful today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or interface you want.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI
+        - Proxy routing
+        - Trace format
+        - Viewer
+        - Export
+        - Documentation
+        - Release/CI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Link to redacted screenshots, recordings, or sample traces if useful.

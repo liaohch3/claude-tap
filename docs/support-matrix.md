@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-02
+last_reviewed: 2026-05-05
 source_of_truth: AGENTS.md
 ---
 
@@ -18,6 +18,8 @@ This document tracks all verified (client × auth × target × transport) combin
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
+| OpenCode | Provider creds via `opencode providers` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
+| OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
 
@@ -30,6 +32,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 |--------|--------------|--------|
 | `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
 | `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
+| `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
 
 Users can always override with `--tap-proxy-mode {reverse,forward}`.

@@ -163,6 +163,18 @@ def _extract_response_tool_names(output: list) -> list[str]:
     return names
 
 
+def _tool_display_name(tool: dict) -> str:
+    for value in (
+        tool.get("name"),
+        (tool.get("function") or {}).get("name") if isinstance(tool.get("function"), dict) else None,
+        tool.get("id"),
+        tool.get("type"),
+    ):
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _extract_metadata(record_json: str) -> dict | None:
     """Extract sidebar-relevant metadata from a raw JSON record string.
 
@@ -178,6 +190,10 @@ def _extract_metadata(record_json: str) -> dict | None:
     body = req.get("body") or {}
     resp = r.get("response") or {}
     resp_body = resp.get("body") or {}
+    if not isinstance(body, dict):
+        body = {}
+    if not isinstance(resp_body, dict):
+        resp_body = {}
     stream_events = _iter_response_events(resp)
 
     # Token usage — from response.body.usage or terminal stream event
@@ -212,7 +228,7 @@ def _extract_metadata(record_json: str) -> dict | None:
 
     # Tool names from request
     tools = body.get("tools") or []
-    tool_names = [t.get("name", "") for t in tools if isinstance(t, dict)]
+    tool_names = [_tool_display_name(t) for t in tools if isinstance(t, dict)]
 
     # Response tool names (tool_use blocks in response content)
     response_tool_names = []
@@ -278,6 +294,14 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
                 if line:
                     records.append(_normalize_record_for_viewer(line))
 
+    # Escape </ sequences so embedded record JSON cannot prematurely close the
+    # surrounding <script> / <script type="text/plain"> blocks. Forward-proxy
+    # mode can capture arbitrary HTTPS upstreams whose bodies legitimately
+    # contain </script>; without this, the browser closes the data block early
+    # and renders the captured HTML as page content. JSON's \/ is a valid
+    # escape for /, so the parsed JSON value is unchanged.
+    records = [rec.replace("</", "<\\/") for rec in records]
+
     jsonl_path_js = json.dumps(str(trace_path.absolute()))
     html_path_js = json.dumps(str(html_path.absolute()))
     version_js = json.dumps(CLAUDE_TAP_VERSION)
@@ -294,9 +318,7 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
 
         meta_js = json.dumps(meta_list, separators=(",", ":"))
 
-        # Escape </ sequences in raw JSONL to prevent premature </script> close.
-        # In JSON, \/ is a valid escape for /, so replacing </ with <\/ is safe.
-        raw_lines = "\n".join(rec.replace("</", "<\\/") for rec in records)
+        raw_lines = "\n".join(records)
 
         data_js = (
             f"const EMBEDDED_TRACE_META = {meta_js};\n"

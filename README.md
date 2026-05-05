@@ -7,7 +7,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), or [Hermes Agent](https://github.com/NousResearch/hermes-agent). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [OpenCode](https://opencode.ai), or [Hermes Agent](https://github.com/NousResearch/hermes-agent). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -22,9 +22,11 @@ Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.
 
 </details>
 
+> **OpenClaw:** If you are Openclaw and integrating claude-tap with [OpenClaw](docs/guides/OPENCLAW_README.md), also read the dedicated setup guide.
+
 ## Install
 
-Requires Python 3.11+ and the client you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`, or [Hermes Agent](https://github.com/NousResearch/hermes-agent) for `--tap-client hermes`.
+Requires Python 3.11+ and the client you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`, [OpenCode](https://opencode.ai) for `--tap-client opencode`, or [Hermes Agent](https://github.com/NousResearch/hermes-agent) for `--tap-client hermes`.
 
 ```bash
 # Recommended
@@ -67,11 +69,16 @@ Codex CLI supports two authentication modes with different upstream targets:
 | **OAuth** (ChatGPT subscription) | `codex login` | `https://chatgpt.com/backend-api/codex` | Default for ChatGPT Plus/Pro/Team users |
 | **API Key** | Set `OPENAI_API_KEY` | `https://api.openai.com` (default) | Pay-per-use via OpenAI Platform |
 
+`claude-tap` auto-detects the Codex target from your auth state when possible.
+
 ```bash
-# OAuth users (ChatGPT Plus/Pro/Team) — must specify target
+# OAuth users (ChatGPT Plus/Pro/Team) — auto-detected after `codex login`
+claude-tap --tap-client codex
+
+# If auto-detection cannot read your Codex auth file, specify the target explicitly
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex
 
-# API Key users — default target works out of the box
+# API Key users — default OpenAI API target works out of the box
 claude-tap --tap-client codex
 
 # With specific model
@@ -81,7 +88,22 @@ claude-tap --tap-client codex -- --model codex-mini-latest
 claude-tap --tap-client codex -- --full-auto
 
 # OAuth + full auto + live viewer
-claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+claude-tap --tap-client codex --tap-live -- --full-auto
+```
+
+### OpenCode
+
+[OpenCode](https://opencode.ai) is a multi-provider terminal AI assistant. Because it can talk to many providers, claude-tap defaults to **forward proxy** mode for opencode: it injects `HTTPS_PROXY` plus the local CA into the child process so traffic to any provider is captured.
+
+```bash
+# Forward proxy mode — captures every provider opencode talks to (default)
+claude-tap --tap-client opencode
+
+# With live viewer
+claude-tap --tap-client opencode --tap-live
+
+# Reverse mode — only works when using Anthropic provider (single ANTHROPIC_BASE_URL)
+claude-tap --tap-client opencode --tap-proxy-mode reverse
 ```
 
 ### Hermes Agent
@@ -117,20 +139,24 @@ claude-tap --tap-no-open
 # Live mode — real-time viewer opens in browser while client runs
 claude-tap --tap-live
 claude-tap --tap-live --tap-live-port 3000    # fixed port for live viewer
+
+# Standalone dashboard — browse trace history without launching a client
+claude-tap dashboard
+claude-tap dashboard --tap-output-dir ./my-traces --tap-live-port 3000
 ```
 
 When the client exits, you can also manually open the generated viewer:
 
 ```bash
-open .traces/trace_*.html
+open .traces/*/trace_*.html
 ```
 
 You can also regenerate a self-contained HTML viewer from an existing JSONL trace:
 
 ```bash
-claude-tap export .traces/trace_20260228_141557.jsonl -o trace.html
+claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 # or:
-claude-tap export .traces/trace_20260228_141557.jsonl --format html
+claude-tap export .traces/2026-02-28/trace_141557.jsonl --format html
 ```
 
 ### Proxy-Only Mode
@@ -146,12 +172,12 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 # Codex CLI (OAuth)
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 8080
 # In another terminal:
-OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
 
 # Codex CLI (API Key)
 claude-tap --tap-client codex --tap-no-launch --tap-port 8080
 # In another terminal:
-OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
 ```
 
 ### Common Combos
@@ -175,7 +201,7 @@ claude-tap --tap-max-traces 10
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default), codex, or hermes
+--tap-client CLIENT      Client to launch: claude (default), codex, opencode, or hermes
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
@@ -187,7 +213,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex, forward for hermes)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex, forward for opencode/hermes)
 ```
 
 ## Viewer Features
@@ -196,7 +222,7 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 
 - **Structural diff** — compare consecutive requests to see exactly what changed: new/removed messages, system prompt diffs, character-level inline highlighting
 - **Path filtering** — filter by API endpoint (e.g., `/v1/messages` only)
-- **Model grouping** — sidebar groups requests by model (Opus > Sonnet > Haiku)
+- **Model grouping** — sidebar groups requests by model, with Claude-family priority ordering
 - **Token usage breakdown** — input / output / cache read / cache creation
 - **Tool inspector** — expandable cards with tool name, description, and parameter schema
 - **Search** — full-text search across messages, tools, prompts, and responses
@@ -212,60 +238,25 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 **How it works:**
 
 1. `claude-tap` starts a reverse proxy and spawns the selected client (`claude` or `codex`) with the provider-specific base URL pointing to it
-2. All API requests flow through the proxy → upstream API → back through proxy
-3. SSE streaming responses are forwarded in real-time (zero added latency)
-4. Each request-response pair is recorded to `trace.jsonl`
+2. Supported API requests flow through the proxy → upstream API → back through proxy
+3. SSE and WebSocket streams are forwarded as chunks/messages arrive with low proxy overhead
+4. Each request-response pair or WebSocket session is recorded to a dated `trace_*.jsonl`
 5. On exit, a self-contained HTML viewer is generated
 6. Live mode (optional) broadcasts updates to browser via SSE
 
-**Key features:** 🔒 API keys auto-redacted · ⚡ Zero latency · 📦 Self-contained viewer · 🔄 Real-time live mode
+**Key features:** 🔒 Common auth headers auto-redacted · ⚡ Low-overhead streaming · 📦 Self-contained viewer · 🔄 Real-time live mode
 
-## Contributor Legibility Checks
+## Community
 
-Run deterministic legibility checks locally:
+[![Star History Chart](https://api.star-history.com/svg?repos=liaohch3/claude-tap&type=Date)](https://www.star-history.com/#liaohch3/claude-tap&Date)
 
-```bash
-uv run python scripts/check_legibility.py
-```
+<a href="https://github.com/liaohch3/claude-tap/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=liaohch3/claude-tap" alt="Contributors" />
+</a>
 
-Strict freshness mode (promotes stale standards metadata to failures):
+## Contributing
 
-```bash
-uv run python scripts/check_legibility.py --strict-freshness
-```
-
-## PR Merge-Readiness Check
-
-Run a concise merge-readiness report for a pull request:
-
-```bash
-scripts/check_pr.sh <pr_number>
-```
-
-Options:
-
-```bash
-# Use an explicit repo instead of current checkout
-scripts/check_pr.sh <pr_number> --repo owner/repo
-
-# Skip local gates (CI/metadata only)
-scripts/check_pr.sh <pr_number> --no-tests
-```
-
-The script prints:
-
-- PR metadata (title, state, draft flag, merge state, head/base branch)
-- CI checks summary (`pass` / `fail` / `pending` counts)
-- Local gate results (unless `--no-tests`)
-- Final verdict line: `VERDICT: READY ...` or `VERDICT: NOT_READY ...`
-
-Local gates executed by default:
-
-```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest tests/ -x --timeout=60
-```
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

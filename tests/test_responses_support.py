@@ -39,6 +39,37 @@ def test_extract_metadata_supports_responses_input_roles_and_ws_usage() -> None:
     assert meta["model"] == "gpt-5.4"
     assert meta["has_system"] is True
     assert "exec_command" in meta["tool_names"]
+    assert "web_search" in meta["tool_names"]
+
+
+def test_extract_metadata_falls_back_to_tool_type_and_nested_function_name() -> None:
+    record = {
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/v1/responses",
+            "body": {
+                "model": "gpt-5.4",
+                "tools": [
+                    {"type": "tool_search", "description": "# Tool discovery"},
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "nested_function",
+                            "description": "Chat Completions style function tool.",
+                        },
+                    },
+                ],
+            },
+        },
+        "response": {"status": 200, "body": {"usage": {"input_tokens": 1, "output_tokens": 1}}},
+    }
+
+    meta = _extract_metadata(json.dumps(record))
+
+    assert meta is not None
+    assert "tool_search" in meta["tool_names"]
+    assert "nested_function" in meta["tool_names"]
 
 
 def test_extract_metadata_supports_interleaved_responses_roles_without_type() -> None:
@@ -68,3 +99,29 @@ def test_extract_metadata_supports_interleaved_responses_roles_without_type() ->
     assert meta["message_count"] == 3
     assert meta["input_tokens"] == 1
     assert meta["output_tokens"] == 1
+
+
+def test_extract_metadata_ignores_list_response_body() -> None:
+    record = {
+        "turn": 1,
+        "request_id": "req_1",
+        "timestamp": "2026-03-17T00:00:00Z",
+        "duration_ms": 10,
+        "request": {
+            "method": "POST",
+            "path": "/v1/messages",
+            "body": {
+                "model": "claude-opus-4-6",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        },
+        "response": {"status": 200, "body": [{"type": "text", "text": "hello"}]},
+    }
+
+    meta = _extract_metadata(json.dumps(record))
+
+    assert meta is not None
+    assert meta["message_count"] == 1
+    assert meta["input_tokens"] == 0
+    assert meta["output_tokens"] == 0
+    assert meta["error_message"] == ""

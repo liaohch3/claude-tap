@@ -1450,12 +1450,20 @@ def test_sse_reassembler():
     assert len(r.events) == 6
     print("  OK: basic SSE parsing")
 
-    # Orphan data line (no event: prefix) — should be ignored
+    # Bare data line (no event: prefix) — must be emitted as a default-type
+    # event so OpenAI Chat Completions streams (which never send event: headers)
+    # don't get silently dropped.
     r2 = SSEReassembler()
     r2.feed_bytes(b'data: {"orphan": true}\n\n')
-    assert len(r2.events) == 0
+    # Bare data lines (no event: prefix) are emitted as default-type events.
+    # OpenAI Chat Completions streams use exactly this shape — the previous
+    # "ignored" behavior silently dropped every such response body.
+    assert len(r2.events) == 1
+    assert r2.events[0]["event"] == "message"
+    assert r2.events[0]["data"] == {"orphan": True}
+    # Snapshot reconstruction stays a no-op for non-Anthropic/Responses schemas.
     assert r2.reconstruct() is None
-    print("  OK: orphan data ignored")
+    print("  OK: bare data emitted as default-type event")
 
     # Partial chunks (data split across feed_bytes calls)
     r3 = SSEReassembler()
@@ -2051,6 +2059,27 @@ def test_parse_args_new_flags():
     print("  OK: mixed new + claude flags")
 
     print("  test_parse_args_new_flags PASSED")
+
+
+def test_parse_dashboard_args():
+    """Test standalone dashboard argument parsing."""
+    from claude_tap import parse_dashboard_args
+
+    a = parse_dashboard_args([])
+    assert a.output_dir == "./.traces"
+    assert a.live_port == 0
+    assert a.host == "127.0.0.1"
+    assert a.open_viewer is True
+
+    a = parse_dashboard_args(
+        ["--tap-output-dir", "/tmp/t", "--tap-live-port", "3000", "--tap-host", "0.0.0.0", "--tap-no-open"]
+    )
+    assert a.output_dir == "/tmp/t"
+    assert a.live_port == 3000
+    assert a.host == "0.0.0.0"
+    assert a.open_viewer is False
+
+    print("  test_parse_dashboard_args PASSED")
 
 
 ## ---------------------------------------------------------------------------
@@ -2779,3 +2808,35 @@ async def test_live_viewer_server():
 
         await server.stop()
         print("  test_live_viewer_server PASSED")
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_serves_viewer(monkeypatch):
+    """Test the dashboard command starts a standalone viewer server."""
+    import aiohttp
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    opened_urls: list[str] = []
+    monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        args = parse_dashboard_args(["--tap-output-dir", tmpdir, "--tap-live-port", "0"])
+        task = asyncio.create_task(dashboard_main(args))
+        try:
+            for _ in range(50):
+                if opened_urls:
+                    break
+                await asyncio.sleep(0.05)
+            assert opened_urls, "dashboard should open the browser"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(opened_urls[0]) as resp:
+                    assert resp.status == 200
+                    html = await resp.text()
+                    assert "LIVE_MODE = true" in html
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

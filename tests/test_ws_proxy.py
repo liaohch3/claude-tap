@@ -145,6 +145,8 @@ async def test_websocket_proxy_basic(trace_dir):
         assert r["request"]["method"] == "WEBSOCKET"
         assert r["request"]["path"] == "/v1/responses"
         assert r["request"]["body"]["model"] == "gpt-test"
+        assert r["request"]["ws_events"][0]["model"] == "gpt-test"
+        assert r["request"]["ws_events"][0]["input"] == "hello"
         assert r["response"]["status"] == 101
         assert len(r["response"]["ws_events"]) == 4
         assert r["response"]["body"]["status"] == "completed"
@@ -272,7 +274,9 @@ def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
             json.dumps(
                 {
                     "type": "response.create",
-                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+                    "input": [
+                        {"role": "user", "content": [{"type": "input_text", "text": "你好，调用一个工具，然后结束"}]}
+                    ],
                 }
             ),
             json.dumps(
@@ -328,10 +332,13 @@ def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
         upstream_base_url="https://chatgpt.com/backend-api/codex",
     )
 
-    assert record["request"]["body"]["input"][0]["content"][0]["text"] == "hello"
+    assert record["request"]["body"]["input"][0]["content"][0]["text"] == "你好，调用一个工具，然后结束"
     assert record["request"]["body"]["input"][1]["type"] == "function_call_output"
     assert record["request"]["body"]["previous_response_id"] == "resp_previous"
     assert record["request"]["body"]["tools"][0]["name"] == "exec_command"
+    assert len(record["request"]["ws_events"]) == 3
+    assert record["request"]["ws_events"][1]["input"][0]["content"][0]["text"] == "你好，调用一个工具，然后结束"
+    assert record["request"]["ws_events"][2]["input"][0]["type"] == "function_call_output"
     assert record["response"]["body"]["usage"] == {"input_tokens": 10, "output_tokens": 2}
     assert record["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_FROM_WS"
 

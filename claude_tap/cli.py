@@ -63,7 +63,7 @@ class ClientConfig:
     default_target: str
     nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
     # Default proxy mode when --tap-proxy-mode is not explicitly set.
-    # Multi-provider clients (e.g. hermes) default to "forward" so that all
+    # Multi-provider clients (e.g. hermes, opencode) default to "forward" so that all
     # provider traffic is captured regardless of which env var the client honors.
     default_proxy_mode: str = "reverse"
 
@@ -94,6 +94,18 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="OPENAI_BASE_URL",
         base_url_suffix="/v1",
         default_target="https://api.openai.com",
+    ),
+    "opencode": ClientConfig(
+        cmd="opencode",
+        label="OpenCode",
+        install_url="https://opencode.ai/docs/",
+        # opencode is multi-provider; ANTHROPIC_BASE_URL is what reverse mode
+        # patches when the user explicitly opts out of forward mode. Forward
+        # proxy is the default and captures every provider transparently.
+        base_url_env="ANTHROPIC_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.anthropic.com",
+        default_proxy_mode="forward",
     ),
     "hermes": ClientConfig(
         cmd="hermes",
@@ -173,6 +185,11 @@ async def run_client(
         base_url = cfg.reverse_base_url(port)
         env[cfg.base_url_env] = base_url
         env["NO_PROXY"] = "127.0.0.1"
+        if client == "claude":
+            has_settings_arg = any(arg == "--settings" or arg.startswith("--settings=") for arg in cmd_args)
+            if not has_settings_arg:
+                settings_payload = {"env": {cfg.base_url_env: base_url}}
+                cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
         if client == "codex" and not has_openai_base_override:
             # Newer Codex builds may ignore OPENAI_BASE_URL in OAuth/WebSocket mode
             # unless the same value is also supplied as a config override.
@@ -408,8 +425,7 @@ async def async_main(args: argparse.Namespace):
             "writer": writer,
             "session": session,
             "turn_counter": 0,
-            "strip_path_prefix": "/v1" if args.client == "codex" and "api.openai.com" not in args.target else "",
-            "force_http": args.client == "codex",
+            **_reverse_proxy_trace_options(args.client, args.target),
         }
         app.router.add_route("*", "/{path_info:.*}", proxy_handler)
 
@@ -531,6 +547,13 @@ async def async_main(args: argparse.Namespace):
 _CODEX_CHATGPT_TARGET = "https://chatgpt.com/backend-api/codex"
 
 
+def _reverse_proxy_trace_options(client: str, target: str) -> dict[str, object]:
+    return {
+        "strip_path_prefix": "/v1" if client == "codex" and "api.openai.com" not in target else "",
+        "force_http": False,
+    }
+
+
 def _detect_codex_target() -> str:
     """Auto-detect the correct upstream target for Codex CLI.
 
@@ -570,12 +593,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6\n"
             "\n"
             "codex cli:\n"
-            "  # API Key users (OPENAI_API_KEY) — default target works out of the box\n"
+            "  # Target is auto-detected from Codex auth state when possible\n"
             "  claude-tap --tap-client codex\n"
-            "  # OAuth users (ChatGPT Plus/Pro/Team) — must specify target\n"
+            "  # If auto-detection cannot read Codex auth, specify OAuth target explicitly\n"
             "  claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex\n"
             "  # With model and full auto-approval\n"
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
+            "\n"
+            "opencode (multi-provider; defaults to forward proxy mode):\n"
+            "  # Forward proxy captures every provider opencode talks to\n"
+            "  claude-tap --tap-client opencode\n"
+            "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
+            "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
             "\n"
             "hermes agent (multi-provider Python agent — forward proxy default):\n"
             "  # Interactive TUI — forward proxy captures whatever provider hermes is configured for\n"
@@ -593,6 +622,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap export trace.jsonl -o out.md    Export to file\n"
             "  claude-tap export trace.jsonl --format json Export as JSON\n"
             "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
+            "\n"
+            "dashboard:\n"
+            "  claude-tap dashboard                       Browse trace history\n"
+            "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
             "\n"
             "homepage: https://github.com/liaohch3/claude-tap"
         ),
@@ -627,7 +660,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["reverse", "forward"],
         default=None,
         dest="proxy_mode",
-        help="'reverse' sets provider base URL (default for claude/codex), 'forward' sets HTTPS_PROXY with CONNECT/TLS termination (default for hermes)",
+        help=(
+            "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
+            "Default depends on the client: 'reverse' for claude/codex, 'forward' for opencode/hermes."
+        ),
     )
     proxy_group.add_argument(
         "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
@@ -696,7 +732,72 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             args.target = _detect_codex_target()
         else:
             args.target = CLIENT_CONFIGS[args.client].default_target
+    if args.proxy_mode is None:
+        args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
     return args
+
+
+def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse arguments for the standalone dashboard command."""
+    parser = argparse.ArgumentParser(
+        prog="claude-tap dashboard",
+        description="Open a local claude-tap dashboard for browsing trace history.",
+    )
+    parser.add_argument(
+        "--tap-output-dir",
+        default="./.traces",
+        dest="output_dir",
+        help="Trace output directory to browse (default: ./.traces)",
+    )
+    parser.add_argument(
+        "--tap-live-port",
+        type=int,
+        default=0,
+        dest="live_port",
+        help="Dashboard server port (default: auto)",
+    )
+    parser.add_argument(
+        "--tap-host",
+        default="127.0.0.1",
+        dest="host",
+        help="Bind address (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--tap-no-open",
+        action="store_false",
+        dest="open_viewer",
+        default=True,
+        help="Don't auto-open the dashboard in a browser",
+    )
+    return parser.parse_args(argv)
+
+
+async def dashboard_main(args: argparse.Namespace) -> int:
+    """Run the standalone dashboard until interrupted."""
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now()
+    date_dir = output_dir / now.strftime("%Y-%m-%d")
+    date_dir.mkdir(parents=True, exist_ok=True)
+    trace_path = date_dir / f"dashboard_{now.strftime('%H%M%S')}.jsonl"
+
+    server = LiveViewerServer(trace_path, port=args.live_port, host=args.host, output_dir=output_dir)
+    await server.start()
+    print(f"🌐 claude-tap dashboard: {server.url}")
+    print(f"📁 Trace directory: {output_dir}")
+    print("Press Ctrl+C to stop.")
+    if args.open_viewer:
+        _open_browser(server.url)
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await server.stop()
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -868,6 +969,14 @@ def main_entry() -> None:
         from claude_tap.export import export_main
 
         sys.exit(export_main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "dashboard":
+        args = parse_dashboard_args(sys.argv[2:])
+        try:
+            code = asyncio.run(dashboard_main(args))
+        except KeyboardInterrupt:
+            code = 0
+        sys.exit(code)
 
     args = parse_args()
     try:
