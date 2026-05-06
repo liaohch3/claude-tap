@@ -1,0 +1,72 @@
+{
+  "projectName": "claude-tap",
+  "projectOwner": "liaohch3",
+  "repoType": "github",
+  "repoHost": "https://github.com",
+  "files": [
+    "README.md",
+    "README_zh.md"
+  ],
+  "imageSize": 100,
+  "commit": false,
+  "contributorsPerLine": 7,
+  "contributors": [
+    {
+      "login": "liaohch3",
+      "name": "liaohch3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/34056481",
+      "profile": "https://github.com/liaohch3",
+      "contributions": [
+        "code",
+        "doc",
+        "maintenance",
+        "test"
+      ]
+    },
+    {
+      "login": "WEIFENG2333",
+      "name": "BKK",
+      "avatar_url": "https://avatars.githubusercontent.com/u/61730227",
+      "profile": "https://github.com/WEIFENG2333",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "YoungCan-Wang",
+      "name": "YoungCan-Wang",
+      "avatar_url": "https://avatars.githubusercontent.com/u/73347006",
+      "profile": "https://github.com/YoungCan-Wang",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "oxkrypton",
+      "name": "0xkrypton",
+      "avatar_url": "https://avatars.githubusercontent.com/u/154910746",
+      "profile": "https://github.com/oxkrypton",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "googs1025",
+      "name": "CYJiang",
+      "avatar_url": "https://avatars.githubusercontent.com/u/86391540",
+      "profile": "https://github.com/googs1025",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "TITOCHAN2023",
+      "name": "陈展鹏",
+      "avatar_url": "https://avatars.githubusercontent.com/u/138754853",
+      "profile": "https://github.com/TITOCHAN2023",
+      "contributions": [
+        "doc"
+      ]
+    }
+  ]
+}

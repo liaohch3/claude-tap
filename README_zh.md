@@ -4,10 +4,12 @@
 [![PyPI downloads](https://img.shields.io/pypi/dm/claude-tap.svg)](https://pypi.org/project/claude-tap/)
 [![Python version](https://img.shields.io/pypi/pyversions/claude-tap.svg)](https://pypi.org/project/claude-tap/)
 [![License](https://img.shields.io/github/license/liaohch3/claude-tap.svg)](https://github.com/liaohch3/claude-tap/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/liaohch3/claude-tap?style=social)](https://github.com/liaohch3/claude-tap/stargazers)
+[![All Contributors](https://img.shields.io/badge/all_contributors-6-orange.svg)](#贡献者)
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[OpenCode](https://opencode.ai) 或 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[OpenCode](https://opencode.ai)、[Hermes Agent](https://github.com/NousResearch/hermes-agent) 或 [Cursor CLI](https://cursor.com/cli) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -24,7 +26,7 @@
 
 ## 安装
 
-需要 Python 3.11+ 以及要追踪的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)（默认）、[Codex CLI](https://github.com/openai/codex)（`--tap-client codex` 时）、[OpenCode](https://opencode.ai)（`--tap-client opencode` 时）、或 [Hermes Agent](https://github.com/NousResearch/hermes-agent)（`--tap-client hermes` 时）。
+需要 Python 3.11+ 以及要追踪的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)（默认）、[Codex CLI](https://github.com/openai/codex)（`--tap-client codex` 时）、[OpenCode](https://opencode.ai)（`--tap-client opencode` 时）、[Hermes Agent](https://github.com/NousResearch/hermes-agent)（`--tap-client hermes` 时）、或 [Cursor CLI](https://cursor.com/cli)（`--tap-client cursor` 时）。
 
 ```bash
 # 推荐
@@ -123,6 +125,16 @@ claude-tap --tap-client hermes --tap-proxy-mode reverse
 ```
 
 > **注意：** Gateway 模式只有在配置的消息平台（Slack、Telegram 等）推送消息给 bot 时才会产生 trace。若没有活跃的平台集成，gateway 不会发起 LLM 请求，也不会生成任何 trace。
+
+### Cursor CLI
+
+Cursor CLI 默认使用 forward proxy。免费套餐建议传 `--model auto`；需要工具调用时不要加 `--mode ask`。
+
+```bash
+claude-tap --tap-client cursor -- -p --trust --model auto "hello"
+claude-tap --tap-client cursor -- -p --trust --model auto --continue "continue"
+```
+
 
 ### 浏览器预览
 
@@ -231,8 +243,8 @@ claude-tap --tap-max-traces 10
 
 **工作原理:**
 
-1. `claude-tap` 启动反向代理，并以对应服务商的 base URL 指向代理来启动所选客户端（`claude` 或 `codex`）
-2. 支持的 API 请求流经: 代理 → 上游 API → 代理返回
+1. `claude-tap` 启动反向代理或 forward proxy，并启动所选客户端
+2. 支持 base URL 的客户端会指向反向代理；不支持 base URL 的客户端会通过 proxy/CA 环境变量接入
 3. SSE 和 WebSocket 流会在收到 chunk/message 时实时转发，代理开销很低
 4. 每个请求-响应对或 WebSocket 会话记录到按日期保存的 `trace_*.jsonl`
 5. 退出时生成自包含的 HTML 查看器
@@ -242,11 +254,34 @@ claude-tap --tap-max-traces 10
 
 ## 社区
 
+### Star 历史
+
 [![Star History Chart](https://api.star-history.com/svg?repos=liaohch3/claude-tap&type=Date)](https://www.star-history.com/#liaohch3/claude-tap&Date)
 
-<a href="https://github.com/liaohch3/claude-tap/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=liaohch3/claude-tap" alt="贡献者" />
-</a>
+### 贡献者
+
+感谢以下贡献者：
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/liaohch3"><img src="https://avatars.githubusercontent.com/u/34056481?s=100" width="100px;" alt="liaohch3"/><br /><sub><b>liaohch3</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=liaohch3" title="Code">💻</a> <a href="https://github.com/liaohch3/claude-tap/commits?author=liaohch3" title="Documentation">📖</a> <a href="#maintenance-liaohch3" title="Maintenance">🚧</a> <a href="https://github.com/liaohch3/claude-tap/commits?author=liaohch3" title="Tests">⚠️</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/WEIFENG2333"><img src="https://avatars.githubusercontent.com/u/61730227?s=100" width="100px;" alt="BKK"/><br /><sub><b>BKK</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=WEIFENG2333" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/YoungCan-Wang"><img src="https://avatars.githubusercontent.com/u/73347006?s=100" width="100px;" alt="YoungCan-Wang"/><br /><sub><b>YoungCan-Wang</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=YoungCan-Wang" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/oxkrypton"><img src="https://avatars.githubusercontent.com/u/154910746?s=100" width="100px;" alt="0xkrypton"/><br /><sub><b>0xkrypton</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=oxkrypton" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/googs1025"><img src="https://avatars.githubusercontent.com/u/86391540?s=100" width="100px;" alt="CYJiang"/><br /><sub><b>CYJiang</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=googs1025" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/TITOCHAN2023"><img src="https://avatars.githubusercontent.com/u/138754853?s=100" width="100px;" alt="陈展鹏"/><br /><sub><b>陈展鹏</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=TITOCHAN2023" title="Documentation">📖</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
 
 ## 许可证
 

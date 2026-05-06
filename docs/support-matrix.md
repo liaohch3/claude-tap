@@ -22,6 +22,7 @@ This document tracks all verified (client × auth × target × transport) combin
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
+| Cursor CLI | Cursor login (`cursor-agent login`) | Forward proxy to `https://api2.cursor.sh` | n/a | HTTPS/protobuf + local transcript import | Real E2E verified |
 
 ## Default Proxy Mode by Client
 
@@ -34,6 +35,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
+| `cursor` | `forward` | Cursor CLI has no base URL override; forward proxy captures network traffic and local transcripts provide readable turns |
 
 Users can always override with `--tap-proxy-mode {reverse,forward}`.
 
@@ -88,6 +90,10 @@ strip = "/v1" if client == "codex" and "api.openai.com" not in target else ""
 - `test_codex_client_reverse_proxy` — e2e with fake upstream (OAuth-like, with strip)
 - `test_websocket_proxy_basic` — WS relay and trace recording
 - `test_hermes_*` — registration, parse_args default-mode resolution, forward/reverse env, argv rewrite
+- `test_cursor_registered_in_client_configs` — verifies Cursor CLI registration and default forward mode
+- `test_run_client_cursor_forward_sets_proxy_ca_and_no_proxy` — verifies Cursor launch env for forward proxy mode
+- `test_import_cursor_transcripts_appends_viewer_friendly_records` — verifies readable Cursor transcript import
+- `test_import_cursor_transcripts_preserves_tool_uses` — verifies Cursor tool_use blocks render in the viewer trace shape
 
 ### Manual (pre-merge for proxy changes)
 
@@ -100,6 +106,10 @@ uv run python -m claude_tap --tap-client codex --tap-no-launch --tap-port 0
 uv run python -m claude_tap --tap-client codex \
   --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 0
 # Verify log shows correct upstream URL
+
+# Cursor CLI
+uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Reply OK"
+# Verify the trace contains raw proxy records plus cursor-transcript records
 ```
 
 ### Real E2E (optional, when auth is available)
@@ -110,6 +120,13 @@ tmux new-session -d -s verify \
   "uv run python -m claude_tap --tap-client codex --tap-target TARGET --tap-no-launch --tap-port 8080"
 # In another window:
 OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex exec "Reply: OK"
+```
+
+```bash
+# Cursor CLI real verification
+uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto \
+  "Use tools to inspect the workspace and reply OK"
+# Verify the generated HTML contains cursor-transcript turns and tool_use blocks.
 ```
 
 ## Adding New Clients or Backends

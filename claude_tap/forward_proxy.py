@@ -93,6 +93,8 @@ class ForwardProxyServer:
         self._writer = writer
         self._session = session
         self._server: asyncio.Server | None = None
+        self._client_tasks: set[asyncio.Task] = set()
+        self._client_writers: set[asyncio.StreamWriter] = set()
         self._turn_counter = 0
         self.actual_port: int = port
 
@@ -107,9 +109,26 @@ class ForwardProxyServer:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
+        for writer in list(self._client_writers):
+            try:
+                writer.close()
+            except Exception:
+                pass
+        tasks = [task for task in self._client_tasks if not task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            try:
+                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5)
+            except asyncio.TimeoutError:
+                log.warning("Timed out waiting for forward proxy client connections to stop")
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle an incoming client connection."""
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._client_tasks.add(current_task)
+        self._client_writers.add(writer)
         try:
             # Read the initial HTTP request line
             request_line = await asyncio.wait_for(reader.readline(), timeout=30)
@@ -136,6 +155,9 @@ class ForwardProxyServer:
         except Exception:
             log.exception("Error handling forward proxy connection")
         finally:
+            if current_task is not None:
+                self._client_tasks.discard(current_task)
+            self._client_writers.discard(writer)
             try:
                 writer.close()
                 await writer.wait_closed()
