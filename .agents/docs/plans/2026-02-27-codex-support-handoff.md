@@ -116,7 +116,7 @@ Reason:
 
 ### F. Planning Docs
 
-#### File: `docs/plans/2026-02-27-codex-support-plan.md`
+#### File: `.agents/docs/plans/2026-02-27-codex-support-plan.md`
 
 Changes made:
 
@@ -199,8 +199,8 @@ Files intended for this task commit:
 - `claude_tap/forward_proxy.py`
 - `claude_tap/viewer.html`
 - `tests/test_e2e.py`
-- `docs/plans/2026-02-27-codex-support-plan.md`
-- `docs/plans/2026-02-27-codex-support-handoff.md` (this file)
+- `.agents/docs/plans/2026-02-27-codex-support-plan.md`
+- `.agents/docs/plans/2026-02-27-codex-support-handoff.md` (this file)
 
 ## 6. Recommended Next Actions for the Next Codex Process
 

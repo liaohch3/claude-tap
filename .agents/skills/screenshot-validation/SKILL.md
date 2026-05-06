@@ -1,6 +1,6 @@
 ---
 name: screenshot-validation
-description: Validate screenshot and viewer HTML quality for PR evidence. Run this after adding or modifying images under docs/evidence/ or docs/recordings/, or after generating a new viewer HTML file. Combines image quality checks (resolution, blankness, file size) with Playwright-based viewer rendering verification.
+description: Validate screenshot and viewer HTML quality for PR evidence. Run this after adding or modifying images under .agents/evidence/pr/ or .agents/recordings/, or after generating a new viewer HTML file. Combines image quality checks (resolution, blankness, file size) with Playwright-based viewer rendering verification.
 user_invocable: true
 ---
 
@@ -19,8 +19,8 @@ Checks PNG/JPG/GIF/WEBP files for:
 ### Run on specific files or directories
 
 ```bash
-uv run python scripts/check_screenshots.py docs/evidence/
-uv run python scripts/check_screenshots.py docs/recordings/
+uv run python scripts/check_screenshots.py .agents/evidence/pr/
+uv run python scripts/check_screenshots.py .agents/recordings/
 uv run python scripts/check_screenshots.py path/to/specific-image.png
 ```
 
@@ -56,13 +56,13 @@ After generating new evidence for a PR:
 
 ```bash
 # 1. Check image quality
-uv run python scripts/check_screenshots.py docs/evidence/
+uv run python scripts/check_screenshots.py .agents/evidence/pr/
 
 # 2. If you generated new viewer HTML, verify it renders
 uv run python scripts/verify_screenshots.py .traces/trace_*.html
 
 # 3. If all passes, stage and commit
-git add docs/evidence/
+git add .agents/evidence/pr/
 ```
 
 ## Fixing common failures

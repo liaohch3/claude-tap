@@ -81,7 +81,7 @@ Commit: `fcb2982`
 
 ## Standards (Added)
 
-See `docs/standards/debugging-standards.md` for the full checklist.
+See `.agents/docs/standards/debugging-standards.md` for the full checklist.
 
 Key additions:
 - Before spawning agents for debugging: spend 5 minutes reading the relevant

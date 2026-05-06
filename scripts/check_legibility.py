@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic legibility checks for standards, plans, and architecture manifest."""
+"""Deterministic legibility checks for maintainer standards, plans, and architecture manifest."""
 
 from __future__ import annotations
 
@@ -13,6 +13,10 @@ from pathlib import Path
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 REQUIRED_STANDARDS_KEYS = ("owner", "last_reviewed", "source_of_truth")
 ALLOWED_PLAN_STATUS = {"active", "completed", "cancelled"}
+AGENT_DOCS_DIR = Path(".agents") / "docs"
+STANDARDS_DIR = AGENT_DOCS_DIR / "standards"
+PLANS_DIR = AGENT_DOCS_DIR / "plans"
+ARCHITECTURE_MANIFEST = AGENT_DOCS_DIR / "architecture" / "manifest.yaml"
 
 
 @dataclass
@@ -110,7 +114,7 @@ def check_standards_freshness(
 ) -> CheckResult:
     failures: list[str] = []
     warnings: list[str] = []
-    standards_dir = repo_root / "docs" / "standards"
+    standards_dir = repo_root / STANDARDS_DIR
 
     for file_path in sorted(standards_dir.glob("*.md")):
         frontmatter = parse_frontmatter(file_path.read_text(encoding="utf-8"))
@@ -145,7 +149,7 @@ def check_standards_freshness(
 def check_architecture_manifest(repo_root: Path) -> CheckResult:
     failures: list[str] = []
     resolved_repo_root = repo_root.resolve()
-    manifest_path = repo_root / "docs" / "architecture" / "manifest.yaml"
+    manifest_path = repo_root / ARCHITECTURE_MANIFEST
     if not manifest_path.exists():
         return CheckResult(failures=[f"{manifest_path}: missing manifest file"], warnings=[])
 
@@ -173,7 +177,7 @@ def check_architecture_manifest(repo_root: Path) -> CheckResult:
 
 def check_plan_state_drift(repo_root: Path) -> CheckResult:
     failures: list[str] = []
-    plans_dir = repo_root / "docs" / "plans"
+    plans_dir = repo_root / PLANS_DIR
 
     for file_path in sorted(plans_dir.glob("**/*.md")):
         text = file_path.read_text(encoding="utf-8")

@@ -55,7 +55,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pytest tests/ -x --timeout=60
 uv run pytest tests/test_e2e.py -k "forward_proxy_connect_websocket" -x --timeout=120
-uv run python scripts/check_screenshots.py docs/evidence/pr74
+uv run python scripts/check_screenshots.py .agents/evidence/pr/pr74
 uv run python scripts/verify_screenshots.py /Users/liaohch3/.claude-tap-traces/2026-04-21/trace_162156.html
 ```
 

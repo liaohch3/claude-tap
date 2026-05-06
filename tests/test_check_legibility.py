@@ -10,6 +10,7 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "check_legibility.py"
 MODULE_NAME = "check_legibility"
+AGENT_DOCS = Path(".agents") / "docs"
 
 
 def _load_module():
@@ -29,15 +30,15 @@ def _write(path: Path, text: str) -> None:
 
 def _base_repo(tmp_path: Path, *, last_reviewed: str = "2026-03-01", plan_status: str = "active") -> Path:
     _write(
-        tmp_path / "docs" / "standards" / "policy.md",
+        tmp_path / AGENT_DOCS / "standards" / "policy.md",
         (f"---\nowner: docs-team\nlast_reviewed: {last_reviewed}\nsource_of_truth: AGENTS.md\n---\n\n# Policy\n"),
     )
     _write(
-        tmp_path / "docs" / "architecture" / "manifest.yaml",
-        "expected_paths:\n  - docs/standards/policy.md\n  - docs/plans/plan.md\n",
+        tmp_path / AGENT_DOCS / "architecture" / "manifest.yaml",
+        "expected_paths:\n  - .agents/docs/standards/policy.md\n  - .agents/docs/plans/plan.md\n",
     )
     _write(
-        tmp_path / "docs" / "plans" / "plan.md",
+        tmp_path / AGENT_DOCS / "plans" / "plan.md",
         f"---\nstatus: {plan_status}\n---\n\n# Plan\n\nNo TODO items.\n",
     )
     return tmp_path
@@ -92,8 +93,8 @@ def test_missing_manifest_path_fails(tmp_path: Path) -> None:
     module = _load_module()
     repo_root = _base_repo(tmp_path)
     _write(
-        repo_root / "docs" / "architecture" / "manifest.yaml",
-        "expected_paths:\n  - docs/standards/policy.md\n  - docs/does-not-exist.md\n",
+        repo_root / AGENT_DOCS / "architecture" / "manifest.yaml",
+        "expected_paths:\n  - .agents/docs/standards/policy.md\n  - docs/does-not-exist.md\n",
     )
 
     result = module.run_checks(
@@ -110,7 +111,7 @@ def test_manifest_rejects_absolute_expected_path(tmp_path: Path) -> None:
     module = _load_module()
     repo_root = _base_repo(tmp_path)
     _write(
-        repo_root / "docs" / "architecture" / "manifest.yaml",
+        repo_root / AGENT_DOCS / "architecture" / "manifest.yaml",
         "expected_paths:\n  - /tmp/not-allowed.md\n",
     )
 
@@ -128,7 +129,7 @@ def test_manifest_rejects_expected_path_outside_repo_root(tmp_path: Path) -> Non
     module = _load_module()
     repo_root = _base_repo(tmp_path)
     _write(
-        repo_root / "docs" / "architecture" / "manifest.yaml",
+        repo_root / AGENT_DOCS / "architecture" / "manifest.yaml",
         "expected_paths:\n  - ../escape.md\n",
     )
 
@@ -146,7 +147,7 @@ def test_completed_plan_with_unchecked_todo_fails(tmp_path: Path) -> None:
     module = _load_module()
     repo_root = _base_repo(tmp_path, plan_status="completed")
     _write(
-        repo_root / "docs" / "plans" / "plan.md",
+        repo_root / AGENT_DOCS / "plans" / "plan.md",
         "---\nstatus: completed\n---\n\n# Plan\n\n- [ ] unresolved item\n",
     )
 
@@ -164,7 +165,7 @@ def test_completed_plan_ignores_unchecked_todo_in_fenced_code(tmp_path: Path) ->
     module = _load_module()
     repo_root = _base_repo(tmp_path, plan_status="completed")
     _write(
-        repo_root / "docs" / "plans" / "plan.md",
+        repo_root / AGENT_DOCS / "plans" / "plan.md",
         ("---\nstatus: completed\n---\n\n# Plan\n\n```markdown\n- [ ] example only\n```\n\nAll work done.\n"),
     )
 

@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-03-03
+last_reviewed: 2026-05-06
 source_of_truth: AGENTS.md
 ---
 
@@ -32,10 +32,10 @@ git branch -d feat/<name>
 
 记录经验教训：
 
-- 错误经验：`docs/error-experience/entries/YYYY-MM-DD-<slug>.md`
-- 正向经验：`docs/good-experience/entries/YYYY-MM-DD-<slug>.md`
-- 汇总：`docs/error-experience/summary/entries/` 与 `docs/good-experience/summary/entries/`
-- 计划：`docs/plans/`
+- 错误经验：`.agents/docs/error-experience/entries/YYYY-MM-DD-<slug>.md`
+- 正向经验：`.agents/docs/good-experience/entries/YYYY-MM-DD-<slug>.md`
+- 汇总：`.agents/docs/error-experience/summary/entries/` 与 `.agents/docs/good-experience/summary/entries/`
+- 计划：`.agents/docs/plans/`
 - 指南：`docs/guides/`
 
 在出现重大 bug、CI 失败或发现有价值模式后，创建一条条目并记录根因与经验。

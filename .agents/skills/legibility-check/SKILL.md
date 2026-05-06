@@ -1,18 +1,18 @@
 ---
 name: legibility-check
-description: Validate docs structure, standards freshness, manifest paths, and plan state. Run this after modifying any file under docs/standards/, docs/plans/, docs/architecture/, or AGENTS.md — it catches stale metadata, broken manifest paths, and plan state drift before CI does.
+description: Validate maintainer docs structure, standards freshness, manifest paths, and plan state. Run this after modifying any file under .agents/docs/standards/, .agents/docs/plans/, .agents/docs/architecture/, or AGENTS.md — it catches stale metadata, broken manifest paths, and plan state drift before CI does.
 user_invocable: true
 ---
 
 # Legibility Check
 
-Run deterministic legibility checks that mirror what CI enforces via `.github/workflows/legibility.yml`. Catching these locally saves a round-trip to CI.
+Run deterministic checks for maintainer docs that mirror what CI enforces via `.github/workflows/legibility.yml`. Catching these locally saves a round-trip to CI.
 
 ## What it checks
 
-1. **Standards freshness** — every `docs/standards/*.md` must have frontmatter with `owner`, `last_reviewed` (ISO date), and `source_of_truth`. Files reviewed more than 60 days ago produce a warning.
-2. **Architecture manifest** — every path listed in `docs/architecture/manifest.yaml` under `expected_paths:` must exist in the repo.
-3. **Plan state drift** — every `docs/plans/**/*.md` must have a `status` frontmatter field (`active`, `completed`, or `cancelled`). Completed plans must not contain unchecked `- [ ]` checkboxes (outside fenced code blocks).
+1. **Standards freshness** — every `.agents/docs/standards/*.md` must have frontmatter with `owner`, `last_reviewed` (ISO date), and `source_of_truth`. Files reviewed more than 60 days ago produce a warning.
+2. **Architecture manifest** — every path listed in `.agents/docs/architecture/manifest.yaml` under `expected_paths:` must exist in the repo.
+3. **Plan state drift** — every `.agents/docs/plans/**/*.md` must have a `status` frontmatter field (`active`, `completed`, or `cancelled`). Completed plans must not contain unchecked `- [ ]` checkboxes (outside fenced code blocks).
 
 ## Run
 

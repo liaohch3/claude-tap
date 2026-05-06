@@ -1,0 +1,11 @@
+expected_paths:
+  - AGENTS.md
+  - .agents/docs/README.md
+  - .agents/docs/standards/README.md
+  - .agents/docs/standards/hard-rules.md
+  - .agents/docs/standards/validation-and-gates.md
+  - .agents/docs/standards/e2e-and-evidence.md
+  - .agents/docs/standards/coding-and-runtime.md
+  - .agents/docs/standards/workflow-and-review.md
+  - scripts/check_legibility.py
+  - .github/workflows/legibility.yml

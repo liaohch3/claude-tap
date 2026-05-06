@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-03-03
+last_reviewed: 2026-05-06
 source_of_truth: AGENTS.md
 ---
 
@@ -37,5 +37,5 @@ Run this checklist before `git commit` when screenshots are part of the PR:
 5. Local automated check passes:
 
 ```bash
-python3 scripts/check_screenshots.py docs/evidence/
+python3 scripts/check_screenshots.py .agents/evidence/pr/
 ```

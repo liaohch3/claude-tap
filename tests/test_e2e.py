@@ -2181,7 +2181,7 @@ def test_codex_upstream_url_construction(monkeypatch, tmp_path):
     with target="https://api.openai.com" produced wrong URLs like
     https://api.openai.com/responses instead of https://api.openai.com/v1/responses.
 
-    See: docs/error-experience/entries/2026-03-10-codex-strip-prefix-url-mismatch.md
+    See: .agents/docs/error-experience/entries/2026-03-10-codex-strip-prefix-url-mismatch.md
     """
     from claude_tap import parse_args
 

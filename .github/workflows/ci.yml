@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Validate screenshot evidence quality
-        run: python scripts/check_screenshots.py docs/evidence/
+        run: python scripts/check_screenshots.py .agents/evidence/pr/
 
   test:
     runs-on: ubuntu-latest

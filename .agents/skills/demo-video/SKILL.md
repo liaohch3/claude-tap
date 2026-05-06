@@ -34,7 +34,7 @@ agg /tmp/claude-tap-recordings/demo.cast /tmp/claude-tap-recordings/demo.gif
 ### 3) Convert GIF to MP4 with ffmpeg
 
 ```bash
-ffmpeg -y -i /tmp/claude-tap-recordings/demo.gif -movflags +faststart -pix_fmt yuv420p docs/demo.mp4
+ffmpeg -y -i /tmp/claude-tap-recordings/demo.gif -movflags +faststart -pix_fmt yuv420p .agents/recordings/demo.mp4
 ```
 
 ## Browser Screenshots (HTML Viewer)
@@ -77,8 +77,8 @@ page.evaluate("""
 ## Output Targets
 
 - `docs/demo.gif`
-- `docs/demo.mp4`
-- Optional localized variants (`docs/demo_zh.gif`, `docs/demo_zh.mp4`)
+- `.agents/recordings/demo.mp4`
+- Optional localized variants (`docs/demo_zh.gif`, `.agents/recordings/demo_zh.mp4`)
 
 ## Avoid
 

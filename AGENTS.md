@@ -4,7 +4,11 @@ External contributors should start with [`CONTRIBUTING.md`](CONTRIBUTING.md). Th
 
 # AGENTS 索引
 
-本文件是贡献者规则的入口。详细策略文本位于 `docs/standards/*.md`。
+本文件是贡献者规则的入口。详细策略文本位于 `.agents/docs/standards/*.md`。
+
+## Documentation Boundary
+
+`docs/` is reserved for public project documentation and README assets that open-source users or external contributors read directly. Maintainer policies, implementation plans, learning records, PR evidence, and recording assets belong under `.agents/` so internal automation workflows stay out of the public docs tree.
 
 ## Pre-commit Hook
 
@@ -29,15 +33,15 @@ git config core.hooksPath .githooks
 
 ## 标准目录
 
-- 硬性规则与仓库策略：`docs/standards/hard-rules.md`
-- 验证 gate 与必需命令：`docs/standards/validation-and-gates.md`
-- E2E 与截图证据要求：`docs/standards/e2e-and-evidence.md`
-- 截图采集与验证标准：`docs/standards/screenshot-standards.md`
-- 编码与运行时安全规则：`docs/standards/coding-and-runtime.md`
-- 工作流、review 与 Brain/Hands 协议：`docs/standards/workflow-and-review.md`
-- 调试方法论与反模式：`docs/standards/debugging-standards.md`
+- 硬性规则与仓库策略：`.agents/docs/standards/hard-rules.md`
+- 验证 gate 与必需命令：`.agents/docs/standards/validation-and-gates.md`
+- E2E 与截图证据要求：`.agents/docs/standards/e2e-and-evidence.md`
+- 截图采集与验证标准：`.agents/docs/standards/screenshot-standards.md`
+- 编码与运行时安全规则：`.agents/docs/standards/coding-and-runtime.md`
+- 工作流、review 与 Brain/Hands 协议：`.agents/docs/standards/workflow-and-review.md`
+- 调试方法论与反模式：`.agents/docs/standards/debugging-standards.md`
 - 客户端支持矩阵与 URL 构造规则：`docs/support-matrix.md`
-- 标准文档元数据与维护流程：`docs/standards/README.md`
+- 标准文档元数据与维护流程：`.agents/docs/standards/README.md`
 
 ## Skills 目录
 
