@@ -75,6 +75,10 @@ claude-tap -- --dangerously-skip-permissions
 claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
+`claude-tap` auto-detects custom Claude Code upstreams from `ANTHROPIC_BASE_URL`
+in your environment or Claude settings. Use `--tap-target` only when you want to
+override that detected target.
+
 </details>
 
 <details>

@@ -75,6 +75,9 @@ claude-tap -- --dangerously-skip-permissions
 claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
+`claude-tap` 会从环境变量或 Claude settings 中的 `ANTHROPIC_BASE_URL`
+自动识别自定义 Claude Code 上游；只有想手动覆盖时才需要传 `--tap-target`。
+
 </details>
 
 <details>

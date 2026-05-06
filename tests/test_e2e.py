@@ -1167,6 +1167,9 @@ def test_parse_args(monkeypatch, tmp_path):
     from claude_tap import parse_args
 
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
 
     # Basic: no args
     a = parse_args([])
