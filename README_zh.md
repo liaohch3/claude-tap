@@ -9,7 +9,7 @@
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 或 [Codex CLI](https://github.com/openai/codex) 的 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、使用 token——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、OpenCode 或 [Cursor CLI](https://cursor.com/cli) 的 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、使用 token——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -26,7 +26,7 @@
 
 ## 安装
 
-需要 Python 3.11+ 和 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（使用 `--tap-client codex` 时需要 [Codex CLI](https://github.com/openai/codex)）。
+需要 Python 3.11+，以及你想 trace 的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、OpenCode 或 [Cursor CLI](https://cursor.com/cli)。
 
 ```bash
 # 推荐
@@ -89,6 +89,15 @@ claude-tap --tap-client codex -- --full-auto
 
 # OAuth + 全自动 + 实时查看器
 claude-tap --tap-client codex --tap-live -- --full-auto
+```
+
+### Cursor CLI
+
+Cursor CLI 默认使用 forward proxy。免费套餐建议传 `--model auto`；需要工具调用时不要加 `--mode ask`。
+
+```bash
+claude-tap --tap-client cursor -- -p --trust --model auto "hello"
+claude-tap --tap-client cursor -- -p --trust --model auto --continue "continue"
 ```
 
 ### 浏览器预览
@@ -164,8 +173,8 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 
 **工作原理:**
 
-1. `claude-tap` 启动反向代理，并以对应服务商的 base URL 指向代理来启动所选客户端（`claude` 或 `codex`）
-2. 支持的 API 请求流经: 代理 → 上游 API → 代理返回
+1. `claude-tap` 启动反向代理或 forward proxy，并启动所选客户端
+2. 支持 base URL 的客户端会指向反向代理；不支持 base URL 的客户端会通过 proxy/CA 环境变量接入
 3. SSE 和 WebSocket 流会在收到 chunk/message 时实时转发，代理开销很低
 4. 每个请求-响应对或 WebSocket 会话记录到按日期保存的 `trace_*.jsonl`
 5. 退出时生成自包含的 HTML 查看器

@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 import webbrowser
@@ -23,6 +24,7 @@ import aiohttp
 from aiohttp import web
 
 from claude_tap.certs import CertificateAuthority, ensure_ca
+from claude_tap.cursor_transcript import import_cursor_transcripts
 from claude_tap.forward_proxy import ForwardProxyServer
 from claude_tap.live import LiveViewerServer
 from claude_tap.proxy import proxy_handler
@@ -107,6 +109,17 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         default_target="https://api.anthropic.com",
         default_proxy_mode="forward",
     ),
+    "cursor": ClientConfig(
+        cmd="cursor-agent",
+        label="Cursor CLI",
+        install_url="https://cursor.com/cli",
+        # Cursor CLI does not expose a provider base URL. Keep reverse-mode
+        # fields structurally valid, but default to forward proxy mode.
+        base_url_env="CURSOR_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api2.cursor.sh",
+        default_proxy_mode="forward",
+    ),
 }
 
 
@@ -140,6 +153,7 @@ async def run_client(
         env["http_proxy"] = proxy_url
         env["https_proxy"] = proxy_url
         env["all_proxy"] = proxy_url
+        _extend_no_proxy(env, ("localhost", "127.0.0.1", "::1"))
         if ca_cert_path:
             env["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
             # Codex is a Rust binary; NODE_EXTRA_CA_CERTS does not affect its TLS stack.
@@ -273,6 +287,27 @@ async def run_client(
     return code
 
 
+def _extend_no_proxy(env: dict[str, str], values: tuple[str, ...]) -> None:
+    """Append local proxy bypasses without discarding existing settings."""
+    existing: list[str] = []
+    for key in ("NO_PROXY", "no_proxy"):
+        raw = env.get(key, "")
+        existing.extend(part.strip() for part in raw.split(",") if part.strip())
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in [*existing, *values]:
+        lowered = value.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        merged.append(value)
+
+    no_proxy = ",".join(merged)
+    env["NO_PROXY"] = no_proxy
+    env["no_proxy"] = no_proxy
+
+
 def _has_config_override(args: list[str], key: str) -> bool:
     """Return True when argv already contains a matching -c/--config override."""
     prefixes = (f"{key}=",)
@@ -395,8 +430,10 @@ async def async_main(args: argparse.Namespace):
             pass
 
     exit_code = 0
+    client_started_at = time.time()
     try:
         if not args.no_launch:
+            client_started_at = time.time()
             try:
                 exit_code = await run_client(
                     actual_port,
@@ -415,13 +452,11 @@ async def async_main(args: argparse.Namespace):
             except asyncio.CancelledError:
                 pass
     finally:
-        try:
-            await session.close()
-        except Exception:
-            pass
         if forward_server:
             try:
-                await forward_server.stop()
+                await asyncio.wait_for(forward_server.stop(), timeout=10)
+            except asyncio.TimeoutError:
+                log.warning("Timed out stopping forward proxy")
             except Exception:
                 pass
         if runner:
@@ -436,6 +471,17 @@ async def async_main(args: argparse.Namespace):
                 await live_server.stop()
             except Exception:
                 pass
+        try:
+            await asyncio.wait_for(session.close(), timeout=5)
+        except asyncio.TimeoutError:
+            log.warning("Timed out closing upstream HTTP session")
+        except Exception:
+            pass
+
+        if args.client == "cursor" and not args.no_launch:
+            imported = await import_cursor_transcripts(writer, since=client_started_at)
+            if imported:
+                print(f"   Cursor transcript turns: {imported}")
 
         # Close writer before generating HTML
         writer.close()
@@ -519,7 +565,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
-        description="Trace Claude Code or Codex API requests via a local proxy. "
+        description="Trace Claude Code, Codex CLI, OpenCode, or Cursor CLI API requests via a local proxy. "
         "All flags not listed below are forwarded to the selected client.",
         epilog=(
             "claude code:\n"
@@ -543,6 +589,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client opencode\n"
             "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
             "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
+            "\n"
+            "cursor cli (defaults to forward proxy mode):\n"
+            '  claude-tap --tap-client cursor -- -p --trust --model auto "hello"\n'
+            "  # Cursor readable messages are imported from local transcripts after exit\n"
             "\n"
             "proxy-only mode (connect from another terminal):\n"
             "  claude-tap --tap-no-launch --tap-port 8080\n"
@@ -575,7 +625,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     proxy_group.add_argument(
         "--tap-client",
-        choices=["claude", "codex", "opencode"],
+        choices=["claude", "codex", "opencode", "cursor"],
         default="claude",
         dest="client",
         help="Client to launch (default: claude)",
@@ -593,7 +643,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex, 'forward' for opencode."
+            "Default depends on the client: 'reverse' for claude/codex, 'forward' for opencode/cursor."
         ),
     )
     proxy_group.add_argument(

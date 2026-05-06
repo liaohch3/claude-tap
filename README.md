@@ -9,7 +9,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex CLI](https://github.com/openai/codex). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), OpenCode, or [Cursor CLI](https://cursor.com/cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -28,7 +28,7 @@ Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/
 
 ## Install
 
-Requires Python 3.11+ and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (or [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`).
+Requires Python 3.11+ and the CLI you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), OpenCode, or [Cursor CLI](https://cursor.com/cli).
 
 ```bash
 # Recommended
@@ -91,6 +91,15 @@ claude-tap --tap-client codex -- --full-auto
 
 # OAuth + full auto + live viewer
 claude-tap --tap-client codex --tap-live -- --full-auto
+```
+
+### Cursor CLI
+
+Cursor CLI uses forward proxy mode by default. Use `--model auto` on free plans, and omit `--mode ask` when you want tool calls.
+
+```bash
+claude-tap --tap-client cursor -- -p --trust --model auto "hello"
+claude-tap --tap-client cursor -- -p --trust --model auto --continue "continue"
 ```
 
 ### Browser Preview
@@ -166,8 +175,8 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 
 **How it works:**
 
-1. `claude-tap` starts a reverse proxy and spawns the selected client (`claude` or `codex`) with the provider-specific base URL pointing to it
-2. Supported API requests flow through the proxy → upstream API → back through proxy
+1. `claude-tap` starts a reverse or forward proxy and spawns the selected client
+2. Base URL clients are pointed at the reverse proxy; clients without base URL support use proxy/CA environment variables
 3. SSE and WebSocket streams are forwarded as chunks/messages arrive with low proxy overhead
 4. Each request-response pair or WebSocket session is recorded to a dated `trace_*.jsonl`
 5. On exit, a self-contained HTML viewer is generated
