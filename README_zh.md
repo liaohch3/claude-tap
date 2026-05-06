@@ -24,6 +24,8 @@
 
 </details>
 
+> **OpenClaw：** 如果你要在 OpenClaw 中集成 claude-tap，请阅读 [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md)。英文版见 [OpenClaw setup guide](docs/guides/OPENCLAW_README.md)。
+
 ## 安装
 
 需要 Python 3.11+，以及你想 trace 的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、OpenCode 或 [Cursor CLI](https://cursor.com/cli)。
