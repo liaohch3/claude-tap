@@ -77,11 +77,11 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
 )
 
 
-def _is_allowed_path(path: str) -> bool:
+def _is_allowed_path(path: str, extra_prefixes: tuple[str, ...] = ()) -> bool:
     """Check whether the request path matches a known API endpoint."""
-    # Strip query string for matching
     clean = path.split("?", 1)[0].rstrip("/")
-    return any(clean == prefix or clean.startswith(prefix + "/") for prefix in ALLOWED_PATH_PREFIXES)
+    prefixes = ALLOWED_PATH_PREFIXES + extra_prefixes
+    return any(clean == prefix or clean.startswith(prefix + "/") for prefix in prefixes)
 
 
 # ---------------------------------------------------------------------------
@@ -91,18 +91,19 @@ def _is_allowed_path(path: str) -> bool:
 
 async def proxy_handler(request: web.Request) -> web.StreamResponse:
     # Reject requests to unknown paths (scanner/crawler protection)
-    if not _is_allowed_path(request.path):
+    ctx: dict = request.app["trace_ctx"]
+    extra_prefixes: tuple[str, ...] = ctx.get("extra_allowed_path_prefixes", ())
+    if not _is_allowed_path(request.path, extra_prefixes):
         log.debug(f"Blocked non-API path: {request.method} {request.path}")
         return web.Response(status=404, text="Not Found")
 
     # Detect WebSocket upgrade and route to WS proxy.
     if request.headers.get("Upgrade", "").lower() == "websocket":
-        if request.app["trace_ctx"].get("force_http"):
+        if ctx.get("force_http"):
             log.info(f"Rejecting WebSocket upgrade on {request.path} (force_http); client will fallback to HTTP")
             return web.Response(status=426, text="Upgrade Required")
         return await _handle_websocket(request)
 
-    ctx: dict = request.app["trace_ctx"]
     target: str = ctx["target_url"]
     writer: TraceWriter = ctx["writer"]
     session: aiohttp.ClientSession = ctx["session"]
