@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 import zlib
@@ -84,6 +86,39 @@ def _is_allowed_path(path: str) -> bool:
     return any(clean == prefix or clean.startswith(prefix + "/") for prefix in ALLOWED_PATH_PREFIXES)
 
 
+_ANTHROPIC_METADATA_USER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _is_deepseek_anthropic_target(target: str) -> bool:
+    """Return True for DeepSeek's Anthropic-compatible API target."""
+    try:
+        url = URL(target)
+    except ValueError:
+        return False
+    return url.host == "api.deepseek.com" and url.path.rstrip("/") == "/anthropic"
+
+
+def _normalize_request_body_for_upstream(req_body: dict, target: str) -> dict:
+    """Apply narrow upstream compatibility fixes without changing default Anthropic behavior."""
+    if not _is_deepseek_anthropic_target(target):
+        return req_body
+
+    metadata = req_body.get("metadata")
+    if not isinstance(metadata, dict):
+        return req_body
+
+    user_id = metadata.get("user_id")
+    if not isinstance(user_id, str) or _ANTHROPIC_METADATA_USER_ID_PATTERN.fullmatch(user_id):
+        return req_body
+
+    normalized_body = dict(req_body)
+    normalized_metadata = dict(metadata)
+    digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:24]
+    normalized_metadata["user_id"] = f"claude_tap_{digest}"
+    normalized_body["metadata"] = normalized_metadata
+    return normalized_body
+
+
 # ---------------------------------------------------------------------------
 # Proxy handler
 # ---------------------------------------------------------------------------
@@ -138,6 +173,16 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     except (json.JSONDecodeError, ValueError):
         req_body = body.decode("utf-8", errors="replace") if body else None
 
+    upstream_body = body
+    if isinstance(req_body, dict):
+        normalized_req_body = _normalize_request_body_for_upstream(req_body, target)
+        if normalized_req_body is not req_body:
+            req_body = normalized_req_body
+            upstream_body = json.dumps(req_body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            for key in list(fwd_headers.keys()):
+                if key.lower() == "content-length":
+                    del fwd_headers[key]
+
     is_streaming = False
     if isinstance(req_body, dict):
         is_streaming = req_body.get("stream", False)
@@ -160,7 +205,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             method=request.method,
             url=upstream_url,
             headers=fwd_headers,
-            data=body,
+            data=upstream_body,
             timeout=aiohttp.ClientTimeout(total=600, sock_read=300),
         )
     except Exception as exc:

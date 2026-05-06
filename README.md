@@ -26,6 +26,8 @@ Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/
 
 > **OpenClaw:** If you are Openclaw and integrating claude-tap with [OpenClaw](docs/guides/OPENCLAW_README.md), also read the dedicated setup guide.
 
+> **DeepSeek:** To trace Claude Code through DeepSeek's Anthropic-compatible API, see the [DeepSeek + Claude Code guide](docs/guides/deepseek-claude-code.md).
+
 ## Install
 
 Requires Python 3.11+ and the CLI you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), OpenCode, or [Cursor CLI](https://cursor.com/cli).
