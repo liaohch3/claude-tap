@@ -4,6 +4,8 @@
 [![PyPI downloads](https://img.shields.io/pypi/dm/claude-tap.svg)](https://pypi.org/project/claude-tap/)
 [![Python version](https://img.shields.io/pypi/pyversions/claude-tap.svg)](https://pypi.org/project/claude-tap/)
 [![License](https://img.shields.io/github/license/liaohch3/claude-tap.svg)](https://github.com/liaohch3/claude-tap/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/liaohch3/claude-tap?style=social)](https://github.com/liaohch3/claude-tap/stargazers)
+[![Contributors](https://img.shields.io/github/contributors/liaohch3/claude-tap.svg)](https://github.com/liaohch3/claude-tap/graphs/contributors)
 
 [中文文档](README_zh.md)
 
@@ -175,7 +177,11 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 
 ## Community
 
+### Star History
+
 [![Star History Chart](https://api.star-history.com/svg?repos=liaohch3/claude-tap&type=Date)](https://www.star-history.com/#liaohch3/claude-tap&Date)
+
+### Contributors
 
 <a href="https://github.com/liaohch3/claude-tap/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=liaohch3/claude-tap" alt="Contributors" />
