@@ -38,17 +38,30 @@ pip install claude-tap
 
 升级: `uv tool upgrade claude-tap` 或 `pip install --upgrade claude-tap`
 
-## 使用
+## 快速开始
 
-### Claude Code
+用 `claude-tap` 启动你想观察的客户端：
 
 ```bash
-# 基本用法 — 启动带 trace 的 Claude Code
+# Claude Code
 claude-tap
 
-# 实时模式 — 在浏览器中实时观察 API 调用
+# Claude Code + 浏览器实时查看
 claude-tap --tap-live
 
+# Codex CLI
+claude-tap --tap-client codex
+
+# Cursor CLI
+claude-tap --tap-client cursor -- -p --trust --model auto "hello"
+```
+
+非 `--tap-*` 参数会在 `--` 后透传给所选客户端。
+
+<details>
+<summary>Claude Code 更多示例</summary>
+
+```bash
 # 透传参数给 Claude Code
 claude-tap -- --model claude-opus-4-6
 claude-tap -c    # 继续上次对话
@@ -56,11 +69,14 @@ claude-tap -c    # 继续上次对话
 # 跳过所有权限确认（自动批准工具调用）
 claude-tap -- --dangerously-skip-permissions
 
-# 全功能组合：实时查看器 + 跳过权限确认 + 指定模型
+# 实时查看器 + 跳过权限确认 + 指定模型
 claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
-### Codex CLI
+</details>
+
+<details>
+<summary>Codex CLI 认证方式和示例</summary>
 
 Codex CLI 支持两种认证方式，对应不同的上游目标：
 
@@ -91,7 +107,10 @@ claude-tap --tap-client codex -- --full-auto
 claude-tap --tap-client codex --tap-live -- --full-auto
 ```
 
-### Cursor CLI
+</details>
+
+<details>
+<summary>Cursor CLI 示例</summary>
 
 Cursor CLI 默认使用 forward proxy。免费套餐建议传 `--model auto`；需要工具调用时不要加 `--mode ask`。
 
@@ -100,7 +119,10 @@ claude-tap --tap-client cursor -- -p --trust --model auto "hello"
 claude-tap --tap-client cursor -- -p --trust --model auto --continue "continue"
 ```
 
-### 浏览器预览
+</details>
+
+<details>
+<summary>浏览器预览、导出和纯代理模式</summary>
 
 ```bash
 # 禁用退出后自动打开 HTML 查看器（默认开启）
@@ -152,7 +174,12 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 
 运行 `claude-tap --help` 查看完整选项。非 `--tap-*` 参数会透传给所选客户端。
 
+</details>
+
 ## 查看器功能
+
+<details>
+<summary>Trace 查看器能力</summary>
 
 查看器是一个自包含的 HTML 文件（零外部依赖）：
 
@@ -167,9 +194,14 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 - **复制助手** — 一键复制请求 JSON 或 cURL 命令
 - **多语言** — English, 简体中文, 日本語, 한국어, Français, العربية, Deutsch, Русский
 
+</details>
+
 ## 架构
 
 ![架构图](docs/architecture.png)
+
+<details>
+<summary>工作原理</summary>
 
 **工作原理:**
 
@@ -181,6 +213,8 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 6. 实时模式（可选）通过 SSE 向浏览器广播更新
 
 **核心特性:** 🔒 常见认证 header 自动脱敏 · ⚡ 低开销流式转发 · 📦 自包含查看器 · 🔄 实时模式
+
+</details>
 
 ## 社区
 
