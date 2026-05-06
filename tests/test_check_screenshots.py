@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import binascii
 import importlib.util
+import shutil
 import struct
+import subprocess
 import sys
 import zlib
 from pathlib import Path
@@ -37,6 +39,24 @@ def _write_png(path: Path, width: int, height: int, color: tuple[int, int, int])
     raw_scanlines = b"".join(b"\x00" + row for _ in range(height))
     idat = zlib.compress(raw_scanlines)
     png = b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", ihdr) + _png_chunk(b"IDAT", idat) + _png_chunk(b"IEND", b"")
+    path.write_bytes(png)
+
+
+def _write_noisy_png(path: Path, width: int, height: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    rows = []
+    for y in range(height):
+        row = bytearray()
+        for x in range(width):
+            row.extend(((x * 17 + y * 31) % 256, (x * 29 + y * 11) % 256, (x * 7 + y * 19) % 256))
+        rows.append(b"\x00" + bytes(row))
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", zlib.compress(b"".join(rows)))
+        + _png_chunk(b"IEND", b"")
+    )
     path.write_bytes(png)
 
 
@@ -96,3 +116,23 @@ def test_main_warns_when_no_images_are_found(tmp_path: Path, capsys) -> None:
 
     assert exit_code == 0
     assert "[WARN] No image files found for input paths." in output
+
+
+def test_shell_wrapper_handles_multiple_passes(tmp_path: Path) -> None:
+    if not shutil.which("identify") and not shutil.which("sips"):
+        return
+
+    images = [tmp_path / "one.png", tmp_path / "two.png"]
+    for image in images:
+        _write_noisy_png(image, width=1440, height=900)
+
+    result = subprocess.run(
+        ["bash", "scripts/check_screenshots.sh", *(str(image) for image in images)],
+        check=False,
+        cwd=SCRIPT_PATH.parent.parent,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Results: 2 passed, 0 failed, 0 warnings" in result.stdout
