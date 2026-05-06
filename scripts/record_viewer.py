@@ -1,8 +1,8 @@
 """Record a walkthrough of the claude-tap trace viewer using Playwright.
 
 Produces:
-  - Video at 1440x900 in docs/recordings/video/
-  - 10+ high-quality screenshots in docs/recordings/
+  - Video at 1440x900 in .agents/recordings/video/
+  - 10+ high-quality screenshots in .agents/recordings/
 """
 
 from __future__ import annotations
@@ -13,7 +13,8 @@ import time
 from playwright.sync_api import sync_playwright
 
 TRACE_HTML = "/tmp/codex-tap-demo/.traces/trace_20260228_004827.html"
-SCREENSHOT_DIR = pathlib.Path(__file__).parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+SCREENSHOT_DIR = REPO_ROOT / ".agents" / "recordings"
 VIDEO_DIR = SCREENSHOT_DIR / "video"
 WIDTH, HEIGHT = 1440, 900
 

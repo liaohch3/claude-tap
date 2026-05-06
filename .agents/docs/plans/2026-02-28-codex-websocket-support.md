@@ -55,5 +55,5 @@ Codex CLI v0.106.0+ 默认对 `/v1/responses` API 调用使用 WebSocket 传输
 ## 参考
 
 - 修复 commit：`a0e00e2`（在 reverse mode 下禁用 websocket 传输）
-- 错误经验：`docs/error-experience/entries/2026-02-28-codex-reverse-websocket-capture-gap.md`
+- 错误经验：`.agents/docs/error-experience/entries/2026-02-28-codex-reverse-websocket-capture-gap.md`
 - Codex CLI flags：`--enable/--disable responses_websockets[_v2]`

@@ -115,7 +115,7 @@ uv run pytest tests/ -x --timeout=60
 uv run pytest tests/test_e2e.py -k "forward_proxy_connect_websocket or forward_proxy_connect" -x --timeout=120
 uv run pytest tests/test_ws_proxy.py -k build_ws_record_merges_incremental_request_and_output_items -x --timeout=120
 uv run pytest tests/test_responses_browser.py -x --timeout=120
-uv run python scripts/check_screenshots.py docs/evidence/pr73
+uv run python scripts/check_screenshots.py .agents/evidence/pr/pr73
 uv run python scripts/verify_screenshots.py \
   /Users/liaohch3/.claude-tap-traces/2026-04-20/trace_011853.html \
   /tmp/codex-forward-real/2026-04-20/trace_011250.html
