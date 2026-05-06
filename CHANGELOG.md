@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.47] - 2026-05-06
+
+### Changed
+- chore: split internal docs from public docs (#125)
+- docs: collapse detailed README sections (#127)
 ## [0.1.46] - 2026-05-06
 
 ### Changed
