@@ -225,18 +225,3 @@ def test_public_docs_missing_english_counterpart_fails(tmp_path: Path) -> None:
     )
 
     assert any("missing English counterpart" in failure for failure in result.failures)
-
-
-def test_legacy_public_doc_without_counterpart_is_allowed(tmp_path: Path) -> None:
-    module = _load_module()
-    repo_root = _base_repo(tmp_path)
-    _write(repo_root / "docs" / "guides" / "OPENCLAW_README.md", "# OpenClaw\n")
-
-    result = module.run_checks(
-        repo_root,
-        freshness_days=60,
-        strict_freshness=False,
-        today=dt.date(2026, 3, 3),
-    )
-
-    assert result.failures == []

@@ -5,6 +5,8 @@ description: Configure and launch claude-tap as a local proxy for OpenClaw integ
 
 # Claude Tap Setup Guide (Required Reading for OpenClaw Integration)
 
+Simplified Chinese version: [OpenClaw 集成的 Claude Tap 设置指南](OPENCLAW_README.zh.md).
+
 ## Background
 
 OpenClaw can trace model API requests through a local proxy such as claude-tap. Once configured, all API requests destined for a given model provider are forwarded through the local proxy to the upstream endpoint, while requests and responses are recorded for debugging.

@@ -19,9 +19,6 @@ PLANS_DIR = AGENT_DOCS_DIR / "plans"
 ARCHITECTURE_MANIFEST = AGENT_DOCS_DIR / "architecture" / "manifest.yaml"
 PUBLIC_DOCS_DIR = Path("docs")
 README_DOC_PAIRS = ((Path("README.md"), Path("README_zh.md")),)
-LEGACY_UNPAIRED_PUBLIC_DOCS = {
-    Path("docs") / "guides" / "OPENCLAW_README.md",
-}
 
 
 @dataclass
@@ -221,10 +218,6 @@ def check_public_docs_bilingual(repo_root: Path) -> CheckResult:
         return CheckResult(failures=failures, warnings=[])
 
     for file_path in sorted(public_docs_dir.glob("**/*.md")):
-        relative_path = file_path.relative_to(repo_root)
-        if relative_path in LEGACY_UNPAIRED_PUBLIC_DOCS:
-            continue
-
         counterpart = _public_doc_counterpart(file_path)
         if not counterpart.exists():
             counterpart_relative = counterpart.relative_to(repo_root)
