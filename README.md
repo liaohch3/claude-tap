@@ -77,7 +77,8 @@ claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-
 
 </details>
 
-### Claude Code with DeepSeek API
+<details>
+<summary>Claude Code with DeepSeek API</summary>
 
 Full English guide: [Claude Code with DeepSeek API](docs/guides/deepseek-claude-code.md). Simplified Chinese version: [Claude Code 搭配 DeepSeek API](docs/guides/deepseek-claude-code.zh.md).
 
@@ -101,6 +102,8 @@ claude-tap \
 ```
 
 Set `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic` only for direct Claude Code usage. When capturing with `claude-tap`, use `--tap-target` for the DeepSeek upstream.
+
+</details>
 
 <details>
 <summary>Codex CLI auth modes and examples</summary>
