@@ -554,6 +554,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap export trace.jsonl --format json Export as JSON\n"
             "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
             "\n"
+            "update:\n"
+            "  claude-tap update                          Upgrade claude-tap in place\n"
+            "  claude-tap update --installer pip          Force pip-based upgrade\n"
+            "\n"
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
             "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
@@ -767,16 +771,66 @@ def _detect_installer() -> str:
 def _start_background_update(installer: str) -> subprocess.Popen | None:
     """Start a background process to upgrade claude-tap."""
     try:
-        if installer == "uv":
-            uv_path = shutil.which("uv")
-            if uv_path is None:
-                return None
-            cmd = [uv_path, "tool", "upgrade", "claude-tap"]
-        else:
-            cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
+        cmd = _build_update_command(installer)
+        if cmd is None:
+            return None
         return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         return None
+
+
+def _build_update_command(installer: str) -> list[str] | None:
+    """Build the foreground/background self-upgrade command."""
+    if installer == "uv":
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            return None
+        return [uv_path, "tool", "upgrade", "claude-tap"]
+    if installer == "pip":
+        return [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
+    raise ValueError(f"unsupported installer: {installer}")
+
+
+def parse_update_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse arguments for the update subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="claude-tap update",
+        description="Upgrade claude-tap using the detected installer.",
+    )
+    parser.add_argument(
+        "--installer",
+        choices=["auto", "uv", "pip"],
+        default="auto",
+        help="Upgrade backend to use (default: auto-detect uv or pip)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the upgrade command without running it",
+    )
+    return parser.parse_args(argv)
+
+
+def update_main(argv: list[str] | None = None) -> int:
+    """Entry point for the update subcommand."""
+    args = parse_update_args(argv)
+    installer = _detect_installer() if args.installer == "auto" else args.installer
+    cmd = _build_update_command(installer)
+    if cmd is None:
+        print("Error: 'uv' command not found. Re-run with --installer pip or install uv.", file=sys.stderr)
+        return 1
+
+    printable_cmd = " ".join(cmd)
+    print(f"Upgrading claude-tap with {installer}: {printable_cmd}")
+    if args.dry_run:
+        return 0
+
+    try:
+        result = subprocess.run(cmd, check=False)
+    except OSError as exc:
+        print(f"Error: failed to run update command: {exc}", file=sys.stderr)
+        return 1
+    return result.returncode
 
 
 # ---------------------------------------------------------------------------
@@ -898,6 +952,9 @@ def main_entry() -> None:
         from claude_tap.export import export_main
 
         sys.exit(export_main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "update":
+        sys.exit(update_main(sys.argv[2:]))
 
     if len(sys.argv) > 1 and sys.argv[1] == "dashboard":
         args = parse_dashboard_args(sys.argv[2:])

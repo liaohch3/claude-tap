@@ -34,7 +34,7 @@ uv tool install claude-tap
 pip install claude-tap
 ```
 
-升级: `uv tool upgrade claude-tap` 或 `pip install --upgrade claude-tap`
+升级: `claude-tap update`、`uv tool upgrade claude-tap` 或 `pip install --upgrade claude-tap`
 
 ## 使用
 
