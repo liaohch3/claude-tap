@@ -44,7 +44,7 @@ Commands:
 uv run ruff check .
 uv run ruff format --check .
 uv run pytest tests/ -x --timeout=60
-uv run python scripts/check_screenshots.py docs/evidence/pr75
+uv run python scripts/check_screenshots.py .agents/evidence/pr/pr75
 uv run python scripts/verify_screenshots.py /Users/liaohch3/Desktop/claude-tap-jsonl-samples/trace_100137.html
 ```
 

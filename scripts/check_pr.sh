@@ -193,16 +193,16 @@ Screenshots: MISSING
 
   Every PR must include screenshots of the real running system.
 
-  Our screenshot standard (docs/standards/screenshot-standards.md):
+  Our screenshot standard (.agents/docs/standards/screenshot-standards.md):
   - Screenshots must show the trace viewer HTML at desktop viewport (>=1280px)
   - Must capture the exact feature/fix claimed (e.g. WEBSOCKET 101, not unrelated GET)
   - Use ASCII-safe characters, no raw Unicode arrows that may garble
-  - Run `python3 scripts/check_screenshots.py docs/evidence/` before commit
+  - Run `python3 scripts/check_screenshots.py .agents/evidence/pr/` before commit
 
   What to do:
   1. Run the feature, open the trace viewer HTML in a browser (>=1280px wide)
   2. Screenshot the specific row/panel proving the fix works
-  3. Add image to docs/evidence/ and link in PR body with ![description](url)
+  3. Add image to .agents/evidence/pr/ and link in PR body with ![description](url)
   4. Verify: no garbled text, correct content shown, legible at normal zoom
 SCREENSHOT_ERR
 fi

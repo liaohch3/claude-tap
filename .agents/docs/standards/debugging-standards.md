@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-03-03
+last_reviewed: 2026-05-06
 source_of_truth: AGENTS.md
 ---
 
@@ -92,12 +92,12 @@ Before spawning agents or running automated retry loops:
 13. **Don't attribute failures to "environment" without evidence.** When a
     request fails through the proxy, first print/log the constructed upstream
     URL. Only blame network/environment after confirming the URL is correct.
-    See: `docs/error-experience/entries/2026-03-10-codex-strip-prefix-url-mismatch.md`
+    See: `.agents/docs/error-experience/entries/2026-03-10-codex-strip-prefix-url-mismatch.md`
 
 ## Post-Debug
 
 14. **Write the experience doc.** Every non-trivial debugging session produces
-    an entry in `docs/error-experience/entries/`. Include:
+    an entry in `.agents/docs/error-experience/entries/`. Include:
     - What broke
     - What you tried (and why it didn't work)
     - What actually fixed it

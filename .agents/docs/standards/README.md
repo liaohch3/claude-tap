@@ -1,12 +1,12 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-03-03
+last_reviewed: 2026-05-06
 source_of_truth: AGENTS.md
 ---
 
 # 标准元数据
 
-`docs/standards/*.md` 下所有文件都必须包含 frontmatter，字段包括：
+`.agents/docs/standards/*.md` 下所有文件都必须包含 frontmatter，字段包括：
 
 - `owner`：负责更新的团队或维护者。
 - `last_reviewed`：最近一次策略审查的 ISO 日期 `YYYY-MM-DD`。

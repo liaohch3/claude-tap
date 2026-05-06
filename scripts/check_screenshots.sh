@@ -105,10 +105,10 @@ else
     done < <(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep -iE '\.(png|jpg|jpeg|webp)$' || true)
 
     if (( ${#files[@]} == 0 )); then
-        # Fallback: check all images in docs/evidence/
+        # Fallback: check all images in .agents/evidence/pr/
         while IFS= read -r f; do
             [[ -n "$f" ]] && files+=("$f")
-        done < <(find docs/evidence -type f -name '*.png' -o -name '*.jpg' 2>/dev/null || true)
+        done < <(find .agents/evidence/pr -type f \( -name '*.png' -o -name '*.jpg' \) 2>/dev/null || true)
     fi
 fi
 
