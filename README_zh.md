@@ -77,12 +77,11 @@ claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-
 
 ### Claude Code + DeepSeek API
 
-DeepSeek 官方 Claude Code 集成使用 Anthropic 兼容端点 `https://api.deepseek.com/anthropic`。如果直接运行 Claude Code，可以这样配置：
+完整中文指南见 [Claude Code 搭配 DeepSeek API](docs/guides/deepseek-claude-code.zh.md)，英文版见 [Claude Code with DeepSeek API](docs/guides/deepseek-claude-code.md)。
 
 ```bash
 export ANTHROPIC_AUTH_TOKEN="<你的 DeepSeek API key>"
 unset ANTHROPIC_API_KEY
-export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
 
 export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
 export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
@@ -92,8 +91,6 @@ export CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
 export CLAUDE_CODE_EFFORT_LEVEL=max
 ```
 
-如果要用 `claude-tap` 捕获这条流量，不要手动把 Claude Code 指到 DeepSeek；让 `claude-tap` 把 Claude Code 指向本地代理，并通过 `--tap-target` 指定真实 DeepSeek 上游：
-
 ```bash
 claude-tap \
   --tap-proxy-mode reverse \
@@ -101,29 +98,7 @@ claude-tap \
   -- --permission-mode bypassPermissions
 ```
 
-一次性 smoke test：
-
-```bash
-claude-tap \
-  --tap-proxy-mode reverse \
-  --tap-target https://api.deepseek.com/anthropic \
-  -- \
-  --permission-mode bypassPermissions \
-  -p 'Use Bash to run pwd, then reply with DEEPSEEK_CLAUDE_TAP_OK.'
-```
-
-退出后可以打开自动生成的 HTML，也可以从 JSONL 重新导出：
-
-```bash
-open .traces/*/trace_*.html
-claude-tap export .traces/2026-05-06/trace_153111.jsonl -o trace.html
-```
-
-注意：
-
-- DeepSeek key 应通过 `ANTHROPIC_AUTH_TOKEN` 传给 Claude Code。
-- `claude-tap` 会自动脱敏 `Authorization` / `x-api-key` 请求头，但不要把 key 写进 prompt、请求 body 或工具输出。
-- 更完整的英文说明和验证截图见 [DeepSeek + Claude Code guide](docs/guides/deepseek-claude-code.md)。
+直接运行 Claude Code 时才设置 `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`；通过 `claude-tap` 捕获时用 `--tap-target` 指定 DeepSeek 上游。
 
 <details>
 <summary>Codex CLI 认证方式和示例</summary>

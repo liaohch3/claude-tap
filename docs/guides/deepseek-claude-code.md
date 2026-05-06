@@ -4,6 +4,8 @@ This guide shows how to run Claude Code through DeepSeek's Anthropic-compatible 
 
 DeepSeek's official Claude Code guide points Claude Code at `https://api.deepseek.com/anthropic` and uses `deepseek-v4-pro[1m]` for the main Claude Code model. When you capture the session with `claude-tap`, keep the DeepSeek auth and model environment variables, but let `claude-tap` set Claude Code's `ANTHROPIC_BASE_URL` to the local proxy and pass the real DeepSeek endpoint as `--tap-target`.
 
+Simplified Chinese version: [Claude Code 搭配 DeepSeek API](deepseek-claude-code.zh.md).
+
 ## Environment
 
 Use `ANTHROPIC_AUTH_TOKEN` for Claude Code and leave `ANTHROPIC_API_KEY` unset to avoid Claude Code's API-key conflict prompt.
