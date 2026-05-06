@@ -1214,11 +1214,14 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.claude_args == ["-c", "--model", "sonnet"]
     print("  OK: mixed tap + claude flags")
 
-    # --tap-no-launch
-    a = parse_args(["--tap-no-launch"])
-    assert a.no_launch is True
-    assert a.claude_args == []
-    print("  OK: --tap-no-launch")
+    # --tap-allow-path
+    a = parse_args(["--tap-allow-path", "/custom/api"])
+    assert a.extra_allowed_paths == ["/custom/api"]
+    print("  OK: --tap-allow-path single")
+
+    a = parse_args(["--tap-allow-path", "/custom/api", "--tap-allow-path", "/another/path"])
+    assert a.extra_allowed_paths == ["/custom/api", "/another/path"]
+    print("  OK: --tap-allow-path multiple")
 
     # Complex claude flags
     a = parse_args(["--tap-port", "0", "-p", "--model", "opus", "--system-prompt", "be brief", "-d"])
@@ -1227,6 +1230,35 @@ def test_parse_args(monkeypatch, tmp_path):
     print("  OK: complex claude flags forwarded")
 
     print("\n  test_parse_args PASSED")
+
+
+def test_parse_args_allow_path_validation():
+    """Test --tap-allow-path validation rejects invalid prefixes."""
+    import pytest
+
+    from claude_tap import parse_args
+
+    # Valid prefixes
+    a = parse_args(["--tap-allow-path", "/custom/api"])
+    assert a.extra_allowed_paths == ["/custom/api"]
+
+    # Empty prefix should fail
+    with pytest.raises(SystemExit):
+        parse_args(["--tap-allow-path", ""])
+
+    # Prefix not starting with /
+    with pytest.raises(SystemExit):
+        parse_args(["--tap-allow-path", "custom/api"])
+
+    # Root prefix /
+    with pytest.raises(SystemExit):
+        parse_args(["--tap-allow-path", "/"])
+
+    # Prefix ending with /
+    with pytest.raises(SystemExit):
+        parse_args(["--tap-allow-path", "/custom/api/"])
+
+    print("  test_parse_args_allow_path_validation PASSED")
 
 
 FAKE_CODEX_SCRIPT = r"""#!/usr/bin/env python3
