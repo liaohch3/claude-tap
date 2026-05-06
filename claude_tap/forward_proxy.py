@@ -35,13 +35,15 @@ from claude_tap.certs import CertificateAuthority
 from claude_tap.proxy import (
     HOP_BY_HOP,
     _build_record,
-    _get_ws_proxy_settings,
     filter_headers,
-    reconstruct_ws_request_body,
-    reconstruct_ws_response_body,
 )
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
+from claude_tap.ws_proxy import (
+    _get_ws_proxy_settings,
+    reconstruct_ws_request_body,
+    reconstruct_ws_response_body,
+)
 
 log = logging.getLogger("claude-tap")
 
