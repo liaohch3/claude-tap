@@ -9,6 +9,8 @@ source_of_truth: AGENTS.md
 This document tracks all verified (client × auth × target × transport) combinations.
 **Any proxy/routing change must verify all applicable rows before merge.**
 
+Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
+
 ## Client Configurations
 
 | Client | Auth Mode | Target | strip_path_prefix | Transport | Status |
@@ -114,4 +116,4 @@ When adding a new client or backend:
 2. Add a URL construction test case in `test_codex_upstream_url_construction`
 3. Add an e2e test with fake upstream if applicable
 4. Verify with real E2E if auth is available
-5. Update README.md and README_zh.md with usage examples
+5. Update the public docs in both English and Simplified Chinese (`README.md` plus `README_zh.md`, and matching `docs/guides/*.md` plus `docs/guides/*.zh.md` guide files when applicable)

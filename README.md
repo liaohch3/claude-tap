@@ -24,7 +24,7 @@ Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/
 
 </details>
 
-> **OpenClaw:** If you are Openclaw and integrating claude-tap with [OpenClaw](docs/guides/OPENCLAW_README.md), also read the dedicated setup guide.
+> **OpenClaw:** If you are integrating claude-tap with OpenClaw, read the [OpenClaw setup guide](docs/guides/OPENCLAW_README.md). Simplified Chinese version: [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md).
 
 ## Install
 
@@ -74,6 +74,34 @@ claude-tap -- --dangerously-skip-permissions
 # Live viewer + skip permissions + specific model
 claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
+
+</details>
+
+<details>
+<summary>Claude Code with DeepSeek API</summary>
+
+Full English guide: [Claude Code with DeepSeek API](docs/guides/deepseek-claude-code.md). Simplified Chinese version: [Claude Code 搭配 DeepSeek API](docs/guides/deepseek-claude-code.zh.md).
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="<your DeepSeek API key>"
+unset ANTHROPIC_API_KEY
+
+export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_EFFORT_LEVEL=max
+```
+
+```bash
+claude-tap \
+  --tap-proxy-mode reverse \
+  --tap-target https://api.deepseek.com/anthropic \
+  -- --permission-mode bypassPermissions
+```
+
+Set `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic` only for direct Claude Code usage. When capturing with `claude-tap`, use `--tap-target` for the DeepSeek upstream.
 
 </details>
 

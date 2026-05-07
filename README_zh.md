@@ -24,6 +24,8 @@
 
 </details>
 
+> **OpenClaw：** 如果你要在 OpenClaw 中集成 claude-tap，请阅读 [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md)。英文版见 [OpenClaw setup guide](docs/guides/OPENCLAW_README.md)。
+
 ## 安装
 
 需要 Python 3.11+，以及你想 trace 的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、OpenCode 或 [Cursor CLI](https://cursor.com/cli)。
@@ -72,6 +74,34 @@ claude-tap -- --dangerously-skip-permissions
 # 实时查看器 + 跳过权限确认 + 指定模型
 claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
+
+</details>
+
+<details>
+<summary>Claude Code + DeepSeek API</summary>
+
+完整中文指南见 [Claude Code 搭配 DeepSeek API](docs/guides/deepseek-claude-code.zh.md)，英文版见 [Claude Code with DeepSeek API](docs/guides/deepseek-claude-code.md)。
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="<你的 DeepSeek API key>"
+unset ANTHROPIC_API_KEY
+
+export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_EFFORT_LEVEL=max
+```
+
+```bash
+claude-tap \
+  --tap-proxy-mode reverse \
+  --tap-target https://api.deepseek.com/anthropic \
+  -- --permission-mode bypassPermissions
+```
+
+直接运行 Claude Code 时才设置 `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`；通过 `claude-tap` 捕获时用 `--tap-target` 指定 DeepSeek 上游。
 
 </details>
 
