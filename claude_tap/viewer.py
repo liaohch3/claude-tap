@@ -123,6 +123,17 @@ def _normalize_record_for_viewer(record_json: str) -> str:
     return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
 
 
+def _parse_function_call_arguments(arguments: object) -> object:
+    if isinstance(arguments, str):
+        try:
+            return json.loads(arguments)
+        except (json.JSONDecodeError, TypeError):
+            return arguments
+    if arguments is None:
+        return {}
+    return arguments
+
+
 def _extract_request_messages(body: dict) -> list[dict]:
     if not isinstance(body, dict):
         return []
@@ -138,7 +149,25 @@ def _extract_request_messages(body: dict) -> list[dict]:
     for item in inp:
         if not isinstance(item, dict):
             continue
-        if item.get("type") not in (None, "message") and "role" not in item:
+        item_type = item.get("type")
+        if item_type == "function_call":
+            normalized.append(
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": item.get("name", ""),
+                            "input": _parse_function_call_arguments(item.get("arguments")),
+                        }
+                    ],
+                }
+            )
+            continue
+        if item_type == "function_call_output":
+            normalized.append({"role": "tool", "content": item.get("output", "")})
+            continue
+        if item_type not in (None, "message") and "role" not in item:
             continue
         role = item.get("role")
         if not isinstance(role, str) or not role:
