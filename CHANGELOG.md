@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.50] - 2026-05-07
+
+### Changed
+- fix(viewer): clarify token summary label (#133)
 ## [0.1.49] - 2026-05-07
 
 ### Changed
