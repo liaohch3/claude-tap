@@ -93,6 +93,42 @@ def test_viewer_treats_codex_forward_websocket_path_as_primary(responses_page) -
     assert result == {"tier": 0, "primary": True}
 
 
+def test_viewer_sorts_dotted_websocket_turns_by_numeric_segments(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const makeEntry = (turn) => ({
+            timestamp: '2026-05-07T10:00:00Z',
+            request_id: 'req_' + turn,
+            turn,
+            duration_ms: 1,
+            request: {
+              method: 'POST',
+              path: '/backend-api/codex/responses',
+              body: { model: 'gpt-test' }
+            },
+            response: {
+              status: 200,
+              body: { usage: { input_tokens: 1, output_tokens: 1 }, output: [] }
+            }
+          });
+          entries = [makeEntry('1.12'), makeEntry('1.2'), makeEntry(2)];
+          activePaths = new Set(['/backend-api/codex/responses']);
+          searchQuery = '';
+          activeTools = null;
+          applyFilter(false);
+          return {
+            filteredTurns: filtered.map(e => e.turn),
+            sidebarTurns: [...document.querySelectorAll('.sidebar-item .si-turn')].map(el => el.textContent)
+          };
+        }"""
+    )
+
+    assert result == {
+        "filteredTurns": ["1.2", "1.12", 2],
+        "sidebarTurns": ["Turn 1.2", "Turn 1.12", "Turn 2"],
+    }
+
+
 def test_viewer_expands_codex_websocket_session_into_response_entries(codex_ws_multi_page) -> None:
     result = codex_ws_multi_page.evaluate(
         """() => ({

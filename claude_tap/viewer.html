@@ -2098,6 +2098,25 @@ function makeFilterChip(p, count) {
   return chip;
 }
 
+function turnSortSegments(value) {
+  if (value === undefined || value === null || value === '') return [0];
+  return String(value).split('.').map(part => {
+    const num = Number(part);
+    return Number.isFinite(num) ? num : 0;
+  });
+}
+
+function compareTurns(a, b) {
+  const aa = turnSortSegments(a);
+  const bb = turnSortSegments(b);
+  const len = Math.max(aa.length, bb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (aa[i] || 0) - (bb[i] || 0);
+    if (diff) return diff;
+  }
+  return String(a ?? '').localeCompare(String(b ?? ''));
+}
+
 function applyFilter(preserveDetail) {
   filtered = entries.filter(e => activePaths.has(getPath(e)));
   if (searchQuery) filtered = filtered.filter(e => matchSearch(e, searchQuery));
@@ -2109,7 +2128,7 @@ function applyFilter(preserveDetail) {
       return rc.some(b => b.type === 'tool_use' && activeTools.has(b.name));
     });
   }
-  filtered.sort((a, b) => (a.turn || 0) - (b.turn || 0));
+  filtered.sort((a, b) => compareTurns(a.turn, b.turn));
   let totalTokens = 0, totalDuration = 0;
   let sumInput = 0, sumOutput = 0, sumCacheRead = 0, sumCacheCreate = 0;
   filtered.forEach(e => {
