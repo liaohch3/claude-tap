@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.48] - 2026-05-07
+
+### Changed
+- fix(proxy): support DeepSeek Claude Code metadata (#121)
 ## [0.1.47] - 2026-05-06
 
 ### Changed
