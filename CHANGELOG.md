@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.49] - 2026-05-07
+
+### Changed
+- fix(viewer): count Responses function calls (#131)
 ## [0.1.48] - 2026-05-07
 
 ### Changed
