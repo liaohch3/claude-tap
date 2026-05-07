@@ -1512,7 +1512,8 @@ const CLAUDE_TAP_VERSION = typeof __CLAUDE_TAP_VERSION__ !== 'undefined' ? __CLA
 /* ─── i18n ─── */
 const I18N = {
   en: {
-    title: "claude-tap", stats_turns: "Turns", stats_tokens: "Tokens", stats_time: "Time",
+    title: "claude-tap", stats_turns: "Turns", stats_tokens: "Total API tokens", stats_time: "Time",
+    stats_tokens_hint: "Sum of input and output tokens across captured requests; this is not the current Claude Code /context usage.",
     drop_title: "Load Trace File", drop_desc: "Drag & drop a .jsonl trace file, or click to browse", drop_btn: "Choose File",
     turn: "Turn", tok: "tok",
     btn_request_json: "Request JSON", btn_curl: "cURL", btn_diff: "Diff with Prev",
@@ -1539,7 +1540,8 @@ const I18N = {
     diff_select_target: "Compare against:", diff_select_auto: "Auto",
   },
   "zh-CN": {
-    title: "claude-tap", stats_turns: "轮次", stats_tokens: "Token", stats_time: "耗时",
+    title: "claude-tap", stats_turns: "轮次", stats_tokens: "累计 API Token", stats_time: "耗时",
+    stats_tokens_hint: "跨所有已捕获请求累计 input+output token；不等同于 Claude Code /context 当前上下文占用。",
     drop_title: "加载 Trace 文件", drop_desc: "拖放 .jsonl 文件到此处，或点击选择文件", drop_btn: "选择文件",
     turn: "轮次", tok: "tok",
     btn_request_json: "请求 JSON", btn_curl: "cURL", btn_diff: "对比上次",
@@ -1566,7 +1568,8 @@ const I18N = {
     diff_select_target: "对比对象：", diff_select_auto: "自动",
   },
   ja: {
-    title: "claude-tap", stats_turns: "ターン", stats_tokens: "トークン", stats_time: "時間",
+    title: "claude-tap", stats_turns: "ターン", stats_tokens: "累計APIトークン", stats_time: "時間",
+    stats_tokens_hint: "キャプチャ済みリクエスト全体の入力+出力トークン合計です。現在の Claude Code /context 使用量ではありません。",
     drop_title: "トレースファイルを読み込む", drop_desc: ".jsonl ファイルをドラッグ＆ドロップ、またはクリックして選択", drop_btn: "ファイル選択",
     turn: "ターン", tok: "tok",
     btn_request_json: "リクエスト JSON", btn_curl: "cURL", btn_diff: "前回と比較",
@@ -1592,7 +1595,8 @@ const I18N = {
     diff_select_target: "比較対象：", diff_select_auto: "自動",
   },
   ko: {
-    title: "claude-tap", stats_turns: "턴", stats_tokens: "토큰", stats_time: "시간",
+    title: "claude-tap", stats_turns: "턴", stats_tokens: "누적 API 토큰", stats_time: "시간",
+    stats_tokens_hint: "캡처된 모든 요청의 입력+출력 토큰 합계입니다. 현재 Claude Code /context 사용량이 아닙니다.",
     drop_title: "트레이스 파일 로드", drop_desc: ".jsonl 파일을 드래그 앤 드롭하거나 클릭하여 선택", drop_btn: "파일 선택",
     turn: "턴", tok: "tok",
     btn_request_json: "요청 JSON", btn_curl: "cURL", btn_diff: "이전과 비교",
@@ -1618,7 +1622,8 @@ const I18N = {
     diff_select_target: "비교 대상：", diff_select_auto: "자동",
   },
   fr: {
-    title: "claude-tap", stats_turns: "Tours", stats_tokens: "Tokens", stats_time: "Durée",
+    title: "claude-tap", stats_turns: "Tours", stats_tokens: "Tokens API cumulés", stats_time: "Durée",
+    stats_tokens_hint: "Somme des tokens d'entrée et de sortie sur les requêtes capturées ; ce n'est pas l'utilisation /context actuelle de Claude Code.",
     drop_title: "Charger un fichier trace", drop_desc: "Glissez-déposez un fichier .jsonl, ou cliquez pour parcourir", drop_btn: "Choisir un fichier",
     turn: "Tour", tok: "tok",
     btn_request_json: "JSON Requête", btn_curl: "cURL", btn_diff: "Comparer avec préc.",
@@ -1644,7 +1649,8 @@ const I18N = {
     diff_select_target: "Comparer avec :", diff_select_auto: "Auto",
   },
   ar: {
-    title: "claude-tap", stats_turns: "الأدوار", stats_tokens: "الرموز", stats_time: "المدة",
+    title: "claude-tap", stats_turns: "الأدوار", stats_tokens: "إجمالي رموز API", stats_time: "المدة",
+    stats_tokens_hint: "مجموع رموز الإدخال والإخراج عبر الطلبات الملتقطة؛ وليس استخدام /context الحالي في Claude Code.",
     drop_title: "تحميل ملف التتبع", drop_desc: "اسحب وأفلت ملف .jsonl هنا، أو انقر للاستعراض", drop_btn: "اختر ملفاً",
     turn: "دور", tok: "رمز",
     btn_request_json: "JSON الطلب", btn_curl: "cURL", btn_diff: "مقارنة مع السابق",
@@ -1670,7 +1676,8 @@ const I18N = {
     diff_select_target: "مقارنة مع:", diff_select_auto: "تلقائي",
   },
   de: {
-    title: "claude-tap", stats_turns: "Runden", stats_tokens: "Token", stats_time: "Dauer",
+    title: "claude-tap", stats_turns: "Runden", stats_tokens: "API-Token gesamt", stats_time: "Dauer",
+    stats_tokens_hint: "Summe aus Eingabe- und Ausgabe-Token über erfasste Anfragen; nicht die aktuelle Claude Code-/context-Nutzung.",
     drop_title: "Trace-Datei laden", drop_desc: "Ziehen Sie eine .jsonl-Datei hierher, oder klicken Sie zum Auswählen", drop_btn: "Datei wählen",
     turn: "Runde", tok: "Tok",
     btn_request_json: "Anfrage-JSON", btn_curl: "cURL", btn_diff: "Mit vorh. vergleichen",
@@ -1696,7 +1703,8 @@ const I18N = {
     diff_select_target: "Vergleichen mit:", diff_select_auto: "Auto",
   },
   ru: {
-    title: "claude-tap", stats_turns: "Ходы", stats_tokens: "Токены", stats_time: "Время",
+    title: "claude-tap", stats_turns: "Ходы", stats_tokens: "Всего API-токенов", stats_time: "Время",
+    stats_tokens_hint: "Сумма входных и выходных токенов по захваченным запросам; это не текущее использование /context в Claude Code.",
     drop_title: "Загрузить файл трассировки", drop_desc: "Перетащите .jsonl файл сюда или нажмите для выбора", drop_btn: "Выбрать файл",
     turn: "Ход", tok: "ток",
     btn_request_json: "JSON запроса", btn_curl: "cURL", btn_diff: "Сравнить с пред.",
@@ -1756,7 +1764,14 @@ function updateStaticTexts() {
   }
   document.title = t('title') + ' Viewer';
   if (e('label-turns')) e('label-turns').textContent = t('stats_turns');
-  if (e('label-tokens')) e('label-tokens').textContent = t('stats_tokens');
+  const tokenLabel = e('label-tokens');
+  if (tokenLabel) {
+    tokenLabel.textContent = t('stats_tokens');
+    if (tokenLabel.parentElement) {
+      tokenLabel.parentElement.title = t('stats_tokens_hint');
+      tokenLabel.parentElement.setAttribute('aria-label', t('stats_tokens_hint'));
+    }
+  }
   if (e('label-time')) e('label-time').textContent = t('stats_time');
   if (e('drop-title')) e('drop-title').textContent = t('drop_title');
   if (e('drop-desc')) e('drop-desc').textContent = t('drop_desc');
