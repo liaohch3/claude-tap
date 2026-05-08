@@ -1304,6 +1304,369 @@ def test_codex_client_reverse_proxy():
         _cleanup(trace_dir, fake_bin_dir, "codex")
 
 
+FAKE_KIMI_SCRIPT = r"""#!/usr/bin/env python3
+# Fake Kimi CLI that sends one streaming Chat Completions request via KIMI_BASE_URL
+import json, os, sys, urllib.request
+
+base = os.environ.get("KIMI_BASE_URL", "https://api.kimi.com/coding/v1")
+url = f"{base}/chat/completions"
+
+req_body = json.dumps({
+    "model": "kimi-k2-turbo-preview",
+    "messages": [{"role": "user", "content": "Reply with exactly: HELLO_KIMI"}],
+    "stream": True,
+}).encode()
+req = urllib.request.Request(url, data=req_body, headers={
+    "Content-Type": "application/json",
+    "Authorization": "Bearer kimi-test-key-12345678",
+})
+try:
+    with urllib.request.urlopen(req) as resp:
+        chunks = resp.read().decode()
+        print(f"[fake-kimi] status={resp.status} stream-bytes={len(chunks)}")
+except Exception as e:
+    print(f"[fake-kimi] Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("[fake-kimi] Done.")
+"""
+
+
+def test_kimi_client_reverse_proxy():
+    """Test --tap-client kimi in reverse mode using KIMI_BASE_URL."""
+
+    async def handler(request):
+        body = await request.json()
+        assert request.path == "/chat/completions"
+        assert body["model"] == "kimi-k2-turbo-preview"
+        from aiohttp import web
+
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        chunks = [
+            {
+                "id": "kimi_chat_1",
+                "model": body["model"],
+                "choices": [{"delta": {"role": "assistant", "reasoning_content": "Need exact text."}}],
+            },
+            {
+                "id": "kimi_chat_1",
+                "model": body["model"],
+                "choices": [{"delta": {"content": "HELLO_KIMI"}}],
+            },
+            {
+                "id": "kimi_chat_1",
+                "model": body["model"],
+                "choices": [
+                    {
+                        "delta": {},
+                        "finish_reason": "stop",
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 2,
+                            "total_tokens": 15,
+                            "cached_tokens": 5,
+                        },
+                    }
+                ],
+            },
+        ]
+        for chunk in chunks:
+            await resp.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        await resp.write_eof()
+        return resp
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_kimi_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_kimi_")
+    fake_kimi = Path(fake_bin_dir) / "kimi"
+    fake_kimi.write_text(FAKE_KIMI_SCRIPT)
+    fake_kimi.chmod(fake_kimi.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19244, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19244,
+            tap_client="kimi",
+        )
+
+        assert proc.returncode == 0, f"kimi mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
+        assert len(trace_files) == 1
+        records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
+        assert len(records) == 1
+        record = records[0]
+        assert record["request"]["path"] == "/chat/completions"
+        assert record["upstream_base_url"] == "http://127.0.0.1:19244"
+        assert record["request"]["body"]["model"] == "kimi-k2-turbo-preview"
+        assert record["response"]["body"]["content"][0]["type"] == "thinking"
+        assert record["response"]["body"]["content"][1]["text"] == "HELLO_KIMI"
+        assert record["response"]["body"]["usage"]["input_tokens"] == 13
+        assert record["response"]["body"]["usage"]["cache_read_input_tokens"] == 5
+        assert "KIMI_BASE_URL=http://127.0.0.1:" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "kimi")
+
+
+FAKE_KIMI_MULTITURN_SCRIPT = r"""#!/usr/bin/env python3
+# Fake Kimi CLI that runs one continuous five-turn chat session.
+import json, os, sys, urllib.request
+
+base = os.environ.get("KIMI_BASE_URL", "https://api.kimi.com/coding/v1")
+url = f"{base}/chat/completions"
+messages = [{"role": "system", "content": "Kimi CLI regression system prompt: keep one continuous session."}]
+tools = [
+    {"type": "function", "function": {"name": "read_file", "description": "Read a file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "search_code", "description": "Search source code.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "list_dir", "description": "List a directory.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "run_tests", "description": "Run tests.", "parameters": {"type": "object", "properties": {"target": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "inspect_git", "description": "Inspect git state.", "parameters": {"type": "object", "properties": {"scope": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "parse_json", "description": "Parse JSON.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}},
+]
+
+def collect_stream(stream_text):
+    tool_calls = {}
+    content = []
+    for raw_line in stream_text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line.removeprefix("data:").strip()
+        if payload == "[DONE]":
+            continue
+        event = json.loads(payload)
+        delta = event.get("choices", [{}])[0].get("delta", {})
+        if delta.get("content"):
+            content.append(delta["content"])
+        for call in delta.get("tool_calls", []):
+            idx = call.get("index", 0)
+            current = tool_calls.setdefault(idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+            if call.get("id"):
+                current["id"] = call["id"]
+            if call.get("type"):
+                current["type"] = call["type"]
+            fn = call.get("function") or {}
+            if fn.get("name"):
+                current["function"]["name"] += fn["name"]
+            if fn.get("arguments"):
+                current["function"]["arguments"] += fn["arguments"]
+    return "".join(content), [tool_calls[idx] for idx in sorted(tool_calls)]
+
+def send_request(turn, phase):
+    req_body = json.dumps({
+        "model": "kimi-k2-turbo-preview",
+        "messages": messages,
+        "tools": tools,
+        "stream": True,
+    }).encode()
+    req = urllib.request.Request(url, data=req_body, headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer kimi-test-key-12345678",
+    })
+    try:
+        with urllib.request.urlopen(req) as resp:
+            chunks = resp.read().decode()
+            content, tool_calls = collect_stream(chunks)
+            print(f"[fake-kimi] turn={turn} phase={phase} status={resp.status} tool_calls={len(tool_calls)}")
+            return content, tool_calls
+    except Exception as e:
+        print(f"[fake-kimi] Turn {turn} {phase} error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+for turn in range(1, 6):
+    messages.append({"role": "user", "content": f"Kimi continuous chat turn {turn}: use at least two tools before answering."})
+    _, tool_calls = send_request(turn, "tools")
+    if len(tool_calls) != 2:
+        print(f"[fake-kimi] expected 2 tool calls, got {len(tool_calls)}", file=sys.stderr)
+        sys.exit(1)
+    messages.append({"role": "assistant", "content": "", "tool_calls": tool_calls})
+    for call in tool_calls:
+        tool_name = call["function"]["name"]
+        messages.append({
+            "role": "tool",
+            "tool_call_id": call["id"],
+            "content": f"{tool_name} result for turn {turn}",
+        })
+    final_text, final_tool_calls = send_request(turn, "final")
+    if final_tool_calls:
+        print(f"[fake-kimi] expected final response without tool calls, got {len(final_tool_calls)}", file=sys.stderr)
+        sys.exit(1)
+    if f"Kimi final answer {turn}" not in final_text:
+        print(f"[fake-kimi] missing final answer text for turn {turn}: {final_text}", file=sys.stderr)
+        sys.exit(1)
+    messages.append({"role": "assistant", "content": final_text})
+
+print("[fake-kimi] Multi-turn Done.")
+"""
+
+
+def test_kimi_multiturn_tool_calls_reverse_proxy():
+    """Verify Kimi reverse mode captures one continuous tool-call chat.
+
+    The fake CLI sends five consecutive user turns in one session. Each turn
+    first requests exactly two streamed tool calls, then sends the tool results
+    back and receives a final assistant answer. This yields ten trace nodes and
+    one accumulated Chat Completions message history.
+    """
+
+    tool_pairs = [
+        ("read_file", "search_code"),
+        ("list_dir", "run_tests"),
+        ("inspect_git", "parse_json"),
+        ("read_file", "run_tests"),
+        ("search_code", "inspect_git"),
+    ]
+
+    async def handler(request):
+        body = await request.json()
+        assert request.path == "/chat/completions"
+        assert body["model"] == "kimi-k2-turbo-preview"
+        from aiohttp import web
+
+        assert body["messages"][0] == {
+            "role": "system",
+            "content": "Kimi CLI regression system prompt: keep one continuous session.",
+        }
+        user_messages = [msg for msg in body["messages"] if msg.get("role") == "user"]
+        turn = len(user_messages)
+        assert 1 <= turn <= 5
+        is_final_request = body["messages"][-1].get("role") == "tool"
+        tool_results = [msg for msg in body["messages"] if msg.get("role") == "tool"]
+        if is_final_request:
+            assert len(tool_results) == turn * 2
+        else:
+            assert body["messages"][-1]["content"].startswith(f"Kimi continuous chat turn {turn}:")
+            assert len(tool_results) == (turn - 1) * 2
+
+        names = tool_pairs[turn - 1]
+
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        if is_final_request:
+            chunk = {
+                "id": f"kimi_multi_{turn}_final",
+                "model": body["model"],
+                "choices": [
+                    {
+                        "delta": {
+                            "role": "assistant",
+                            "content": f"Kimi final answer {turn}: used {names[0]} and {names[1]}.",
+                        },
+                        "finish_reason": "stop",
+                        "usage": {
+                            "prompt_tokens": 150 + turn,
+                            "completion_tokens": 30 + turn,
+                            "total_tokens": 180 + (turn * 2),
+                            "cached_tokens": 20 + turn,
+                        },
+                    }
+                ],
+            }
+            await resp.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        else:
+            for idx, name in enumerate(names):
+                arguments = json.dumps({"turn": turn, "tool": name})
+                chunk = {
+                    "id": f"kimi_multi_{turn}_tools",
+                    "model": body["model"],
+                    "choices": [
+                        {
+                            "delta": {
+                                "role": "assistant" if idx == 0 else None,
+                                "tool_calls": [
+                                    {
+                                        "index": idx,
+                                        "id": f"call_{turn}_{idx + 1}",
+                                        "type": "function",
+                                        "function": {"name": name, "arguments": arguments},
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                }
+                if idx == 1:
+                    chunk["choices"][0]["finish_reason"] = "tool_calls"
+                    chunk["choices"][0]["usage"] = {
+                        "prompt_tokens": 100 + turn,
+                        "completion_tokens": 20 + turn,
+                        "total_tokens": 120 + (turn * 2),
+                        "cached_tokens": 10 + turn,
+                    }
+                await resp.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        await resp.write_eof()
+        return resp
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_kimi_multiturn_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_kimi_multiturn_")
+    fake_kimi = Path(fake_bin_dir) / "kimi"
+    fake_kimi.write_text(FAKE_KIMI_MULTITURN_SCRIPT)
+    fake_kimi.chmod(fake_kimi.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19245, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19245,
+            tap_client="kimi",
+        )
+
+        assert proc.returncode == 0, f"kimi multi-turn mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
+        assert len(trace_files) == 1
+        records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
+        assert len(records) == 10
+
+        unique_tool_names = set()
+        total_tool_calls = 0
+        for turn in range(1, 6):
+            tool_record = records[(turn - 1) * 2]
+            final_record = records[(turn - 1) * 2 + 1]
+            for record in (tool_record, final_record):
+                assert record["request"]["path"] == "/chat/completions"
+                assert record["upstream_base_url"] == "http://127.0.0.1:19245"
+                assert record["request"]["body"]["messages"][0]["role"] == "system"
+
+            assert tool_record["request"]["body"]["messages"][-1]["content"].startswith(
+                f"Kimi continuous chat turn {turn}:"
+            )
+            tool_blocks = [
+                block for block in tool_record["response"]["body"]["content"] if block.get("type") == "tool_use"
+            ]
+            assert len(tool_blocks) == 2
+            total_tool_calls += len(tool_blocks)
+            unique_tool_names.update(block["name"] for block in tool_blocks)
+            assert tool_record["response"]["body"]["usage"]["cache_read_input_tokens"] == 10 + turn
+
+            assert final_record["request"]["body"]["messages"][-1]["role"] == "tool"
+            final_tool_blocks = [
+                block for block in final_record["response"]["body"]["content"] if block.get("type") == "tool_use"
+            ]
+            assert final_tool_blocks == []
+            final_text = " ".join(
+                block.get("text", "")
+                for block in final_record["response"]["body"]["content"]
+                if block.get("type") == "text"
+            )
+            assert f"Kimi final answer {turn}" in final_text
+            assert final_record["response"]["body"]["usage"]["cache_read_input_tokens"] == 20 + turn
+
+        expected_tool_names = {"read_file", "search_code", "list_dir", "run_tests", "inspect_git", "parse_json"}
+        assert total_tool_calls == 10
+        assert unique_tool_names == expected_tool_names
+        assert "KIMI_BASE_URL=http://127.0.0.1:" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "kimi_multiturn")
+
+
 ## ---------------------------------------------------------------------------
 ## Test 6b: test_codex_zstd_request_body — proxy decompresses zstd request bodies
 ## ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), OpenCode, or [Cursor CLI](https://cursor.com/cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), OpenCode, or [Cursor CLI](https://cursor.com/cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -28,7 +28,7 @@ Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/
 
 ## Install
 
-Requires Python 3.11+ and the CLI you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), OpenCode, or [Cursor CLI](https://cursor.com/cli).
+Requires Python 3.11+ and the CLI you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), OpenCode, or [Cursor CLI](https://cursor.com/cli).
 
 ```bash
 # Recommended
@@ -53,6 +53,9 @@ claude-tap --tap-live
 
 # Codex CLI
 claude-tap --tap-client codex
+
+# Kimi CLI
+claude-tap --tap-client kimi
 
 # Cursor CLI
 claude-tap --tap-client cursor -- -p --trust --model auto "hello"
@@ -140,6 +143,21 @@ claude-tap --tap-client codex --tap-live -- --full-auto
 </details>
 
 <details>
+<summary>Kimi CLI examples</summary>
+
+Kimi CLI uses reverse proxy mode by default through `KIMI_BASE_URL`. Use your existing Kimi CLI auth/config; the default upstream target is the Kimi Code API.
+
+```bash
+claude-tap --tap-client kimi
+claude-tap --tap-client kimi -- --thinking
+
+# Use Moonshot Open Platform instead of Kimi Code
+claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1
+```
+
+</details>
+
+<details>
 <summary>Cursor CLI examples</summary>
 
 Cursor CLI uses forward proxy mode by default. Use `--model auto` on free plans, and omit `--mode ask` when you want tool calls.
@@ -200,6 +218,11 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 claude-tap --tap-client codex --tap-no-launch --tap-port 8080
 # In another terminal:
 OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
+
+# Kimi CLI
+claude-tap --tap-client kimi --tap-no-launch --tap-port 8080
+# In another terminal:
+KIMI_BASE_URL=http://127.0.0.1:8080 kimi
 ```
 
 Run `claude-tap --help` for all options. Flags that are not `--tap-*` are forwarded to the selected client.

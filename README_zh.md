@@ -9,7 +9,7 @@
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、OpenCode 或 [Cursor CLI](https://cursor.com/cli) 的 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、使用 token——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、OpenCode 或 [Cursor CLI](https://cursor.com/cli) 的 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、使用 token——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -28,7 +28,7 @@
 
 ## 安装
 
-需要 Python 3.11+，以及你想 trace 的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、OpenCode 或 [Cursor CLI](https://cursor.com/cli)。
+需要 Python 3.11+，以及你想 trace 的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、OpenCode 或 [Cursor CLI](https://cursor.com/cli)。
 
 ```bash
 # 推荐
@@ -53,6 +53,9 @@ claude-tap --tap-live
 
 # Codex CLI
 claude-tap --tap-client codex
+
+# Kimi CLI
+claude-tap --tap-client kimi
 
 # Cursor CLI
 claude-tap --tap-client cursor -- -p --trust --model auto "hello"
@@ -140,6 +143,21 @@ claude-tap --tap-client codex --tap-live -- --full-auto
 </details>
 
 <details>
+<summary>Kimi CLI 示例</summary>
+
+Kimi CLI 默认通过 `KIMI_BASE_URL` 使用 reverse proxy。使用你已有的 Kimi CLI 认证和配置；默认上游目标是 Kimi Code API。
+
+```bash
+claude-tap --tap-client kimi
+claude-tap --tap-client kimi -- --thinking
+
+# 改用 Moonshot Open Platform，而不是 Kimi Code
+claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1
+```
+
+</details>
+
+<details>
 <summary>Cursor CLI 示例</summary>
 
 Cursor CLI 默认使用 forward proxy。免费套餐建议传 `--model auto`；需要工具调用时不要加 `--mode ask`。
@@ -200,6 +218,11 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 claude-tap --tap-client codex --tap-no-launch --tap-port 8080
 # 在另一个终端:
 OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
+
+# Kimi CLI
+claude-tap --tap-client kimi --tap-no-launch --tap-port 8080
+# 在另一个终端:
+KIMI_BASE_URL=http://127.0.0.1:8080 kimi
 ```
 
 运行 `claude-tap --help` 查看完整选项。非 `--tap-*` 参数会透传给所选客户端。

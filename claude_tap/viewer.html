@@ -2062,7 +2062,7 @@ let pathFilterExpanded = false;
  *   noise     – plugin manifests, bot APIs, asset downloads, version checks — hidden by default
  */
 const PRIMARY_PATH_PREFIXES = ['/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions'];
-const SECONDARY_PATH_PREFIXES = ['/v1/mcp', '/v1/models', '/v1/embeddings', '/responses', '/models', '/chat/completions', '/completions'];
+const SECONDARY_PATH_PREFIXES = ['/v1/mcp', '/v1/models', '/v1/embeddings', '/v1/files', '/responses', '/models', '/chat/completions', '/completions', '/files', '/search', '/fetch', '/usages', '/feedback'];
 function isBedrockInvokePath(p) {
   return p.startsWith('/model/') && (p.endsWith('/invoke') || p.endsWith('/invoke-with-response-stream'));
 }
@@ -2967,13 +2967,101 @@ function renderDetail(e) {
 }
 
 /* ─── Renderers ─── */
+function chatMessageContentToText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map(part => {
+      if (typeof part === 'string') return part;
+      if (!part || typeof part !== 'object') return '';
+      if (part.type === 'text' || part.type === 'input_text' || part.type === 'output_text') return part.text || '';
+      if (typeof part.text === 'string') return part.text;
+      return JSON.stringify(part);
+    }).filter(Boolean).join('\n');
+  }
+  if (content === undefined || content === null) return '';
+  return JSON.stringify(content);
+}
+
+function isChatInstructionRole(role) {
+  return role === 'system' || role === 'developer';
+}
+
+function chatInstructionMessages(body) {
+  if (!Array.isArray(body?.messages)) return [];
+  return body.messages.filter(m => m && isChatInstructionRole(m.role));
+}
+
+function parseToolCallArguments(args) {
+  if (args === undefined || args === null || args === '') return {};
+  if (typeof args !== 'string') return args;
+  try { return JSON.parse(args); } catch(e) { return args; }
+}
+
+function chatToolCallToContentBlock(call) {
+  const fn = call?.function || {};
+  return {
+    type: 'tool_use',
+    id: call?.id || '',
+    name: fn.name || call?.name || 'tool_use',
+    input: parseToolCallArguments(fn.arguments),
+  };
+}
+
+function normalizeChatMessageForDisplay(msg) {
+  if (!msg || typeof msg !== 'object') return { role: 'unknown', content: '' };
+  const role = msg.role || 'unknown';
+  if (role === 'tool') {
+    return {
+      ...msg,
+      content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id || '', content: msg.content || '' }],
+    };
+  }
+  const content = [];
+  if (Array.isArray(msg.content)) content.push(...msg.content);
+  else if (typeof msg.content === 'string') {
+    if (msg.content.trim()) content.push({ type: 'text', text: msg.content });
+  } else if (msg.content !== undefined && msg.content !== null) {
+    content.push(msg.content);
+  }
+  if (Array.isArray(msg.tool_calls)) {
+    content.push(...msg.tool_calls.map(chatToolCallToContentBlock));
+  }
+  return { ...msg, content };
+}
+
+function hasDisplayContent(content) {
+  if (typeof content === 'string') return content.trim().length > 0;
+  if (!Array.isArray(content)) return content !== undefined && content !== null;
+  return content.some(block => {
+    if (!block || typeof block !== 'object') return false;
+    if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') return !!(block.text || '').trim();
+    if (block.type === 'thinking') return !!(block.thinking || '').trim();
+    if (block.type === 'tool_use') return true;
+    if (block.type === 'tool_result') {
+      const rc = block.content;
+      if (typeof rc === 'string') return rc.trim().length > 0 || !!block.tool_use_id;
+      if (Array.isArray(rc)) return rc.length > 0;
+      return rc !== undefined && rc !== null;
+    }
+    return JSON.stringify(block) !== '{}';
+  });
+}
+
 function extractSystem(body) {
   if (!body) return null;
-  if (typeof body.system === 'string') return body.system;
-  if (Array.isArray(body.system)) return body.system.map(b => typeof b === 'string' ? b : b.type === 'text' ? (b.text || '') : JSON.stringify(b)).join('\n\n');
+  const parts = [];
+  if (typeof body.system === 'string' && body.system.trim()) parts.push(body.system);
+  if (Array.isArray(body.system)) {
+    const systemText = body.system.map(b => typeof b === 'string' ? b : b.type === 'text' ? (b.text || '') : JSON.stringify(b)).filter(Boolean).join('\n\n');
+    if (systemText.trim()) parts.push(systemText);
+  }
   // Responses API: instructions field holds the system prompt
-  if (typeof body.instructions === 'string') return body.instructions;
-  return null;
+  if (typeof body.instructions === 'string' && body.instructions.trim()) parts.push(body.instructions);
+  const chatInstructions = chatInstructionMessages(body)
+    .map(m => chatMessageContentToText(m.content))
+    .filter(text => text.trim());
+  parts.push(...chatInstructions);
+  return parts.length ? parts.join('\n\n') : null;
 }
 
 function getResponseEvents(entry) {
@@ -3031,7 +3119,12 @@ function getResponsesContinuationInfo(entry) {
 // Normalize messages from Chat Completions (body.messages) or Responses API (body.input)
 function getMessages(body) {
   if (!body) return [];
-  if (Array.isArray(body.messages) && body.messages.length > 0) return body.messages;
+  if (Array.isArray(body.messages) && body.messages.length > 0) {
+    return body.messages
+      .filter(m => !isChatInstructionRole(m?.role))
+      .map(normalizeChatMessageForDisplay)
+      .filter(m => hasDisplayContent(m.content));
+  }
   if (Array.isArray(body.input)) {
     const messages = body.input.filter(item => {
       if (!item || typeof item !== 'object') return false;
@@ -3156,13 +3249,15 @@ function renderMessages(msgs) {
   return msgs.map(m => {
     const role = m.role || 'unknown';
     const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : (role === 'developer' || role === 'system') ? 'system' : 'system';
-    return `<div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${renderContent(m.content, role)}</div>`;
-  }).join('');
+    const rendered = renderContent(m.content, role);
+    if (!rendered.trim()) return '';
+    return `<div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${rendered}</div>`;
+  }).filter(Boolean).join('');
 }
 
 function renderContent(content, role) {
-  if (typeof content === 'string') return `<div class="content-block">${esc(content)}</div>`;
-  if (!Array.isArray(content)) return `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
+  if (typeof content === 'string') return content.trim() ? `<div class="content-block">${esc(content)}</div>` : '';
+  if (!Array.isArray(content)) return content === undefined || content === null ? '' : `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
   return content.map(block => {
     if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') { const txt = block.text || ''; if (!txt.trim()) return ''; return `<div class="content-block">${esc(txt)}</div>`; }
     if (block.type === 'thinking') {
