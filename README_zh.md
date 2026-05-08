@@ -9,7 +9,7 @@
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、OpenCode 或 [Cursor CLI](https://cursor.com/cli) 的 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、使用 token——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[OpenCode](https://opencode.ai)、[Hermes Agent](https://github.com/NousResearch/hermes-agent) 或 [Cursor CLI](https://cursor.com/cli) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -28,7 +28,7 @@
 
 ## 安装
 
-需要 Python 3.11+，以及你想 trace 的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、OpenCode 或 [Cursor CLI](https://cursor.com/cli)。
+需要 Python 3.11+ 以及要追踪的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)（默认）、[Codex CLI](https://github.com/openai/codex)（`--tap-client codex` 时）、[OpenCode](https://opencode.ai)（`--tap-client opencode` 时）、[Hermes Agent](https://github.com/NousResearch/hermes-agent)（`--tap-client hermes` 时）、或 [Cursor CLI](https://cursor.com/cli)（`--tap-client cursor` 时）。
 
 ```bash
 # 推荐
@@ -140,6 +140,47 @@ claude-tap --tap-client codex --tap-live -- --full-auto
 </details>
 
 <details>
+<summary>OpenCode 示例</summary>
+
+[OpenCode](https://opencode.ai) 是一款多 provider 的终端 AI 助手。由于它能对接多种 provider，claude-tap 默认对 opencode 使用 **forward proxy** 模式——向子进程注入 `HTTPS_PROXY` 与本地 CA，捕获它对接的任意 provider 流量。
+
+```bash
+# forward proxy 模式 — 捕获 opencode 对接的任意 provider（默认）
+claude-tap --tap-client opencode
+
+# 配合实时查看器
+claude-tap --tap-client opencode --tap-live
+
+# reverse 模式 — 仅在使用 Anthropic provider 时有效（单一 ANTHROPIC_BASE_URL）
+claude-tap --tap-client opencode --tap-proxy-mode reverse
+```
+
+</details>
+
+<details>
+<summary>Hermes Agent 示例</summary>
+
+Hermes Agent 是基于 Python 的多 provider AI agent（Nous Portal / OpenRouter / NVIDIA NIM / 小米 MiMo / GLM / Kimi / MiniMax / Hugging Face / OpenAI / Anthropic / 自定义）。由于它能对接任意 provider，且 `httpx`、`requests` 都默认认 `HTTPS_PROXY` 环境变量，claude-tap 默认对 hermes 使用 **forward proxy** 模式——通过向子进程注入 `HTTPS_PROXY` 与本地 CA，捕获它对接的任意 provider 流量。
+
+```bash
+# 交互式 TUI — 本地抓 trace 的推荐方式。
+claude-tap --tap-client hermes --tap-live
+
+# Gateway 模式 — 捕获由 Slack、Telegram 等平台消息触发的 LLM 调用。
+# 需要在 ~/.hermes/.env 中配置消息平台。
+# claude-tap 自动将 `gateway start` 改写为 `gateway run`，使 gateway 在前台运行并
+# 继承 HTTPS_PROXY；否则 systemd/launchd 启动的守护进程不会经过代理，无法抓到 trace。
+claude-tap --tap-client hermes -- gateway start
+
+# 反向模式仅在 ~/.hermes 配了一个读 OPENAI_BASE_URL 的 OpenAI 兼容 provider 时才有用
+claude-tap --tap-client hermes --tap-proxy-mode reverse
+```
+
+> **注意：** Gateway 模式只有在配置的消息平台（Slack、Telegram 等）推送消息给 bot 时才会产生 trace。若没有活跃的平台集成，gateway 不会发起 LLM 请求，也不会生成任何 trace。
+
+</details>
+
+<details>
 <summary>Cursor CLI 示例</summary>
 
 Cursor CLI 默认使用 forward proxy。免费套餐建议传 `--model auto`；需要工具调用时不要加 `--mode ask`。
@@ -202,7 +243,41 @@ claude-tap --tap-client codex --tap-no-launch --tap-port 8080
 OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
 ```
 
-运行 `claude-tap --help` 查看完整选项。非 `--tap-*` 参数会透传给所选客户端。
+### 常用组合
+
+```bash
+# 追踪 Claude Code：实时查看器 + 自动批准
+claude-tap --tap-live -- --dangerously-skip-permissions
+
+# 追踪 Codex（OAuth）：实时查看器 + 全自动
+claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+
+# 自定义 trace 输出目录
+claude-tap --tap-output-dir ./my-traces
+
+# 仅保留最近 10 次 trace
+claude-tap --tap-max-traces 10
+```
+
+### CLI 选项
+
+除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
+
+```
+--tap-client CLIENT      启动的客户端: claude（默认）/ codex / opencode / hermes / cursor
+--tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
+--tap-live               启动实时查看器（自动打开浏览器）
+--tap-live-port PORT     实时查看器端口（默认: 自动分配）
+--tap-no-open            退出后不自动打开 HTML 查看器（默认开启）
+--tap-output-dir DIR     Trace 输出目录（默认: ./.traces）
+--tap-port PORT          代理端口（默认: 自动分配）
+--tap-host HOST          绑定地址（默认: 127.0.0.1，--tap-no-launch 模式下为 0.0.0.0）
+--tap-no-launch          仅启动代理，不启动客户端
+--tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
+--tap-no-update-check    禁用启动时的 PyPI 更新检查
+--tap-no-auto-update     仅检查更新，不自动下载
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex 用 reverse，opencode/hermes/cursor 用 forward）
+```
 
 </details>
 

@@ -9,7 +9,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), OpenCode, or [Cursor CLI](https://cursor.com/cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [OpenCode](https://opencode.ai), [Hermes Agent](https://github.com/NousResearch/hermes-agent), or [Cursor CLI](https://cursor.com/cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -28,7 +28,7 @@ Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/
 
 ## Install
 
-Requires Python 3.11+ and the CLI you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), OpenCode, or [Cursor CLI](https://cursor.com/cli).
+Requires Python 3.11+ and the client you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`, [OpenCode](https://opencode.ai) for `--tap-client opencode`, [Hermes Agent](https://github.com/NousResearch/hermes-agent) for `--tap-client hermes`, or [Cursor CLI](https://cursor.com/cli) for `--tap-client cursor`.
 
 ```bash
 # Recommended
@@ -140,6 +140,49 @@ claude-tap --tap-client codex --tap-live -- --full-auto
 </details>
 
 <details>
+<summary>OpenCode examples</summary>
+
+[OpenCode](https://opencode.ai) is a multi-provider terminal AI assistant. Because it can talk to many providers, claude-tap defaults to **forward proxy** mode for opencode: it injects `HTTPS_PROXY` plus the local CA into the child process so traffic to any provider is captured.
+
+```bash
+# Forward proxy mode — captures every provider opencode talks to (default)
+claude-tap --tap-client opencode
+
+# With live viewer
+claude-tap --tap-client opencode --tap-live
+
+# Reverse mode — only works when using Anthropic provider (single ANTHROPIC_BASE_URL)
+claude-tap --tap-client opencode --tap-proxy-mode reverse
+```
+
+</details>
+
+<details>
+<summary>Hermes Agent examples</summary>
+
+Hermes Agent is a multi-provider Python AI agent (Nous Portal, OpenRouter, NVIDIA NIM, Xiaomi MiMo, GLM, Kimi, MiniMax, Hugging Face, OpenAI, Anthropic, custom). Because it can talk to any of these providers — and `httpx` / `requests` both honor `HTTPS_PROXY` natively — claude-tap defaults to **forward proxy** mode for hermes: it injects `HTTPS_PROXY` plus the local CA into the child process so any provider is captured.
+
+```bash
+# Interactive TUI — the recommended way for local trace capture.
+claude-tap --tap-client hermes --tap-live
+
+# Gateway mode — captures LLM calls triggered by incoming platform messages (Slack, Telegram, etc.).
+# Requires a messaging platform configured in ~/.hermes/.env.
+# claude-tap auto-rewrites `gateway start` → `gateway run` so the gateway runs in the
+# foreground and inherits HTTPS_PROXY; without this, the daemon spawned by systemd/launchd
+# would not go through the proxy and no traces would be recorded.
+claude-tap --tap-client hermes -- gateway start
+
+# Reverse mode is opt-in and only useful when ~/.hermes is configured with an
+# OpenAI-compatible provider that reads OPENAI_BASE_URL.
+claude-tap --tap-client hermes --tap-proxy-mode reverse
+```
+
+> **Note:** Gateway mode only produces traces when a configured messaging platform (Slack, Telegram, etc.) delivers a message to the bot. Without an active platform integration, the gateway makes no LLM calls and no traces are recorded.
+
+</details>
+
+<details>
 <summary>Cursor CLI examples</summary>
 
 Cursor CLI uses forward proxy mode by default. Use `--model auto` on free plans, and omit `--mode ask` when you want tool calls.
@@ -202,7 +245,41 @@ claude-tap --tap-client codex --tap-no-launch --tap-port 8080
 OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
 ```
 
-Run `claude-tap --help` for all options. Flags that are not `--tap-*` are forwarded to the selected client.
+### Common Combos
+
+```bash
+# Trace Claude Code with live viewer and auto-accept
+claude-tap --tap-live -- --dangerously-skip-permissions
+
+# Trace Codex (OAuth) with live viewer and full auto
+claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-live -- --full-auto
+
+# Save traces to a custom directory
+claude-tap --tap-output-dir ./my-traces
+
+# Keep only the last 10 trace sessions
+claude-tap --tap-max-traces 10
+```
+
+### CLI Options
+
+All flags are forwarded to the selected client, except these `--tap-*` ones:
+
+```
+--tap-client CLIENT      Client to launch: claude (default), codex, opencode, hermes, or cursor
+--tap-target URL         Upstream API URL (default: auto per client)
+--tap-live               Start real-time viewer (auto-opens browser)
+--tap-live-port PORT     Port for live viewer server (default: auto)
+--tap-no-open            Don't auto-open HTML viewer after exit (on by default)
+--tap-output-dir DIR     Trace output directory (default: ./.traces)
+--tap-port PORT          Proxy port (default: auto)
+--tap-host HOST          Bind address (default: 127.0.0.1, or 0.0.0.0 in --tap-no-launch mode)
+--tap-no-launch          Only start the proxy, don't launch client
+--tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
+--tap-no-update-check    Disable PyPI update check on startup
+--tap-no-auto-update     Check for updates but don't auto-download
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex, forward for opencode/hermes/cursor)
+```
 
 </details>
 

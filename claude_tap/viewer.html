@@ -2560,6 +2560,12 @@ function getTaskFingerprint(e) {
     sysText = body.system.map(s => typeof s === 'string' ? s : (s.text || '')).join('\n');
   } else if (typeof body.instructions === 'string') {
     sysText = body.instructions;
+  } else if (Array.isArray(body.messages)) {
+    // OpenAI chat-completions schema: system prompt lives in messages[0..n] with role="system"
+    sysText = body.messages
+      .filter(m => m && m.role === 'system')
+      .map(m => typeof m.content === 'string' ? m.content : (Array.isArray(m.content) ? m.content.map(c => c?.text || '').join('\n') : ''))
+      .join('\n');
   }
   // Tool names sorted for stable fingerprint
   const tools = body.tools || [];
@@ -2573,6 +2579,7 @@ function getTaskFingerprint(e) {
   // Self-identification phrases ("You are X") win over generic substring matches,
   // since other agents may mention "Claude Code" inside their own prompt body.
   else if (lower.includes('you are opencode')) label = 'OpenCode';
+  else if (lower.includes('you are hermes')) label = 'Hermes';
   else if (lower.includes('you are codex')) label = 'Codex';
   else if (lower.includes('claude code')) label = 'Claude Code';
   else if (lower.includes('claude agent')) label = 'Claude Agent';
