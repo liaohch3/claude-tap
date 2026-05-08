@@ -28,7 +28,7 @@ Intercept and inspect API traffic from [Claude Code](https://docs.anthropic.com/
 
 ## Install
 
-Requires Python 3.11+ and the CLI you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), OpenCode, or [Cursor CLI](https://cursor.com/cli).
+Requires Python 3.11+ and the CLI you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [OpenCode](https://github.com/anomalyco/opencode), or [Cursor CLI](https://cursor.com/cli).
 
 ```bash
 # Recommended
