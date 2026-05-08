@@ -1412,6 +1412,194 @@ def test_kimi_client_reverse_proxy():
         _cleanup(trace_dir, fake_bin_dir, "kimi")
 
 
+FAKE_KIMI_MULTITURN_SCRIPT = r"""#!/usr/bin/env python3
+# Fake Kimi CLI that runs five turns and records tool results between turns.
+import json, os, sys, urllib.request
+
+base = os.environ.get("KIMI_BASE_URL", "https://api.kimi.com/coding/v1")
+url = f"{base}/chat/completions"
+messages = []
+tools = [
+    {"type": "function", "function": {"name": "read_file", "description": "Read a file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "search_code", "description": "Search source code.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "list_dir", "description": "List a directory.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "run_tests", "description": "Run tests.", "parameters": {"type": "object", "properties": {"target": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "inspect_git", "description": "Inspect git state.", "parameters": {"type": "object", "properties": {"scope": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "parse_json", "description": "Parse JSON.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}},
+]
+
+def collect_tool_calls(stream_text):
+    tool_calls = {}
+    for raw_line in stream_text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line.removeprefix("data:").strip()
+        if payload == "[DONE]":
+            continue
+        event = json.loads(payload)
+        for call in event.get("choices", [{}])[0].get("delta", {}).get("tool_calls", []):
+            idx = call.get("index", 0)
+            current = tool_calls.setdefault(idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+            if call.get("id"):
+                current["id"] = call["id"]
+            if call.get("type"):
+                current["type"] = call["type"]
+            fn = call.get("function") or {}
+            if fn.get("name"):
+                current["function"]["name"] += fn["name"]
+            if fn.get("arguments"):
+                current["function"]["arguments"] += fn["arguments"]
+    return [tool_calls[idx] for idx in sorted(tool_calls)]
+
+for turn in range(1, 6):
+    messages.append({"role": "user", "content": f"Kimi multi-turn tool request {turn}: use at least two tools."})
+    req_body = json.dumps({
+        "model": "kimi-k2-turbo-preview",
+        "messages": messages,
+        "tools": tools,
+        "stream": True,
+    }).encode()
+    req = urllib.request.Request(url, data=req_body, headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer kimi-test-key-12345678",
+    })
+    try:
+        with urllib.request.urlopen(req) as resp:
+            chunks = resp.read().decode()
+            tool_calls = collect_tool_calls(chunks)
+            print(f"[fake-kimi] turn={turn} status={resp.status} tool_calls={len(tool_calls)}")
+    except Exception as e:
+        print(f"[fake-kimi] Turn {turn} error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if len(tool_calls) != 2:
+        print(f"[fake-kimi] expected 2 tool calls, got {len(tool_calls)}", file=sys.stderr)
+        sys.exit(1)
+    messages.append({"role": "assistant", "content": "", "tool_calls": tool_calls})
+    for call in tool_calls:
+        tool_name = call["function"]["name"]
+        messages.append({
+            "role": "tool",
+            "tool_call_id": call["id"],
+            "content": f"{tool_name} result for turn {turn}",
+        })
+
+print("[fake-kimi] Multi-turn Done.")
+"""
+
+
+def test_kimi_multiturn_tool_calls_reverse_proxy():
+    """Verify Kimi reverse mode captures five tool-call turns.
+
+    The fake CLI sends five Chat Completions requests. Each streamed response
+    contains exactly two tool calls, and the next request includes the previous
+    assistant tool_calls plus tool results so the trace represents a real
+    multi-turn tool conversation.
+    """
+
+    tool_pairs = [
+        ("read_file", "search_code"),
+        ("list_dir", "run_tests"),
+        ("inspect_git", "parse_json"),
+        ("read_file", "run_tests"),
+        ("search_code", "inspect_git"),
+    ]
+
+    async def handler(request):
+        body = await request.json()
+        assert request.path == "/chat/completions"
+        assert body["model"] == "kimi-k2-turbo-preview"
+        from aiohttp import web
+
+        user_messages = [msg for msg in body["messages"] if msg.get("role") == "user"]
+        turn = len(user_messages)
+        assert 1 <= turn <= 5
+        if turn > 1:
+            tool_results = [msg for msg in body["messages"] if msg.get("role") == "tool"]
+            assert len(tool_results) >= (turn - 1) * 2
+        names = tool_pairs[turn - 1]
+
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        for idx, name in enumerate(names):
+            arguments = json.dumps({"turn": turn, "tool": name})
+            chunk = {
+                "id": f"kimi_multi_{turn}",
+                "model": body["model"],
+                "choices": [
+                    {
+                        "delta": {
+                            "role": "assistant" if idx == 0 else None,
+                            "tool_calls": [
+                                {
+                                    "index": idx,
+                                    "id": f"call_{turn}_{idx + 1}",
+                                    "type": "function",
+                                    "function": {"name": name, "arguments": arguments},
+                                }
+                            ],
+                        }
+                    }
+                ],
+            }
+            if idx == 1:
+                chunk["choices"][0]["finish_reason"] = "tool_calls"
+                chunk["choices"][0]["usage"] = {
+                    "prompt_tokens": 100 + turn,
+                    "completion_tokens": 20 + turn,
+                    "total_tokens": 120 + (turn * 2),
+                    "cached_tokens": 10 + turn,
+                }
+            await resp.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        await resp.write_eof()
+        return resp
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_kimi_multiturn_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_kimi_multiturn_")
+    fake_kimi = Path(fake_bin_dir) / "kimi"
+    fake_kimi.write_text(FAKE_KIMI_MULTITURN_SCRIPT)
+    fake_kimi.chmod(fake_kimi.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19245, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19245,
+            tap_client="kimi",
+        )
+
+        assert proc.returncode == 0, f"kimi multi-turn mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
+        assert len(trace_files) == 1
+        records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
+        assert len(records) == 5
+
+        unique_tool_names = set()
+        total_tool_calls = 0
+        for turn, record in enumerate(records, start=1):
+            assert record["request"]["path"] == "/chat/completions"
+            assert record["upstream_base_url"] == "http://127.0.0.1:19245"
+            assert record["request"]["body"]["messages"][-1]["content"].startswith(
+                f"Kimi multi-turn tool request {turn}:"
+            )
+            tool_blocks = [block for block in record["response"]["body"]["content"] if block.get("type") == "tool_use"]
+            assert len(tool_blocks) == 2
+            total_tool_calls += len(tool_blocks)
+            unique_tool_names.update(block["name"] for block in tool_blocks)
+            assert record["response"]["body"]["usage"]["cache_read_input_tokens"] == 10 + turn
+
+        expected_tool_names = {"read_file", "search_code", "list_dir", "run_tests", "inspect_git", "parse_json"}
+        assert total_tool_calls == 10
+        assert unique_tool_names == expected_tool_names
+        assert "KIMI_BASE_URL=http://127.0.0.1:" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "kimi_multiturn")
+
+
 ## ---------------------------------------------------------------------------
 ## Test 6b: test_codex_zstd_request_body — proxy decompresses zstd request bodies
 ## ---------------------------------------------------------------------------
