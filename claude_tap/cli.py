@@ -398,6 +398,7 @@ async def async_main(args: argparse.Namespace):
             "writer": writer,
             "session": session,
             "turn_counter": 0,
+            "extra_allowed_path_prefixes": tuple(args.extra_allowed_paths),
             **_reverse_proxy_trace_options(args.client, args.target),
         }
         app.router.add_route("*", "/{path_info:.*}", proxy_handler)
@@ -648,6 +649,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     proxy_group.add_argument(
         "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
+    )
+    proxy_group.add_argument(
+        "--tap-allow-path",
+        action="append",
+        default=[],
+        dest="extra_allowed_paths",
+        metavar="PREFIX",
+        help="Extra path prefix to allow through the proxy (can be repeated, e.g. --tap-allow-path /custom/api)",
     )
 
     # -- Viewer options --
