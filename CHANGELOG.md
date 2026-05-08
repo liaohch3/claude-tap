@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.52] - 2026-05-08
+
+### Changed
+- feat: add Kimi CLI client support (#139)
 ## [0.1.51] - 2026-05-08
 
 ### Changed
