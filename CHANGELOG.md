@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.51] - 2026-05-08
+
+### Changed
+- Harden viewer metadata for Codex string bodies (#137)
 ## [0.1.50] - 2026-05-07
 
 ### Changed
