@@ -192,6 +192,10 @@ def _extract_response_tool_names(output: list) -> list[str]:
     return names
 
 
+def _dict_or_empty(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 def _tool_display_name(tool: dict) -> str:
     for value in (
         tool.get("name"),
@@ -215,14 +219,10 @@ def _extract_metadata(record_json: str) -> dict | None:
     except (json.JSONDecodeError, TypeError):
         return None
 
-    req = r.get("request") or {}
-    body = req.get("body") or {}
-    resp = r.get("response") or {}
-    resp_body = resp.get("body") or {}
-    if not isinstance(body, dict):
-        body = {}
-    if not isinstance(resp_body, dict):
-        resp_body = {}
+    req = _dict_or_empty(r.get("request"))
+    body = _dict_or_empty(req.get("body"))
+    resp = _dict_or_empty(r.get("response"))
+    resp_body = _dict_or_empty(resp.get("body"))
     stream_events = _iter_response_events(resp)
 
     # Token usage — from response.body.usage or terminal stream event

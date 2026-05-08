@@ -68,6 +68,74 @@ def test_extract_metadata_handles_both_bodies_as_strings() -> None:
     assert meta["path"] == "/-/npm/v1/security/advisories/bulk"
 
 
+def test_extract_metadata_handles_non_dict_request_response_containers() -> None:
+    rec = {
+        "timestamp": "2026-05-07T15:25:00+00:00",
+        "request_id": "req_bad_container",
+        "request": "opaque request container",
+        "response": "opaque response container",
+    }
+    meta = _extract_metadata(json.dumps(rec))
+    assert meta is not None
+    assert meta["request_id"] == "req_bad_container"
+    assert meta["method"] == ""
+    assert meta["path"] == ""
+    assert meta["status"] == 0
+
+
+def test_extract_metadata_handles_talon_codex_trace_with_string_request_body() -> None:
+    """Regression for Talon-launched Codex traces captured by claude-tap 0.1.38.
+
+    The crashed stack was in _generate_html_viewer -> _extract_metadata when a
+    Codex WebSocket trace had request.body as a string. Metadata extraction must
+    still degrade gracefully and keep usage from the terminal stream event.
+    """
+    rec = {
+        "timestamp": "2026-05-07T15:26:00+00:00",
+        "request_id": "req_talon_codex_string_body",
+        "turn": 1,
+        "duration_ms": 220000,
+        "request": {
+            "method": "WEBSOCKET",
+            "path": "/backend-api/codex/responses",
+            "headers": {"user-agent": "codex/0.128.0"},
+            "body": "opaque websocket create payload",
+        },
+        "response": {
+            "status": 101,
+            "headers": {},
+            "body": "",
+            "ws_events": [
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_talon_codex",
+                        "usage": {
+                            "input_tokens": 12,
+                            "output_tokens": 5,
+                            "cache_read_input_tokens": 3,
+                            "cache_creation_input_tokens": 2,
+                        },
+                    },
+                }
+            ],
+        },
+    }
+
+    meta = _extract_metadata(json.dumps(rec))
+
+    assert meta is not None
+    assert meta["request_id"] == "req_talon_codex_string_body"
+    assert meta["path"] == "/backend-api/codex/responses"
+    assert meta["model"] == ""
+    assert meta["has_system"] is False
+    assert meta["message_count"] == 0
+    assert meta["input_tokens"] == 12
+    assert meta["output_tokens"] == 5
+    assert meta["cache_read_input_tokens"] == 3
+    assert meta["cache_creation_input_tokens"] == 2
+
+
 def test_generate_html_viewer_does_not_crash_on_mixed_bodies(tmp_path: Path) -> None:
     """End-to-end: lazy path (>LAZY_THRESHOLD records) calls _extract_metadata
     on every line. A single string-body record must not abort generation."""
