@@ -531,6 +531,48 @@ async def async_main(args: argparse.Namespace):
 _CODEX_CHATGPT_TARGET = "https://chatgpt.com/backend-api/codex"
 
 
+def _read_settings_env_base_url(path: Path, env_key: str) -> str | None:
+    """Read a provider base URL from a Claude-style settings file."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    env = data.get("env")
+    if not isinstance(env, dict):
+        return None
+    value = env.get(env_key)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _detect_claude_target() -> str:
+    """Auto-detect the upstream target Claude Code would normally use.
+
+    Claude Code can source ``ANTHROPIC_BASE_URL`` from settings files rather
+    than the process environment. Mirror that behavior so reverse proxy mode
+    captures custom gateways without forcing users to repeat ``--tap-target``.
+    """
+    env_target = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    if env_target:
+        return env_target
+
+    env_key = CLIENT_CONFIGS["claude"].base_url_env
+    candidate_paths = (
+        Path.cwd() / ".claude" / "settings.local.json",
+        Path.cwd() / ".claude" / "settings.json",
+        Path.home() / ".claude" / "settings.json",
+    )
+    for path in candidate_paths:
+        target = _read_settings_env_base_url(path, env_key)
+        if target:
+            return target
+    return CLIENT_CONFIGS["claude"].default_target
+
+
 def _reverse_proxy_trace_options(client: str, target: str) -> dict[str, object]:
     return {
         "strip_path_prefix": "/v1" if client == "codex" and "api.openai.com" not in target else "",
@@ -707,7 +749,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.host is None:
         args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
     if args.target is None:
-        if args.client == "codex":
+        if args.client == "claude":
+            args.target = _detect_claude_target()
+        elif args.client == "codex":
             args.target = _detect_codex_target()
         else:
             args.target = CLIENT_CONFIGS[args.client].default_target

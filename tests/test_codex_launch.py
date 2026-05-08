@@ -118,6 +118,47 @@ def test_parse_args_codex_auto_detects_chatgpt_target(monkeypatch, tmp_path) -> 
     assert args.target == "https://chatgpt.com/backend-api/codex"
 
 
+def test_parse_args_claude_uses_env_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://gateway.example.test/v1/anthropic")
+
+    args = parse_args([])
+
+    assert args.target == "https://gateway.example.test/v1/anthropic"
+
+
+def test_parse_args_claude_uses_project_settings_base_url(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    home_settings = home / ".claude"
+    project_settings = project / ".claude"
+    home_settings.mkdir(parents=True)
+    project_settings.mkdir(parents=True)
+    (home_settings / "settings.json").write_text(
+        '{"env":{"ANTHROPIC_BASE_URL":"https://global.example.test/v1/anthropic"}}\n',
+        encoding="utf-8",
+    )
+    (project_settings / "settings.local.json").write_text(
+        '{"env":{"ANTHROPIC_BASE_URL":"https://project.example.test/v1/anthropic"}}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    monkeypatch.chdir(project)
+
+    args = parse_args([])
+
+    assert args.target == "https://project.example.test/v1/anthropic"
+
+
+def test_parse_args_claude_falls_back_to_default_target(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+
+    args = parse_args([])
+
+    assert args.target == "https://api.anthropic.com"
+
+
 def test_codex_reverse_trace_options_allow_websocket() -> None:
     options = _reverse_proxy_trace_options("codex", "https://chatgpt.com/backend-api/codex")
 
