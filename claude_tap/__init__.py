@@ -10,6 +10,7 @@ from __future__ import annotations
 from claude_tap.certs import CertificateAuthority, ensure_ca
 from claude_tap.cli import (
     __version__,
+    _build_update_command,
     _cleanup_traces,
     _detect_installer,
     _load_manifest,
@@ -21,6 +22,8 @@ from claude_tap.cli import (
     main_entry,
     parse_args,
     parse_dashboard_args,
+    parse_update_args,
+    update_main,
 )
 from claude_tap.forward_proxy import ForwardProxyServer
 from claude_tap.live import LiveViewerServer
@@ -31,6 +34,7 @@ from claude_tap.viewer import _generate_html_viewer
 
 __all__ = [
     "__version__",
+    "_build_update_command",
     "_cleanup_traces",
     "_detect_installer",
     "_load_manifest",
@@ -40,6 +44,8 @@ __all__ = [
     "main_entry",
     "parse_args",
     "parse_dashboard_args",
+    "parse_update_args",
+    "update_main",
     "async_main",
     "dashboard_main",
     "CertificateAuthority",
