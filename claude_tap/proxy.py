@@ -69,12 +69,19 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/completions",
     "/v1/models",
     "/v1/embeddings",
+    "/v1/files",
     # OpenAI Responses API (after strip_path_prefix removes /v1)
     "/responses",
     "/chat/completions",
     "/completions",
     "/models",
     "/embeddings",
+    "/files",
+    # Kimi Code auxiliary APIs (when users proxy Kimi Code services explicitly)
+    "/search",
+    "/fetch",
+    "/usages",
+    "/feedback",
 )
 
 

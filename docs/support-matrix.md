@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-01
+last_reviewed: 2026-05-08
 source_of_truth: AGENTS.md
 ---
 
@@ -20,6 +20,8 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
+| Kimi CLI | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested |
+| Kimi CLI | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
 | OpenCode | Provider creds via `opencode providers` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
 | Cursor CLI | Cursor login (`cursor-agent login`) | Forward proxy to `https://api2.cursor.sh` | n/a | HTTPS/protobuf + local transcript import | Real E2E verified |
@@ -33,6 +35,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 |--------|--------------|--------|
 | `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
 | `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
+| `kimi` | `reverse` | Single provider, native `KIMI_BASE_URL` env var |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
 | `cursor` | `forward` | Cursor CLI has no base URL override; forward proxy captures network traffic and local transcripts provide readable turns |
 
@@ -54,7 +57,7 @@ upstream: {target}/responses
 ### Decision Logic
 
 ```python
-strip = "/v1" if client == "codex" and "api.openai.com" not in target else ""
+strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 ```
 
 | Target contains `api.openai.com` | strip | Example |
@@ -68,6 +71,9 @@ strip = "/v1" if client == "codex" and "api.openai.com" not in target else ""
 
 - `test_codex_upstream_url_construction` — verifies URL construction for all 5 matrix combinations
 - `test_codex_client_reverse_proxy` — e2e with fake upstream (OAuth-like, with strip)
+- `test_kimi_registered_in_client_configs` — verifies Kimi CLI registration
+- `test_kimi_client_reverse_proxy` — e2e with fake Kimi Chat Completions stream
+- `test_chat_completions_reasoning_content_is_mirrored_as_thinking` — verifies Kimi thinking stream rendering shape
 - `test_websocket_proxy_basic` — WS relay and trace recording
 - `test_cursor_registered_in_client_configs` — verifies Cursor CLI registration and default forward mode
 - `test_run_client_cursor_forward_sets_proxy_ca_and_no_proxy` — verifies Cursor launch env for forward proxy mode
@@ -89,6 +95,10 @@ uv run python -m claude_tap --tap-client codex \
 # Cursor CLI
 uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Reply OK"
 # Verify the trace contains raw proxy records plus cursor-transcript records
+
+# Kimi CLI
+uv run python -m claude_tap --tap-client kimi -- --thinking
+# Verify the trace contains /chat/completions records and thinking/text output
 ```
 
 ### Real E2E (optional, when auth is available)
@@ -113,7 +123,7 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto \
 When adding a new client or backend:
 
 1. Add a row to the matrix above
-2. Add a URL construction test case in `test_codex_upstream_url_construction`
+2. Add a `CLIENT_CONFIGS` entry and a launch/config test
 3. Add an e2e test with fake upstream if applicable
 4. Verify with real E2E if auth is available
 5. Update the public docs in both English and Simplified Chinese (`README.md` plus `README_zh.md`, and matching `docs/guides/*.md` plus `docs/guides/*.zh.md` guide files when applicable)

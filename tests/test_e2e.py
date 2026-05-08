@@ -1304,6 +1304,114 @@ def test_codex_client_reverse_proxy():
         _cleanup(trace_dir, fake_bin_dir, "codex")
 
 
+FAKE_KIMI_SCRIPT = r"""#!/usr/bin/env python3
+# Fake Kimi CLI that sends one streaming Chat Completions request via KIMI_BASE_URL
+import json, os, sys, urllib.request
+
+base = os.environ.get("KIMI_BASE_URL", "https://api.kimi.com/coding/v1")
+url = f"{base}/chat/completions"
+
+req_body = json.dumps({
+    "model": "kimi-k2-turbo-preview",
+    "messages": [{"role": "user", "content": "Reply with exactly: HELLO_KIMI"}],
+    "stream": True,
+}).encode()
+req = urllib.request.Request(url, data=req_body, headers={
+    "Content-Type": "application/json",
+    "Authorization": "Bearer kimi-test-key-12345678",
+})
+try:
+    with urllib.request.urlopen(req) as resp:
+        chunks = resp.read().decode()
+        print(f"[fake-kimi] status={resp.status} stream-bytes={len(chunks)}")
+except Exception as e:
+    print(f"[fake-kimi] Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("[fake-kimi] Done.")
+"""
+
+
+def test_kimi_client_reverse_proxy():
+    """Test --tap-client kimi in reverse mode using KIMI_BASE_URL."""
+
+    async def handler(request):
+        body = await request.json()
+        assert request.path == "/chat/completions"
+        assert body["model"] == "kimi-k2-turbo-preview"
+        from aiohttp import web
+
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        chunks = [
+            {
+                "id": "kimi_chat_1",
+                "model": body["model"],
+                "choices": [{"delta": {"role": "assistant", "reasoning_content": "Need exact text."}}],
+            },
+            {
+                "id": "kimi_chat_1",
+                "model": body["model"],
+                "choices": [{"delta": {"content": "HELLO_KIMI"}}],
+            },
+            {
+                "id": "kimi_chat_1",
+                "model": body["model"],
+                "choices": [
+                    {
+                        "delta": {},
+                        "finish_reason": "stop",
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 2,
+                            "total_tokens": 15,
+                            "cached_tokens": 5,
+                        },
+                    }
+                ],
+            },
+        ]
+        for chunk in chunks:
+            await resp.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        await resp.write_eof()
+        return resp
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_kimi_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_kimi_")
+    fake_kimi = Path(fake_bin_dir) / "kimi"
+    fake_kimi.write_text(FAKE_KIMI_SCRIPT)
+    fake_kimi.chmod(fake_kimi.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19244, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19244,
+            tap_client="kimi",
+        )
+
+        assert proc.returncode == 0, f"kimi mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
+        assert len(trace_files) == 1
+        records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
+        assert len(records) == 1
+        record = records[0]
+        assert record["request"]["path"] == "/chat/completions"
+        assert record["upstream_base_url"] == "http://127.0.0.1:19244"
+        assert record["request"]["body"]["model"] == "kimi-k2-turbo-preview"
+        assert record["response"]["body"]["content"][0]["type"] == "thinking"
+        assert record["response"]["body"]["content"][1]["text"] == "HELLO_KIMI"
+        assert record["response"]["body"]["usage"]["input_tokens"] == 13
+        assert record["response"]["body"]["usage"]["cache_read_input_tokens"] == 5
+        assert "KIMI_BASE_URL=http://127.0.0.1:" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "kimi")
+
+
 ## ---------------------------------------------------------------------------
 ## Test 6b: test_codex_zstd_request_body — proxy decompresses zstd request bodies
 ## ---------------------------------------------------------------------------
