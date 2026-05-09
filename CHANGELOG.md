@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.54] - 2026-05-09
+
+### Changed
+- fix(viewer): show Codex cached tokens (#144)
 ## [0.1.53] - 2026-05-08
 
 ### Changed
