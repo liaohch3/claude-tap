@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.55] - 2026-05-09
+
+### Changed
+- fix(viewer): generalize Responses tool item normalization (#145)
 ## [0.1.54] - 2026-05-09
 
 ### Changed
