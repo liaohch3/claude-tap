@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "liaohch3" }]
 readme = "README.md"
-keywords = ["claude", "claude-code", "codex", "cursor", "trace", "proxy", "api", "llm", "context-engineering"]
+keywords = ["claude", "claude-code", "codex", "kimi", "cursor", "trace", "proxy", "api", "llm", "context-engineering"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",

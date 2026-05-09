@@ -9,7 +9,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [OpenCode](https://opencode.ai), [Hermes Agent](https://github.com/NousResearch/hermes-agent), or [Cursor CLI](https://cursor.com/cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Hermes Agent](https://github.com/NousResearch/hermes-agent), or [Cursor CLI](https://cursor.com/cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -24,11 +24,11 @@ Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.
 
 </details>
 
-> **OpenClaw:** If you are Openclaw and integrating claude-tap with [OpenClaw](docs/guides/OPENCLAW_README.md), also read the dedicated setup guide.
+> **OpenClaw:** If you are integrating claude-tap with OpenClaw, read the [OpenClaw setup guide](docs/guides/OPENCLAW_README.md). Simplified Chinese version: [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md).
 
 ## Install
 
-Requires Python 3.11+ and the client you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`, [OpenCode](https://opencode.ai) for `--tap-client opencode`, [Hermes Agent](https://github.com/NousResearch/hermes-agent) for `--tap-client hermes`, or [Cursor CLI](https://cursor.com/cli) for `--tap-client cursor`.
+Requires Python 3.11+ and the client you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`, [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) for `--tap-client kimi`, [OpenCode](https://opencode.ai) for `--tap-client opencode`, [Hermes Agent](https://github.com/NousResearch/hermes-agent) for `--tap-client hermes`, or [Cursor CLI](https://cursor.com/cli) for `--tap-client cursor`.
 
 ```bash
 # Recommended
@@ -54,6 +54,9 @@ claude-tap --tap-live
 # Codex CLI
 claude-tap --tap-client codex
 
+# Kimi CLI
+claude-tap --tap-client kimi
+
 # Cursor CLI
 claude-tap --tap-client cursor -- -p --trust --model auto "hello"
 ```
@@ -74,6 +77,34 @@ claude-tap -- --dangerously-skip-permissions
 # Live viewer + skip permissions + specific model
 claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
+
+</details>
+
+<details>
+<summary>Claude Code with DeepSeek API</summary>
+
+Full English guide: [Claude Code with DeepSeek API](docs/guides/deepseek-claude-code.md). Simplified Chinese version: [Claude Code 搭配 DeepSeek API](docs/guides/deepseek-claude-code.zh.md).
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="<your DeepSeek API key>"
+unset ANTHROPIC_API_KEY
+
+export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_EFFORT_LEVEL=max
+```
+
+```bash
+claude-tap \
+  --tap-proxy-mode reverse \
+  --tap-target https://api.deepseek.com/anthropic \
+  -- --permission-mode bypassPermissions
+```
+
+Set `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic` only for direct Claude Code usage. When capturing with `claude-tap`, use `--tap-target` for the DeepSeek upstream.
 
 </details>
 
@@ -107,6 +138,21 @@ claude-tap --tap-client codex -- --full-auto
 
 # OAuth + full auto + live viewer
 claude-tap --tap-client codex --tap-live -- --full-auto
+```
+
+</details>
+
+<details>
+<summary>Kimi CLI examples</summary>
+
+Kimi CLI uses reverse proxy mode by default through `KIMI_BASE_URL`. Use your existing Kimi CLI auth/config; the default upstream target is the Kimi Code API.
+
+```bash
+claude-tap --tap-client kimi
+claude-tap --tap-client kimi -- --thinking
+
+# Use Moonshot Open Platform instead of Kimi Code
+claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1
 ```
 
 </details>
@@ -215,6 +261,11 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 claude-tap --tap-client codex --tap-no-launch --tap-port 8080
 # In another terminal:
 OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
+
+# Kimi CLI
+claude-tap --tap-client kimi --tap-no-launch --tap-port 8080
+# In another terminal:
+KIMI_BASE_URL=http://127.0.0.1:8080 kimi
 ```
 
 ### Common Combos

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from claude_tap.sse import SSEReassembler
-from claude_tap.viewer import _extract_metadata
+from claude_tap.viewer import _extract_metadata, _extract_request_messages
 
 
 def test_sse_reassembler_reconstructs_openai_responses_completed_event() -> None:
@@ -99,6 +99,82 @@ def test_extract_metadata_supports_interleaved_responses_roles_without_type() ->
     assert meta["message_count"] == 3
     assert meta["input_tokens"] == 1
     assert meta["output_tokens"] == 1
+
+
+def test_extract_metadata_counts_responses_function_call_input_items() -> None:
+    record = {
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/v1/responses",
+            "body": {
+                "model": "gpt-5.4",
+                "instructions": "Use tools when needed.",
+                "input": [
+                    {"role": "user", "content": [{"type": "input_text", "text": "Read pyproject."}]},
+                    {
+                        "type": "function_call",
+                        "name": "read_file",
+                        "arguments": '{"path":"pyproject.toml"}',
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_1",
+                        "output": '[project]\nname = "claude-tap"',
+                    },
+                ],
+                "tools": [{"type": "function", "name": "read_file"}],
+            },
+        },
+        "response": {"status": 200, "body": {"usage": {"input_tokens": 4, "output_tokens": 2}}},
+    }
+
+    meta = _extract_metadata(json.dumps(record))
+
+    assert meta is not None
+    assert meta["message_count"] == 3
+    assert meta["has_system"] is True
+    assert meta["input_tokens"] == 4
+    assert meta["output_tokens"] == 2
+    assert "read_file" in meta["tool_names"]
+
+
+def test_extract_request_messages_normalizes_responses_function_call_input_items() -> None:
+    messages = _extract_request_messages(
+        {
+            "input": [
+                {"role": "user", "content": [{"type": "input_text", "text": "Read pyproject."}]},
+                {
+                    "type": "function_call",
+                    "name": "read_file",
+                    "arguments": '{"path":"pyproject.toml"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": '[project]\nname = "claude-tap"',
+                },
+                {
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "not json",
+                },
+                {
+                    "type": "function_call",
+                    "name": "missing_args",
+                },
+            ]
+        }
+    )
+
+    assert messages[0]["role"] == "user"
+    assert messages[1] == {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "name": "read_file", "input": {"path": "pyproject.toml"}}],
+    }
+    assert messages[2] == {"role": "tool", "content": '[project]\nname = "claude-tap"'}
+    assert messages[3]["content"][0]["input"] == "not json"
+    assert messages[4]["content"][0]["input"] == {}
 
 
 def test_extract_metadata_ignores_list_response_body() -> None:

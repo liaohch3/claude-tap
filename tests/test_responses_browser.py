@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -62,6 +63,69 @@ def codex_ws_multi_page(codex_ws_multi_html_file: Path):
         browser.close()
 
 
+@pytest.fixture(scope="module")
+def chat_completions_history_html_file() -> Path:
+    trace_path = Path(tempfile.mktemp(suffix=".jsonl"))
+    html_path = Path(tempfile.mktemp(suffix=".html"))
+    record = {
+        "request_id": "req_kimi_history",
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/chat/completions",
+            "body": {
+                "model": "kimi-k2-turbo-preview",
+                "messages": [
+                    {"role": "system", "content": "Kimi CLI regression system prompt."},
+                    {"role": "user", "content": "Use a tool."},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_read",
+                                "type": "function",
+                                "function": {"name": "read_file", "arguments": '{"path":"pyproject.toml"}'},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "call_read", "content": "project metadata"},
+                    {"role": "user", "content": "Continue in the same chat."},
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "description": "Read a file.",
+                            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+                        },
+                    }
+                ],
+            },
+        },
+        "response": {"status": 200, "body": {"content": [{"type": "text", "text": "Done."}]}},
+    }
+    trace_path.write_text(json.dumps(record) + "\n")
+    _generate_html_viewer(trace_path, html_path)
+    yield html_path
+    trace_path.unlink(missing_ok=True)
+    html_path.unlink(missing_ok=True)
+
+
+@pytest.fixture()
+def chat_completions_history_page(chat_completions_history_html_file: Path):
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"file://{chat_completions_history_html_file}", timeout=10000)
+        page.wait_for_selector(".sidebar-item", timeout=5000)
+        yield page
+        browser.close()
+
+
 def test_viewer_renders_codex_responses_messages_usage_and_response(responses_page) -> None:
     responses_page.locator(".sidebar-item").first.click()
     responses_page.wait_for_selector("#detail .section", timeout=5000)
@@ -80,6 +144,38 @@ def test_viewer_renders_codex_responses_messages_usage_and_response(responses_pa
     assert "exec_command" in tools_text
     assert "web_search" in tools_text
     assert "unknown" not in tools_text.lower()
+
+
+def test_viewer_renders_chat_completions_system_and_history_tool_calls(chat_completions_history_page) -> None:
+    chat_completions_history_page.locator(".sidebar-item").first.click()
+    chat_completions_history_page.wait_for_selector("#detail .section", timeout=5000)
+
+    result = chat_completions_history_page.evaluate(
+        """() => {
+          const body = entries[0].request.body;
+          const messages = getMessages(body);
+          const assistantBlocks = Array.from(document.querySelectorAll('#detail .msg.assistant'))
+            .map(el => el.innerText.trim());
+          return {
+            system: extractSystem(body),
+            roles: messages.map(m => m.role),
+            assistantContent: messages.find(m => m.role === 'assistant')?.content || [],
+            titles: Array.from(document.querySelectorAll('#detail .section .title')).map(el => el.textContent),
+            detailText: document.querySelector('#detail').innerText,
+            assistantBlocks,
+          };
+        }"""
+    )
+
+    assert result["system"] == "Kimi CLI regression system prompt."
+    assert result["roles"] == ["user", "assistant", "tool", "user"]
+    assert result["assistantContent"] == [
+        {"type": "tool_use", "id": "call_read", "name": "read_file", "input": {"path": "pyproject.toml"}}
+    ]
+    assert "System Prompt" in result["titles"]
+    assert "Kimi CLI regression system prompt." in result["detailText"]
+    assert "read_file" in result["detailText"]
+    assert all(block != "ASSISTANT" for block in result["assistantBlocks"])
 
 
 def test_viewer_treats_codex_forward_websocket_path_as_primary(responses_page) -> None:

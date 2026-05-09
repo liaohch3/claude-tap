@@ -9,7 +9,7 @@
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[OpenCode](https://opencode.ai)、[Hermes Agent](https://github.com/NousResearch/hermes-agent) 或 [Cursor CLI](https://cursor.com/cli) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Hermes Agent](https://github.com/NousResearch/hermes-agent) 或 [Cursor CLI](https://cursor.com/cli) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -24,9 +24,11 @@
 
 </details>
 
+> **OpenClaw：** 如果你要在 OpenClaw 中集成 claude-tap，请阅读 [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md)。英文版见 [OpenClaw setup guide](docs/guides/OPENCLAW_README.md)。
+
 ## 安装
 
-需要 Python 3.11+ 以及要追踪的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)（默认）、[Codex CLI](https://github.com/openai/codex)（`--tap-client codex` 时）、[OpenCode](https://opencode.ai)（`--tap-client opencode` 时）、[Hermes Agent](https://github.com/NousResearch/hermes-agent)（`--tap-client hermes` 时）、或 [Cursor CLI](https://cursor.com/cli)（`--tap-client cursor` 时）。
+需要 Python 3.11+ 以及要追踪的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)（默认）、[Codex CLI](https://github.com/openai/codex)（`--tap-client codex` 时）、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)（`--tap-client kimi` 时）、[OpenCode](https://opencode.ai)（`--tap-client opencode` 时）、[Hermes Agent](https://github.com/NousResearch/hermes-agent)（`--tap-client hermes` 时）、或 [Cursor CLI](https://cursor.com/cli)（`--tap-client cursor` 时）。
 
 ```bash
 # 推荐
@@ -52,6 +54,9 @@ claude-tap --tap-live
 # Codex CLI
 claude-tap --tap-client codex
 
+# Kimi CLI
+claude-tap --tap-client kimi
+
 # Cursor CLI
 claude-tap --tap-client cursor -- -p --trust --model auto "hello"
 ```
@@ -72,6 +77,34 @@ claude-tap -- --dangerously-skip-permissions
 # 实时查看器 + 跳过权限确认 + 指定模型
 claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
+
+</details>
+
+<details>
+<summary>Claude Code + DeepSeek API</summary>
+
+完整中文指南见 [Claude Code 搭配 DeepSeek API](docs/guides/deepseek-claude-code.zh.md)，英文版见 [Claude Code with DeepSeek API](docs/guides/deepseek-claude-code.md)。
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="<你的 DeepSeek API key>"
+unset ANTHROPIC_API_KEY
+
+export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_EFFORT_LEVEL=max
+```
+
+```bash
+claude-tap \
+  --tap-proxy-mode reverse \
+  --tap-target https://api.deepseek.com/anthropic \
+  -- --permission-mode bypassPermissions
+```
+
+直接运行 Claude Code 时才设置 `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`；通过 `claude-tap` 捕获时用 `--tap-target` 指定 DeepSeek 上游。
 
 </details>
 
@@ -105,6 +138,21 @@ claude-tap --tap-client codex -- --full-auto
 
 # OAuth + 全自动 + 实时查看器
 claude-tap --tap-client codex --tap-live -- --full-auto
+```
+
+</details>
+
+<details>
+<summary>Kimi CLI 示例</summary>
+
+Kimi CLI 默认通过 `KIMI_BASE_URL` 使用 reverse proxy。使用你已有的 Kimi CLI 认证和配置；默认上游目标是 Kimi Code API。
+
+```bash
+claude-tap --tap-client kimi
+claude-tap --tap-client kimi -- --thinking
+
+# 改用 Moonshot Open Platform，而不是 Kimi Code
+claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1
 ```
 
 </details>
@@ -211,6 +259,11 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 claude-tap --tap-client codex --tap-no-launch --tap-port 8080
 # 在另一个终端:
 OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
+
+# Kimi CLI
+claude-tap --tap-client kimi --tap-no-launch --tap-port 8080
+# 在另一个终端:
+KIMI_BASE_URL=http://127.0.0.1:8080 kimi
 ```
 
 ### 常用组合

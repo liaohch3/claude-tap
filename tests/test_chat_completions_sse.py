@@ -63,6 +63,44 @@ def test_chat_completions_usage_dual_naming() -> None:
     assert snap["model"] == "hy3"
 
 
+def test_chat_completions_choice_usage_and_cached_tokens() -> None:
+    """Kimi streams usage inside the final choice object and may expose cached
+    input tokens as `cached_tokens`; both must feed existing token displays."""
+    r = SSEReassembler()
+    r.feed_bytes(
+        b'data: {"id":"c_kimi","model":"kimi-k2","choices":[{"delta":{"role":"assistant","content":"hi"}}]}\n\n'
+        b'data: {"id":"c_kimi","choices":[{"delta":{},"finish_reason":"stop",'
+        b'"usage":{"prompt_tokens":8,"completion_tokens":5,"total_tokens":13,"cached_tokens":3}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    snap = r.reconstruct()
+    assert snap is not None
+    usage = snap["usage"]
+    assert usage["input_tokens"] == 8
+    assert usage["output_tokens"] == 5
+    assert usage["cache_read_input_tokens"] == 3
+
+
+def test_chat_completions_reasoning_content_is_mirrored_as_thinking() -> None:
+    """Kimi thinking mode streams `reasoning_content` deltas on Chat
+    Completions chunks. The viewer renders the mirrored thinking block."""
+    r = SSEReassembler()
+    r.feed_bytes(
+        b'data: {"id":"c_kimi","choices":[{"delta":{"role":"assistant","reasoning_content":"Think "}}]}\n\n'
+        b'data: {"id":"c_kimi","choices":[{"delta":{"reasoning_content":"carefully."}}]}\n\n'
+        b'data: {"id":"c_kimi","choices":[{"delta":{"content":"Done."}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    snap = r.reconstruct()
+    assert snap is not None
+    assert snap["choices"][0]["message"]["reasoning_content"] == "Think carefully."
+    assert snap["choices"][0]["message"]["content"] == "Done."
+    assert snap["content"][0] == {"type": "thinking", "thinking": "Think carefully."}
+    assert snap["content"][1] == {"type": "text", "text": "Done."}
+
+
 def test_chat_completions_tool_call_accumulation() -> None:
     """Tool calls stream as indexed deltas with name/arguments concatenated
     across multiple chunks. Final snapshot must have the assembled call."""

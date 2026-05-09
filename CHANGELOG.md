@@ -13,6 +13,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+
+
+
+
+
+## [0.1.53] - 2026-05-08
+
+### Changed
+- docs: strengthen Kimi evidence with real multiturn trace (#141)
+## [0.1.52] - 2026-05-08
+
+### Changed
+- feat: add Kimi CLI client support (#139)
+## [0.1.51] - 2026-05-08
+
+### Changed
+- Harden viewer metadata for Codex string bodies (#137)
+## [0.1.50] - 2026-05-07
+
+### Changed
+- fix(viewer): clarify token summary label (#133)
+## [0.1.49] - 2026-05-07
+
+### Changed
+- fix(viewer): count Responses function calls (#131)
+## [0.1.48] - 2026-05-07
+
+### Changed
+- fix(proxy): support DeepSeek Claude Code metadata (#121)
 ## [0.1.47] - 2026-05-06
 
 ### Changed

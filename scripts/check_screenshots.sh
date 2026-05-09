@@ -31,7 +31,7 @@ check_file() {
     # Check file exists
     if [[ ! -f "$file" ]]; then
         echo -e "${RED}FAIL${NC} $file: file not found"
-        ((FAIL++))
+        ((FAIL += 1))
         return
     fi
 
@@ -81,16 +81,16 @@ check_file() {
         for issue in "${issues[@]}"; do
             echo "      - $issue"
         done
-        ((FAIL++))
+        ((FAIL += 1))
     elif (( ${#warnings[@]} > 0 )); then
         echo -e "${YELLOW}WARN${NC} $file (${width}x${height}, ${size} bytes)"
         for warning in "${warnings[@]}"; do
             echo "      - $warning"
         done
-        ((WARN++))
+        ((WARN += 1))
     else
         echo -e "${GREEN}PASS${NC} $file (${width}x${height}, ${size} bytes)"
-        ((PASS++))
+        ((PASS += 1))
     fi
 }
 

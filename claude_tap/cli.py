@@ -64,6 +64,14 @@ class ClientConfig:
     base_url_suffix: str  # appended to http://127.0.0.1:{port}
     default_target: str
     nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
+    # Some CLIs need process env duplicated into a CLI settings payload.
+    inject_settings_env: bool = False
+    # Some CLIs need a base URL in both env and a native config override.
+    base_url_config_key: str | None = None
+    # Reverse proxy URL normalization. Example: Codex OAuth receives /v1/* but
+    # its upstream target already points at a /codex backend that expects /*.
+    strip_path_prefix: str = ""
+    strip_path_prefix_unless_target_contains: tuple[str, ...] = ()
     # Default proxy mode when --tap-proxy-mode is not explicitly set.
     # Multi-provider clients (e.g. hermes, opencode) default to "forward" so that all
     # provider traffic is captured regardless of which env var the client honors.
@@ -78,6 +86,13 @@ class ClientConfig:
     def reverse_base_url(self, port: int) -> str:
         return f"http://127.0.0.1:{port}{self.base_url_suffix}"
 
+    def reverse_strip_path_prefix(self, target: str) -> str:
+        if not self.strip_path_prefix:
+            return ""
+        if any(marker in target for marker in self.strip_path_prefix_unless_target_contains):
+            return ""
+        return self.strip_path_prefix
+
 
 CLIENT_CONFIGS: dict[str, ClientConfig] = {
     "claude": ClientConfig(
@@ -88,6 +103,7 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_suffix="",
         default_target="https://api.anthropic.com",
         nesting_env_keys=("CLAUDECODE", "CLAUDE_CODE_SSE_PORT"),
+        inject_settings_env=True,
     ),
     "codex": ClientConfig(
         cmd="codex",
@@ -96,6 +112,17 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="OPENAI_BASE_URL",
         base_url_suffix="/v1",
         default_target="https://api.openai.com",
+        base_url_config_key="openai_base_url",
+        strip_path_prefix="/v1",
+        strip_path_prefix_unless_target_contains=("api.openai.com",),
+    ),
+    "kimi": ClientConfig(
+        cmd="kimi",
+        label="Kimi Code CLI",
+        install_url="https://github.com/MoonshotAI/kimi-cli",
+        base_url_env="KIMI_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.kimi.com/coding/v1",
     ),
     "opencode": ClientConfig(
         cmd="opencode",
@@ -155,7 +182,9 @@ async def run_client(
 
     cmd_args = list(extra_args)
     cmd_args = _maybe_rewrite_hermes_gateway_start(client, cmd_args)
-    has_openai_base_override = _has_config_override(cmd_args, "openai_base_url")
+    has_base_url_config_override = bool(
+        cfg.base_url_config_key and _has_config_override(cmd_args, cfg.base_url_config_key)
+    )
 
     if proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
@@ -176,11 +205,8 @@ async def run_client(
             # REQUESTS_CA_BUNDLE covers the requests library.
             env["REQUESTS_CA_BUNDLE"] = str(ca_cert_path)
 
-        if client == "claude":
-            # Claude Code may source proxy env from settings rather than process env.
-            # Inject equivalent settings unless user already provided --settings.
-            has_settings_arg = any(arg == "--settings" or arg.startswith("--settings=") for arg in cmd_args)
-            if not has_settings_arg:
+        if cfg.inject_settings_env:
+            if not _has_settings_arg(cmd_args):
                 settings_payload: dict[str, dict[str, str]] = {
                     "env": {
                         "HTTP_PROXY": proxy_url,
@@ -193,21 +219,18 @@ async def run_client(
                 }
                 if ca_cert_path:
                     settings_payload["env"]["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
-                cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
+                cmd_args = _settings_arg(settings_payload["env"]) + cmd_args
         # Don't set provider-specific base URL in forward mode
     else:
         base_url = cfg.reverse_base_url(port)
         env[cfg.base_url_env] = base_url
         env["NO_PROXY"] = "127.0.0.1"
-        if client == "claude":
-            has_settings_arg = any(arg == "--settings" or arg.startswith("--settings=") for arg in cmd_args)
-            if not has_settings_arg:
-                settings_payload = {"env": {cfg.base_url_env: base_url}}
-                cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
-        if client == "codex" and not has_openai_base_override:
-            # Newer Codex builds may ignore OPENAI_BASE_URL in OAuth/WebSocket mode
+        if cfg.inject_settings_env and not _has_settings_arg(cmd_args):
+            cmd_args = _settings_arg({cfg.base_url_env: base_url}) + cmd_args
+        if cfg.base_url_config_key and not has_base_url_config_override:
+            # Some clients ignore their base URL env in selected auth/transport modes
             # unless the same value is also supplied as a config override.
-            cmd_args = ["-c", f'openai_base_url="{base_url}"'] + cmd_args
+            cmd_args = ["-c", f'{cfg.base_url_config_key}="{base_url}"'] + cmd_args
 
     for key in cfg.nesting_env_keys:
         env.pop(key, None)
@@ -387,6 +410,15 @@ def _has_config_override(args: list[str], key: str) -> bool:
                 return True
         i += 1
     return False
+
+
+def _has_settings_arg(args: list[str]) -> bool:
+    return any(arg == "--settings" or arg.startswith("--settings=") for arg in args)
+
+
+def _settings_arg(env_values: dict[str, str]) -> list[str]:
+    settings_payload = {"env": env_values}
+    return ["--settings", json.dumps(settings_payload, separators=(",", ":"))]
 
 
 async def async_main(args: argparse.Namespace):
@@ -594,8 +626,9 @@ _CODEX_CHATGPT_TARGET = "https://chatgpt.com/backend-api/codex"
 
 
 def _reverse_proxy_trace_options(client: str, target: str) -> dict[str, object]:
+    cfg = CLIENT_CONFIGS[client]
     return {
-        "strip_path_prefix": "/v1" if client == "codex" and "api.openai.com" not in target else "",
+        "strip_path_prefix": cfg.reverse_strip_path_prefix(target),
         "force_http": False,
     }
 
@@ -618,6 +651,11 @@ def _detect_codex_target() -> str:
     return CLIENT_CONFIGS["codex"].default_target
 
 
+TARGET_DETECTORS = {
+    "codex": _detect_codex_target,
+}
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse argv, extracting ``--tap-*`` flags for ourselves and forwarding
     everything else to the selected client.
@@ -627,7 +665,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
-        description="Trace Claude Code, Codex CLI, OpenCode, or Cursor CLI API requests via a local proxy. "
+        description="Trace Claude Code, Codex CLI, Kimi CLI, OpenCode, or Cursor CLI API requests via a local proxy. "
         "All flags not listed below are forwarded to the selected client.",
         epilog=(
             "claude code:\n"
@@ -645,6 +683,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex\n"
             "  # With model and full auto-approval\n"
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
+            "\n"
+            "kimi cli:\n"
+            "  # Uses KIMI_BASE_URL and forwards to Kimi Code by default\n"
+            "  claude-tap --tap-client kimi\n"
+            "  claude-tap --tap-client kimi -- --thinking\n"
+            "  # Use Moonshot Open Platform instead of Kimi Code\n"
+            "  claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1\n"
             "\n"
             "opencode (multi-provider; defaults to forward proxy mode):\n"
             "  # Forward proxy captures every provider opencode talks to\n"
@@ -712,7 +757,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex, 'forward' for opencode/hermes/cursor."
+            "Default depends on the client: 'reverse' for claude/codex/kimi, 'forward' for opencode/hermes/cursor."
         ),
     )
     proxy_group.add_argument(
@@ -778,10 +823,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.proxy_mode is None:
         args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
     if args.target is None:
-        if args.client == "codex":
-            args.target = _detect_codex_target()
-        else:
-            args.target = CLIENT_CONFIGS[args.client].default_target
+        detector = TARGET_DETECTORS.get(args.client)
+        args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
     if args.proxy_mode is None:
         args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
     return args

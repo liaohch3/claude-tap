@@ -17,11 +17,17 @@ from claude_tap.proxy import _is_allowed_path
         "/v1/models",
         "/v1/models/claude-3",
         "/v1/embeddings",
+        "/v1/files",
         "/responses",
         "/chat/completions",
         "/completions",
         "/models",
         "/embeddings",
+        "/files",
+        "/search",
+        "/fetch",
+        "/usages",
+        "/feedback",
     ],
 )
 def test_allowed_paths(path: str):

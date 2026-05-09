@@ -126,5 +126,5 @@ commit 前：
 
 ## 语言
 
-所有代码、注释、commit message、文档和 skill 文件必须使用英文。
-唯一例外是 `README_zh.md` 以及其他明确为中文的 README 文件。
+代码、注释、commit message 和 skill 文件必须使用英文。
+对外文档必须中英文双份：`README.md` 对应 `README_zh.md`，`docs/guides/*.md` 对应同目录的 `*.zh.md`。

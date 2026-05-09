@@ -123,6 +123,17 @@ def _normalize_record_for_viewer(record_json: str) -> str:
     return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
 
 
+def _parse_function_call_arguments(arguments: object) -> object:
+    if isinstance(arguments, str):
+        try:
+            return json.loads(arguments)
+        except (json.JSONDecodeError, TypeError):
+            return arguments
+    if arguments is None:
+        return {}
+    return arguments
+
+
 def _extract_request_messages(body: dict) -> list[dict]:
     if not isinstance(body, dict):
         return []
@@ -138,7 +149,25 @@ def _extract_request_messages(body: dict) -> list[dict]:
     for item in inp:
         if not isinstance(item, dict):
             continue
-        if item.get("type") not in (None, "message") and "role" not in item:
+        item_type = item.get("type")
+        if item_type == "function_call":
+            normalized.append(
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": item.get("name", ""),
+                            "input": _parse_function_call_arguments(item.get("arguments")),
+                        }
+                    ],
+                }
+            )
+            continue
+        if item_type == "function_call_output":
+            normalized.append({"role": "tool", "content": item.get("output", "")})
+            continue
+        if item_type not in (None, "message") and "role" not in item:
             continue
         role = item.get("role")
         if not isinstance(role, str) or not role:
@@ -161,6 +190,10 @@ def _extract_response_tool_names(output: list) -> list[str]:
         elif item.get("type") == "function_call":
             names.append(item.get("name", ""))
     return names
+
+
+def _dict_or_empty(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
 
 
 def _tool_display_name(tool: dict) -> str:
@@ -186,14 +219,10 @@ def _extract_metadata(record_json: str) -> dict | None:
     except (json.JSONDecodeError, TypeError):
         return None
 
-    req = r.get("request") or {}
-    body = req.get("body") or {}
-    resp = r.get("response") or {}
-    resp_body = resp.get("body") or {}
-    if not isinstance(body, dict):
-        body = {}
-    if not isinstance(resp_body, dict):
-        resp_body = {}
+    req = _dict_or_empty(r.get("request"))
+    body = _dict_or_empty(req.get("body"))
+    resp = _dict_or_empty(r.get("response"))
+    resp_body = _dict_or_empty(resp.get("body"))
     stream_events = _iter_response_events(resp)
 
     # Token usage — from response.body.usage or terminal stream event

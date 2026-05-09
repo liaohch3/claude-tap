@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-05
+last_reviewed: 2026-05-09
 source_of_truth: AGENTS.md
 ---
 
@@ -8,6 +8,8 @@ source_of_truth: AGENTS.md
 
 This document tracks all verified (client × auth × target × transport) combinations.
 **Any proxy/routing change must verify all applicable rows before merge.**
+
+Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 
 ## Client Configurations
 
@@ -18,6 +20,8 @@ This document tracks all verified (client × auth × target × transport) combin
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
+| Kimi CLI | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested |
+| Kimi CLI | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
 | OpenCode | Provider creds via `opencode providers` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
@@ -33,6 +37,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 |--------|--------------|--------|
 | `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
 | `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
+| `kimi` | `reverse` | Single provider, native `KIMI_BASE_URL` env var |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
 | `cursor` | `forward` | Cursor CLI has no base URL override; forward proxy captures network traffic and local transcripts provide readable turns |
@@ -74,7 +79,7 @@ upstream: {target}/responses
 ### Decision Logic
 
 ```python
-strip = "/v1" if client == "codex" and "api.openai.com" not in target else ""
+strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 ```
 
 | Target contains `api.openai.com` | strip | Example |
@@ -88,6 +93,9 @@ strip = "/v1" if client == "codex" and "api.openai.com" not in target else ""
 
 - `test_codex_upstream_url_construction` — verifies URL construction for all 5 matrix combinations
 - `test_codex_client_reverse_proxy` — e2e with fake upstream (OAuth-like, with strip)
+- `test_kimi_registered_in_client_configs` — verifies Kimi CLI registration
+- `test_kimi_client_reverse_proxy` — e2e with fake Kimi Chat Completions stream
+- `test_chat_completions_reasoning_content_is_mirrored_as_thinking` — verifies Kimi thinking stream rendering shape
 - `test_websocket_proxy_basic` — WS relay and trace recording
 - `test_hermes_*` — registration, parse_args default-mode resolution, forward/reverse env, argv rewrite
 - `test_cursor_registered_in_client_configs` — verifies Cursor CLI registration and default forward mode
@@ -110,6 +118,10 @@ uv run python -m claude_tap --tap-client codex \
 # Cursor CLI
 uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Reply OK"
 # Verify the trace contains raw proxy records plus cursor-transcript records
+
+# Kimi CLI
+uv run python -m claude_tap --tap-client kimi -- --thinking
+# Verify the trace contains /chat/completions records and thinking/text output
 ```
 
 ### Real E2E (optional, when auth is available)
@@ -134,7 +146,7 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto \
 When adding a new client or backend:
 
 1. Add a row to the matrix above
-2. Add a URL construction test case in `test_codex_upstream_url_construction`
+2. Add a `CLIENT_CONFIGS` entry and a launch/config test
 3. Add an e2e test with fake upstream if applicable
 4. Verify with real E2E if auth is available
-5. Update README.md and README_zh.md with usage examples
+5. Update the public docs in both English and Simplified Chinese (`README.md` plus `README_zh.md`, and matching `docs/guides/*.md` plus `docs/guides/*.zh.md` guide files when applicable)
