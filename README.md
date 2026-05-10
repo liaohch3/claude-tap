@@ -289,7 +289,7 @@ claude-tap --tap-max-traces 10
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default), codex, opencode, hermes, or cursor
+--tap-client CLIENT      Client to launch: claude (default), codex, kimi, opencode, hermes, or cursor
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
@@ -301,7 +301,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex, forward for opencode/hermes/cursor)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi, forward for opencode/hermes/cursor)
 ```
 
 </details>

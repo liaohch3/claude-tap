@@ -287,7 +287,7 @@ claude-tap --tap-max-traces 10
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动的客户端: claude（默认）/ codex / opencode / hermes / cursor
+--tap-client CLIENT      启动的客户端: claude（默认）/ codex / kimi / opencode / hermes / cursor
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               启动实时查看器（自动打开浏览器）
 --tap-live-port PORT     实时查看器端口（默认: 自动分配）
@@ -299,7 +299,7 @@ claude-tap --tap-max-traces 10
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
---tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex 用 reverse，opencode/hermes/cursor 用 forward）
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi 用 reverse，opencode/hermes/cursor 用 forward）
 ```
 
 </details>

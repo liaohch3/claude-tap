@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-08
+last_reviewed: 2026-05-10
 source_of_truth: AGENTS.md
 ---
 
@@ -24,6 +24,8 @@ English version: [Support Matrix](support-matrix.md).
 | Kimi CLI | Kimi CLI 认证/配置 | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 配置支持 |
 | OpenCode | 通过 `opencode providers` 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
 | OpenCode | 仅 Anthropic provider（`--tap-proxy-mode reverse`） | `https://api.anthropic.com` | 无 | HTTP/SSE | 单测覆盖 |
+| Hermes Agent | 通过 `~/.hermes/` 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
+| Hermes Agent | 自定义 OpenAI 兼容 provider（`--tap-proxy-mode reverse`） | `https://api.openai.com` | `/v1` | HTTP/SSE | 单测覆盖 |
 | Cursor CLI | Cursor 登录（`cursor-agent login`） | Forward proxy 到 `https://api2.cursor.sh` | n/a | HTTPS/protobuf + 本地 transcript import | 真实 E2E 已验证 |
 
 ## 各客户端默认代理模式
@@ -36,9 +38,24 @@ English version: [Support Matrix](support-matrix.md).
 | `codex` | `reverse` | 单 provider，原生支持 `OPENAI_BASE_URL` 环境变量 |
 | `kimi` | `reverse` | 单 provider，原生支持 `KIMI_BASE_URL` 环境变量 |
 | `opencode` | `forward` | 多 provider；forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
+| `hermes` | `forward` | 多 provider 的 Python agent；`httpx` 与 `requests` 都原生认 `HTTPS_PROXY`，forward proxy 捕获是最自然的默认 |
 | `cursor` | `forward` | Cursor CLI 没有 base URL 覆盖能力；forward proxy 捕获网络流量，本地 transcript 提供可读对话 |
 
 用户始终可以通过 `--tap-proxy-mode {reverse,forward}` 显式覆盖。
+
+## 子命令 argv 改写
+
+部分客户端会把长期运行的守护进程委托给操作系统服务管理器（launchd / systemd / schtasks）。被托管派生出的守护进程**不会**继承我们注入的代理 / CA 环境，trace 抓取会静默失败。claude-tap 会检测这些模式并把 argv 改写为前台等价命令：
+
+| 客户端 | 命中的 argv | 改写为 | 原因 |
+|--------|-------------|--------|------|
+| `hermes` | `gateway start [...]` | `gateway run [...]` | 较新版本的 hermes 会把 `gateway start` 委托给 systemd / launchd；`gateway run` 是前台等价命令，也正是 systemd unit 的 `ExecStart=` 自身实际执行的命令 |
+
+进程启动时会显式打印改写日志，方便用户察觉。如果用户确实需要守护化行为（并接受抓不到流量），可以加 `--tap-no-launch` 自行运行原命令。
+
+> **注意：** Gateway 模式只有在配置的消息平台（Slack、Telegram 等）推送消息给 bot 时才会产生 trace。
+> 若没有活跃的平台集成，gateway 不会发起 LLM 请求，也不会生成任何 trace。
+> 本地抓 trace 请使用 TUI 模式（`claude-tap --tap-client hermes`）。
 
 ## URL 构造规则
 
@@ -74,6 +91,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_kimi_client_reverse_proxy`：使用 fake Kimi Chat Completions stream 覆盖 e2e
 - `test_chat_completions_reasoning_content_is_mirrored_as_thinking`：验证 Kimi thinking stream 渲染形状
 - `test_websocket_proxy_basic`：验证 WebSocket relay 和 trace 记录
+- `test_hermes_*`：验证 Hermes 注册、parse_args 默认模式解析、forward/reverse 启动环境、argv 改写
 - `test_cursor_registered_in_client_configs`：验证 Cursor CLI 注册和默认 forward 模式
 - `test_run_client_cursor_forward_sets_proxy_ca_and_no_proxy`：验证 Cursor forward proxy 启动环境变量
 - `test_import_cursor_transcripts_appends_viewer_friendly_records`：验证 Cursor transcript import 会追加 viewer 友好的记录
