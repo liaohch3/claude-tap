@@ -550,6 +550,58 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   background: var(--green-bg); padding: 1px 6px; border-radius: 3px; max-width: 300px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.diff-param-change, .diff-tool-detail {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.diff-param-change:last-child, .diff-tool-detail:last-child { margin-bottom: 0; }
+.diff-param-change summary, .diff-tool-detail summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-secondary);
+}
+.diff-param-change summary:hover, .diff-tool-detail summary:hover { background: var(--bg-hover); }
+.diff-param-key, .diff-tool-name {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--cyan);
+}
+.diff-param-body, .diff-tool-body { padding: 10px 12px 12px; }
+.diff-param-body .sbs-diff { border: none; }
+.diff-tool-desc {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.diff-tool-nested {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.diff-tool-nested strong { color: var(--text); }
+.diff-tool-nested ul { margin: 6px 0 0 18px; padding: 0; }
+.diff-tool-nested li { margin: 3px 0; }
+.diff-tool-json {
+  max-height: 420px;
+  overflow: auto;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+}
 /* ─── Side-by-side JSON diff ─── */
 .diff-side-by-side { display: flex; gap: 2px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .diff-side-by-side .diff-panel { flex: 1; min-width: 0; overflow: auto; }
@@ -3625,11 +3677,81 @@ function _isPrefixOf(shorter, longer) {
   return true;
 }
 
+function responseIdForDiff(entry) {
+  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  return getResponsePayload(resolved)?.id || resolved?.response?.body?.id || '';
+}
+
+function previousResponseIdForDiff(entry) {
+  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  return resolved?.request?.body?.previous_response_id || getResponsePayload(resolved)?.previous_response_id || '';
+}
+
+function codexThreadKey(entry) {
+  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  const metadata = resolved?.request?.body?.client_metadata || {};
+  let turnMetadata = metadata['x-codex-turn-metadata'];
+  if (typeof turnMetadata === 'string') {
+    try { turnMetadata = JSON.parse(turnMetadata); } catch(e) { turnMetadata = null; }
+  }
+  if (!turnMetadata || typeof turnMetadata !== 'object') return '';
+  const threadId = turnMetadata.thread_id || '';
+  const sessionId = turnMetadata.session_id || '';
+  if (!threadId && !sessionId) return '';
+  return `${sessionId}:${threadId}`;
+}
+
+function findPrevByResponseId(idx) {
+  const previousId = previousResponseIdForDiff(filtered[idx]);
+  if (!previousId) return -1;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (responseIdForDiff(filtered[i]) === previousId) return i;
+  }
+  return -1;
+}
+
+function findPrevByCodexThread(idx) {
+  const key = codexThreadKey(filtered[idx]);
+  if (!key) return -1;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (codexThreadKey(filtered[i]) === key) return i;
+  }
+  return -1;
+}
+
+function findNextByResponseId(idx) {
+  const currentId = responseIdForDiff(filtered[idx]);
+  if (!currentId) return -1;
+  for (let i = idx + 1; i < filtered.length; i++) {
+    if (previousResponseIdForDiff(filtered[i]) === currentId) return i;
+  }
+  return -1;
+}
+
+function findNextByCodexThread(idx) {
+  const key = codexThreadKey(filtered[idx]);
+  if (!key) return -1;
+  for (let i = idx + 1; i < filtered.length; i++) {
+    if (codexThreadKey(filtered[i]) === key) return i;
+  }
+  return -1;
+}
+
 function findPrevSameModel(idx) {
   const target = filtered[idx];
   const targetHashes = _getMsgHashes(target);
 
-  // Strategy 1: find the best prefix match (longest prefix)
+  // Strategy 1: exact Responses state link when the previous response is visible.
+  const linkedIdx = findPrevByResponseId(idx);
+  if (linkedIdx >= 0) return { idx: linkedIdx, isFallback: false };
+
+  // Strategy 2: Codex WebSocket turns can contain hidden generate=false
+  // prefetch responses. When previous_response_id points at one of those
+  // hidden frames, use the nearest visible entry in the same Codex thread.
+  const codexThreadIdx = findPrevByCodexThread(idx);
+  if (codexThreadIdx >= 0) return { idx: codexThreadIdx, isFallback: false };
+
+  // Strategy 3: find the best prefix match (longest prefix)
   let bestIdx = -1;
   let bestLen = 0;
   for (let i = idx - 1; i >= 0; i--) {
@@ -3643,7 +3765,7 @@ function findPrevSameModel(idx) {
   }
   if (bestIdx >= 0) return { idx: bestIdx, isFallback: false };
 
-  // Strategy 2: fallback to same model + isMainTurn (original behavior)
+  // Strategy 4: fallback to same model + isMainTurn (original behavior)
   const model = target?.request?.body?.model;
   const main = isMainTurn(target);
   for (let i = idx - 1; i >= 0; i--) {
@@ -3661,7 +3783,13 @@ function findNextSameModel(idx) {
   const current = filtered[idx];
   const currentHashes = _getMsgHashes(current);
 
-  // Strategy 1: find the next entry whose messages start with current's messages as prefix
+  const linkedIdx = findNextByResponseId(idx);
+  if (linkedIdx >= 0) return linkedIdx;
+
+  const codexThreadIdx = findNextByCodexThread(idx);
+  if (codexThreadIdx >= 0) return codexThreadIdx;
+
+  // Strategy 3: find the next entry whose messages start with current's messages as prefix
   let bestIdx = -1;
   let bestLen = Infinity;
   for (let i = idx + 1; i < filtered.length; i++) {
@@ -3856,7 +3984,7 @@ function structuralDiff(oldB, newB) {
   const d = { unchangedMsgs: 0, newMsgs: [], removedMsgs: [], modifiedMsgs: [],
     systemChanged: false, oldSystemLen: 0, newSystemLen: 0, oldSystemText: '', newSystemText: '',
     toolsChanged: false, oldToolCount: 0, newToolCount: 0,
-    addedTools: [], removedTools: [], fieldChanges: [] };
+    addedTools: [], removedTools: [], addedToolDetails: [], removedToolDetails: [], fieldChanges: [] };
   // Messages — compare by role+content (ignore cache_control etc.)
   const om = getMessages(oldB), nm = getMessages(newB);
   // Common prefix
@@ -3899,11 +4027,17 @@ function structuralDiff(oldB, newB) {
   d.oldSystemText = oldSys;
   d.newSystemText = newSys;
   // Tools — find added/removed by name
-  const oldTools = (oldB.tools || []).map(toolDisplayName);
-  const newTools = (newB.tools || []).map(toolDisplayName);
+  const oldToolEntries = oldB.tools || [];
+  const newToolEntries = newB.tools || [];
+  const oldTools = oldToolEntries.map(toolDisplayName);
+  const newTools = newToolEntries.map(toolDisplayName);
+  const oldToolMap = new Map(oldToolEntries.map(tool => [toolDisplayName(tool), tool]));
+  const newToolMap = new Map(newToolEntries.map(tool => [toolDisplayName(tool), tool]));
   const oldSet = new Set(oldTools), newSet = new Set(newTools);
   d.addedTools = newTools.filter(n => !oldSet.has(n));
   d.removedTools = oldTools.filter(n => !newSet.has(n));
+  d.addedToolDetails = d.addedTools.map(name => newToolMap.get(name)).filter(Boolean);
+  d.removedToolDetails = d.removedTools.map(name => oldToolMap.get(name)).filter(Boolean);
   d.toolsChanged = d.addedTools.length > 0 || d.removedTools.length > 0 || oldTools.length !== newTools.length;
   d.oldToolCount = oldTools.length;
   d.newToolCount = newTools.length;
@@ -3916,6 +4050,46 @@ function structuralDiff(oldB, newB) {
     if (ov !== nv) d.fieldChanges.push({ key: k, oldVal: oldB[k], newVal: newB[k], added: ov === undefined, removed: nv === undefined });
   }
   return d;
+}
+
+function normalizeDiffValue(value) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try { return normalizeDiffValue(JSON.parse(trimmed)); } catch(e) { return value; }
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(normalizeDiffValue);
+  if (value && typeof value === 'object') {
+    const normalized = {};
+    for (const [key, child] of Object.entries(value)) normalized[key] = normalizeDiffValue(child);
+    return normalized;
+  }
+  return value;
+}
+
+function formatDiffValue(value) {
+  if (value === undefined) return '';
+  const normalized = normalizeDiffValue(value);
+  return typeof normalized === 'string' ? normalized : JSON.stringify(normalized, null, 2);
+}
+
+function renderParamChange(f) {
+  const oldText = formatDiffValue(f.oldVal);
+  const newText = formatDiffValue(f.newVal);
+  const badgeClass = f.added ? 'add' : f.removed ? 'del' : 'change';
+  const badgeText = f.added ? t('diff_added') : f.removed ? t('diff_removed') : t('diff_changed');
+  return `<details class="diff-param-change" open><summary><span class="diff-param-key">${esc(f.key)}</span><span class="ds-badge ${badgeClass}">${badgeText}</span></summary><div class="diff-param-body">${renderLineDiff(oldText, newText)}</div></details>`;
+}
+
+function renderDiffToolDetail(tool, badgeClass, badgeText) {
+  const name = toolDisplayName(tool) || 'unknown';
+  const desc = toolDescription(tool);
+  const nested = Array.isArray(tool?.tools) && tool.tools.length
+    ? `<div class="diff-tool-nested"><strong>${esc(tool.tools.length + ' ' + t('badge_tools'))}</strong><ul>${tool.tools.map(child => `<li><span class="diff-tool-name">${esc(toolDisplayName(child) || 'unknown')}</span>${toolDescription(child) ? ` - ${esc(toolDescription(child).split('\n')[0])}` : ''}</li>`).join('')}</ul></div>`
+    : '';
+  return `<details class="diff-tool-detail"><summary><span class="diff-tool-name">${esc(name)}</span><span class="ds-badge ${badgeClass}">${badgeText}</span></summary><div class="diff-tool-body">${desc ? `<div class="diff-tool-desc">${esc(desc)}</div>` : ''}${nested}<pre class="diff-tool-json">${esc(JSON.stringify(tool, null, 2))}</pre></div></details>`;
 }
 
 function renderStructuralDiff(d) {
@@ -3953,18 +4127,11 @@ function renderStructuralDiff(d) {
   if (totalNew === 0 && totalRm === 0 && totalMod === 0 && d.unchangedMsgs === 0) html += `<div style="color:var(--text-tertiary);font-size:12px">${t('no_messages')}</div>`;
   html += `</div></div>`;
 
-  // ── Parameters ── (side-by-side)
+  // ── Parameters ──
   if (d.fieldChanges.length > 0) {
-    const oldObj = {}, newObj = {};
-    d.fieldChanges.forEach(f => {
-      if (f.oldVal !== undefined) oldObj[f.key] = f.oldVal;
-      if (f.newVal !== undefined) newObj[f.key] = f.newVal;
-    });
     html += `<div class="diff-section"><div class="diff-section-header">${t('diff_params')} <span class="ds-badge change">${d.fieldChanges.length} ${t('diff_changed')}</span></div><div class="diff-section-body">`;
-    html += `<div class="diff-side-by-side">`;
-    html += `<div class="diff-panel old"><div class="diff-panel-header">${t('diff_sys_old')}</div><pre>${esc(JSON.stringify(oldObj, null, 2))}</pre></div>`;
-    html += `<div class="diff-panel new"><div class="diff-panel-header">${t('diff_sys_new')}</div><pre>${esc(JSON.stringify(newObj, null, 2))}</pre></div>`;
-    html += `</div></div></div>`;
+    html += d.fieldChanges.map(renderParamChange).join('');
+    html += `</div></div>`;
   }
 
   // ── System Prompt ──
@@ -3982,8 +4149,8 @@ function renderStructuralDiff(d) {
     html += `<div class="diff-section"><div class="diff-section-header">${t('diff_tools')} <span class="ds-badge change">${d.oldToolCount} &rarr; ${d.newToolCount}</span></div>`;
     if (d.addedTools.length || d.removedTools.length) {
       html += `<div class="diff-section-body">`;
-      d.addedTools.forEach(n => { html += `<div class="diff-field-row"><span class="diff-field-key" style="color:var(--cyan)">${esc(n)}</span><span class="ds-badge add" style="font-size:9px">${t('diff_added')}</span></div>`; });
-      d.removedTools.forEach(n => { html += `<div class="diff-field-row"><span class="diff-field-key" style="color:var(--cyan)">${esc(n)}</span><span class="ds-badge del" style="font-size:9px">${t('diff_removed')}</span></div>`; });
+      d.addedToolDetails.forEach(tool => { html += renderDiffToolDetail(tool, 'add', t('diff_added')); });
+      d.removedToolDetails.forEach(tool => { html += renderDiffToolDetail(tool, 'del', t('diff_removed')); });
       html += `</div>`;
     }
     html += `</div>`;
