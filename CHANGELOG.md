@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.58] - 2026-05-11
+
+### Changed
+- Fix dotted WebSocket turn ordering (#130)
 ## [0.1.57] - 2026-05-11
 
 ### Changed
