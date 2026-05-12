@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Add Gemini CLI, Pi, iFlow CLI, Qoder CLI, and Devin CLI launch support with shared client config coverage.
 
 
 

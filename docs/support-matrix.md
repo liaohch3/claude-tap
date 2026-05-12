@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-09
+last_reviewed: 2026-05-12
 source_of_truth: AGENTS.md
 ---
 
@@ -20,13 +20,22 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
+| Gemini CLI | Google / Gemini / Vertex auth | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
+| Gemini CLI | Gemini API key (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE GenerateContent | Unit-tested |
+| Gemini CLI | Vertex AI (`--tap-proxy-mode reverse`) | `https://aiplatform.googleapis.com` | none | HTTP/SSE GenerateContent | Supported by config |
 | Kimi CLI | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested |
 | Kimi CLI | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
 | OpenCode | Provider creds via `opencode providers` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
+| Pi | Provider creds via Pi config/API keys | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
+| Pi | OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | none | HTTP/SSE Chat Completions | Unit-tested |
+| iFlow CLI | iFlow auth/API key | `https://apis.iflow.cn` + `/v1` path | none | HTTP/SSE Chat Completions | Unit-tested |
+| iFlow CLI | OpenAI-compatible provider override | user-provided `--tap-target` | none | HTTP/SSE Chat Completions | Supported by config |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
 | Cursor CLI | Cursor login (`cursor-agent login`) | Forward proxy to `https://api2.cursor.sh` | n/a | HTTPS/protobuf + local transcript import | Real E2E verified |
+| Qoder CLI | Qoder login | Forward proxy (Qoder account upstreams) | n/a | HTTPS | Unit-tested |
+| Devin CLI | Devin auth | Forward proxy (Devin cloud upstreams) | n/a | HTTPS | Unit-tested |
 
 ## Default Proxy Mode by Client
 
@@ -37,10 +46,15 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 |--------|--------------|--------|
 | `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
 | `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
+| `gemini` | `forward` | Multiple Google auth/upstream modes; forward proxy captures Google account, Gemini API key, and Vertex flows without guessing target |
 | `kimi` | `reverse` | Single provider, native `KIMI_BASE_URL` env var |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
+| `pi` | `forward` | Multi-provider; forward proxy captures the selected provider without assuming a provider-specific base URL |
+| `iflow` | `reverse` | OpenAI-compatible native base URL config via `IFLOW_baseUrl` / `IFLOW_BASE_URL` |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
 | `cursor` | `forward` | Cursor CLI has no base URL override; forward proxy captures network traffic and local transcripts provide readable turns |
+| `qoder` | `forward` | Account-backed CLI with no documented provider base URL override |
+| `devin` | `forward` | Devin cloud integration documents proxy-env use; forward proxy is the compatible default |
 
 Users can always override with `--tap-proxy-mode {reverse,forward}`.
 
@@ -93,6 +107,11 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 
 - `test_codex_upstream_url_construction` — verifies URL construction for all 5 matrix combinations
 - `test_codex_client_reverse_proxy` — e2e with fake upstream (OAuth-like, with strip)
+- `test_all_requested_clients_are_registered` — verifies every supported CLI key is present
+- `test_client_binary_names_match_official_install_packages` — verifies command names (`gemini`, `pi`, `iflow`, `qodercli`, `devin`, etc.)
+- `test_parse_args_accepts_requested_clients_and_resolves_default_modes` — verifies parse-time target and default proxy-mode resolution for all clients
+- `test_run_client_reverse_sets_all_configured_base_url_envs` — verifies reverse-mode env injection for all clients, including multi-env Gemini/iFlow config
+- `test_run_client_forward_sets_proxy_and_generic_ca_envs` — verifies forward-mode proxy and CA env injection for all clients
 - `test_kimi_registered_in_client_configs` — verifies Kimi CLI registration
 - `test_kimi_client_reverse_proxy` — e2e with fake Kimi Chat Completions stream
 - `test_chat_completions_reasoning_content_is_mirrored_as_thinking` — verifies Kimi thinking stream rendering shape
@@ -122,6 +141,26 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Repl
 # Kimi CLI
 uv run python -m claude_tap --tap-client kimi -- --thinking
 # Verify the trace contains /chat/completions records and thinking/text output
+
+# Gemini CLI
+uv run python -m claude_tap --tap-client gemini -- -p "Reply OK"
+# Verify the trace contains Google Gemini/Vertex API records
+
+# Pi
+uv run python -m claude_tap --tap-client pi -- -p "Reply OK"
+# Verify the trace contains the selected provider records
+
+# iFlow CLI
+uv run python -m claude_tap --tap-client iflow -- -p "Reply OK"
+# Verify the trace contains /v1/chat/completions records
+
+# Qoder CLI
+uv run python -m claude_tap --tap-client qoder -- -p "Reply OK"
+# Verify the trace contains Qoder account-backed records
+
+# Devin CLI
+uv run python -m claude_tap --tap-client devin -- -p "Reply OK"
+# Verify the trace contains Devin cloud records
 ```
 
 ### Real E2E (optional, when auth is available)

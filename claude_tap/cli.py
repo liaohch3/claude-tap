@@ -63,6 +63,7 @@ class ClientConfig:
     base_url_env: str
     base_url_suffix: str  # appended to http://127.0.0.1:{port}
     default_target: str
+    extra_base_url_envs: tuple[str, ...] = ()
     nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
     # Some CLIs need process env duplicated into a CLI settings payload.
     inject_settings_env: bool = False
@@ -85,6 +86,11 @@ class ClientConfig:
 
     def reverse_base_url(self, port: int) -> str:
         return f"http://127.0.0.1:{port}{self.base_url_suffix}"
+
+    @property
+    def reverse_base_url_envs(self) -> tuple[str, ...]:
+        """Environment variables that should receive the reverse-proxy base URL."""
+        return (self.base_url_env, *self.extra_base_url_envs)
 
     def reverse_strip_path_prefix(self, target: str) -> str:
         if not self.strip_path_prefix:
@@ -124,6 +130,19 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_suffix="",
         default_target="https://api.kimi.com/coding/v1",
     ),
+    "gemini": ClientConfig(
+        cmd="gemini",
+        label="Gemini CLI",
+        install_url="https://github.com/google-gemini/gemini-cli",
+        base_url_env="GOOGLE_GEMINI_BASE_URL",
+        extra_base_url_envs=("GOOGLE_VERTEX_BASE_URL",),
+        base_url_suffix="",
+        default_target="https://generativelanguage.googleapis.com",
+        # Gemini supports base URL envs for API-key / Vertex auth, but OAuth and
+        # Code Assist flows may use different Google endpoints. Forward mode is
+        # the broadest default; reverse remains available for explicit targets.
+        default_proxy_mode="forward",
+    ),
     "opencode": ClientConfig(
         cmd="opencode",
         label="OpenCode",
@@ -148,6 +167,26 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         # OPENAI_BASE_URL. Default to forward proxy capture.
         default_proxy_mode="forward",
     ),
+    "pi": ClientConfig(
+        cmd="pi",
+        label="Pi",
+        install_url="https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent",
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+        # Pi is multi-provider. Forward proxy captures the selected provider
+        # without assuming which provider/base-URL setting the user configured.
+        default_proxy_mode="forward",
+    ),
+    "iflow": ClientConfig(
+        cmd="iflow",
+        label="iFlow CLI",
+        install_url="https://github.com/iflow-ai/iflow-cli",
+        base_url_env="IFLOW_baseUrl",
+        extra_base_url_envs=("IFLOW_BASE_URL",),
+        base_url_suffix="/v1",
+        default_target="https://apis.iflow.cn",
+    ),
     "cursor": ClientConfig(
         cmd="cursor-agent",
         label="Cursor CLI",
@@ -157,6 +196,28 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="CURSOR_BASE_URL",
         base_url_suffix="",
         default_target="https://api2.cursor.sh",
+        default_proxy_mode="forward",
+    ),
+    "qoder": ClientConfig(
+        cmd="qodercli",
+        label="Qoder CLI",
+        install_url="https://qoder.com/cli",
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+        # Qoder CLI has first-party account auth and no documented provider base
+        # URL override. Forward proxy is the compatible default.
+        default_proxy_mode="forward",
+    ),
+    "devin": ClientConfig(
+        cmd="devin",
+        label="Devin CLI",
+        install_url="https://cli.devin.ai",
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+        # Devin for Terminal uses its own cloud integration and documents proxy
+        # envs for constrained networks. Capture it through forward proxy by default.
         default_proxy_mode="forward",
     ),
 }
@@ -223,7 +284,8 @@ async def run_client(
         # Don't set provider-specific base URL in forward mode
     else:
         base_url = cfg.reverse_base_url(port)
-        env[cfg.base_url_env] = base_url
+        for env_key in cfg.reverse_base_url_envs:
+            env[env_key] = base_url
         env["NO_PROXY"] = "127.0.0.1"
         if cfg.inject_settings_env and not _has_settings_arg(cmd_args):
             cmd_args = _settings_arg({cfg.base_url_env: base_url}) + cmd_args
@@ -242,7 +304,8 @@ async def run_client(
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     else:
-        print(f"   {cfg.base_url_env}={cfg.reverse_base_url(port)}")
+        for env_key in cfg.reverse_base_url_envs:
+            print(f"   {env_key}={cfg.reverse_base_url(port)}")
     print()
 
     # Give child its own process group and make it the foreground group
@@ -666,7 +729,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
-        description="Trace Claude Code, Codex CLI, Kimi CLI, OpenCode, or Cursor CLI API requests via a local proxy. "
+        description="Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, iFlow CLI, Cursor CLI, "
+        "Qoder CLI, Devin CLI, or Hermes Agent API requests via a local proxy. "
         "All flags not listed below are forwarded to the selected client.",
         epilog=(
             "claude code:\n"
@@ -692,11 +756,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # Use Moonshot Open Platform instead of Kimi Code\n"
             "  claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1\n"
             "\n"
+            "gemini cli (defaults to forward proxy mode):\n"
+            '  claude-tap --tap-client gemini -- -p "hello"\n'
+            "  # Reverse mode sets GOOGLE_GEMINI_BASE_URL and GOOGLE_VERTEX_BASE_URL\n"
+            "  claude-tap --tap-client gemini --tap-proxy-mode reverse\n"
+            "\n"
             "opencode (multi-provider; defaults to forward proxy mode):\n"
             "  # Forward proxy captures every provider opencode talks to\n"
             "  claude-tap --tap-client opencode\n"
             "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
             "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
+            "\n"
+            "pi (multi-provider; defaults to forward proxy mode):\n"
+            '  claude-tap --tap-client pi -- -p "hello"\n'
+            '  claude-tap --tap-client pi -- --provider openai --model gpt-4o-mini -p "hello"\n'
+            "\n"
+            "iflow cli:\n"
+            "  # Uses IFLOW_baseUrl and IFLOW_BASE_URL in reverse mode\n"
+            "  claude-tap --tap-client iflow\n"
+            '  claude-tap --tap-client iflow -- -p "hello"\n'
             "\n"
             "hermes agent (multi-provider Python agent — forward proxy default):\n"
             "  # Interactive TUI — captures LLM calls directly\n"
@@ -708,6 +786,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "cursor cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client cursor -- -p --trust --model auto "hello"\n'
             "  # Cursor readable messages are imported from local transcripts after exit\n"
+            "\n"
+            "qoder cli (defaults to forward proxy mode):\n"
+            '  claude-tap --tap-client qoder -- -p "hello"\n'
+            "  claude-tap --tap-client qoder -- --yolo\n"
+            "\n"
+            "devin cli (defaults to forward proxy mode):\n"
+            '  claude-tap --tap-client devin -- -p "hello"\n'
+            "  claude-tap --tap-client devin -- --permission-mode bypass\n"
             "\n"
             "proxy-only mode (connect from another terminal):\n"
             "  claude-tap --tap-no-launch --tap-port 8080\n"
@@ -758,7 +844,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex/kimi, 'forward' for opencode/hermes/cursor."
+            "Default depends on the client: 'reverse' for claude/codex/kimi/iflow, "
+            "'forward' for gemini/opencode/pi/hermes/cursor/qoder/devin."
         ),
     )
     proxy_group.add_argument(

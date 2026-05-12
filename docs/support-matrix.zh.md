@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-10
+last_reviewed: 2026-05-12
 source_of_truth: AGENTS.md
 ---
 
@@ -20,13 +20,22 @@ English version: [Support Matrix](support-matrix.md).
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | WebSocket | 已验证 |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | 已验证 |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | 已验证 |
+| Gemini CLI | Google / Gemini / Vertex 认证 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
+| Gemini CLI | Gemini API key（`--tap-proxy-mode reverse`） | `https://generativelanguage.googleapis.com` | 无 | HTTP/SSE GenerateContent | 单测覆盖 |
+| Gemini CLI | Vertex AI（`--tap-proxy-mode reverse`） | `https://aiplatform.googleapis.com` | 无 | HTTP/SSE GenerateContent | 配置支持 |
 | Kimi CLI | Kimi CLI 认证/配置 | `https://api.kimi.com/coding/v1` | 无 | HTTP/SSE Chat Completions | 单测覆盖 |
 | Kimi CLI | Kimi CLI 认证/配置 | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 配置支持 |
 | OpenCode | 通过 `opencode providers` 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
 | OpenCode | 仅 Anthropic provider（`--tap-proxy-mode reverse`） | `https://api.anthropic.com` | 无 | HTTP/SSE | 单测覆盖 |
+| Pi | 通过 Pi 配置/API key 设置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
+| Pi | OpenAI 兼容 provider（`--tap-proxy-mode reverse`） | `https://api.openai.com` | 无 | HTTP/SSE Chat Completions | 单测覆盖 |
+| iFlow CLI | iFlow 认证/API key | `https://apis.iflow.cn` + `/v1` path | 无 | HTTP/SSE Chat Completions | 单测覆盖 |
+| iFlow CLI | OpenAI 兼容 provider 覆盖 | 用户传入的 `--tap-target` | 无 | HTTP/SSE Chat Completions | 配置支持 |
 | Hermes Agent | 通过 `~/.hermes/` 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
 | Hermes Agent | 自定义 OpenAI 兼容 provider（`--tap-proxy-mode reverse`） | `https://api.openai.com` | `/v1` | HTTP/SSE | 单测覆盖 |
 | Cursor CLI | Cursor 登录（`cursor-agent login`） | Forward proxy 到 `https://api2.cursor.sh` | n/a | HTTPS/protobuf + 本地 transcript import | 真实 E2E 已验证 |
+| Qoder CLI | Qoder 登录 | Forward proxy（Qoder 账号上游） | n/a | HTTPS | 单测覆盖 |
+| Devin CLI | Devin 认证 | Forward proxy（Devin 云端上游） | n/a | HTTPS | 单测覆盖 |
 
 ## 各客户端默认代理模式
 
@@ -36,10 +45,15 @@ English version: [Support Matrix](support-matrix.md).
 |--------|----------|------|
 | `claude` | `reverse` | 单 provider，原生支持 `ANTHROPIC_BASE_URL` 环境变量 |
 | `codex` | `reverse` | 单 provider，原生支持 `OPENAI_BASE_URL` 环境变量 |
+| `gemini` | `forward` | 多种 Google 认证/上游模式；forward proxy 不需要猜测 Google 账号、Gemini API key 或 Vertex 目标 |
 | `kimi` | `reverse` | 单 provider，原生支持 `KIMI_BASE_URL` 环境变量 |
 | `opencode` | `forward` | 多 provider；forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
+| `pi` | `forward` | 多 provider；forward proxy 不需要假设用户选择的 provider 或 base URL |
+| `iflow` | `reverse` | OpenAI 兼容原生 base URL 配置：`IFLOW_baseUrl` / `IFLOW_BASE_URL` |
 | `hermes` | `forward` | 多 provider 的 Python agent；`httpx` 与 `requests` 都原生认 `HTTPS_PROXY`，forward proxy 捕获是最自然的默认 |
 | `cursor` | `forward` | Cursor CLI 没有 base URL 覆盖能力；forward proxy 捕获网络流量，本地 transcript 提供可读对话 |
+| `qoder` | `forward` | 账号型 CLI，未公开文档说明 provider base URL 覆盖能力 |
+| `devin` | `forward` | Devin 云端集成文档说明可使用 proxy env；forward proxy 是兼容默认 |
 
 用户始终可以通过 `--tap-proxy-mode {reverse,forward}` 显式覆盖。
 
@@ -87,6 +101,11 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 
 - `test_codex_upstream_url_construction`：验证全部 5 个矩阵组合的 URL 构造
 - `test_codex_client_reverse_proxy`：使用 fake upstream 覆盖 OAuth 类 reverse proxy e2e
+- `test_all_requested_clients_are_registered`：验证所有支持的 CLI key 都已注册
+- `test_client_binary_names_match_official_install_packages`：验证命令名（`gemini`、`pi`、`iflow`、`qodercli`、`devin` 等）
+- `test_parse_args_accepts_requested_clients_and_resolves_default_modes`：验证所有客户端的 target 和默认代理模式解析
+- `test_run_client_reverse_sets_all_configured_base_url_envs`：验证所有客户端 reverse 模式的环境变量注入，包括 Gemini/iFlow 的多 env 配置
+- `test_run_client_forward_sets_proxy_and_generic_ca_envs`：验证所有客户端 forward 模式的 proxy 和 CA 环境变量注入
 - `test_kimi_registered_in_client_configs`：验证 Kimi CLI 注册
 - `test_kimi_client_reverse_proxy`：使用 fake Kimi Chat Completions stream 覆盖 e2e
 - `test_chat_completions_reasoning_content_is_mirrored_as_thinking`：验证 Kimi thinking stream 渲染形状
@@ -116,6 +135,26 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Repl
 # Kimi CLI
 uv run python -m claude_tap --tap-client kimi -- --thinking
 # 验证 trace 包含 /chat/completions 记录和 thinking/text 输出
+
+# Gemini CLI
+uv run python -m claude_tap --tap-client gemini -- -p "Reply OK"
+# 验证 trace 包含 Google Gemini/Vertex API 记录
+
+# Pi
+uv run python -m claude_tap --tap-client pi -- -p "Reply OK"
+# 验证 trace 包含所选 provider 记录
+
+# iFlow CLI
+uv run python -m claude_tap --tap-client iflow -- -p "Reply OK"
+# 验证 trace 包含 /v1/chat/completions 记录
+
+# Qoder CLI
+uv run python -m claude_tap --tap-client qoder -- -p "Reply OK"
+# 验证 trace 包含 Qoder 账号上游记录
+
+# Devin CLI
+uv run python -m claude_tap --tap-client devin -- -p "Reply OK"
+# 验证 trace 包含 Devin 云端记录
 ```
 
 ### 真实 E2E（有认证时可选）

@@ -9,7 +9,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Hermes Agent](https://github.com/NousResearch/hermes-agent), or [Cursor CLI](https://cursor.com/cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect API traffic from Claude Code, Codex CLI, Gemini CLI, OpenCode, Pi, Kimi CLI, iFlow CLI, Cursor Agent, Qoder CLI, Devin CLI, or Hermes Agent. See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -28,7 +28,21 @@ Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.
 
 ## Install
 
-Requires Python 3.11+ and the client you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`, [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) for `--tap-client kimi`, [OpenCode](https://opencode.ai) for `--tap-client opencode`, [Hermes Agent](https://github.com/NousResearch/hermes-agent) for `--tap-client hermes`, or [Cursor CLI](https://cursor.com/cli) for `--tap-client cursor`.
+Requires Python 3.11+ and the client you want to trace:
+
+| Client | Install command | `--tap-client` |
+|--------|-----------------|----------------|
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `curl -fsSL https://claude.ai/install.sh \| bash` | `claude` (default) |
+| [Codex CLI](https://github.com/openai/codex) | `npm install -g @openai/codex` | `codex` |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `npm install -g @google/gemini-cli` | `gemini` |
+| [OpenCode](https://opencode.ai) | `npm install -g opencode-ai` | `opencode` |
+| [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | `npm install -g @mariozechner/pi-coding-agent` | `pi` |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | `uv tool install kimi-cli` | `kimi` |
+| [iFlow CLI](https://github.com/iflow-ai/iflow-cli) | `npm install -g @iflow-ai/iflow-cli` | `iflow` |
+| [Cursor Agent](https://cursor.com/cli) | `curl -fsSL https://cursor.com/install \| bash` | `cursor` |
+| [Qoder CLI](https://qoder.com/cli) | `npm install -g @qoder-ai/qodercli` | `qoder` |
+| [Devin CLI](https://cli.devin.ai) | follow the install script at the docs link | `devin` |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | `pipx install hermes-agent` | `hermes` |
 
 ```bash
 # Recommended
@@ -57,8 +71,29 @@ claude-tap --tap-client codex
 # Kimi CLI
 claude-tap --tap-client kimi
 
+# Gemini CLI
+claude-tap --tap-client gemini -- -p "hello"
+
+# OpenCode
+claude-tap --tap-client opencode
+
+# Pi
+claude-tap --tap-client pi -- -p "hello"
+
+# iFlow CLI
+claude-tap --tap-client iflow
+
 # Cursor CLI
 claude-tap --tap-client cursor -- -p --trust --model auto "hello"
+
+# Qoder CLI
+claude-tap --tap-client qoder -- -p "hello"
+
+# Devin CLI
+claude-tap --tap-client devin -- -p "hello"
+
+# Hermes Agent
+claude-tap --tap-client hermes --tap-live
 ```
 
 Flags that are not `--tap-*` are forwarded to the selected client after `--`.
@@ -158,6 +193,24 @@ claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1
 </details>
 
 <details>
+<summary>Gemini CLI examples</summary>
+
+Gemini CLI defaults to **forward proxy** mode because Google account, Gemini API key, and Vertex AI auth can use different upstream endpoints. Reverse mode is also available for API-key or Vertex workflows: it sets both `GOOGLE_GEMINI_BASE_URL` and `GOOGLE_VERTEX_BASE_URL`.
+
+```bash
+# Forward proxy mode — recommended default
+claude-tap --tap-client gemini -- -p "hello"
+
+# Reverse mode for Gemini API-key auth
+claude-tap --tap-client gemini --tap-proxy-mode reverse
+
+# Reverse mode for Vertex AI: set the upstream explicitly
+claude-tap --tap-client gemini --tap-proxy-mode reverse --tap-target https://aiplatform.googleapis.com
+```
+
+</details>
+
+<details>
 <summary>OpenCode examples</summary>
 
 [OpenCode](https://opencode.ai) is a multi-provider terminal AI assistant. Because it can talk to many providers, claude-tap defaults to **forward proxy** mode for opencode: it injects `HTTPS_PROXY` plus the local CA into the child process so traffic to any provider is captured.
@@ -171,6 +224,37 @@ claude-tap --tap-client opencode --tap-live
 
 # Reverse mode — only works when using Anthropic provider (single ANTHROPIC_BASE_URL)
 claude-tap --tap-client opencode --tap-proxy-mode reverse
+```
+
+</details>
+
+<details>
+<summary>Pi examples</summary>
+
+Pi is a multi-provider coding agent. claude-tap defaults to **forward proxy** mode so the selected provider is captured without depending on a specific provider base URL setting.
+
+```bash
+claude-tap --tap-client pi
+claude-tap --tap-client pi -- -p "hello"
+claude-tap --tap-client pi -- --provider openai --model gpt-4o-mini -p "hello"
+
+# Reverse mode is opt-in for OpenAI-compatible provider configurations.
+claude-tap --tap-client pi --tap-proxy-mode reverse
+```
+
+</details>
+
+<details>
+<summary>iFlow CLI examples</summary>
+
+iFlow CLI defaults to reverse proxy mode through `IFLOW_baseUrl` and `IFLOW_BASE_URL`. The default upstream is the OpenAI-compatible iFlow API.
+
+```bash
+claude-tap --tap-client iflow
+claude-tap --tap-client iflow -- -p "hello"
+
+# Use another OpenAI-compatible backend
+claude-tap --tap-client iflow --tap-target https://api.openai.com
 ```
 
 </details>
@@ -208,6 +292,32 @@ Cursor CLI uses forward proxy mode by default. Use `--model auto` on free plans,
 ```bash
 claude-tap --tap-client cursor -- -p --trust --model auto "hello"
 claude-tap --tap-client cursor -- -p --trust --model auto --continue "continue"
+```
+
+</details>
+
+<details>
+<summary>Qoder CLI examples</summary>
+
+Qoder CLI defaults to **forward proxy** mode because its account-backed CLI does not document a provider base URL override.
+
+```bash
+claude-tap --tap-client qoder
+claude-tap --tap-client qoder -- -p "hello"
+claude-tap --tap-client qoder -- --yolo
+```
+
+</details>
+
+<details>
+<summary>Devin CLI examples</summary>
+
+Devin CLI defaults to **forward proxy** mode. It uses Devin's cloud integration, so claude-tap captures traffic through injected proxy and CA environment variables.
+
+```bash
+claude-tap --tap-client devin
+claude-tap --tap-client devin -- -p "hello"
+claude-tap --tap-client devin -- --permission-mode bypass
 ```
 
 </details>
@@ -266,6 +376,16 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 claude-tap --tap-client kimi --tap-no-launch --tap-port 8080
 # In another terminal:
 KIMI_BASE_URL=http://127.0.0.1:8080 kimi
+
+# Gemini CLI (reverse mode)
+claude-tap --tap-client gemini --tap-proxy-mode reverse --tap-no-launch --tap-port 8080
+# In another terminal:
+GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8080 gemini
+
+# iFlow CLI
+claude-tap --tap-client iflow --tap-no-launch --tap-port 8080
+# In another terminal:
+IFLOW_baseUrl=http://127.0.0.1:8080/v1 iflow
 ```
 
 ### Common Combos
@@ -289,7 +409,7 @@ claude-tap --tap-max-traces 10
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default), codex, kimi, opencode, hermes, or cursor
+--tap-client CLIENT      Client to launch: claude (default), codex, gemini, opencode, pi, kimi, iflow, cursor, qoder, devin, or hermes
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
@@ -301,7 +421,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi, forward for opencode/hermes/cursor)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/iflow, forward for gemini/opencode/pi/hermes/cursor/qoder/devin)
 ```
 
 </details>
