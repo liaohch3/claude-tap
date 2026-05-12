@@ -2091,7 +2091,12 @@ function getPath(e) { return (e.request?.path || '/unknown').replace(/\?.*$/, ''
 function renderApp(preserveDetail) {
   $('#drop-zone').style.display = 'none';
   $('#sidebar-wrap').style.display = 'flex';
-  $('#detail').style.display = '';
+  const detail = $('#detail');
+  if (detail?.dataset.staticPreload === '1') {
+    detail.innerHTML = '';
+    delete detail.dataset.staticPreload;
+  }
+  detail.style.display = '';
   $('#stats').style.display = '';
   $('#path-filter').style.display = '';
   const pathCounts = {};
