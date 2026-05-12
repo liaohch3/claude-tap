@@ -266,6 +266,11 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 claude-tap --tap-client kimi --tap-no-launch --tap-port 8080
 # In another terminal:
 KIMI_BASE_URL=http://127.0.0.1:8080 kimi
+
+# Anthropic Python SDK (or any custom agent built on it)
+claude-tap --tap-no-launch --tap-port 8080
+# In your agent process:
+ANTHROPIC_BASE_URL=http://127.0.0.1:8080 python your_agent.py
 ```
 
 ### Common Combos

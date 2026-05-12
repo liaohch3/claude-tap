@@ -264,6 +264,11 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0
 claude-tap --tap-client kimi --tap-no-launch --tap-port 8080
 # 在另一个终端:
 KIMI_BASE_URL=http://127.0.0.1:8080 kimi
+
+# Anthropic Python SDK（或任何基于它构建的自定义 Agent）
+claude-tap --tap-no-launch --tap-port 8080
+# 在你的 Agent 进程中:
+ANTHROPIC_BASE_URL=http://127.0.0.1:8080 python your_agent.py
 ```
 
 ### 常用组合
