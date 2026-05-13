@@ -277,6 +277,293 @@ def _chat_completions_record() -> dict[str, Any]:
     }
 
 
+def _opencode_chat_completions_record() -> dict[str, Any]:
+    return {
+        "timestamp": "2026-05-13T16:11:10+00:00",
+        "request_id": "req_opencode_real_shape_contract",
+        "turn": 2,
+        "duration_ms": 1800,
+        "request": {
+            "method": "POST",
+            "path": "/zen/v1/chat/completions",
+            "headers": {"Host": "opencode.ai"},
+            "body": {
+                "model": "deepseek-v4-flash-free",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are opencode, an interactive CLI tool that helps users "
+                            "with software engineering tasks."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": "Run printf OPENCODE_TOOL_ONE and pwd.",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "reasoning_content": "The user wants me to run a specific command.",
+                        "tool_calls": [
+                            {
+                                "id": "call_one",
+                                "type": "function",
+                                "function": {
+                                    "name": "bash",
+                                    "arguments": (
+                                        '{"command":"printf \'OPENCODE_TOOL_ONE\\\\n\'; pwd",'
+                                        '"description":"Run printf and pwd"}'
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_one",
+                        "content": "OPENCODE_TOOL_ONE\n/home/liaohch3/src/github.com/liaohch3/claude-tap-3\n",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "OPENCODE_TOOL_ONE\n/home/liaohch3/src/github.com/liaohch3/claude-tap-3",
+                    },
+                    {
+                        "role": "user",
+                        "content": "Second turn: run printf OPENCODE_TOOL_TWO and ls pyproject.toml.",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "reasoning_content": "The user wants a second command and the previous path.",
+                        "tool_calls": [
+                            {
+                                "id": "call_two",
+                                "type": "function",
+                                "function": {
+                                    "name": "bash",
+                                    "arguments": (
+                                        '{"command":"printf \'OPENCODE_TOOL_TWO\\\\n\'; ls pyproject.toml",'
+                                        '"description":"Run printf and ls"}'
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_two",
+                        "content": "OPENCODE_TOOL_TWO\npyproject.toml\n",
+                    },
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "description": "Executes a given bash command.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "command": {"type": "string"},
+                                    "description": {"type": "string"},
+                                },
+                                "required": ["command"],
+                            },
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "edit",
+                            "description": "Edit a file.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"filePath": {"type": "string"}},
+                            },
+                        },
+                    },
+                ],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "tool_choice": "auto",
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {
+                "object": "chat.completion",
+                "model": "deepseek-v4-flash",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "The user wants both the path from the previous output and the new output.",
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Path from OPENCODE_TOOL_ONE: "
+                            "`/home/liaohch3/src/github.com/liaohch3/claude-tap-3`\n\n"
+                            "New command output:\n```\nOPENCODE_TOOL_TWO\npyproject.toml\n```"
+                        ),
+                    },
+                ],
+                "usage": {
+                    "prompt_tokens": 14070,
+                    "completion_tokens": 109,
+                    "total_tokens": 14179,
+                    "prompt_tokens_details": {"cached_tokens": 13952},
+                    "completion_tokens_details": {"reasoning_tokens": 57},
+                    "input_tokens": 14070,
+                    "output_tokens": 109,
+                    "cache_read_input_tokens": 13952,
+                },
+            },
+            "sse_events": [
+                {
+                    "event": "message",
+                    "data": {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "reasoning_content": (
+                                        "The user wants both the path from the previous output and the new output."
+                                    )
+                                }
+                            }
+                        ]
+                    },
+                },
+                {
+                    "event": "message",
+                    "data": {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "content": (
+                                        "Path from OPENCODE_TOOL_ONE: "
+                                        "`/home/liaohch3/src/github.com/liaohch3/claude-tap-3`"
+                                    )
+                                }
+                            }
+                        ]
+                    },
+                },
+            ],
+        },
+    }
+
+
+def _opencode_openai_oauth_responses_record() -> dict[str, Any]:
+    return {
+        "timestamp": "2026-05-13T16:45:43+00:00",
+        "request_id": "req_opencode_openai_oauth_responses_contract",
+        "turn": 3,
+        "duration_ms": 6106,
+        "request": {
+            "method": "POST",
+            "path": "/backend-api/codex/responses",
+            "headers": {"Host": "chatgpt.com", "User-Agent": "opencode/1.14.48"},
+            "body": {
+                "model": "gpt-5.4-mini",
+                "instructions": (
+                    "You are OpenCode, You and the user share the same workspace "
+                    "and collaborate to achieve the user's goals."
+                ),
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": (
+                                    "Use the bash tool to run exactly: printf "
+                                    "'OPENCODE_OPENAI_OAUTH_TOOL_ONE\\n'; pwd ."
+                                ),
+                            }
+                        ],
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Running the requested shell command."}],
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call_oauth_bash",
+                        "name": "bash",
+                        "arguments": (
+                            '{"command":"printf \'OPENCODE_OPENAI_OAUTH_TOOL_ONE\\\\n\'; pwd .",'
+                            '"description":"Runs the requested command"}'
+                        ),
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_oauth_bash",
+                        "output": (
+                            "OPENCODE_OPENAI_OAUTH_TOOL_ONE\n/home/liaohch3/src/github.com/liaohch3/claude-tap-3\n"
+                        ),
+                    },
+                ],
+                "tools": [
+                    {"type": "function", "name": "bash", "description": "Run a shell command."},
+                    {"type": "function", "name": "read", "description": "Read a file."},
+                ],
+                "stream": True,
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": (
+                                    "OPENCODE_OPENAI_OAUTH_TOOL_ONE\n"
+                                    "/home/liaohch3/src/github.com/liaohch3/claude-tap-3"
+                                ),
+                            }
+                        ],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 12424,
+                    "output_tokens": 115,
+                    "input_tokens_details": {"cached_tokens": 11776},
+                },
+            },
+            "sse_events": [
+                {
+                    "event": "response.output_item.done",
+                    "data": {
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        "OPENCODE_OPENAI_OAUTH_TOOL_ONE\n"
+                                        "/home/liaohch3/src/github.com/liaohch3/claude-tap-3"
+                                    ),
+                                }
+                            ],
+                        },
+                    },
+                }
+            ],
+        },
+    }
+
+
 def _gemini_record() -> dict[str, Any]:
     return {
         "timestamp": "2026-05-13T13:24:00+00:00",
@@ -419,6 +706,42 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             expected_output_types=("text",),
             expected_usage={"input_tokens": 150, "output_tokens": 10, "cache_read_input_tokens": 70},
             required_detail_text=("Read the project metadata.", "read_file", "Chat final OK."),
+        ),
+        ViewerContractCase(
+            name="opencode_chat_completions",
+            records=(_opencode_chat_completions_record(),),
+            expected_sections=("Tools", "System Prompt", "Messages", "Response", "SSE Events"),
+            expected_system="You are opencode, an interactive CLI tool that helps users with software engineering tasks.",
+            expected_roles=("user", "assistant", "tool", "assistant", "user", "assistant", "tool"),
+            expected_tools=("bash", "edit"),
+            expected_output_types=("thinking", "text"),
+            expected_usage={"input_tokens": 14070, "output_tokens": 109, "cache_read_input_tokens": 13952},
+            required_detail_text=(
+                "OPENCODE_TOOL_ONE",
+                "/home/liaohch3/src/github.com/liaohch3/claude-tap-3",
+                "OPENCODE_TOOL_TWO",
+                "pyproject.toml",
+            ),
+            min_stream_events=2,
+        ),
+        ViewerContractCase(
+            name="opencode_openai_oauth_responses",
+            records=(_opencode_openai_oauth_responses_record(),),
+            expected_sections=("Tools", "System Prompt", "Messages", "Response", "SSE Events"),
+            expected_system=(
+                "You are OpenCode, You and the user share the same workspace "
+                "and collaborate to achieve the user's goals."
+            ),
+            expected_roles=("developer", "user", "assistant", "assistant", "tool"),
+            expected_tools=("bash", "read"),
+            expected_output_types=("text",),
+            expected_usage={"input_tokens": 12424, "output_tokens": 115, "cache_read_input_tokens": 11776},
+            required_detail_text=(
+                "OPENCODE_OPENAI_OAUTH_TOOL_ONE",
+                "/home/liaohch3/src/github.com/liaohch3/claude-tap-3",
+                "bash",
+            ),
+            min_stream_events=1,
         ),
         ViewerContractCase(
             name="gemini",

@@ -3502,6 +3502,8 @@ function getMessages(body) {
 
 function shouldRenderRequestContext(entry, body, msgs, respOutput) {
   if (!entry || !body || !Array.isArray(msgs) || msgs.length === 0) return false;
+  const method = entry?.request?.method || '';
+  if (!entry.derived_from_websocket && entry.transport !== 'websocket' && method !== 'WEBSOCKET') return false;
   const path = getPath(entry);
   if (!path.includes('/codex/responses')) return false;
   if (!Array.isArray(body.input) || body.input.length === 0) return false;

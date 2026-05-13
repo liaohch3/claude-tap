@@ -24,7 +24,7 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Gemini CLI | API key / Vertex-compatible config (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE | Unit-tested |
 | Kimi CLI | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested |
 | Kimi CLI | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
-| OpenCode | Provider creds via `opencode providers` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
+| OpenCode | Provider creds via `opencode providers` (OpenAI OAuth and OpenCode free provider verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Real E2E verified |
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
