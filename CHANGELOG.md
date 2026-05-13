@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.1.63] - 2026-05-13
+
+### Changed
+- test(viewer): add cross-client quality contracts (#168)
 ### Added
 - Add cross-client HTML viewer contract tests for semantic sections, runtime errors, visual layout states, and V8 coverage of core inline JavaScript functions.
 - Add backend/frontend project, incremental, and viewer CSS selector coverage targets enforced by CI.
