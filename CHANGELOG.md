@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.61] - 2026-05-13
+
+### Changed
+- refactor(cli): support multiple reverse base URL envs (#160)
 ## [0.1.60] - 2026-05-11
 
 ### Changed
