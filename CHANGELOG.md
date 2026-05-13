@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Add cross-client HTML viewer contract tests for semantic sections, runtime errors, and V8 coverage of core inline JavaScript functions.
+- Add backend/frontend project and incremental coverage targets enforced by CI.
 
 ## [0.1.62] - 2026-05-13
 
