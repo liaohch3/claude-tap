@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.1.64] - 2026-05-13
+
+### Changed
+- test(opencode): add real trace viewer evidence (#170)
 ### Added
 - Add OpenCode real trace viewer evidence, OpenAI OAuth Responses evidence, and dedicated viewer contracts for multi-turn tool-call traces.
 
