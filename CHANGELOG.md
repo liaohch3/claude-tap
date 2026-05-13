@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Add OpenCode real trace viewer evidence and a dedicated viewer contract for multi-turn tool-call Chat Completions traces.
 
 ## [0.1.63] - 2026-05-13
 
