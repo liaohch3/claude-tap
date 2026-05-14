@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.66] - 2026-05-14
+
+### Changed
+- feat(cli): add update subcommand (#114)
 ## [0.1.65] - 2026-05-14
 
 ### Changed
