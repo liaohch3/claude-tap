@@ -146,6 +146,55 @@ def test_viewer_renders_codex_responses_messages_usage_and_response(responses_pa
     assert "unknown" not in tools_text.lower()
 
 
+def test_viewer_json_tree_toggle_collapses_and_expands(responses_page) -> None:
+    responses_page.locator(".sidebar-item").first.click()
+    responses_page.wait_for_selector("#detail .section", timeout=5000)
+
+    result = responses_page.evaluate(
+        """() => {
+          const section = Array.from(document.querySelectorAll('#detail .section'))
+            .find(el => el.querySelector('.title')?.textContent === 'Full JSON');
+          if (!section) return { found: false };
+
+          const toggle = section.querySelector('.jt-toggle');
+          const children = section.querySelector('.jt-children');
+          const summary = section.querySelector('.jt-summary');
+          const closeLine = children?.nextElementSibling;
+          const initial = {
+            toggle: toggle?.textContent,
+            childrenOpen: children?.classList.contains('jt-open'),
+            summaryShown: summary?.classList.contains('jt-show'),
+            closeHidden: closeLine?.classList.contains('jt-hidden'),
+          };
+
+          toggle.click();
+          const collapsed = {
+            toggle: toggle.textContent,
+            childrenOpen: children.classList.contains('jt-open'),
+            summaryShown: summary.classList.contains('jt-show'),
+            closeHidden: closeLine.classList.contains('jt-hidden'),
+          };
+
+          toggle.click();
+          const expanded = {
+            toggle: toggle.textContent,
+            childrenOpen: children.classList.contains('jt-open'),
+            summaryShown: summary.classList.contains('jt-show'),
+            closeHidden: closeLine.classList.contains('jt-hidden'),
+          };
+
+          return { found: true, initial, collapsed, expanded };
+        }"""
+    )
+
+    assert result == {
+        "found": True,
+        "initial": {"toggle": "▼", "childrenOpen": True, "summaryShown": False, "closeHidden": False},
+        "collapsed": {"toggle": "▶", "childrenOpen": False, "summaryShown": True, "closeHidden": True},
+        "expanded": {"toggle": "▼", "childrenOpen": True, "summaryShown": False, "closeHidden": False},
+    }
+
+
 def test_viewer_maps_responses_cached_tokens_to_cache_read(responses_page) -> None:
     result = responses_page.evaluate(
         """() => getUsage({

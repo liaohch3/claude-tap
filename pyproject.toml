@@ -52,6 +52,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.3",
     "pexpect>=4.9",
+    "coverage>=7.6",
     "ruff>=0.11",
 ]
 
@@ -93,6 +94,14 @@ exclude_lines = [
     "if TYPE_CHECKING:",
 ]
 show_missing = true
+
+[tool.claude_tap.coverage]
+python_total_min = 65.0
+python_diff_min = 80.0
+viewer_js_function_min = 50.0
+viewer_js_diff_min = 80.0
+viewer_css_selector_min = 65.0
+viewer_css_diff_min = 80.0
 
 [dependency-groups]
 dev = [

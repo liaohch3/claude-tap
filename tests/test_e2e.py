@@ -24,6 +24,7 @@ import pytest
 from yarl import URL
 
 FAKE_UPSTREAM_PORT = 19199
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 FAKE_CLAUDE_SCRIPT = r'''#!/usr/bin/env python3
 """Fake claude CLI — sends requests to ANTHROPIC_BASE_URL then exits."""
@@ -225,7 +226,7 @@ def test_e2e():
 
 
 def _run_test(upstream_port):
-    project_dir = Path(__file__).parent
+    project_dir = PROJECT_ROOT
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_")
 
     # Create fake claude
@@ -511,7 +512,7 @@ def test_upstream_error():
     stop_upstream = _start_fake_upstream(FAKE_UPSTREAM_ERROR_PORT, error_handler)
     print(f"\n[test_upstream_error] Fake upstream on :{FAKE_UPSTREAM_ERROR_PORT}")
 
-    project_dir = Path(__file__).parent
+    project_dir = PROJECT_ROOT
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_error_")
     fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_ERROR_SCRIPT)
 
@@ -657,7 +658,7 @@ def test_malformed_sse():
     stop_upstream = _start_fake_upstream(FAKE_UPSTREAM_MALFORMED_PORT, malformed_sse_handler)
     print(f"\n[test_malformed_sse] Fake upstream on :{FAKE_UPSTREAM_MALFORMED_PORT}")
 
-    project_dir = Path(__file__).parent
+    project_dir = PROJECT_ROOT
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_malformed_")
     fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_MALFORMED_SCRIPT)
 
@@ -790,7 +791,7 @@ def test_large_payload():
     stop_upstream = _start_fake_upstream(FAKE_UPSTREAM_LARGE_PORT, large_handler)
     print(f"\n[test_large_payload] Fake upstream on :{FAKE_UPSTREAM_LARGE_PORT}")
 
-    project_dir = Path(__file__).parent
+    project_dir = PROJECT_ROOT
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_large_")
     fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_LARGE_SCRIPT)
 
@@ -953,7 +954,7 @@ def test_concurrent_requests():
     stop_upstream = _start_fake_upstream(FAKE_UPSTREAM_CONCURRENT_PORT, concurrent_handler)
     print(f"\n[test_concurrent_requests] Fake upstream on :{FAKE_UPSTREAM_CONCURRENT_PORT}")
 
-    project_dir = Path(__file__).parent
+    project_dir = PROJECT_ROOT
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_concurrent_")
     fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_CONCURRENT_SCRIPT)
 
@@ -1072,7 +1073,7 @@ def _cmd_dev():
     import signal
     import subprocess as sp
 
-    project_dir = Path(__file__).parent
+    project_dir = PROJECT_ROOT
     traces_dir = project_dir / ".traces"
     traces_dir.mkdir(exist_ok=True)
 
@@ -1928,7 +1929,7 @@ def test_upstream_unreachable():
     """Test that when upstream is unreachable (connection refused), the proxy
     returns 502 and the trace contains no records (since we can't reach upstream)."""
 
-    project_dir = Path(__file__).parent
+    project_dir = PROJECT_ROOT
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_unreachable_")
     fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_UNREACHABLE_SCRIPT)
 
@@ -2051,7 +2052,7 @@ def test_version_check_with_fake_pypi():
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
 
-    project_dir = Path(__file__).parent
+    project_dir = PROJECT_ROOT
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_update_")
     fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_NOOP_SCRIPT)
 
@@ -2113,7 +2114,7 @@ def test_version_check_no_update():
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
 
-    project_dir = Path(__file__).parent
+    project_dir = PROJECT_ROOT
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_noupdate_")
     fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_NOOP_SCRIPT)
 
@@ -2273,7 +2274,7 @@ def test_e2e_with_cleanup():
 
     stop_upstream, upstream_port = run_fake_upstream_in_thread()
 
-    project_dir = Path(__file__).parent
+    project_dir = PROJECT_ROOT
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_cleanup_")
     output_dir = Path(trace_dir)
     fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_SCRIPT)

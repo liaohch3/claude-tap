@@ -78,6 +78,9 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     "/models",
     "/embeddings",
     "/files",
+    # Gemini API
+    "/v1beta/models",
+    "/v1alpha/models",
     # Kimi Code auxiliary APIs (when users proxy Kimi Code services explicitly)
     "/search",
     "/fetch",

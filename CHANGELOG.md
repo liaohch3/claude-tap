@@ -11,6 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.1.67] - 2026-05-14
+
+### Changed
+- feat(viewer): add collapsible JSON tree view
+## [0.1.66] - 2026-05-14
+
+### Changed
+- feat(cli): add update subcommand (#114)
+## [0.1.65] - 2026-05-14
+
+### Changed
+- feat: support Pi CLI capture (#172)
+## [0.1.64] - 2026-05-13
+
+### Changed
+- test(opencode): add real trace viewer evidence (#170)
+### Added
+- Add OpenCode real trace viewer evidence, OpenAI OAuth Responses evidence, and dedicated viewer contracts for multi-turn tool-call traces.
+
+## [0.1.63] - 2026-05-13
+
+### Changed
+- test(viewer): add cross-client quality contracts (#168)
+### Added
+- Add cross-client HTML viewer contract tests for semantic sections, runtime errors, visual layout states, and V8 coverage of core inline JavaScript functions.
+- Add backend/frontend project, incremental, and viewer CSS selector coverage targets enforced by CI.
+
+## [0.1.62] - 2026-05-13
+
+### Changed
+- feat(cli): add Gemini CLI client (#166)
+### Added
+- Add Gemini CLI client support with forward proxy default.
+- Render Gemini CLI system prompts, messages, tool calls, tool results, SSE output, and token usage in the viewer.
 
 
 
@@ -26,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+
+
+
+
+
+## [0.1.61] - 2026-05-13
+
+### Changed
+- refactor(cli): support multiple reverse base URL envs (#160)
 ## [0.1.60] - 2026-05-11
 
 ### Changed

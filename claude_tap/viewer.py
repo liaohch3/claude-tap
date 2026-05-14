@@ -135,6 +135,243 @@ def _parse_function_call_arguments(arguments: object) -> object:
     return arguments
 
 
+def _parse_sse_data_frames(body: object) -> list[dict]:
+    if not isinstance(body, str) or "data:" not in body:
+        return []
+
+    events: list[dict] = []
+    data_lines: list[str] = []
+    for line in body.splitlines():
+        if line.startswith("data:"):
+            data_lines.append(line[len("data:") :].strip())
+            continue
+        if line.strip():
+            continue
+        if not data_lines:
+            continue
+        raw_data = "\n".join(data_lines)
+        data_lines = []
+        if raw_data == "[DONE]":
+            continue
+        try:
+            data = json.loads(raw_data)
+        except (json.JSONDecodeError, TypeError):
+            data = raw_data
+        events.append({"event": "message", "data": data})
+
+    if data_lines:
+        raw_data = "\n".join(data_lines)
+        if raw_data != "[DONE]":
+            try:
+                data = json.loads(raw_data)
+            except (json.JSONDecodeError, TypeError):
+                data = raw_data
+            events.append({"event": "message", "data": data})
+
+    return events
+
+
+def _gemini_request(body: dict) -> dict:
+    req = body.get("request")
+    return req if isinstance(req, dict) else {}
+
+
+def _is_gemini_request_body(body: dict) -> bool:
+    req = _gemini_request(body)
+    return bool(req) and (
+        isinstance(req.get("contents"), list)
+        or isinstance(req.get("systemInstruction"), dict)
+        or isinstance(req.get("tools"), list)
+    )
+
+
+def _gemini_text_from_parts(parts: object) -> str:
+    if not isinstance(parts, list):
+        return ""
+    return "\n".join(
+        part.get("text", "") for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str)
+    )
+
+
+def _extract_gemini_system(body: dict) -> str:
+    instr = _gemini_request(body).get("systemInstruction")
+    if not isinstance(instr, dict):
+        return ""
+    return _gemini_text_from_parts(instr.get("parts")).strip()
+
+
+def _gemini_function_response_content(resp: dict) -> str:
+    payload = resp.get("response")
+    if isinstance(payload, dict) and "output" in payload:
+        output = payload["output"]
+    else:
+        output = payload
+    if isinstance(output, str):
+        return output
+    return json.dumps(output, ensure_ascii=False)
+
+
+def _gemini_part_blocks(part: dict) -> list[dict]:
+    blocks: list[dict] = []
+    text = part.get("text")
+    if isinstance(text, str) and text.strip():
+        if part.get("thought") is True:
+            blocks.append({"type": "thinking", "thinking": text})
+        else:
+            blocks.append({"type": "text", "text": text})
+
+    call = part.get("functionCall")
+    if isinstance(call, dict):
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": call.get("id", ""),
+                "name": call.get("name", "tool_use"),
+                "input": call.get("args") if isinstance(call.get("args"), dict) else {},
+            }
+        )
+
+    response = part.get("functionResponse")
+    if isinstance(response, dict):
+        blocks.append(
+            {
+                "type": "tool_result",
+                "tool_use_id": response.get("id") or response.get("name", ""),
+                "content": _gemini_function_response_content(response),
+            }
+        )
+    return blocks
+
+
+def _gemini_role(role: object) -> str:
+    if role == "model":
+        return "assistant"
+    return role if isinstance(role, str) and role else "user"
+
+
+def _extract_gemini_request_messages(body: dict) -> list[dict]:
+    contents = _gemini_request(body).get("contents")
+    if not isinstance(contents, list):
+        return []
+
+    messages: list[dict] = []
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        blocks: list[dict] = []
+        for part in content.get("parts") or []:
+            if isinstance(part, dict):
+                blocks.extend(_gemini_part_blocks(part))
+        if not blocks:
+            continue
+        role = _gemini_role(content.get("role"))
+        if all(block.get("type") == "tool_result" for block in blocks):
+            role = "tool"
+        messages.append({"role": role, "content": blocks})
+    return messages
+
+
+def _extract_gemini_tools(body: dict) -> list[dict]:
+    tools = _gemini_request(body).get("tools")
+    if not isinstance(tools, list):
+        return []
+
+    normalized: list[dict] = []
+    for tool_group in tools:
+        if not isinstance(tool_group, dict):
+            continue
+        declarations = tool_group.get("functionDeclarations")
+        if not isinstance(declarations, list):
+            continue
+        for decl in declarations:
+            if not isinstance(decl, dict):
+                continue
+            normalized.append(
+                {
+                    "name": decl.get("name", ""),
+                    "description": decl.get("description", ""),
+                    "input_schema": decl.get("parametersJsonSchema") or decl.get("parameters") or {},
+                }
+            )
+    return normalized
+
+
+def _gemini_payloads_from_response_body(body: object) -> list[dict]:
+    if isinstance(body, str):
+        return [event["data"] for event in _parse_sse_data_frames(body) if isinstance(event.get("data"), dict)]
+    if isinstance(body, dict):
+        return [body]
+    return []
+
+
+def _extract_gemini_response_output(body: object) -> dict | None:
+    payloads = _gemini_payloads_from_response_body(body)
+    content: list[dict] = []
+    text_block: dict[str, str] | None = None
+
+    def append_text(text: str) -> None:
+        nonlocal text_block
+        if not text.strip():
+            return
+        if text_block is None:
+            text_block = {"type": "text", "text": ""}
+            content.append(text_block)
+        text_block["text"] += text
+
+    for payload in payloads:
+        response = payload.get("response") if isinstance(payload.get("response"), dict) else payload
+        candidates = response.get("candidates") if isinstance(response, dict) else None
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_content = candidate.get("content")
+            if not isinstance(candidate_content, dict):
+                continue
+            for part in candidate_content.get("parts") or []:
+                if not isinstance(part, dict):
+                    continue
+                if isinstance(part.get("text"), str):
+                    if part.get("thought") is True:
+                        thinking = part["text"]
+                        if thinking.strip():
+                            content.append({"type": "thinking", "thinking": thinking})
+                    else:
+                        append_text(part["text"])
+                call = part.get("functionCall")
+                if isinstance(call, dict):
+                    content.append(
+                        {
+                            "type": "tool_use",
+                            "id": call.get("id", ""),
+                            "name": call.get("name", "tool_use"),
+                            "input": call.get("args") if isinstance(call.get("args"), dict) else {},
+                        }
+                    )
+
+    return {"content": content} if content else None
+
+
+def _extract_gemini_response_usage(body: object) -> dict:
+    usage: dict = {}
+    for payload in _gemini_payloads_from_response_body(body):
+        response = payload.get("response") if isinstance(payload.get("response"), dict) else payload
+        if not isinstance(response, dict):
+            continue
+        event_usage = response.get("usageMetadata")
+        if isinstance(event_usage, dict):
+            usage = event_usage
+    return normalize_usage(usage)
+
+
+def _extract_gemini_response_tool_names(body: object) -> list[str]:
+    output = _extract_gemini_response_output(body)
+    if not output:
+        return []
+    return [block.get("name", "") for block in output["content"] if block.get("type") == "tool_use"]
+
+
 def _tool_search_output_content(item: dict) -> str:
     names: list[str] = []
     tools = item.get("tools")
@@ -213,6 +450,9 @@ def _extract_request_messages(body: dict) -> list[dict]:
     msgs = body.get("messages")
     if isinstance(msgs, list) and msgs:
         return [msg for msg in msgs if isinstance(msg, dict)]
+
+    if _is_gemini_request_body(body):
+        return _extract_gemini_request_messages(body)
 
     inp = body.get("input")
     if not isinstance(inp, list):
@@ -309,11 +549,14 @@ def _extract_metadata(record_json: str) -> dict | None:
     req = _dict_or_empty(r.get("request"))
     body = _dict_or_empty(req.get("body"))
     resp = _dict_or_empty(r.get("response"))
-    resp_body = _dict_or_empty(resp.get("body"))
+    raw_resp_body = resp.get("body")
+    resp_body = _dict_or_empty(raw_resp_body)
     stream_events = _iter_response_events(resp)
+    if not stream_events:
+        stream_events = _parse_sse_data_frames(raw_resp_body)
 
     # Token usage — from response.body.usage or terminal stream event
-    usage = resp_body.get("usage") or {}
+    usage = resp_body.get("usage") or _extract_gemini_response_usage(raw_resp_body) or {}
     if not usage:
         for ev in reversed(stream_events):
             if _event_type(ev) != "response.completed":
@@ -339,12 +582,14 @@ def _extract_metadata(record_json: str) -> dict | None:
         sys_text = "\n".join(parts)
     elif isinstance(body.get("instructions"), str):
         sys_text = body["instructions"]
+    elif _is_gemini_request_body(body):
+        sys_text = _extract_gemini_system(body)
 
     # Messages
     msgs = _extract_request_messages(body)
 
     # Tool names from request
-    tools = body.get("tools") or []
+    tools = body.get("tools") or _extract_gemini_tools(body)
     tool_names = [_tool_display_name(t) for t in tools if isinstance(t, dict)]
 
     # Response tool names (tool_use blocks in response content)
@@ -359,6 +604,8 @@ def _extract_metadata(record_json: str) -> dict | None:
         response_tool_names.extend(_extract_response_tool_names(resp_body.get("output") or []))
     if not response_tool_names:
         response_tool_names.extend(_extract_response_tool_names_from_output_item_events(stream_events))
+    if not response_tool_names:
+        response_tool_names.extend(_extract_gemini_response_tool_names(raw_resp_body))
     if not response_tool_names:
         for ev in reversed(stream_events):
             if _event_type(ev) != "response.completed":

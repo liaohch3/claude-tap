@@ -63,6 +63,7 @@ class ClientConfig:
     base_url_env: str
     base_url_suffix: str  # appended to http://127.0.0.1:{port}
     default_target: str
+    extra_base_url_envs: tuple[str, ...] = ()
     nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
     # Some CLIs need process env duplicated into a CLI settings payload.
     inject_settings_env: bool = False
@@ -73,7 +74,7 @@ class ClientConfig:
     strip_path_prefix: str = ""
     strip_path_prefix_unless_target_contains: tuple[str, ...] = ()
     # Default proxy mode when --tap-proxy-mode is not explicitly set.
-    # Multi-provider clients (e.g. hermes, opencode) default to "forward" so that all
+    # Multi-provider clients (e.g. hermes, opencode, pi) default to "forward" so that all
     # provider traffic is captured regardless of which env var the client honors.
     default_proxy_mode: str = "reverse"
 
@@ -85,6 +86,21 @@ class ClientConfig:
 
     def reverse_base_url(self, port: int) -> str:
         return f"http://127.0.0.1:{port}{self.base_url_suffix}"
+
+    @property
+    def reverse_base_url_envs(self) -> tuple[str, ...]:
+        seen: set[str] = set()
+        env_keys: list[str] = []
+        for env_key in (self.base_url_env, *self.extra_base_url_envs):
+            if env_key in seen:
+                continue
+            seen.add(env_key)
+            env_keys.append(env_key)
+        return tuple(env_keys)
+
+    def reverse_base_url_env_map(self, port: int) -> dict[str, str]:
+        base_url = self.reverse_base_url(port)
+        return {env_key: base_url for env_key in self.reverse_base_url_envs}
 
     def reverse_strip_path_prefix(self, target: str) -> str:
         if not self.strip_path_prefix:
@@ -124,6 +140,18 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_suffix="",
         default_target="https://api.kimi.com/coding/v1",
     ),
+    "gemini": ClientConfig(
+        cmd="gemini",
+        label="Gemini CLI",
+        install_url="https://github.com/google-gemini/gemini-cli",
+        base_url_env="GOOGLE_GEMINI_BASE_URL",
+        extra_base_url_envs=("GOOGLE_VERTEX_BASE_URL",),
+        base_url_suffix="",
+        default_target="https://generativelanguage.googleapis.com",
+        # Google OAuth / Code Assist traffic spans several Google endpoints.
+        # Forward mode captures that flow without assuming a single base URL.
+        default_proxy_mode="forward",
+    ),
     "opencode": ClientConfig(
         cmd="opencode",
         label="OpenCode",
@@ -134,6 +162,19 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="ANTHROPIC_BASE_URL",
         base_url_suffix="",
         default_target="https://api.anthropic.com",
+        default_proxy_mode="forward",
+    ),
+    "pi": ClientConfig(
+        cmd="pi",
+        label="Pi",
+        install_url="https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent",
+        # Pi is multi-provider and stores provider base URLs in its model
+        # registry/models.json rather than a single global env var. Reverse
+        # mode remains structurally available for custom OpenAI-compatible
+        # setups, but forward mode is the reliable default.
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
         default_proxy_mode="forward",
     ),
     "hermes": ClientConfig(
@@ -222,14 +263,15 @@ async def run_client(
                 cmd_args = _settings_arg(settings_payload["env"]) + cmd_args
         # Don't set provider-specific base URL in forward mode
     else:
-        base_url = cfg.reverse_base_url(port)
-        env[cfg.base_url_env] = base_url
+        reverse_env = cfg.reverse_base_url_env_map(port)
+        env.update(reverse_env)
         env["NO_PROXY"] = "127.0.0.1"
         if cfg.inject_settings_env and not _has_settings_arg(cmd_args):
-            cmd_args = _settings_arg({cfg.base_url_env: base_url}) + cmd_args
+            cmd_args = _settings_arg(reverse_env) + cmd_args
         if cfg.base_url_config_key and not has_base_url_config_override:
             # Some clients ignore their base URL env in selected auth/transport modes
             # unless the same value is also supplied as a config override.
+            base_url = cfg.reverse_base_url(port)
             cmd_args = ["-c", f'{cfg.base_url_config_key}="{base_url}"'] + cmd_args
 
     for key in cfg.nesting_env_keys:
@@ -242,7 +284,8 @@ async def run_client(
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     else:
-        print(f"   {cfg.base_url_env}={cfg.reverse_base_url(port)}")
+        for env_key, base_url in cfg.reverse_base_url_env_map(port).items():
+            print(f"   {env_key}={base_url}")
     print()
 
     # Give child its own process group and make it the foreground group
@@ -666,8 +709,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
-        description="Trace Claude Code, Codex CLI, Kimi CLI, OpenCode, or Cursor CLI API requests via a local proxy. "
-        "All flags not listed below are forwarded to the selected client.",
+        description=(
+            "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, "
+            "or Cursor CLI API requests via a local proxy. All flags not listed below are "
+            "forwarded to the selected client."
+        ),
         epilog=(
             "claude code:\n"
             "  claude-tap                            Basic tracing\n"
@@ -692,11 +738,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # Use Moonshot Open Platform instead of Kimi Code\n"
             "  claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1\n"
             "\n"
+            "gemini cli (defaults to forward proxy mode):\n"
+            '  claude-tap --tap-client gemini -- -p "hello"\n'
+            "  # Reverse mode sets GOOGLE_GEMINI_BASE_URL and GOOGLE_VERTEX_BASE_URL\n"
+            "  claude-tap --tap-client gemini --tap-proxy-mode reverse\n"
+            "\n"
             "opencode (multi-provider; defaults to forward proxy mode):\n"
             "  # Forward proxy captures every provider opencode talks to\n"
             "  claude-tap --tap-client opencode\n"
             "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
             "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
+            "\n"
+            "pi (multi-provider; defaults to forward proxy mode):\n"
+            "  # Forward proxy captures OpenAI Codex OAuth and other providers\n"
+            '  claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"\n'
+            "  # Pi OAuth is configured with /login inside pi, or via PI_CODING_AGENT_DIR\n"
             "\n"
             "hermes agent (multi-provider Python agent — forward proxy default):\n"
             "  # Interactive TUI — captures LLM calls directly\n"
@@ -718,6 +774,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap export trace.jsonl -o out.md    Export to file\n"
             "  claude-tap export trace.jsonl --format json Export as JSON\n"
             "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
+            "\n"
+            "update:\n"
+            "  claude-tap update                          Upgrade claude-tap in place\n"
+            "  claude-tap update --installer pip          Force pip-based upgrade\n"
             "\n"
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
@@ -758,7 +818,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex/kimi, 'forward' for opencode/hermes/cursor."
+            "Default depends on the client: 'reverse' for claude/codex/kimi, "
+            "'forward' for gemini/opencode/pi/hermes/cursor."
         ),
     )
     proxy_group.add_argument(
@@ -952,16 +1013,66 @@ def _detect_installer() -> str:
 def _start_background_update(installer: str) -> subprocess.Popen | None:
     """Start a background process to upgrade claude-tap."""
     try:
-        if installer == "uv":
-            uv_path = shutil.which("uv")
-            if uv_path is None:
-                return None
-            cmd = [uv_path, "tool", "upgrade", "claude-tap"]
-        else:
-            cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
+        cmd = _build_update_command(installer)
+        if cmd is None:
+            return None
         return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         return None
+
+
+def _build_update_command(installer: str) -> list[str] | None:
+    """Build the foreground/background self-upgrade command."""
+    if installer == "uv":
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            return None
+        return [uv_path, "tool", "upgrade", "claude-tap"]
+    if installer == "pip":
+        return [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
+    raise ValueError(f"unsupported installer: {installer}")
+
+
+def parse_update_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse arguments for the update subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="claude-tap update",
+        description="Upgrade claude-tap using the detected installer.",
+    )
+    parser.add_argument(
+        "--installer",
+        choices=["auto", "uv", "pip"],
+        default="auto",
+        help="Upgrade backend to use (default: auto-detect uv or pip)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the upgrade command without running it",
+    )
+    return parser.parse_args(argv)
+
+
+def update_main(argv: list[str] | None = None) -> int:
+    """Entry point for the update subcommand."""
+    args = parse_update_args(argv)
+    installer = _detect_installer() if args.installer == "auto" else args.installer
+    cmd = _build_update_command(installer)
+    if cmd is None:
+        print("Error: 'uv' command not found. Re-run with --installer pip or install uv.", file=sys.stderr)
+        return 1
+
+    printable_cmd = " ".join(cmd)
+    print(f"Upgrading claude-tap with {installer}: {printable_cmd}")
+    if args.dry_run:
+        return 0
+
+    try:
+        result = subprocess.run(cmd, check=False)
+    except OSError as exc:
+        print(f"Error: failed to run update command: {exc}", file=sys.stderr)
+        return 1
+    return result.returncode
 
 
 # ---------------------------------------------------------------------------
@@ -1083,6 +1194,9 @@ def main_entry() -> None:
         from claude_tap.export import export_main
 
         sys.exit(export_main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "update":
+        sys.exit(update_main(sys.argv[2:]))
 
     if len(sys.argv) > 1 and sys.argv[1] == "dashboard":
         args = parse_dashboard_args(sys.argv[2:])
