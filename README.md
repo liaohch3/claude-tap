@@ -296,6 +296,11 @@ claude-tap --tap-no-launch --tap-port 8080
 # In another terminal:
 ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
 
+# Anthropic Python SDK (or any custom agent built on it)
+claude-tap --tap-no-launch --tap-port 8080
+# In your agent process:
+ANTHROPIC_BASE_URL=http://127.0.0.1:8080 python your_agent.py
+
 # Codex CLI (OAuth)
 claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 8080
 # In another terminal:
