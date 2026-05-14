@@ -341,6 +341,13 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                       getUsage(entry);
                       getResponseEvents(entry);
                       getResponseOutput(entry);
+                      const jsonSection = Array.from(document.querySelectorAll('#detail .section'))
+                        .find(el => el.querySelector('.title')?.textContent === t('section_json'));
+                      const jsonToggle = jsonSection?.querySelector('.jt-toggle');
+                      if (jsonToggle) {
+                        jsonToggle.click();
+                        jsonToggle.click();
+                      }
                     }""",
                     index,
                 )

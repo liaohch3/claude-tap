@@ -1108,6 +1108,13 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
                   getUsage(entry);
                   getResponseEvents(entry);
                   getResponseOutput(entry);
+                  const jsonSection = Array.from(document.querySelectorAll('#detail .section'))
+                    .find(el => el.querySelector('.title')?.textContent === t('section_json'));
+                  const jsonToggle = jsonSection?.querySelector('.jt-toggle');
+                  if (jsonToggle) {
+                    jsonToggle.click();
+                    jsonToggle.click();
+                  }
                 }""",
                 index,
             )
