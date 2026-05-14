@@ -9,7 +9,7 @@
 
 [English](README.md)
 
-拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Hermes Agent](https://github.com/NousResearch/hermes-agent) 或 [Cursor CLI](https://cursor.com/cli) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
+拦截并查看 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent) 或 [Cursor CLI](https://cursor.com/cli) 的所有 API 流量。看清它们如何构造 system prompt、管理对话历史、选择工具、优化 token 用量——通过一个美观的 trace 查看器。
 
 ![演示](docs/demo_zh.gif)
 
@@ -28,7 +28,7 @@
 
 ## 安装
 
-需要 Python 3.11+ 以及要追踪的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)（默认）、[Codex CLI](https://github.com/openai/codex)（`--tap-client codex` 时）、[Gemini CLI](https://github.com/google-gemini/gemini-cli)（`--tap-client gemini` 时）、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)（`--tap-client kimi` 时）、[OpenCode](https://opencode.ai)（`--tap-client opencode` 时）、[Hermes Agent](https://github.com/NousResearch/hermes-agent)（`--tap-client hermes` 时）、或 [Cursor CLI](https://cursor.com/cli)（`--tap-client cursor` 时）。
+需要 Python 3.11+ 以及要追踪的客户端：[Claude Code](https://docs.anthropic.com/en/docs/claude-code)（默认）、[Codex CLI](https://github.com/openai/codex)（`--tap-client codex` 时）、[Gemini CLI](https://github.com/google-gemini/gemini-cli)（`--tap-client gemini` 时）、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)（`--tap-client kimi` 时）、[OpenCode](https://opencode.ai)（`--tap-client opencode` 时）、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)（`--tap-client pi` 时）、[Hermes Agent](https://github.com/NousResearch/hermes-agent)（`--tap-client hermes` 时）、或 [Cursor CLI](https://cursor.com/cli)（`--tap-client cursor` 时）。
 
 ```bash
 # 推荐
@@ -59,6 +59,9 @@ claude-tap --tap-client gemini -- -p "hello"
 
 # Kimi CLI
 claude-tap --tap-client kimi
+
+# Pi
+claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
 
 # Cursor CLI
 claude-tap --tap-client cursor -- -p --trust --model auto "hello"
@@ -197,6 +200,26 @@ claude-tap --tap-client opencode --tap-proxy-mode reverse
 </details>
 
 <details>
+<summary>Pi 示例</summary>
+
+[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) 是一个多 provider coding agent。因为 Pi 可以使用 `openai-codex` 这类订阅 OAuth provider，也可以使用模型注册表中的自定义 API-key provider，claude-tap 默认对 Pi 使用 **forward proxy** 模式。
+
+```bash
+# 通过 Pi 的 openai-codex provider 使用 OpenAI Codex OAuth
+claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
+
+# 配合实时查看器
+claude-tap --tap-client pi --tap-live -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
+
+# 捕获只读工具调用
+claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark --tools bash -p "Run pwd"
+```
+
+Pi 在 `/login` 后会把 OAuth 凭据保存在 `~/.pi/agent/auth.json`。如果你把 Pi 凭据放在其他目录，请在启动 `claude-tap` 前设置 `PI_CODING_AGENT_DIR`。
+
+</details>
+
+<details>
 <summary>Hermes Agent 示例</summary>
 
 Hermes Agent 是基于 Python 的多 provider AI agent（Nous Portal / OpenRouter / NVIDIA NIM / 小米 MiMo / GLM / Kimi / MiniMax / Hugging Face / OpenAI / Anthropic / 自定义）。由于它能对接任意 provider，且 `httpx`、`requests` 都默认认 `HTTPS_PROXY` 环境变量，claude-tap 默认对 hermes 使用 **forward proxy** 模式——通过向子进程注入 `HTTPS_PROXY` 与本地 CA，捕获它对接的任意 provider 流量。
@@ -313,7 +336,7 @@ claude-tap --tap-max-traces 10
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动的客户端: claude（默认）/ codex / gemini / kimi / opencode / hermes / cursor
+--tap-client CLIENT      启动的客户端: claude（默认）/ codex / gemini / kimi / opencode / pi / hermes / cursor
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               启动实时查看器（自动打开浏览器）
 --tap-live-port PORT     实时查看器端口（默认: 自动分配）
@@ -325,7 +348,7 @@ claude-tap --tap-max-traces 10
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
---tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi 用 reverse，gemini/opencode/hermes/cursor 用 forward）
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi 用 reverse，gemini/opencode/pi/hermes/cursor 用 forward）
 ```
 
 </details>

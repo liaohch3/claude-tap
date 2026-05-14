@@ -74,7 +74,7 @@ class ClientConfig:
     strip_path_prefix: str = ""
     strip_path_prefix_unless_target_contains: tuple[str, ...] = ()
     # Default proxy mode when --tap-proxy-mode is not explicitly set.
-    # Multi-provider clients (e.g. hermes, opencode) default to "forward" so that all
+    # Multi-provider clients (e.g. hermes, opencode, pi) default to "forward" so that all
     # provider traffic is captured regardless of which env var the client honors.
     default_proxy_mode: str = "reverse"
 
@@ -162,6 +162,19 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="ANTHROPIC_BASE_URL",
         base_url_suffix="",
         default_target="https://api.anthropic.com",
+        default_proxy_mode="forward",
+    ),
+    "pi": ClientConfig(
+        cmd="pi",
+        label="Pi",
+        install_url="https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent",
+        # Pi is multi-provider and stores provider base URLs in its model
+        # registry/models.json rather than a single global env var. Reverse
+        # mode remains structurally available for custom OpenAI-compatible
+        # setups, but forward mode is the reliable default.
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
         default_proxy_mode="forward",
     ),
     "hermes": ClientConfig(
@@ -697,7 +710,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
         description=(
-            "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Hermes Agent, "
+            "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, "
             "or Cursor CLI API requests via a local proxy. All flags not listed below are "
             "forwarded to the selected client."
         ),
@@ -735,6 +748,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client opencode\n"
             "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
             "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
+            "\n"
+            "pi (multi-provider; defaults to forward proxy mode):\n"
+            "  # Forward proxy captures OpenAI Codex OAuth and other providers\n"
+            '  claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"\n'
+            "  # Pi OAuth is configured with /login inside pi, or via PI_CODING_AGENT_DIR\n"
             "\n"
             "hermes agent (multi-provider Python agent — forward proxy default):\n"
             "  # Interactive TUI — captures LLM calls directly\n"
@@ -797,7 +815,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
             "Default depends on the client: 'reverse' for claude/codex/kimi, "
-            "'forward' for gemini/opencode/hermes/cursor."
+            "'forward' for gemini/opencode/pi/hermes/cursor."
         ),
     )
     proxy_group.add_argument(

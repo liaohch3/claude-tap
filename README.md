@@ -9,7 +9,7 @@
 
 [中文文档](README_zh.md)
 
-Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Hermes Agent](https://github.com/NousResearch/hermes-agent), or [Cursor CLI](https://cursor.com/cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
+Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), or [Cursor CLI](https://cursor.com/cli). See exactly how they construct system prompts, manage conversation history, select tools, and use tokens — in a beautiful trace viewer.
 
 ![Demo](docs/demo.gif)
 
@@ -28,7 +28,7 @@ Intercept and inspect all API traffic from [Claude Code](https://docs.anthropic.
 
 ## Install
 
-Requires Python 3.11+ and the client you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`, [Gemini CLI](https://github.com/google-gemini/gemini-cli) for `--tap-client gemini`, [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) for `--tap-client kimi`, [OpenCode](https://opencode.ai) for `--tap-client opencode`, [Hermes Agent](https://github.com/NousResearch/hermes-agent) for `--tap-client hermes`, or [Cursor CLI](https://cursor.com/cli) for `--tap-client cursor`.
+Requires Python 3.11+ and the client you want to trace: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (default), [Codex CLI](https://github.com/openai/codex) for `--tap-client codex`, [Gemini CLI](https://github.com/google-gemini/gemini-cli) for `--tap-client gemini`, [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) for `--tap-client kimi`, [OpenCode](https://opencode.ai) for `--tap-client opencode`, [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) for `--tap-client pi`, [Hermes Agent](https://github.com/NousResearch/hermes-agent) for `--tap-client hermes`, or [Cursor CLI](https://cursor.com/cli) for `--tap-client cursor`.
 
 ```bash
 # Recommended
@@ -59,6 +59,9 @@ claude-tap --tap-client gemini -- -p "hello"
 
 # Kimi CLI
 claude-tap --tap-client kimi
+
+# Pi
+claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
 
 # Cursor CLI
 claude-tap --tap-client cursor -- -p --trust --model auto "hello"
@@ -197,6 +200,26 @@ claude-tap --tap-client opencode --tap-proxy-mode reverse
 </details>
 
 <details>
+<summary>Pi examples</summary>
+
+[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) is a multi-provider coding agent. claude-tap defaults to **forward proxy** mode for Pi because Pi can use subscription OAuth providers such as `openai-codex` and custom API-key providers from its model registry.
+
+```bash
+# OpenAI Codex OAuth via Pi's openai-codex provider
+claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
+
+# With live viewer
+claude-tap --tap-client pi --tap-live -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
+
+# Read-only tool capture
+claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark --tools bash -p "Run pwd"
+```
+
+Pi stores OAuth credentials in `~/.pi/agent/auth.json` after `/login`. If you keep Pi credentials in another directory, set `PI_CODING_AGENT_DIR` before launching `claude-tap`.
+
+</details>
+
+<details>
 <summary>Hermes Agent examples</summary>
 
 Hermes Agent is a multi-provider Python AI agent (Nous Portal, OpenRouter, NVIDIA NIM, Xiaomi MiMo, GLM, Kimi, MiniMax, Hugging Face, OpenAI, Anthropic, custom). Because it can talk to any of these providers — and `httpx` / `requests` both honor `HTTPS_PROXY` natively — claude-tap defaults to **forward proxy** mode for hermes: it injects `HTTPS_PROXY` plus the local CA into the child process so any provider is captured.
@@ -315,7 +338,7 @@ claude-tap --tap-max-traces 10
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default), codex, gemini, kimi, opencode, hermes, or cursor
+--tap-client CLIENT      Client to launch: claude (default), codex, gemini, kimi, opencode, pi, hermes, or cursor
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
@@ -327,7 +350,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi, forward for gemini/opencode/hermes/cursor)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi, forward for gemini/opencode/pi/hermes/cursor)
 ```
 
 </details>

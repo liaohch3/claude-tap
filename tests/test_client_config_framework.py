@@ -15,6 +15,7 @@ SUPPORTED_CLIENTS = {
     "gemini",
     "kimi",
     "opencode",
+    "pi",
     "hermes",
     "cursor",
 }
@@ -27,6 +28,7 @@ SUPPORTED_DEFAULT_PROXY_MODES = {
     "gemini": "forward",
     "kimi": "reverse",
     "opencode": "forward",
+    "pi": "forward",
     "hermes": "forward",
     "cursor": "forward",
 }

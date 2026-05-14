@@ -39,6 +39,7 @@ class ViewerContractCase:
     required_detail_text: tuple[str, ...]
     min_stream_events: int = 0
     entry_index: int = 0
+    expected_sidebar_label: str | None = None
 
 
 def _sse_frame(payload: dict[str, Any]) -> str:
@@ -564,6 +565,173 @@ def _opencode_openai_oauth_responses_record() -> dict[str, Any]:
     }
 
 
+def _pi_openai_oauth_websocket_record() -> dict[str, Any]:
+    system_prompt = (
+        "You are an expert coding assistant operating inside pi, a coding agent harness. "
+        "You help users by reading files, executing commands, editing code, and writing new files.\n\n"
+        "Available tools:\n- bash: Execute bash commands (ls, grep, find, etc.)"
+    )
+    initial_request = {
+        "type": "response.create",
+        "model": "gpt-5.3-codex-spark",
+        "store": False,
+        "stream": True,
+        "instructions": system_prompt,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Use the bash tool to run exactly: printf 'PI_TOOL_ONE\\n'; pwd.",
+                    }
+                ],
+            }
+        ],
+        "tools": [{"type": "function", "name": "bash", "description": "Execute a bash command."}],
+        "reasoning": {"effort": "low", "summary": "auto"},
+        "prompt_cache_key": "session-pi-contract",
+        "tool_choice": "auto",
+        "parallel_tool_calls": True,
+    }
+    continuation_request = {
+        **initial_request,
+        "previous_response_id": "resp_pi_tool_call",
+        "input": [
+            {
+                "type": "function_call_output",
+                "call_id": "call_pi_bash",
+                "output": "PI_TOOL_ONE\n/home/liaohch3/src/github.com/liaohch3/claude-tap-3\n",
+            }
+        ],
+    }
+    return {
+        "timestamp": "2026-05-14T07:47:21+00:00",
+        "request_id": "req_pi_openai_oauth_ws_contract",
+        "turn": 1,
+        "duration_ms": 2400,
+        "transport": "websocket",
+        "request": {
+            "method": "WEBSOCKET",
+            "path": "/backend-api/codex/responses",
+            "headers": {"Host": "chatgpt.com", "User-Agent": "pi (browser)", "originator": "pi"},
+            "body": continuation_request,
+            "ws_events": [initial_request, continuation_request],
+        },
+        "response": {
+            "status": 101,
+            "headers": {},
+            "body": {
+                "id": "resp_pi_final",
+                "status": "completed",
+                "instructions": system_prompt,
+                "model": "gpt-5.3-codex-spark",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "PI_TOOL_ONE\n/home/liaohch3/src/github.com/liaohch3/claude-tap-3",
+                            }
+                        ],
+                    }
+                ],
+                "usage": {"input_tokens": 655, "output_tokens": 29, "total_tokens": 684},
+            },
+            "ws_events": [
+                {
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_pi_tool_call",
+                        "status": "in_progress",
+                        "instructions": system_prompt,
+                        "model": "gpt-5.3-codex-spark",
+                        "previous_response_id": None,
+                    },
+                },
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "function_call",
+                        "name": "bash",
+                        "call_id": "call_pi_bash",
+                        "arguments": '{"command":"printf \'PI_TOOL_ONE\\n\'; pwd"}',
+                    },
+                },
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_pi_tool_call",
+                        "status": "completed",
+                        "instructions": system_prompt,
+                        "model": "gpt-5.3-codex-spark",
+                        "previous_response_id": None,
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "name": "bash",
+                                "call_id": "call_pi_bash",
+                                "arguments": '{"command":"printf \'PI_TOOL_ONE\\n\'; pwd"}',
+                            }
+                        ],
+                        "usage": {"input_tokens": 530, "output_tokens": 88, "total_tokens": 618},
+                    },
+                },
+                {
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_pi_final",
+                        "status": "in_progress",
+                        "instructions": system_prompt,
+                        "model": "gpt-5.3-codex-spark",
+                        "previous_response_id": "resp_pi_tool_call",
+                    },
+                },
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "PI_TOOL_ONE\n/home/liaohch3/src/github.com/liaohch3/claude-tap-3",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_pi_final",
+                        "status": "completed",
+                        "instructions": system_prompt,
+                        "model": "gpt-5.3-codex-spark",
+                        "previous_response_id": "resp_pi_tool_call",
+                        "output": [
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": "PI_TOOL_ONE\n/home/liaohch3/src/github.com/liaohch3/claude-tap-3",
+                                    }
+                                ],
+                            }
+                        ],
+                        "usage": {"input_tokens": 655, "output_tokens": 29, "total_tokens": 684},
+                    },
+                },
+            ],
+        },
+    }
+
+
 def _gemini_record() -> dict[str, Any]:
     return {
         "timestamp": "2026-05-13T13:24:00+00:00",
@@ -744,6 +912,28 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             min_stream_events=1,
         ),
         ViewerContractCase(
+            name="pi_openai_oauth_websocket_final_response",
+            records=(_pi_openai_oauth_websocket_record(),),
+            expected_sections=("Tools", "System Prompt", "Request Context", "Response", "SSE Events"),
+            expected_system=(
+                "You are an expert coding assistant operating inside pi, a coding agent harness. "
+                "You help users by reading files, executing commands, editing code, and writing new files.\n\n"
+                "Available tools:\n- bash: Execute bash commands (ls, grep, find, etc.)"
+            ),
+            expected_roles=("developer", "user", "assistant", "tool"),
+            expected_tools=("bash",),
+            expected_output_types=("text",),
+            expected_usage={"input_tokens": 655, "output_tokens": 29},
+            required_detail_text=(
+                "PI_TOOL_ONE",
+                "/home/liaohch3/src/github.com/liaohch3/claude-tap-3",
+                "printf 'PI_TOOL_ONE",
+            ),
+            min_stream_events=2,
+            entry_index=1,
+            expected_sidebar_label="Pi",
+        ),
+        ViewerContractCase(
             name="gemini",
             records=(_gemini_record(),),
             expected_sections=("Tools", "System Prompt", "Messages", "Response", "SSE Events"),
@@ -829,6 +1019,7 @@ def test_viewer_semantic_contracts_across_supported_trace_shapes(
               const usage = getUsage(entry);
               return {
                 sectionTitles: Array.from(document.querySelectorAll('#detail .section .title')).map(el => el.textContent),
+                sidebarLabel: document.querySelectorAll('.sidebar-item .si-task')[entryIndex]?.textContent || '',
                 system: extractSystem(body) || '',
                 roles: getMessages(body).map(message => message.role),
                 tools: getRequestTools(body).map(toolDisplayName),
@@ -850,6 +1041,8 @@ def test_viewer_semantic_contracts_across_supported_trace_shapes(
         assert section in result["sectionTitles"]
     if case.expected_system is not None:
         assert result["system"] == case.expected_system
+    if case.expected_sidebar_label is not None:
+        assert result["sidebarLabel"] == case.expected_sidebar_label
     assert result["roles"] == list(case.expected_roles)
     assert result["tools"] == list(case.expected_tools)
     assert result["outputTypes"] == list(case.expected_output_types)

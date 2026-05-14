@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-13
+last_reviewed: 2026-05-14
 source_of_truth: AGENTS.md
 ---
 
@@ -26,6 +26,8 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Kimi CLI | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
 | OpenCode | Provider creds via `opencode providers` (OpenAI OAuth and OpenCode free provider verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Real E2E verified |
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
+| Pi | Provider creds via Pi `/login` or `PI_CODING_AGENT_DIR` auth file (`openai-codex` OAuth verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE + WebSocket | Real E2E verified |
+| Pi | Custom OpenAI-compatible setup (`--tap-proxy-mode reverse`) | `https://api.openai.com` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
 | Cursor CLI | Cursor login (`cursor-agent login`) | Forward proxy to `https://api2.cursor.sh` | n/a | HTTPS/protobuf + local transcript import | Real E2E verified |
@@ -42,6 +44,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |
 | `kimi` | `reverse` | Single provider, native `KIMI_BASE_URL` env var |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
+| `pi` | `forward` | Multi-provider; Pi can use OpenAI Codex OAuth and custom model registry providers, so forward proxy captures traffic without relying on a single base URL override |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
 | `cursor` | `forward` | Cursor CLI has no base URL override; forward proxy captures network traffic and local transcripts provide readable turns |
 
@@ -105,6 +108,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_chat_completions_reasoning_content_is_mirrored_as_thinking` — verifies Kimi thinking stream rendering shape
 - `test_websocket_proxy_basic` — WS relay and trace recording
 - `test_hermes_*` — registration, parse_args default-mode resolution, forward/reverse env, argv rewrite
+- `test_pi_*` — registration, parse_args default-mode resolution, forward/reverse env, and argument preservation
 - `test_cursor_registered_in_client_configs` — verifies Cursor CLI registration and default forward mode
 - `test_run_client_cursor_forward_sets_proxy_ca_and_no_proxy` — verifies Cursor launch env for forward proxy mode
 - `test_import_cursor_transcripts_appends_viewer_friendly_records` — verifies readable Cursor transcript import
@@ -133,6 +137,11 @@ uv run python -m claude_tap --tap-client kimi -- --thinking
 # Gemini CLI
 uv run python -m claude_tap --tap-client gemini -- -p "Reply OK" --yolo --output-format text
 # Verify the trace contains Google OAuth / Code Assist API records
+
+# Pi
+uv run python -m claude_tap --tap-client pi -- \
+  --model openai-codex/gpt-5.3-codex-spark -p "Reply OK"
+# Verify the trace contains chatgpt.com/backend-api records and readable OpenAI Responses sections
 ```
 
 ### Real E2E (optional, when auth is available)
@@ -157,6 +166,15 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto \
 uv run python -m claude_tap --tap-client gemini -- -p \
   "Use tools to inspect the workspace and reply OK" --yolo --output-format text
 # Verify the trace contains cloudcode-pa.googleapis.com / streamGenerateContent records.
+```
+
+```bash
+# Pi real verification with OpenAI Codex OAuth
+uv run python -m claude_tap --tap-client pi -- \
+  --model openai-codex/gpt-5.3-codex-spark --tools bash -p \
+  "Use bash to inspect the workspace and reply OK"
+# Verify the generated viewer shows Tools, System Prompt, Messages, Response,
+# SSE/WebSocket events, tool calls, tool outputs, and token usage.
 ```
 
 ## Adding New Clients or Backends
