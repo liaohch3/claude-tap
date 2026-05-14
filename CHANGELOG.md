@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.68] - 2026-05-14
+
+### Changed
+- docs: show Anthropic Python SDK in proxy-only mode
 ## [0.1.67] - 2026-05-14
 
 ### Changed
