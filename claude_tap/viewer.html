@@ -92,6 +92,10 @@
 [data-theme="dark"] .json-view .js { color: #3fb950; }
 [data-theme="dark"] .json-view .jn { color: #d29922; }
 [data-theme="dark"] .json-view .jb { color: #f85149; }
+[data-theme="dark"] .json-view .json-punct { color: #6e7681; }
+[data-theme="dark"] .jt-toggle { color: #6e7681; }
+[data-theme="dark"] .jt-toggle:hover { color: #c9d1d9; }
+[data-theme="dark"] .jt-summary { color: #6e7681; }
 *,*::before,*::after { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: var(--sans); background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; -webkit-font-smoothing: antialiased; }
 
@@ -425,6 +429,21 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .json-view .jn { color: #d97706; }
 .json-view .jb { color: #dc2626; }
 .json-view .jnull { color: var(--text-tertiary); }
+.json-view .json-punct { color: var(--text-tertiary); }
+
+/* JSON tree */
+.jt-line { min-height: 1.55em; }
+.jt-toggle {
+  cursor: pointer; user-select: none; display: inline-block; width: 16px; color: var(--text-tertiary);
+  font-size: 10px; line-height: 1.55; vertical-align: top; margin-right: 2px; flex-shrink: 0;
+}
+.jt-toggle:hover { color: var(--text-primary); }
+.jt-children { margin-left: 18px; display: none; }
+.jt-children.jt-open { display: block; }
+.jt-close { }
+.jt-close.jt-hidden { display: none; }
+.jt-summary { display: none; color: var(--text-tertiary); font-style: italic; }
+.jt-summary.jt-show { display: inline; }
 
 /* ─── Diff modal ─── */
 .diff-overlay {
@@ -549,6 +568,58 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   font-family: var(--mono); color: var(--green);
   background: var(--green-bg); padding: 1px 6px; border-radius: 3px; max-width: 300px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.diff-param-change, .diff-tool-detail {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.diff-param-change:last-child, .diff-tool-detail:last-child { margin-bottom: 0; }
+.diff-param-change summary, .diff-tool-detail summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-secondary);
+}
+.diff-param-change summary:hover, .diff-tool-detail summary:hover { background: var(--bg-hover); }
+.diff-param-key, .diff-tool-name {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--cyan);
+}
+.diff-param-body, .diff-tool-body { padding: 10px 12px 12px; }
+.diff-param-body .sbs-diff { border: none; }
+.diff-tool-desc {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.diff-tool-nested {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.diff-tool-nested strong { color: var(--text); }
+.diff-tool-nested ul { margin: 6px 0 0 18px; padding: 0; }
+.diff-tool-nested li { margin: 3px 0; }
+.diff-tool-json {
+  max-height: 420px;
+  overflow: auto;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
 }
 /* ─── Side-by-side JSON diff ─── */
 .diff-side-by-side { display: flex; gap: 2px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
@@ -1215,16 +1286,98 @@ function mergeWebSocketResponseGroups(groups) {
   return { responseId: groups.map(group => group.responseId).filter(Boolean).join('+'), events };
 }
 
-function normalizeWebSocketDerivedInput(input) {
-  if (!Array.isArray(input)) return input;
-  return input.map(item => {
-    if (!item || typeof item !== 'object' || item.type !== 'function_call_output') return item;
+function parseResponseToolArguments(args) {
+  if (args === undefined || args === null || args === '') return {};
+  if (typeof args !== 'string') return args;
+  try { return JSON.parse(args); } catch(e) { return args; }
+}
+
+function toolSearchOutputContent(item) {
+  const names = [];
+  if (Array.isArray(item?.tools)) {
+    for (const namespace of item.tools) {
+      if (!namespace || typeof namespace !== 'object') continue;
+      const namespaceName = typeof namespace.name === 'string' ? namespace.name : '';
+      if (namespaceName) names.push(namespaceName);
+      if (!Array.isArray(namespace.tools)) continue;
+      for (const tool of namespace.tools) {
+        if (!tool || typeof tool !== 'object' || typeof tool.name !== 'string' || !tool.name) continue;
+        names.push(namespaceName ? `${namespaceName}.${tool.name}` : tool.name);
+      }
+    }
+  }
+  if (names.length) return ['tool_search_output', ...names].join('\n');
+  if (Array.isArray(item?.tools)) return JSON.stringify(item.tools, null, 2);
+  if (item?.output !== undefined) return typeof item.output === 'string' ? item.output : JSON.stringify(item.output, null, 2);
+  return JSON.stringify(item || {}, null, 2);
+}
+
+function responseCallToolName(item) {
+  if (item?.type === 'tool_search_call') return 'tool_search';
+  if (typeof item?.name === 'string' && item.name) return item.name;
+  if (typeof item?.type === 'string' && item.type.endsWith('_call')) return item.type.slice(0, -'_call'.length);
+  return '';
+}
+
+function isResponseCallItem(item) {
+  return !!(item && typeof item === 'object' && typeof item.type === 'string' && item.type.endsWith('_call'));
+}
+
+function responseCallInput(item) {
+  if (Object.prototype.hasOwnProperty.call(item, 'arguments')) return parseResponseToolArguments(item.arguments);
+  const input = {};
+  for (const [key, value] of Object.entries(item || {})) {
+    if (['id', 'type', 'status', 'call_id', 'name', 'execution'].includes(key)) continue;
+    input[key] = value;
+  }
+  return input;
+}
+
+function isResponseToolResultItem(item) {
+  if (!item || typeof item !== 'object' || typeof item.type !== 'string') return false;
+  return item.type === 'tool_search_output' || item.type.endsWith('_call_output');
+}
+
+function responseToolResultContent(item) {
+  if (item?.type === 'tool_search_output') return toolSearchOutputContent(item);
+  if (Object.prototype.hasOwnProperty.call(item || {}, 'output')) {
+    return typeof item.output === 'string' ? item.output : JSON.stringify(item.output, null, 2);
+  }
+  const content = {};
+  for (const [key, value] of Object.entries(item || {})) {
+    if (['id', 'type', 'status', 'call_id', 'execution'].includes(key)) continue;
+    content[key] = value;
+  }
+  return JSON.stringify(content, null, 2);
+}
+
+function responseInputItemToMessage(item) {
+  if (!item || typeof item !== 'object') return item;
+  if (isResponseCallItem(item)) {
+    return {
+      type: 'message',
+      role: 'assistant',
+      content: [{
+        type: 'tool_use',
+        id: item.call_id || item.id || '',
+        name: responseCallToolName(item),
+        input: responseCallInput(item)
+      }]
+    };
+  }
+  if (isResponseToolResultItem(item)) {
     return {
       type: 'message',
       role: 'tool',
-      content: [{ type: 'tool_result', tool_use_id: item.call_id || '', content: item.output || '' }]
+      content: [{ type: 'tool_result', tool_use_id: item.call_id || '', content: responseToolResultContent(item) }]
     };
-  });
+  }
+  return item;
+}
+
+function normalizeWebSocketDerivedInput(input) {
+  if (!Array.isArray(input)) return input;
+  return input.map(responseInputItemToMessage);
 }
 
 function webSocketOutputMessages(events) {
@@ -1237,15 +1390,16 @@ function webSocketOutputMessages(events) {
   }
   items.sort((a, b) => a.outputIndex - b.outputIndex);
   for (const { item } of items) {
-    if (item.type === 'function_call') {
-      let input = item.arguments || {};
-      if (typeof input === 'string') {
-        try { input = JSON.parse(input); } catch(e) {}
-      }
+    if (isResponseCallItem(item)) {
       messages.push({
         type: 'message',
         role: 'assistant',
-        content: [{ type: 'tool_use', id: item.call_id || item.id || '', name: item.name || '', input }]
+        content: [{
+          type: 'tool_use',
+          id: item.call_id || item.id || '',
+          name: responseCallToolName(item),
+          input: responseCallInput(item)
+        }]
       });
     } else if (item.type === 'message') {
       messages.push({
@@ -1260,18 +1414,21 @@ function webSocketOutputMessages(events) {
 
 function isToolResultInputItem(item) {
   if (!item || typeof item !== 'object') return false;
-  if (item.type === 'function_call_output') return true;
+  if (isResponseToolResultItem(item)) return true;
   if (item.role !== 'tool') return false;
   const content = Array.isArray(item.content) ? item.content : [];
   return content.some(block => block?.type === 'tool_result');
+}
+
+function messageKey(message) {
+  try { return JSON.stringify(message); } catch(e) { return String(message); }
 }
 
 function uniqueMessages(messages) {
   const seen = new Set();
   const unique = [];
   for (const message of messages) {
-    let key;
-    try { key = JSON.stringify(message); } catch(e) { key = String(message); }
+    const key = messageKey(message);
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(message);
@@ -1284,15 +1441,63 @@ function regularMessagesFromBody(body) {
   return normalized.filter(item => !isToolResultInputItem(item));
 }
 
+function toolResultMessagesFromInput(input) {
+  const normalized = normalizeWebSocketDerivedInput(Array.isArray(input) ? input : []);
+  return normalized.filter(isToolResultInputItem);
+}
+
+function toolUseIdsFromMessage(message) {
+  const content = Array.isArray(message?.content) ? message.content : [];
+  return content
+    .filter(block => block?.type === 'tool_use')
+    .map(block => block.id || block.tool_use_id || '')
+    .filter(Boolean);
+}
+
+function toolResultIdsFromMessage(message) {
+  const content = Array.isArray(message?.content) ? message.content : [];
+  return content
+    .filter(block => block?.type === 'tool_result')
+    .map(block => block.tool_use_id || block.id || '')
+    .filter(Boolean);
+}
+
+function interleaveWebSocketOutputGroups(outputGroups, toolResults) {
+  const resultPool = (toolResults || []).map(message => ({
+    message,
+    ids: toolResultIdsFromMessage(message),
+    used: false
+  }));
+  const messages = [];
+  for (const outputMessages of outputGroups || []) {
+    messages.push(...outputMessages);
+    const callIds = outputMessages.flatMap(toolUseIdsFromMessage);
+    for (const callId of callIds) {
+      const matched = resultPool.find(result => !result.used && result.ids.includes(callId));
+      if (!matched) continue;
+      matched.used = true;
+      messages.push(matched.message);
+    }
+  }
+  messages.push(...resultPool.filter(result => !result.used).map(result => result.message));
+  return messages;
+}
+
 function buildWebSocketHistoryInput(input, priorGroups, priorRequestBodies) {
   const normalized = normalizeWebSocketDerivedInput(Array.isArray(input) ? input : []);
   const regularMessages = uniqueMessages([
     ...(priorRequestBodies || []).flatMap(regularMessagesFromBody),
     ...normalized.filter(item => !isToolResultInputItem(item))
   ]);
-  const toolResults = normalized.filter(isToolResultInputItem);
-  const priorOutputs = (priorGroups || []).flatMap(group => webSocketOutputMessages(group.events));
-  return [...regularMessages, ...priorOutputs, ...toolResults];
+  const toolResults = uniqueMessages([
+    ...(priorRequestBodies || []).flatMap(body => toolResultMessagesFromInput(body?.input)),
+    ...normalized.filter(isToolResultInputItem)
+  ]);
+  const outputGroups = (priorGroups || []).map(group => webSocketOutputMessages(group.events));
+  const priorOutputKeys = new Set(outputGroups.flat().map(messageKey));
+  const contextMessages = regularMessages.filter(message => !priorOutputKeys.has(messageKey(message)));
+  const interleavedOutputs = interleaveWebSocketOutputGroups(outputGroups, toolResults);
+  return uniqueMessages([...contextMessages, ...interleavedOutputs]);
 }
 
 function requestBodiesForWebSocketEntry(entry) {
@@ -1326,7 +1531,7 @@ function requestBodyForWebSocketGroup(entry, groups, idx) {
 
 function bodyWithoutToolResultOnlyInput(body) {
   const next = cloneJson(body || {}) || {};
-  if (Array.isArray(next.input) && next.input.every(item => item?.type === 'function_call_output')) {
+  if (Array.isArray(next.input) && next.input.every(isToolResultInputItem)) {
     next.input = [];
   }
   return next;
@@ -2062,7 +2267,7 @@ let pathFilterExpanded = false;
  *   noise     – plugin manifests, bot APIs, asset downloads, version checks — hidden by default
  */
 const PRIMARY_PATH_PREFIXES = ['/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions'];
-const SECONDARY_PATH_PREFIXES = ['/v1/mcp', '/v1/models', '/v1/embeddings', '/responses', '/models', '/chat/completions', '/completions'];
+const SECONDARY_PATH_PREFIXES = ['/v1/mcp', '/v1/models', '/v1/embeddings', '/v1/files', '/responses', '/models', '/chat/completions', '/completions', '/files', '/search', '/fetch', '/usages', '/feedback'];
 function isBedrockInvokePath(p) {
   return p.startsWith('/model/') && (p.endsWith('/invoke') || p.endsWith('/invoke-with-response-stream'));
 }
@@ -2113,6 +2318,25 @@ function makeFilterChip(p, count) {
   return chip;
 }
 
+function turnSortSegments(value) {
+  if (value === undefined || value === null || value === '') return [0];
+  return String(value).split('.').map(part => {
+    const num = Number(part);
+    return Number.isFinite(num) ? num : 0;
+  });
+}
+
+function compareTurns(a, b) {
+  const aa = turnSortSegments(a);
+  const bb = turnSortSegments(b);
+  const len = Math.max(aa.length, bb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (aa[i] || 0) - (bb[i] || 0);
+    if (diff) return diff;
+  }
+  return String(a ?? '').localeCompare(String(b ?? ''));
+}
+
 function applyFilter(preserveDetail) {
   filtered = entries.filter(e => activePaths.has(getPath(e)));
   if (searchQuery) filtered = filtered.filter(e => matchSearch(e, searchQuery));
@@ -2124,7 +2348,7 @@ function applyFilter(preserveDetail) {
       return rc.some(b => b.type === 'tool_use' && activeTools.has(b.name));
     });
   }
-  filtered.sort((a, b) => (a.turn || 0) - (b.turn || 0));
+  filtered.sort((a, b) => compareTurns(a.turn, b.turn));
   let totalTokens = 0, totalDuration = 0;
   let sumInput = 0, sumOutput = 0, sumCacheRead = 0, sumCacheCreate = 0;
   filtered.forEach(e => {
@@ -2236,7 +2460,7 @@ function matchSearch(e, q) {
     const mc = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
     if (mc.toLowerCase().includes(q)) return true;
   }
-  const tools = body?.tools || [];
+  const tools = getRequestTools(body);
   for (const td of tools) {
     if (toolDisplayName(td).toLowerCase().includes(q)) return true;
     if (toolDescription(td).toLowerCase().includes(q)) return true;
@@ -2311,7 +2535,7 @@ function getEntrySearchText(entry) {
   parts.push(body?.model || '');
   parts.push(extractSystem(body) || '');
   getMessages(body).forEach(m => parts.push(msgToText(m)));
-  (body?.tools || []).forEach(td => parts.push(JSON.stringify(td)));
+  getRequestTools(body).forEach(td => parts.push(JSON.stringify(td)));
   const output = getResponseOutput(resolved);
   if (output?.content) parts.push(msgToText({ role: 'assistant', content: output.content }));
   getResponseEvents(resolved).forEach(ev => parts.push(JSON.stringify(ev)));
@@ -2560,6 +2784,12 @@ function getTaskFingerprint(e) {
     sysText = body.system.map(s => typeof s === 'string' ? s : (s.text || '')).join('\n');
   } else if (typeof body.instructions === 'string') {
     sysText = body.instructions;
+  } else if (Array.isArray(body.messages)) {
+    // OpenAI chat-completions schema: system prompt lives in messages[0..n] with role="system"
+    sysText = body.messages
+      .filter(m => m && m.role === 'system')
+      .map(m => typeof m.content === 'string' ? m.content : (Array.isArray(m.content) ? m.content.map(c => c?.text || '').join('\n') : ''))
+      .join('\n');
   }
   // Tool names sorted for stable fingerprint
   const tools = body.tools || [];
@@ -2573,7 +2803,9 @@ function getTaskFingerprint(e) {
   // Self-identification phrases ("You are X") win over generic substring matches,
   // since other agents may mention "Claude Code" inside their own prompt body.
   else if (lower.includes('you are opencode')) label = 'OpenCode';
+  else if (lower.includes('you are hermes')) label = 'Hermes';
   else if (lower.includes('you are codex')) label = 'Codex';
+  else if (lower.includes('operating inside pi') || lower.includes('pi, a coding agent harness')) label = 'Pi';
   else if (lower.includes('claude code')) label = 'Claude Code';
   else if (lower.includes('claude agent')) label = 'Claude Agent';
   else if (lower.includes('openclaw')) label = 'OpenClaw';
@@ -2935,7 +3167,7 @@ function renderDetail(e) {
 
   if (usage) html += renderTokenUsage(usage);
 
-  const tools = reqBody?.tools;
+  const tools = getRequestTools(reqBody);
   if (tools && tools.length) html += section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'));
 
   const sysPrompt = extractSystem(reqBody);
@@ -2954,7 +3186,7 @@ function renderDetail(e) {
   const streamEvents = getResponseEvents(e);
   if (streamEvents.length) html += section(t('section_sse'), renderSSEEvents(streamEvents), false, null, streamEvents.length + ' ' + t('badge_events'));
 
-  html += section(t('section_json'), `<div class="json-view">${syntaxHL(e)}</div>`, false, JSON.stringify(e, null, 2));
+  html += section(t('section_json'), `<div class="json-view">${renderJSONTree(e)}</div>`, false, JSON.stringify(e, null, 2));
 
   d.innerHTML = html;
   bindSections(d);
@@ -2967,20 +3199,241 @@ function renderDetail(e) {
 }
 
 /* ─── Renderers ─── */
+function chatMessageContentToText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map(part => {
+      if (typeof part === 'string') return part;
+      if (!part || typeof part !== 'object') return '';
+      if (part.type === 'text' || part.type === 'input_text' || part.type === 'output_text') return part.text || '';
+      if (typeof part.text === 'string') return part.text;
+      return JSON.stringify(part);
+    }).filter(Boolean).join('\n');
+  }
+  if (content === undefined || content === null) return '';
+  return JSON.stringify(content);
+}
+
+function isChatInstructionRole(role) {
+  return role === 'system' || role === 'developer';
+}
+
+function chatInstructionMessages(body) {
+  if (!Array.isArray(body?.messages)) return [];
+  return body.messages.filter(m => m && isChatInstructionRole(m.role));
+}
+
+function parseToolCallArguments(args) {
+  if (args === undefined || args === null || args === '') return {};
+  if (typeof args !== 'string') return args;
+  try { return JSON.parse(args); } catch(e) { return args; }
+}
+
+function chatToolCallToContentBlock(call) {
+  const fn = call?.function || {};
+  return {
+    type: 'tool_use',
+    id: call?.id || '',
+    name: fn.name || call?.name || 'tool_use',
+    input: parseToolCallArguments(fn.arguments),
+  };
+}
+
+function normalizeChatMessageForDisplay(msg) {
+  if (!msg || typeof msg !== 'object') return { role: 'unknown', content: '' };
+  const role = msg.role || 'unknown';
+  if (role === 'tool') {
+    return {
+      ...msg,
+      content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id || '', content: msg.content || '' }],
+    };
+  }
+  const content = [];
+  if (Array.isArray(msg.content)) content.push(...msg.content);
+  else if (typeof msg.content === 'string') {
+    if (msg.content.trim()) content.push({ type: 'text', text: msg.content });
+  } else if (msg.content !== undefined && msg.content !== null) {
+    content.push(msg.content);
+  }
+  if (Array.isArray(msg.tool_calls)) {
+    content.push(...msg.tool_calls.map(chatToolCallToContentBlock));
+  }
+  return { ...msg, content };
+}
+
+function geminiRequest(body) {
+  return body?.request && typeof body.request === 'object' ? body.request : {};
+}
+
+function isGeminiRequestBody(body) {
+  const req = geminiRequest(body);
+  return !!req && (
+    Array.isArray(req.contents) ||
+    !!req.systemInstruction ||
+    Array.isArray(req.tools)
+  );
+}
+
+function geminiTextFromParts(parts) {
+  if (!Array.isArray(parts)) return '';
+  return parts
+    .filter(part => part && typeof part === 'object' && typeof part.text === 'string')
+    .map(part => part.text)
+    .join('\n');
+}
+
+function geminiSystemInstruction(body) {
+  const instruction = geminiRequest(body).systemInstruction;
+  if (!instruction || typeof instruction !== 'object') return '';
+  return geminiTextFromParts(instruction.parts).trim();
+}
+
+function geminiRole(role) {
+  return role === 'model' ? 'assistant' : (typeof role === 'string' && role ? role : 'user');
+}
+
+function geminiFunctionResponseContent(response) {
+  const payload = response?.response;
+  const output = payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'output')
+    ? payload.output
+    : payload;
+  if (typeof output === 'string') return output;
+  if (output === undefined || output === null) return '';
+  return JSON.stringify(output, null, 2);
+}
+
+function geminiPartContentBlocks(part) {
+  const blocks = [];
+  if (!part || typeof part !== 'object') return blocks;
+  if (typeof part.text === 'string' && part.text.trim()) {
+    if (part.thought === true) blocks.push({ type: 'thinking', thinking: part.text });
+    else blocks.push({ type: 'text', text: part.text });
+  }
+  if (part.functionCall && typeof part.functionCall === 'object') {
+    const call = part.functionCall;
+    blocks.push({
+      type: 'tool_use',
+      id: call.id || '',
+      name: call.name || 'tool_use',
+      input: call.args && typeof call.args === 'object' ? call.args : {},
+    });
+  }
+  if (part.functionResponse && typeof part.functionResponse === 'object') {
+    const response = part.functionResponse;
+    blocks.push({
+      type: 'tool_result',
+      tool_use_id: response.id || response.name || '',
+      content: geminiFunctionResponseContent(response),
+    });
+  }
+  return blocks;
+}
+
+function geminiMessages(body) {
+  const contents = geminiRequest(body).contents;
+  if (!Array.isArray(contents)) return [];
+  return contents.map(item => {
+    if (!item || typeof item !== 'object') return null;
+    const blocks = (item.parts || []).flatMap(geminiPartContentBlocks);
+    if (!blocks.length) return null;
+    let role = geminiRole(item.role);
+    if (blocks.every(block => block.type === 'tool_result')) role = 'tool';
+    return { role, content: blocks };
+  }).filter(Boolean);
+}
+
+function flattenGeminiTools(tools) {
+  if (!Array.isArray(tools)) return [];
+  const flattened = [];
+  for (const group of tools) {
+    if (!group || typeof group !== 'object') continue;
+    const declarations = group.functionDeclarations;
+    if (!Array.isArray(declarations)) continue;
+    for (const decl of declarations) {
+      if (!decl || typeof decl !== 'object') continue;
+      flattened.push({
+        name: decl.name || '',
+        description: decl.description || '',
+        input_schema: decl.parametersJsonSchema || decl.parameters || {},
+      });
+    }
+  }
+  return flattened;
+}
+
+function getRequestTools(body) {
+  const direct = Array.isArray(body?.tools) ? body.tools : [];
+  const geminiTools = flattenGeminiTools(geminiRequest(body).tools);
+  return geminiTools.length ? geminiTools : direct;
+}
+
+function hasDisplayContent(content) {
+  if (typeof content === 'string') return content.trim().length > 0;
+  if (!Array.isArray(content)) return content !== undefined && content !== null;
+  return content.some(block => {
+    if (!block || typeof block !== 'object') return false;
+    if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') return !!(block.text || '').trim();
+    if (block.type === 'thinking') return !!(block.thinking || '').trim();
+    if (block.type === 'tool_use') return true;
+    if (block.type === 'tool_result') {
+      const rc = block.content;
+      if (typeof rc === 'string') return rc.trim().length > 0 || !!block.tool_use_id;
+      if (Array.isArray(rc)) return rc.length > 0;
+      return rc !== undefined && rc !== null;
+    }
+    return JSON.stringify(block) !== '{}';
+  });
+}
+
 function extractSystem(body) {
   if (!body) return null;
-  if (typeof body.system === 'string') return body.system;
-  if (Array.isArray(body.system)) return body.system.map(b => typeof b === 'string' ? b : b.type === 'text' ? (b.text || '') : JSON.stringify(b)).join('\n\n');
+  const parts = [];
+  if (typeof body.system === 'string' && body.system.trim()) parts.push(body.system);
+  if (Array.isArray(body.system)) {
+    const systemText = body.system.map(b => typeof b === 'string' ? b : b.type === 'text' ? (b.text || '') : JSON.stringify(b)).filter(Boolean).join('\n\n');
+    if (systemText.trim()) parts.push(systemText);
+  }
   // Responses API: instructions field holds the system prompt
-  if (typeof body.instructions === 'string') return body.instructions;
-  return null;
+  if (typeof body.instructions === 'string' && body.instructions.trim()) parts.push(body.instructions);
+  const chatInstructions = chatInstructionMessages(body)
+    .map(m => chatMessageContentToText(m.content))
+    .filter(text => text.trim());
+  parts.push(...chatInstructions);
+  const geminiSystem = geminiSystemInstruction(body);
+  if (geminiSystem) parts.push(geminiSystem);
+  return parts.length ? parts.join('\n\n') : null;
+}
+
+function parseSseDataFrames(text) {
+  if (typeof text !== 'string' || !text.includes('data:')) return [];
+  const events = [];
+  let dataLines = [];
+  const flush = () => {
+    if (!dataLines.length) return;
+    const raw = dataLines.join('\n');
+    dataLines = [];
+    if (raw === '[DONE]') return;
+    let data = raw;
+    try { data = JSON.parse(raw); } catch(e) {}
+    events.push({ event: 'message', data });
+  };
+  for (const line of text.split(/\r?\n/)) {
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trim());
+      continue;
+    }
+    if (!line.trim()) flush();
+  }
+  flush();
+  return events;
 }
 
 function getResponseEvents(entry) {
   const sse = entry?.response?.sse_events;
   if (Array.isArray(sse) && sse.length > 0) return sse;
   const ws = entry?.response?.ws_events;
-  return Array.isArray(ws) ? ws : [];
+  if (Array.isArray(ws) && ws.length > 0) return ws;
+  return parseSseDataFrames(entry?.response?.body);
 }
 
 function getEventType(event) {
@@ -3016,8 +3469,8 @@ function getResponsesContinuationInfo(entry) {
   const payload = getResponsePayload(entry) || {};
   const previousId = payload.previous_response_id || body.previous_response_id;
   if (!previousId) return null;
-  const messages = getMessages(body).filter(m => m.role === 'user' || m.role === 'tool');
-  if (messages.length > 0) return null;
+  const userMessages = getMessages(body).filter(m => m.role === 'user');
+  if (userMessages.length > 0) return null;
   const headers = entry?.request?.headers || {};
   return {
     response_id: payload.id || '',
@@ -3031,9 +3484,18 @@ function getResponsesContinuationInfo(entry) {
 // Normalize messages from Chat Completions (body.messages) or Responses API (body.input)
 function getMessages(body) {
   if (!body) return [];
-  if (Array.isArray(body.messages) && body.messages.length > 0) return body.messages;
+  if (Array.isArray(body.messages) && body.messages.length > 0) {
+    return body.messages
+      .filter(m => !isChatInstructionRole(m?.role))
+      .map(normalizeChatMessageForDisplay)
+      .filter(m => hasDisplayContent(m.content));
+  }
+  if (isGeminiRequestBody(body)) {
+    return geminiMessages(body).filter(m => hasDisplayContent(m.content));
+  }
   if (Array.isArray(body.input)) {
-    const messages = body.input.filter(item => {
+    const normalizedInput = normalizeWebSocketDerivedInput(body.input);
+    const messages = normalizedInput.filter(item => {
       if (!item || typeof item !== 'object') return false;
       if (typeof item.role !== 'string' || !item.role) return false;
       return item.type === undefined || item.type === 'message';
@@ -3060,21 +3522,56 @@ function getMessages(body) {
 
 function shouldRenderRequestContext(entry, body, msgs, respOutput) {
   if (!entry || !body || !Array.isArray(msgs) || msgs.length === 0) return false;
+  const method = entry?.request?.method || '';
+  if (!entry.derived_from_websocket && entry.transport !== 'websocket' && method !== 'WEBSOCKET') return false;
   const path = getPath(entry);
   if (!path.includes('/codex/responses')) return false;
   if (!Array.isArray(body.input) || body.input.length === 0) return false;
   return true;
 }
 
+function normalizeUsage(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  const normalized = { ...usage };
+  if (normalized.input_tokens === undefined && usage.prompt_tokens !== undefined) {
+    normalized.input_tokens = usage.prompt_tokens;
+  }
+  if (normalized.input_tokens === undefined && usage.promptTokenCount !== undefined) {
+    normalized.input_tokens = usage.promptTokenCount;
+  }
+  if (normalized.output_tokens === undefined && usage.completion_tokens !== undefined) {
+    normalized.output_tokens = usage.completion_tokens;
+  }
+  if (normalized.output_tokens === undefined && usage.candidatesTokenCount !== undefined) {
+    normalized.output_tokens = usage.candidatesTokenCount;
+  }
+  if (normalized.cache_read_input_tokens === undefined) {
+    let cached = usage.cached_tokens;
+    if (cached === undefined) cached = usage.cachedContentTokenCount;
+    if (cached === undefined && usage.input_tokens_details && typeof usage.input_tokens_details === 'object') {
+      cached = usage.input_tokens_details.cached_tokens;
+    }
+    if (cached === undefined && usage.prompt_tokens_details && typeof usage.prompt_tokens_details === 'object') {
+      cached = usage.prompt_tokens_details.cached_tokens;
+    }
+    if (cached !== undefined && cached !== null) {
+      normalized.cache_read_input_tokens = cached;
+    }
+  }
+  return normalized;
+}
+
 // Extract token usage from response.body.usage or SSE response.completed event
 function getUsage(entry) {
   const u = getResponsePayload(entry)?.usage;
-  if (u) return u;
+  if (u) return normalizeUsage(u);
+  const geminiUsage = geminiUsageFromPayloads(entry);
+  if (geminiUsage) return geminiUsage;
   const events = getResponseEvents(entry);
   for (let i = events.length - 1; i >= 0; i--) {
     if (getEventType(events[i]) !== 'response.completed') continue;
     const data = getEventData(events[i]);
-    if (data?.response?.usage) return data.response.usage;
+    if (data?.response?.usage) return normalizeUsage(data.response.usage);
   }
   return null;
 }
@@ -3089,8 +3586,8 @@ function normalizeResponseOutput(output) {
         if (c?.type === 'output_text') content.push({ type: 'text', text: c.text });
         else content.push(c);
       }
-    } else if (item.type === 'function_call') {
-      content.push({ type: 'tool_use', name: item.name, input: item.arguments ? (typeof item.arguments === 'string' ? (() => { try { return JSON.parse(item.arguments); } catch(e) { return item.arguments; } })() : item.arguments) : {} });
+    } else if (isResponseCallItem(item)) {
+      content.push({ type: 'tool_use', name: responseCallToolName(item), input: responseCallInput(item) });
     } else if (item.type === 'reasoning') {
       if (!item.summary) continue;
       const summaryText = Array.isArray(item.summary) ? item.summary.map(s => s?.text || '').join('\n') : (item.summary.text || JSON.stringify(item.summary));
@@ -3119,8 +3616,71 @@ function reconstructOutputFromEvents(events) {
   );
 }
 
+function geminiResponsePayloads(entry) {
+  const body = entry?.response?.body;
+  if (typeof body === 'string') {
+    return parseSseDataFrames(body)
+      .map(event => event.data)
+      .filter(data => data && typeof data === 'object');
+  }
+  if (body && typeof body === 'object') return [body];
+  return [];
+}
+
+function geminiUsageFromPayloads(entry) {
+  if (!isGeminiRequestBody(entry?.request?.body)) return null;
+  let usage = null;
+  for (const payload of geminiResponsePayloads(entry)) {
+    const response = payload?.response && typeof payload.response === 'object' ? payload.response : payload;
+    if (response?.usageMetadata) usage = response.usageMetadata;
+  }
+  return usage ? normalizeUsage(usage) : null;
+}
+
+function geminiResponseOutput(entry) {
+  if (!isGeminiRequestBody(entry?.request?.body)) return null;
+  const content = [];
+  let textBlock = null;
+  const appendText = text => {
+    if (typeof text !== 'string' || !text.trim()) return;
+    if (!textBlock) {
+      textBlock = { type: 'text', text: '' };
+      content.push(textBlock);
+    }
+    textBlock.text += text;
+  };
+  for (const payload of geminiResponsePayloads(entry)) {
+    const response = payload?.response && typeof payload.response === 'object' ? payload.response : payload;
+    const candidates = response?.candidates;
+    if (!Array.isArray(candidates)) continue;
+    for (const candidate of candidates) {
+      const parts = candidate?.content?.parts;
+      if (!Array.isArray(parts)) continue;
+      for (const part of parts) {
+        if (!part || typeof part !== 'object') continue;
+        if (typeof part.text === 'string') {
+          if (part.thought === true && part.text.trim()) content.push({ type: 'thinking', thinking: part.text });
+          else appendText(part.text);
+        }
+        if (part.functionCall && typeof part.functionCall === 'object') {
+          const call = part.functionCall;
+          content.push({
+            type: 'tool_use',
+            id: call.id || '',
+            name: call.name || 'tool_use',
+            input: call.args && typeof call.args === 'object' ? call.args : {},
+          });
+        }
+      }
+    }
+  }
+  return content.length ? { content } : null;
+}
+
 // Extract response output from response.body.content or SSE response.completed event
 function getResponseOutput(entry) {
+  const geminiOutput = geminiResponseOutput(entry);
+  if (geminiOutput) return geminiOutput;
   const body = getResponsePayload(entry);
   if (body?.content) return body;
   const fromBody = normalizeResponseOutput(body?.output);
@@ -3156,13 +3716,15 @@ function renderMessages(msgs) {
   return msgs.map(m => {
     const role = m.role || 'unknown';
     const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : (role === 'developer' || role === 'system') ? 'system' : 'system';
-    return `<div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${renderContent(m.content, role)}</div>`;
-  }).join('');
+    const rendered = renderContent(m.content, role);
+    if (!rendered.trim()) return '';
+    return `<div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${rendered}</div>`;
+  }).filter(Boolean).join('');
 }
 
 function renderContent(content, role) {
-  if (typeof content === 'string') return `<div class="content-block">${esc(content)}</div>`;
-  if (!Array.isArray(content)) return `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
+  if (typeof content === 'string') return content.trim() ? `<div class="content-block">${esc(content)}</div>` : '';
+  if (!Array.isArray(content)) return content === undefined || content === null ? '' : `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
   return content.map(block => {
     if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') { const txt = block.text || ''; if (!txt.trim()) return ''; return `<div class="content-block">${esc(txt)}</div>`; }
     if (block.type === 'thinking') {
@@ -3283,29 +3845,63 @@ function bindSections(container) {
   });
 }
 
-/* ─── Syntax highlight ─── */
-function syntaxHL(obj) {
-  const s = JSON.stringify(obj, null, 2);
-  let out = '', i = 0; const len = s.length;
-  while (i < len) {
-    const c = s[i];
-    if (c === '"') {
-      let j = i + 1;
-      while (j < len) { if (s[j] === '\\') { j += 2; continue; } if (s[j] === '"') break; j++; }
-      j++;
-      const raw = s.slice(i, j); let k = j;
-      while (k < len && s[k] === ' ') k++;
-      out += k < len && s[k] === ':' ? `<span class="jk">${esc(raw)}</span>` : `<span class="js">${esc(raw)}</span>`;
-      i = j;
-    } else if (c === '-' || (c >= '0' && c <= '9')) {
-      const m = s.slice(i).match(/^-?\d+(\.\d+)?([eE][+-]?\d+)?/);
-      if (m) { out += `<span class="jn">${m[0]}</span>`; i += m[0].length; } else { out += esc(c); i++; }
-    } else if (s.slice(i, i + 4) === 'true') { out += '<span class="jb">true</span>'; i += 4; }
-    else if (s.slice(i, i + 5) === 'false') { out += '<span class="jb">false</span>'; i += 5; }
-    else if (s.slice(i, i + 4) === 'null') { out += '<span class="jnull">null</span>'; i += 4; }
-    else { out += esc(c); i++; }
+/* ─── JSON tree view ─── */
+let _jtId = 0;
+
+function renderJSONTree(obj, depth = 0) {
+  if (depth > 50) return '<span class="json-punct">…</span>';
+
+  if (obj === null) return '<span class="jnull">null</span>';
+  if (typeof obj === 'boolean') return `<span class="jb">${obj}</span>`;
+  if (typeof obj === 'number') return `<span class="jn">${obj}</span>`;
+  if (typeof obj === 'string') return `<span class="js">${esc(JSON.stringify(obj))}</span>`;
+  if (typeof obj !== 'object') return esc(String(obj));
+
+  const isArray = Array.isArray(obj);
+  const keys = isArray ? obj.map((_, i) => i) : Object.keys(obj);
+  const len = keys.length;
+
+  if (len === 0) return `<span class="json-punct">${isArray ? '[]' : '{}'}</span>`;
+
+  const id = 'jt' + (_jtId++);
+  const bracket = isArray ? '[' : '{';
+  const closeBracket = isArray ? ']' : '}';
+  const summary = `${len} ${isArray ? 'item' : 'key'}${len !== 1 ? 's' : ''}`;
+
+  let items = '';
+  keys.forEach((key, i) => {
+    const comma = i < len - 1 ? '<span class="json-punct">,</span>' : '';
+    const k = isArray ? '' : `<span class="jk">${esc(JSON.stringify(key))}</span><span class="json-punct">: </span>`;
+    items += `<div class="jt-line">${k}${renderJSONTree(obj[key], depth + 1)}${comma}</div>`;
+  });
+
+  return `<span class="jt-toggle jt-open" onclick="toggleJT(event,'${id}')">▼</span>`
+    + `<span class="json-punct">${bracket}</span>`
+    + `<span class="jt-summary" id="${id}s">… ${summary}</span>`
+    + `<div class="jt-children jt-open" id="${id}">${items}</div>`
+    + `<div class="jt-close" id="${id}c"><span class="json-punct">${closeBracket}</span></div>`;
+}
+
+function toggleJT(event, id) {
+  event.stopPropagation();
+  const node = document.getElementById(id);
+  const summary = document.getElementById(id + 's');
+  const closeLine = document.getElementById(id + 'c');
+  const toggle = event.currentTarget;
+  const open = node.classList.contains('jt-open');
+  if (open) {
+    node.classList.remove('jt-open');
+    toggle.classList.remove('jt-open');
+    toggle.textContent = '▶';
+    if (summary) summary.classList.add('jt-show');
+    if (closeLine) closeLine.classList.add('jt-hidden');
+  } else {
+    node.classList.add('jt-open');
+    toggle.classList.add('jt-open');
+    toggle.textContent = '▼';
+    if (summary) summary.classList.remove('jt-show');
+    if (closeLine) closeLine.classList.remove('jt-hidden');
   }
-  return out;
 }
 
 function copyRequestBody(btn) {
@@ -3334,7 +3930,8 @@ function isMainTurn(e) {
   const b = e?.request?.body;
   if (!b) return false;
   const hasSys = (b.system && (typeof b.system === 'string' ? b.system.length > 0 : b.system.length > 0))
-      || (typeof b.instructions === 'string' && b.instructions.length > 0);
+      || (typeof b.instructions === 'string' && b.instructions.length > 0)
+      || !!geminiSystemInstruction(b);
   const msgs = getMessages(b);
   return hasSys || msgs.length > 1;
 }
@@ -3371,11 +3968,81 @@ function _isPrefixOf(shorter, longer) {
   return true;
 }
 
+function responseIdForDiff(entry) {
+  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  return getResponsePayload(resolved)?.id || resolved?.response?.body?.id || '';
+}
+
+function previousResponseIdForDiff(entry) {
+  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  return resolved?.request?.body?.previous_response_id || getResponsePayload(resolved)?.previous_response_id || '';
+}
+
+function codexThreadKey(entry) {
+  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  const metadata = resolved?.request?.body?.client_metadata || {};
+  let turnMetadata = metadata['x-codex-turn-metadata'];
+  if (typeof turnMetadata === 'string') {
+    try { turnMetadata = JSON.parse(turnMetadata); } catch(e) { turnMetadata = null; }
+  }
+  if (!turnMetadata || typeof turnMetadata !== 'object') return '';
+  const threadId = turnMetadata.thread_id || '';
+  const sessionId = turnMetadata.session_id || '';
+  if (!threadId && !sessionId) return '';
+  return `${sessionId}:${threadId}`;
+}
+
+function findPrevByResponseId(idx) {
+  const previousId = previousResponseIdForDiff(filtered[idx]);
+  if (!previousId) return -1;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (responseIdForDiff(filtered[i]) === previousId) return i;
+  }
+  return -1;
+}
+
+function findPrevByCodexThread(idx) {
+  const key = codexThreadKey(filtered[idx]);
+  if (!key) return -1;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (codexThreadKey(filtered[i]) === key) return i;
+  }
+  return -1;
+}
+
+function findNextByResponseId(idx) {
+  const currentId = responseIdForDiff(filtered[idx]);
+  if (!currentId) return -1;
+  for (let i = idx + 1; i < filtered.length; i++) {
+    if (previousResponseIdForDiff(filtered[i]) === currentId) return i;
+  }
+  return -1;
+}
+
+function findNextByCodexThread(idx) {
+  const key = codexThreadKey(filtered[idx]);
+  if (!key) return -1;
+  for (let i = idx + 1; i < filtered.length; i++) {
+    if (codexThreadKey(filtered[i]) === key) return i;
+  }
+  return -1;
+}
+
 function findPrevSameModel(idx) {
   const target = filtered[idx];
   const targetHashes = _getMsgHashes(target);
 
-  // Strategy 1: find the best prefix match (longest prefix)
+  // Strategy 1: exact Responses state link when the previous response is visible.
+  const linkedIdx = findPrevByResponseId(idx);
+  if (linkedIdx >= 0) return { idx: linkedIdx, isFallback: false };
+
+  // Strategy 2: Codex WebSocket turns can contain hidden generate=false
+  // prefetch responses. When previous_response_id points at one of those
+  // hidden frames, use the nearest visible entry in the same Codex thread.
+  const codexThreadIdx = findPrevByCodexThread(idx);
+  if (codexThreadIdx >= 0) return { idx: codexThreadIdx, isFallback: false };
+
+  // Strategy 3: find the best prefix match (longest prefix)
   let bestIdx = -1;
   let bestLen = 0;
   for (let i = idx - 1; i >= 0; i--) {
@@ -3389,7 +4056,7 @@ function findPrevSameModel(idx) {
   }
   if (bestIdx >= 0) return { idx: bestIdx, isFallback: false };
 
-  // Strategy 2: fallback to same model + isMainTurn (original behavior)
+  // Strategy 4: fallback to same model + isMainTurn (original behavior)
   const model = target?.request?.body?.model;
   const main = isMainTurn(target);
   for (let i = idx - 1; i >= 0; i--) {
@@ -3407,7 +4074,13 @@ function findNextSameModel(idx) {
   const current = filtered[idx];
   const currentHashes = _getMsgHashes(current);
 
-  // Strategy 1: find the next entry whose messages start with current's messages as prefix
+  const linkedIdx = findNextByResponseId(idx);
+  if (linkedIdx >= 0) return linkedIdx;
+
+  const codexThreadIdx = findNextByCodexThread(idx);
+  if (codexThreadIdx >= 0) return codexThreadIdx;
+
+  // Strategy 3: find the next entry whose messages start with current's messages as prefix
   let bestIdx = -1;
   let bestLen = Infinity;
   for (let i = idx + 1; i < filtered.length; i++) {
@@ -3602,7 +4275,7 @@ function structuralDiff(oldB, newB) {
   const d = { unchangedMsgs: 0, newMsgs: [], removedMsgs: [], modifiedMsgs: [],
     systemChanged: false, oldSystemLen: 0, newSystemLen: 0, oldSystemText: '', newSystemText: '',
     toolsChanged: false, oldToolCount: 0, newToolCount: 0,
-    addedTools: [], removedTools: [], fieldChanges: [] };
+    addedTools: [], removedTools: [], addedToolDetails: [], removedToolDetails: [], fieldChanges: [] };
   // Messages — compare by role+content (ignore cache_control etc.)
   const om = getMessages(oldB), nm = getMessages(newB);
   // Common prefix
@@ -3645,11 +4318,17 @@ function structuralDiff(oldB, newB) {
   d.oldSystemText = oldSys;
   d.newSystemText = newSys;
   // Tools — find added/removed by name
-  const oldTools = (oldB.tools || []).map(toolDisplayName);
-  const newTools = (newB.tools || []).map(toolDisplayName);
+  const oldToolEntries = getRequestTools(oldB);
+  const newToolEntries = getRequestTools(newB);
+  const oldTools = oldToolEntries.map(toolDisplayName);
+  const newTools = newToolEntries.map(toolDisplayName);
+  const oldToolMap = new Map(oldToolEntries.map(tool => [toolDisplayName(tool), tool]));
+  const newToolMap = new Map(newToolEntries.map(tool => [toolDisplayName(tool), tool]));
   const oldSet = new Set(oldTools), newSet = new Set(newTools);
   d.addedTools = newTools.filter(n => !oldSet.has(n));
   d.removedTools = oldTools.filter(n => !newSet.has(n));
+  d.addedToolDetails = d.addedTools.map(name => newToolMap.get(name)).filter(Boolean);
+  d.removedToolDetails = d.removedTools.map(name => oldToolMap.get(name)).filter(Boolean);
   d.toolsChanged = d.addedTools.length > 0 || d.removedTools.length > 0 || oldTools.length !== newTools.length;
   d.oldToolCount = oldTools.length;
   d.newToolCount = newTools.length;
@@ -3662,6 +4341,46 @@ function structuralDiff(oldB, newB) {
     if (ov !== nv) d.fieldChanges.push({ key: k, oldVal: oldB[k], newVal: newB[k], added: ov === undefined, removed: nv === undefined });
   }
   return d;
+}
+
+function normalizeDiffValue(value) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try { return normalizeDiffValue(JSON.parse(trimmed)); } catch(e) { return value; }
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(normalizeDiffValue);
+  if (value && typeof value === 'object') {
+    const normalized = {};
+    for (const [key, child] of Object.entries(value)) normalized[key] = normalizeDiffValue(child);
+    return normalized;
+  }
+  return value;
+}
+
+function formatDiffValue(value) {
+  if (value === undefined) return '';
+  const normalized = normalizeDiffValue(value);
+  return typeof normalized === 'string' ? normalized : JSON.stringify(normalized, null, 2);
+}
+
+function renderParamChange(f) {
+  const oldText = formatDiffValue(f.oldVal);
+  const newText = formatDiffValue(f.newVal);
+  const badgeClass = f.added ? 'add' : f.removed ? 'del' : 'change';
+  const badgeText = f.added ? t('diff_added') : f.removed ? t('diff_removed') : t('diff_changed');
+  return `<details class="diff-param-change" open><summary><span class="diff-param-key">${esc(f.key)}</span><span class="ds-badge ${badgeClass}">${badgeText}</span></summary><div class="diff-param-body">${renderLineDiff(oldText, newText)}</div></details>`;
+}
+
+function renderDiffToolDetail(tool, badgeClass, badgeText) {
+  const name = toolDisplayName(tool) || 'unknown';
+  const desc = toolDescription(tool);
+  const nested = Array.isArray(tool?.tools) && tool.tools.length
+    ? `<div class="diff-tool-nested"><strong>${esc(tool.tools.length + ' ' + t('badge_tools'))}</strong><ul>${tool.tools.map(child => `<li><span class="diff-tool-name">${esc(toolDisplayName(child) || 'unknown')}</span>${toolDescription(child) ? ` - ${esc(toolDescription(child).split('\n')[0])}` : ''}</li>`).join('')}</ul></div>`
+    : '';
+  return `<details class="diff-tool-detail"><summary><span class="diff-tool-name">${esc(name)}</span><span class="ds-badge ${badgeClass}">${badgeText}</span></summary><div class="diff-tool-body">${desc ? `<div class="diff-tool-desc">${esc(desc)}</div>` : ''}${nested}<pre class="diff-tool-json">${esc(JSON.stringify(tool, null, 2))}</pre></div></details>`;
 }
 
 function renderStructuralDiff(d) {
@@ -3699,18 +4418,11 @@ function renderStructuralDiff(d) {
   if (totalNew === 0 && totalRm === 0 && totalMod === 0 && d.unchangedMsgs === 0) html += `<div style="color:var(--text-tertiary);font-size:12px">${t('no_messages')}</div>`;
   html += `</div></div>`;
 
-  // ── Parameters ── (side-by-side)
+  // ── Parameters ──
   if (d.fieldChanges.length > 0) {
-    const oldObj = {}, newObj = {};
-    d.fieldChanges.forEach(f => {
-      if (f.oldVal !== undefined) oldObj[f.key] = f.oldVal;
-      if (f.newVal !== undefined) newObj[f.key] = f.newVal;
-    });
     html += `<div class="diff-section"><div class="diff-section-header">${t('diff_params')} <span class="ds-badge change">${d.fieldChanges.length} ${t('diff_changed')}</span></div><div class="diff-section-body">`;
-    html += `<div class="diff-side-by-side">`;
-    html += `<div class="diff-panel old"><div class="diff-panel-header">${t('diff_sys_old')}</div><pre>${esc(JSON.stringify(oldObj, null, 2))}</pre></div>`;
-    html += `<div class="diff-panel new"><div class="diff-panel-header">${t('diff_sys_new')}</div><pre>${esc(JSON.stringify(newObj, null, 2))}</pre></div>`;
-    html += `</div></div></div>`;
+    html += d.fieldChanges.map(renderParamChange).join('');
+    html += `</div></div>`;
   }
 
   // ── System Prompt ──
@@ -3728,8 +4440,8 @@ function renderStructuralDiff(d) {
     html += `<div class="diff-section"><div class="diff-section-header">${t('diff_tools')} <span class="ds-badge change">${d.oldToolCount} &rarr; ${d.newToolCount}</span></div>`;
     if (d.addedTools.length || d.removedTools.length) {
       html += `<div class="diff-section-body">`;
-      d.addedTools.forEach(n => { html += `<div class="diff-field-row"><span class="diff-field-key" style="color:var(--cyan)">${esc(n)}</span><span class="ds-badge add" style="font-size:9px">${t('diff_added')}</span></div>`; });
-      d.removedTools.forEach(n => { html += `<div class="diff-field-row"><span class="diff-field-key" style="color:var(--cyan)">${esc(n)}</span><span class="ds-badge del" style="font-size:9px">${t('diff_removed')}</span></div>`; });
+      d.addedToolDetails.forEach(tool => { html += renderDiffToolDetail(tool, 'add', t('diff_added')); });
+      d.removedToolDetails.forEach(tool => { html += renderDiffToolDetail(tool, 'del', t('diff_removed')); });
       html += `</div>`;
     }
     html += `</div>`;

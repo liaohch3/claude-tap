@@ -7,6 +7,7 @@ import json
 import sys
 from pathlib import Path
 
+from claude_tap.usage import normalize_usage
 from claude_tap.viewer import _generate_html_viewer, _normalize_record_for_viewer
 
 
@@ -33,7 +34,7 @@ def _response_body(record: dict) -> dict:
 
 
 def _usage_from(record: dict) -> dict:
-    return _as_dict(_response_body(record).get("usage"))
+    return normalize_usage(_response_body(record).get("usage"))
 
 
 def _turn_sort_key(record: dict) -> int:
@@ -214,7 +215,7 @@ def _export_markdown(records: list[dict]) -> str:
                             lines.append(f"<details>\n<summary>Thinking</summary>\n\n{thinking[:5000]}\n\n</details>\n")
 
         # Token usage
-        usage = _as_dict(resp_body.get("usage"))
+        usage = normalize_usage(resp_body.get("usage"))
         if usage:
             parts = []
             if usage.get("input_tokens"):

@@ -12,10 +12,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.1.68] - 2026-05-14
+
+### Changed
+- docs: show Anthropic Python SDK in proxy-only mode
+## [0.1.67] - 2026-05-14
+
+### Changed
+- feat(viewer): add collapsible JSON tree view
+## [0.1.66] - 2026-05-14
+
+### Changed
+- feat(cli): add update subcommand (#114)
+## [0.1.65] - 2026-05-14
+
+### Changed
+- feat: support Pi CLI capture (#172)
+## [0.1.64] - 2026-05-13
+
+### Changed
+- test(opencode): add real trace viewer evidence (#170)
+### Added
+- Add OpenCode real trace viewer evidence, OpenAI OAuth Responses evidence, and dedicated viewer contracts for multi-turn tool-call traces.
+
+## [0.1.63] - 2026-05-13
+
+### Changed
+- test(viewer): add cross-client quality contracts (#168)
+### Added
+- Add cross-client HTML viewer contract tests for semantic sections, runtime errors, visual layout states, and V8 coverage of core inline JavaScript functions.
+- Add backend/frontend project, incremental, and viewer CSS selector coverage targets enforced by CI.
+
+## [0.1.62] - 2026-05-13
+
+### Changed
+- feat(cli): add Gemini CLI client (#166)
+### Added
+- Add Gemini CLI client support with forward proxy default.
+- Render Gemini CLI system prompts, messages, tool calls, tool results, SSE output, and token usage in the viewer.
 
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## [0.1.61] - 2026-05-13
+
+### Changed
+- refactor(cli): support multiple reverse base URL envs (#160)
+## [0.1.60] - 2026-05-11
+
+### Changed
+- add --tap-allow-path argument to support custom api prefixes (#122)
+## [0.1.59] - 2026-05-11
+
+### Changed
+- feat(cli): add hermes-agent client (forward proxy by default) (#97)
+## [0.1.58] - 2026-05-11
+
+### Changed
+- Fix dotted WebSocket turn ordering (#130)
+## [0.1.57] - 2026-05-11
+
+### Changed
+- fix(viewer): improve diff targets and tool details (#148)
+## [0.1.56] - 2026-05-11
+
+### Changed
+- fix(viewer): interleave Codex tool results (#151)
+## [0.1.55] - 2026-05-09
+
+### Changed
+- fix(viewer): generalize Responses tool item normalization (#145)
+## [0.1.54] - 2026-05-09
+
+### Changed
+- fix(viewer): show Codex cached tokens (#144)
+## [0.1.53] - 2026-05-08
+
+### Changed
+- docs: strengthen Kimi evidence with real multiturn trace (#141)
+## [0.1.52] - 2026-05-08
+
+### Changed
+- feat: add Kimi CLI client support (#139)
+## [0.1.51] - 2026-05-08
+
+### Changed
+- Harden viewer metadata for Codex string bodies (#137)
 ## [0.1.50] - 2026-05-07
 
 ### Changed

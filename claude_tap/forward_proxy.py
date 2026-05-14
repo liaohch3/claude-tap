@@ -39,6 +39,7 @@ from claude_tap.proxy import (
 )
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
+from claude_tap.usage import normalize_usage
 from claude_tap.ws_proxy import (
     _get_ws_proxy_settings,
     reconstruct_ws_request_body,
@@ -467,7 +468,7 @@ class ForwardProxyServer:
         duration_ms = int((time.monotonic() - t0) * 1000)
         reconstructed = reassembler.reconstruct()
 
-        usage = reconstructed.get("usage", {}) if reconstructed else {}
+        usage = normalize_usage(reconstructed.get("usage", {}) if reconstructed else {})
         in_tok = usage.get("input_tokens", 0)
         out_tok = usage.get("output_tokens", 0)
         cache_read = usage.get("cache_read_input_tokens", 0)

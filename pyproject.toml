@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "liaohch3" }]
 readme = "README.md"
-keywords = ["claude", "claude-code", "codex", "cursor", "trace", "proxy", "api", "llm", "context-engineering"]
+keywords = ["claude", "claude-code", "codex", "kimi", "cursor", "trace", "proxy", "api", "llm", "context-engineering"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -52,6 +52,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.3",
     "pexpect>=4.9",
+    "coverage>=7.6",
     "ruff>=0.11",
 ]
 
@@ -93,6 +94,14 @@ exclude_lines = [
     "if TYPE_CHECKING:",
 ]
 show_missing = true
+
+[tool.claude_tap.coverage]
+python_total_min = 65.0
+python_diff_min = 80.0
+viewer_js_function_min = 50.0
+viewer_js_diff_min = 80.0
+viewer_css_selector_min = 65.0
+viewer_css_diff_min = 80.0
 
 [dependency-groups]
 dev = [

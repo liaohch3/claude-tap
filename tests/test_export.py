@@ -57,6 +57,39 @@ def test_export_html_format_defaults_to_trace_html_path(tmp_path, capsys) -> Non
     assert f"Exported 1 turns to {html_path}" in capsys.readouterr().out
 
 
+def test_export_markdown_maps_responses_cached_tokens(tmp_path, capsys) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    record = {
+        "timestamp": "2026-05-09T00:00:00",
+        "turn": 1,
+        "duration_ms": 12,
+        "request": {
+            "body": {
+                "model": "gpt-5.4",
+                "input": [{"role": "user", "content": "hi"}],
+            }
+        },
+        "response": {
+            "body": {
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "hello"}]}],
+                "usage": {
+                    "input_tokens": 11767,
+                    "input_tokens_details": {"cached_tokens": 11648},
+                    "output_tokens": 6,
+                    "total_tokens": 11773,
+                },
+            }
+        },
+    }
+    trace_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    assert export_main([str(trace_path), "--format", "markdown"]) == 0
+
+    output = capsys.readouterr().out
+    assert "- **Cache read tokens**: 11,648" in output
+    assert "*Tokens: in=11,767 / out=6 / cache_read=11,648*" in output
+
+
 def test_export_help_mentions_html(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         export_main(["--help"])

@@ -310,3 +310,156 @@ class TestDiffNavInBrowser:
 
         # Prev should now be disabled
         assert s["prevDisabled"] is True, "Should be at start of chain"
+
+    def test_codex_thread_hidden_prefetch_parent(self, browser_page):
+        """Codex Responses diff should skip hidden prefetch parents."""
+        result = browser_page.evaluate("""
+        () => {
+          const oldEntries = entries;
+          const oldFiltered = filtered;
+          const metadata = {
+            "x-codex-turn-metadata": JSON.stringify({ session_id: "session-a", thread_id: "thread-a" })
+          };
+          try {
+            filtered = [
+              {
+                turn: "1.1",
+                request_id: "req-1",
+                request: { body: {
+                  model: "gpt-5.5",
+                  client_metadata: metadata,
+                  messages: [{ role: "user", content: "initial" }]
+                }},
+                response: { body: { id: "resp_1_1", content: [{ type: "text", text: "one" }] } }
+              },
+              {
+                turn: "3.2",
+                request_id: "req-2",
+                request: { body: {
+                  model: "gpt-5.5",
+                  client_metadata: metadata,
+                  previous_response_id: "resp_3_1",
+                  messages: [
+                    { role: "user", content: "initial" },
+                    { role: "assistant", content: "earlier final text" },
+                    { role: "user", content: "limit compare" },
+                    { role: "assistant", content: [{ type: "tool_use", name: "tool_search", input: { limit: 8 } }] },
+                    { role: "tool", content: "github tools" }
+                  ]
+                }},
+                response: { body: { id: "resp_3_2", content: [{ type: "text", text: "two" }] } }
+              },
+              {
+                turn: "4.1",
+                request_id: "req-3",
+                request: { body: {
+                  model: "gpt-5.5",
+                  client_metadata: metadata,
+                  previous_response_id: "resp_hidden_prefetch",
+                  messages: [
+                    { role: "user", content: "initial" },
+                    { role: "assistant", content: "earlier final text" },
+                    { role: "user", content: "figma domain" },
+                    { role: "tool", content: "older tool outputs" }
+                  ]
+                }},
+                response: { body: { id: "resp_4_1", content: [{ type: "text", text: "three" }] } }
+              }
+            ];
+            entries = filtered;
+            return {
+              parent: findPrevSameModel(2),
+              titleBefore: filtered[findPrevSameModel(2).idx].turn,
+              nextFromMiddle: findNextSameModel(1),
+            };
+          } finally {
+            entries = oldEntries;
+            filtered = oldFiltered;
+          }
+        }
+        """)
+
+        assert result == {
+            "parent": {"idx": 1, "isFallback": False},
+            "titleBefore": "3.2",
+            "nextFromMiddle": 2,
+        }
+
+    def test_parameter_diff_renders_field_level_line_diff(self, browser_page):
+        """Changed params should be rendered per field, not as opaque JSON blobs."""
+        result = browser_page.evaluate("""
+        () => {
+          const oldBody = {
+            previous_response_id: "resp_old",
+            client_metadata: {
+              "x-codex-turn-metadata": JSON.stringify({ turn_id: "turn-old", has_changes: true })
+            }
+          };
+          const newBody = {
+            previous_response_id: "resp_new",
+            client_metadata: {
+              "x-codex-turn-metadata": JSON.stringify({ turn_id: "turn-new", has_changes: false })
+            }
+          };
+          const host = document.createElement("div");
+          host.innerHTML = renderStructuralDiff(structuralDiff(oldBody, newBody));
+          const paramBlocks = Array.from(host.querySelectorAll(".diff-param-change"));
+          return {
+            paramCount: paramBlocks.length,
+            keys: paramBlocks.map(block => block.querySelector(".diff-param-key")?.textContent),
+            hasLineDiff: host.querySelectorAll(".diff-param-body .sbs-cell").length > 0,
+            text: host.innerText,
+          };
+        }
+        """)
+
+        assert result["paramCount"] == 2
+        assert result["keys"] == ["previous_response_id", "client_metadata"]
+        assert result["hasLineDiff"] is True
+        assert "turn-old" in result["text"]
+        assert "turn-new" in result["text"]
+
+    def test_added_tool_diff_is_expandable_with_schema(self, browser_page):
+        """Added namespace tools should expose their full schema in the diff."""
+        result = browser_page.evaluate("""
+        () => {
+          const oldBody = { tools: [{ type: "function", name: "tool_search" }] };
+          const newBody = { tools: [
+            { type: "function", name: "tool_search" },
+            {
+              type: "namespace",
+              name: "mcp__codex_apps__github",
+              description: "Access repositories, issues, and pull requests.",
+              tools: [{
+                type: "function",
+                name: "_fetch_pr",
+                description: "Fetch a pull request.",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    repo_full_name: { type: "string", description: "Repository in owner/name form." },
+                    pr_number: { type: "integer", description: "Pull request number." }
+                  },
+                  required: ["repo_full_name", "pr_number"]
+                }
+              }]
+            }
+          ] };
+          const host = document.createElement("div");
+          host.innerHTML = renderStructuralDiff(structuralDiff(oldBody, newBody));
+          const detail = host.querySelector(".diff-tool-detail");
+          const beforeOpen = detail.open;
+          detail.open = true;
+          return {
+            beforeOpen,
+            summary: detail.querySelector("summary")?.innerText,
+            body: detail.querySelector(".diff-tool-body")?.innerText,
+            json: detail.querySelector(".diff-tool-json")?.textContent,
+          };
+        }
+        """)
+
+        assert result["beforeOpen"] is False
+        assert "mcp__codex_apps__github" in result["summary"]
+        assert "_fetch_pr" in result["body"]
+        assert "repo_full_name" in result["json"]

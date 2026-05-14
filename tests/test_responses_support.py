@@ -42,6 +42,35 @@ def test_extract_metadata_supports_responses_input_roles_and_ws_usage() -> None:
     assert "web_search" in meta["tool_names"]
 
 
+def test_extract_metadata_maps_responses_cached_tokens_to_cache_read() -> None:
+    record = {
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/responses",
+            "body": {"model": "gpt-5.4", "input": [{"role": "user", "content": "hi"}]},
+        },
+        "response": {
+            "status": 200,
+            "body": {
+                "usage": {
+                    "input_tokens": 11767,
+                    "input_tokens_details": {"cached_tokens": 11648},
+                    "output_tokens": 6,
+                    "total_tokens": 11773,
+                }
+            },
+        },
+    }
+
+    meta = _extract_metadata(json.dumps(record))
+
+    assert meta is not None
+    assert meta["input_tokens"] == 11767
+    assert meta["output_tokens"] == 6
+    assert meta["cache_read_input_tokens"] == 11648
+
+
 def test_extract_metadata_falls_back_to_tool_type_and_nested_function_name() -> None:
     record = {
         "turn": 1,
@@ -70,6 +99,107 @@ def test_extract_metadata_falls_back_to_tool_type_and_nested_function_name() -> 
     assert meta is not None
     assert "tool_search" in meta["tool_names"]
     assert "nested_function" in meta["tool_names"]
+
+
+def test_extract_metadata_counts_responses_tool_search_call_from_body_output() -> None:
+    record = {
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/v1/responses",
+            "body": {"model": "gpt-5.5", "input": [{"role": "user", "content": "Find tools."}]},
+        },
+        "response": {
+            "status": 200,
+            "body": {
+                "output": [
+                    {
+                        "type": "tool_search_call",
+                        "status": "completed",
+                        "arguments": {"query": "browser automation", "limit": 5},
+                        "call_id": "call_search",
+                        "execution": "client",
+                    }
+                ],
+                "usage": {"input_tokens": 4, "output_tokens": 2},
+            },
+        },
+    }
+
+    meta = _extract_metadata(json.dumps(record))
+
+    assert meta is not None
+    assert meta["response_tool_names"] == ["tool_search"]
+
+
+def test_extract_metadata_counts_generic_responses_tool_call_items() -> None:
+    record = {
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/v1/responses",
+            "body": {"model": "gpt-5.5", "input": [{"role": "user", "content": "Search."}]},
+        },
+        "response": {
+            "status": 200,
+            "body": {
+                "output": [
+                    {"type": "web_search_call", "status": "completed", "action": {"type": "search", "query": "docs"}},
+                    {"type": "file_search_call", "status": "completed", "queries": ["parser"]},
+                    {"type": "custom_tool_call", "status": "completed", "name": "deploy_preview"},
+                ],
+                "usage": {"input_tokens": 4, "output_tokens": 2},
+            },
+        },
+    }
+
+    meta = _extract_metadata(json.dumps(record))
+
+    assert meta is not None
+    assert meta["response_tool_names"] == ["web_search", "file_search", "deploy_preview"]
+
+
+def test_extract_metadata_counts_ws_tool_search_call_output_item_when_completed_output_is_empty() -> None:
+    record = {
+        "turn": 1,
+        "request": {
+            "method": "WEBSOCKET",
+            "path": "/backend-api/codex/responses",
+            "body": {"model": "gpt-5.5", "input": [{"role": "user", "content": "Find tools."}]},
+        },
+        "response": {
+            "status": 101,
+            "body": {"output": [], "usage": {"input_tokens": 4, "output_tokens": 2}},
+            "ws_events": [
+                {"type": "response.created", "response": {"id": "resp_search", "status": "in_progress"}},
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "tool_search_call",
+                        "status": "completed",
+                        "arguments": {"query": "browser automation", "limit": 5},
+                        "call_id": "call_search",
+                        "execution": "client",
+                    },
+                },
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_search",
+                        "status": "completed",
+                        "output": [],
+                        "usage": {"input_tokens": 4, "output_tokens": 2},
+                    },
+                },
+            ],
+        },
+    }
+
+    meta = _extract_metadata(json.dumps(record))
+
+    assert meta is not None
+    assert meta["response_tool_names"] == ["tool_search"]
 
 
 def test_extract_metadata_supports_interleaved_responses_roles_without_type() -> None:
@@ -163,6 +293,15 @@ def test_extract_request_messages_normalizes_responses_function_call_input_items
                     "type": "function_call",
                     "name": "missing_args",
                 },
+                {
+                    "type": "web_search_call",
+                    "action": {"type": "search", "query": "Responses items"},
+                },
+                {
+                    "type": "computer_call_output",
+                    "call_id": "call_screen",
+                    "output": {"type": "computer_screenshot", "image_url": "https://example.test/screen.png"},
+                },
             ]
         }
     )
@@ -175,6 +314,46 @@ def test_extract_request_messages_normalizes_responses_function_call_input_items
     assert messages[2] == {"role": "tool", "content": '[project]\nname = "claude-tap"'}
     assert messages[3]["content"][0]["input"] == "not json"
     assert messages[4]["content"][0]["input"] == {}
+    assert messages[5] == {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "name": "web_search",
+                "input": {"action": {"type": "search", "query": "Responses items"}},
+            }
+        ],
+    }
+    assert messages[6]["role"] == "tool"
+    assert "computer_screenshot" in messages[6]["content"]
+
+
+def test_extract_request_messages_normalizes_responses_tool_search_output_input_items() -> None:
+    messages = _extract_request_messages(
+        {
+            "input": [
+                {
+                    "type": "tool_search_output",
+                    "call_id": "call_search",
+                    "status": "completed",
+                    "execution": "client",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "mcp__codex_apps__figma",
+                            "tools": [{"type": "function", "name": "_use_figma"}],
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert len(messages) == 1
+    assert messages[0]["role"] == "tool"
+    assert "tool_search_output" in messages[0]["content"]
+    assert "mcp__codex_apps__figma" in messages[0]["content"]
+    assert "mcp__codex_apps__figma._use_figma" in messages[0]["content"]
 
 
 def test_extract_metadata_ignores_list_response_body() -> None:

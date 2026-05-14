@@ -63,9 +63,18 @@ class ClientConfig:
     base_url_env: str
     base_url_suffix: str  # appended to http://127.0.0.1:{port}
     default_target: str
+    extra_base_url_envs: tuple[str, ...] = ()
     nesting_env_keys: tuple[str, ...] = ()  # env vars to clear before launch
+    # Some CLIs need process env duplicated into a CLI settings payload.
+    inject_settings_env: bool = False
+    # Some CLIs need a base URL in both env and a native config override.
+    base_url_config_key: str | None = None
+    # Reverse proxy URL normalization. Example: Codex OAuth receives /v1/* but
+    # its upstream target already points at a /codex backend that expects /*.
+    strip_path_prefix: str = ""
+    strip_path_prefix_unless_target_contains: tuple[str, ...] = ()
     # Default proxy mode when --tap-proxy-mode is not explicitly set.
-    # Multi-provider clients (e.g. opencode) default to "forward" so that all
+    # Multi-provider clients (e.g. hermes, opencode, pi) default to "forward" so that all
     # provider traffic is captured regardless of which env var the client honors.
     default_proxy_mode: str = "reverse"
 
@@ -78,6 +87,28 @@ class ClientConfig:
     def reverse_base_url(self, port: int) -> str:
         return f"http://127.0.0.1:{port}{self.base_url_suffix}"
 
+    @property
+    def reverse_base_url_envs(self) -> tuple[str, ...]:
+        seen: set[str] = set()
+        env_keys: list[str] = []
+        for env_key in (self.base_url_env, *self.extra_base_url_envs):
+            if env_key in seen:
+                continue
+            seen.add(env_key)
+            env_keys.append(env_key)
+        return tuple(env_keys)
+
+    def reverse_base_url_env_map(self, port: int) -> dict[str, str]:
+        base_url = self.reverse_base_url(port)
+        return {env_key: base_url for env_key in self.reverse_base_url_envs}
+
+    def reverse_strip_path_prefix(self, target: str) -> str:
+        if not self.strip_path_prefix:
+            return ""
+        if any(marker in target for marker in self.strip_path_prefix_unless_target_contains):
+            return ""
+        return self.strip_path_prefix
+
 
 CLIENT_CONFIGS: dict[str, ClientConfig] = {
     "claude": ClientConfig(
@@ -88,6 +119,7 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_suffix="",
         default_target="https://api.anthropic.com",
         nesting_env_keys=("CLAUDECODE", "CLAUDE_CODE_SSE_PORT"),
+        inject_settings_env=True,
     ),
     "codex": ClientConfig(
         cmd="codex",
@@ -96,6 +128,29 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="OPENAI_BASE_URL",
         base_url_suffix="/v1",
         default_target="https://api.openai.com",
+        base_url_config_key="openai_base_url",
+        strip_path_prefix="/v1",
+        strip_path_prefix_unless_target_contains=("api.openai.com",),
+    ),
+    "kimi": ClientConfig(
+        cmd="kimi",
+        label="Kimi Code CLI",
+        install_url="https://github.com/MoonshotAI/kimi-cli",
+        base_url_env="KIMI_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.kimi.com/coding/v1",
+    ),
+    "gemini": ClientConfig(
+        cmd="gemini",
+        label="Gemini CLI",
+        install_url="https://github.com/google-gemini/gemini-cli",
+        base_url_env="GOOGLE_GEMINI_BASE_URL",
+        extra_base_url_envs=("GOOGLE_VERTEX_BASE_URL",),
+        base_url_suffix="",
+        default_target="https://generativelanguage.googleapis.com",
+        # Google OAuth / Code Assist traffic spans several Google endpoints.
+        # Forward mode captures that flow without assuming a single base URL.
+        default_proxy_mode="forward",
     ),
     "opencode": ClientConfig(
         cmd="opencode",
@@ -107,6 +162,31 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="ANTHROPIC_BASE_URL",
         base_url_suffix="",
         default_target="https://api.anthropic.com",
+        default_proxy_mode="forward",
+    ),
+    "pi": ClientConfig(
+        cmd="pi",
+        label="Pi",
+        install_url="https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent",
+        # Pi is multi-provider and stores provider base URLs in its model
+        # registry/models.json rather than a single global env var. Reverse
+        # mode remains structurally available for custom OpenAI-compatible
+        # setups, but forward mode is the reliable default.
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+        default_proxy_mode="forward",
+    ),
+    "hermes": ClientConfig(
+        cmd="hermes",
+        label="Hermes Agent",
+        install_url="https://github.com/NousResearch/hermes-agent",
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+        # hermes is a Python 3.11+ multi-provider agent; reverse mode requires
+        # a user-configured OpenAI-compatible provider in ~/.hermes that honors
+        # OPENAI_BASE_URL. Default to forward proxy capture.
         default_proxy_mode="forward",
     ),
     "cursor": ClientConfig(
@@ -142,7 +222,10 @@ async def run_client(
     env = os.environ.copy()
 
     cmd_args = list(extra_args)
-    has_openai_base_override = _has_config_override(cmd_args, "openai_base_url")
+    cmd_args = _maybe_rewrite_hermes_gateway_start(client, cmd_args)
+    has_base_url_config_override = bool(
+        cfg.base_url_config_key and _has_config_override(cmd_args, cfg.base_url_config_key)
+    )
 
     if proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
@@ -159,12 +242,12 @@ async def run_client(
             # Codex is a Rust binary; NODE_EXTRA_CA_CERTS does not affect its TLS stack.
             env["SSL_CERT_FILE"] = str(ca_cert_path)
             env["CODEX_CA_CERTIFICATE"] = str(ca_cert_path)
+            # hermes is Python (httpx + requests); SSL_CERT_FILE covers httpx,
+            # REQUESTS_CA_BUNDLE covers the requests library.
+            env["REQUESTS_CA_BUNDLE"] = str(ca_cert_path)
 
-        if client == "claude":
-            # Claude Code may source proxy env from settings rather than process env.
-            # Inject equivalent settings unless user already provided --settings.
-            has_settings_arg = any(arg == "--settings" or arg.startswith("--settings=") for arg in cmd_args)
-            if not has_settings_arg:
+        if cfg.inject_settings_env:
+            if not _has_settings_arg(cmd_args):
                 settings_payload: dict[str, dict[str, str]] = {
                     "env": {
                         "HTTP_PROXY": proxy_url,
@@ -177,21 +260,19 @@ async def run_client(
                 }
                 if ca_cert_path:
                     settings_payload["env"]["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
-                cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
+                cmd_args = _settings_arg(settings_payload["env"]) + cmd_args
         # Don't set provider-specific base URL in forward mode
     else:
-        base_url = cfg.reverse_base_url(port)
-        env[cfg.base_url_env] = base_url
+        reverse_env = cfg.reverse_base_url_env_map(port)
+        env.update(reverse_env)
         env["NO_PROXY"] = "127.0.0.1"
-        if client == "claude":
-            has_settings_arg = any(arg == "--settings" or arg.startswith("--settings=") for arg in cmd_args)
-            if not has_settings_arg:
-                settings_payload = {"env": {cfg.base_url_env: base_url}}
-                cmd_args = ["--settings", json.dumps(settings_payload, separators=(",", ":"))] + cmd_args
-        if client == "codex" and not has_openai_base_override:
-            # Newer Codex builds may ignore OPENAI_BASE_URL in OAuth/WebSocket mode
+        if cfg.inject_settings_env and not _has_settings_arg(cmd_args):
+            cmd_args = _settings_arg(reverse_env) + cmd_args
+        if cfg.base_url_config_key and not has_base_url_config_override:
+            # Some clients ignore their base URL env in selected auth/transport modes
             # unless the same value is also supplied as a config override.
-            cmd_args = ["-c", f'openai_base_url="{base_url}"'] + cmd_args
+            base_url = cfg.reverse_base_url(port)
+            cmd_args = ["-c", f'{cfg.base_url_config_key}="{base_url}"'] + cmd_args
 
     for key in cfg.nesting_env_keys:
         env.pop(key, None)
@@ -203,7 +284,8 @@ async def run_client(
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     else:
-        print(f"   {cfg.base_url_env}={cfg.reverse_base_url(port)}")
+        for env_key, base_url in cfg.reverse_base_url_env_map(port).items():
+            print(f"   {env_key}={base_url}")
     print()
 
     # Give child its own process group and make it the foreground group
@@ -287,6 +369,52 @@ async def run_client(
     return code
 
 
+_HERMES_GLOBAL_OPTS_WITH_VALUE = {"--profile", "-p"}
+_HERMES_GLOBAL_BOOLEAN_OPTS = {"--ignore-user-config", "--accept-hooks"}
+
+
+def _maybe_rewrite_hermes_gateway_start(client: str, cmd_args: list[str]) -> list[str]:
+    """Rewrite ``hermes [global-opts] gateway start`` to ``... gateway run``.
+
+    Recent hermes versions delegate ``gateway start`` to systemd / launchd,
+    which spawn the gateway in a fresh env that does NOT inherit the
+    HTTPS_PROXY / CA env we inject — trace capture would silently fail.
+    ``gateway run`` is the foreground equivalent (it's exactly what the
+    systemd unit's ``ExecStart=`` invokes), so the spawned process is our
+    child and inherits the injected env.
+
+    Hermes' CLI shape is ``hermes [global-options] <command> [...]``, so the
+    rewrite skips any recognised leading global options before matching
+    ``gateway start``.
+    """
+    if client != "hermes":
+        return cmd_args
+    i = 0
+    while i < len(cmd_args):
+        arg = cmd_args[i]
+        if arg in _HERMES_GLOBAL_OPTS_WITH_VALUE and i + 1 < len(cmd_args):
+            i += 2
+            continue
+        if "=" in arg and arg.split("=", 1)[0] in _HERMES_GLOBAL_OPTS_WITH_VALUE:
+            i += 1
+            continue
+        if arg in _HERMES_GLOBAL_BOOLEAN_OPTS:
+            i += 1
+            continue
+        break
+    if i + 1 < len(cmd_args) and cmd_args[i] == "gateway" and cmd_args[i + 1] == "start":
+        print(
+            "ℹ️  Rewriting `hermes gateway start` to `hermes gateway run` so the "
+            "gateway runs in the foreground under claude-tap. Recent hermes "
+            "versions delegate `gateway start` to systemd / launchd, which spawns "
+            "the gateway in a fresh env that does NOT inherit the proxy / CA env "
+            "we inject — trace capture would silently fail. Pass --tap-no-launch "
+            "and start the gateway yourself if you want the daemonised behaviour."
+        )
+        return cmd_args[:i] + ["gateway", "run"] + cmd_args[i + 2 :]
+    return cmd_args
+
+
 def _extend_no_proxy(env: dict[str, str], values: tuple[str, ...]) -> None:
     """Append local proxy bypasses without discarding existing settings."""
     existing: list[str] = []
@@ -325,6 +453,15 @@ def _has_config_override(args: list[str], key: str) -> bool:
                 return True
         i += 1
     return False
+
+
+def _has_settings_arg(args: list[str]) -> bool:
+    return any(arg == "--settings" or arg.startswith("--settings=") for arg in args)
+
+
+def _settings_arg(env_values: dict[str, str]) -> list[str]:
+    settings_payload = {"env": env_values}
+    return ["--settings", json.dumps(settings_payload, separators=(",", ":"))]
 
 
 async def async_main(args: argparse.Namespace):
@@ -398,6 +535,7 @@ async def async_main(args: argparse.Namespace):
             "writer": writer,
             "session": session,
             "turn_counter": 0,
+            "extra_allowed_path_prefixes": tuple(args.extra_allowed_paths),
             **_reverse_proxy_trace_options(args.client, args.target),
         }
         app.router.add_route("*", "/{path_info:.*}", proxy_handler)
@@ -574,8 +712,9 @@ def _detect_claude_target() -> str:
 
 
 def _reverse_proxy_trace_options(client: str, target: str) -> dict[str, object]:
+    cfg = CLIENT_CONFIGS[client]
     return {
-        "strip_path_prefix": "/v1" if client == "codex" and "api.openai.com" not in target else "",
+        "strip_path_prefix": cfg.reverse_strip_path_prefix(target),
         "force_http": False,
     }
 
@@ -598,6 +737,12 @@ def _detect_codex_target() -> str:
     return CLIENT_CONFIGS["codex"].default_target
 
 
+TARGET_DETECTORS = {
+    "claude": _detect_claude_target,
+    "codex": _detect_codex_target,
+}
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse argv, extracting ``--tap-*`` flags for ourselves and forwarding
     everything else to the selected client.
@@ -607,8 +752,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
-        description="Trace Claude Code, Codex CLI, OpenCode, or Cursor CLI API requests via a local proxy. "
-        "All flags not listed below are forwarded to the selected client.",
+        description=(
+            "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, "
+            "or Cursor CLI API requests via a local proxy. All flags not listed below are "
+            "forwarded to the selected client."
+        ),
         epilog=(
             "claude code:\n"
             "  claude-tap                            Basic tracing\n"
@@ -626,11 +774,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # With model and full auto-approval\n"
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
             "\n"
+            "kimi cli:\n"
+            "  # Uses KIMI_BASE_URL and forwards to Kimi Code by default\n"
+            "  claude-tap --tap-client kimi\n"
+            "  claude-tap --tap-client kimi -- --thinking\n"
+            "  # Use Moonshot Open Platform instead of Kimi Code\n"
+            "  claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1\n"
+            "\n"
+            "gemini cli (defaults to forward proxy mode):\n"
+            '  claude-tap --tap-client gemini -- -p "hello"\n'
+            "  # Reverse mode sets GOOGLE_GEMINI_BASE_URL and GOOGLE_VERTEX_BASE_URL\n"
+            "  claude-tap --tap-client gemini --tap-proxy-mode reverse\n"
+            "\n"
             "opencode (multi-provider; defaults to forward proxy mode):\n"
             "  # Forward proxy captures every provider opencode talks to\n"
             "  claude-tap --tap-client opencode\n"
             "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
             "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
+            "\n"
+            "pi (multi-provider; defaults to forward proxy mode):\n"
+            "  # Forward proxy captures OpenAI Codex OAuth and other providers\n"
+            '  claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"\n'
+            "  # Pi OAuth is configured with /login inside pi, or via PI_CODING_AGENT_DIR\n"
+            "\n"
+            "hermes agent (multi-provider Python agent — forward proxy default):\n"
+            "  # Interactive TUI — captures LLM calls directly\n"
+            "  claude-tap --tap-client hermes --tap-live\n"
+            "  # Gateway mode — captures LLM calls triggered by Slack/Telegram/etc. messages\n"
+            "  #   (requires messaging platform configured in ~/.hermes/.env)\n"
+            "  claude-tap --tap-client hermes -- gateway start\n"
             "\n"
             "cursor cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client cursor -- -p --trust --model auto "hello"\n'
@@ -645,6 +817,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap export trace.jsonl -o out.md    Export to file\n"
             "  claude-tap export trace.jsonl --format json Export as JSON\n"
             "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
+            "\n"
+            "update:\n"
+            "  claude-tap update                          Upgrade claude-tap in place\n"
+            "  claude-tap update --installer pip          Force pip-based upgrade\n"
             "\n"
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
@@ -667,7 +843,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     proxy_group.add_argument(
         "--tap-client",
-        choices=["claude", "codex", "opencode", "cursor"],
+        choices=sorted(CLIENT_CONFIGS.keys()),
         default="claude",
         dest="client",
         help="Client to launch (default: claude)",
@@ -685,11 +861,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex, 'forward' for opencode/cursor."
+            "Default depends on the client: 'reverse' for claude/codex/kimi, "
+            "'forward' for gemini/opencode/pi/hermes/cursor."
         ),
     )
     proxy_group.add_argument(
         "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
+    )
+    proxy_group.add_argument(
+        "--tap-allow-path",
+        action="append",
+        default=[],
+        dest="extra_allowed_paths",
+        metavar="PREFIX",
+        help="Extra path prefix to allow through the proxy (can be repeated, e.g. --tap-allow-path /custom/api)",
     )
 
     # -- Viewer options --
@@ -749,14 +934,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.host is None:
         args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
     if args.target is None:
-        if args.client == "claude":
-            args.target = _detect_claude_target()
-        elif args.client == "codex":
-            args.target = _detect_codex_target()
-        else:
-            args.target = CLIENT_CONFIGS[args.client].default_target
+        detector = TARGET_DETECTORS.get(args.client)
+        args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
     if args.proxy_mode is None:
         args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
+
+    # Validate --tap-allow-path prefixes
+    for prefix in args.extra_allowed_paths:
+        if not prefix:
+            tap_parser.error("--tap-allow-path cannot be empty")
+        if not prefix.startswith("/"):
+            tap_parser.error(f"--tap-allow-path '{prefix}' must start with '/'")
+        if prefix == "/":
+            tap_parser.error("--tap-allow-path '/' is too broad and not allowed")
+        if prefix.endswith("/"):
+            tap_parser.error(f"--tap-allow-path '{prefix}' must not end with '/' (specify exact prefix)")
+
     return args
 
 
@@ -861,16 +1054,66 @@ def _detect_installer() -> str:
 def _start_background_update(installer: str) -> subprocess.Popen | None:
     """Start a background process to upgrade claude-tap."""
     try:
-        if installer == "uv":
-            uv_path = shutil.which("uv")
-            if uv_path is None:
-                return None
-            cmd = [uv_path, "tool", "upgrade", "claude-tap"]
-        else:
-            cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
+        cmd = _build_update_command(installer)
+        if cmd is None:
+            return None
         return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         return None
+
+
+def _build_update_command(installer: str) -> list[str] | None:
+    """Build the foreground/background self-upgrade command."""
+    if installer == "uv":
+        uv_path = shutil.which("uv")
+        if uv_path is None:
+            return None
+        return [uv_path, "tool", "upgrade", "claude-tap"]
+    if installer == "pip":
+        return [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
+    raise ValueError(f"unsupported installer: {installer}")
+
+
+def parse_update_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse arguments for the update subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="claude-tap update",
+        description="Upgrade claude-tap using the detected installer.",
+    )
+    parser.add_argument(
+        "--installer",
+        choices=["auto", "uv", "pip"],
+        default="auto",
+        help="Upgrade backend to use (default: auto-detect uv or pip)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the upgrade command without running it",
+    )
+    return parser.parse_args(argv)
+
+
+def update_main(argv: list[str] | None = None) -> int:
+    """Entry point for the update subcommand."""
+    args = parse_update_args(argv)
+    installer = _detect_installer() if args.installer == "auto" else args.installer
+    cmd = _build_update_command(installer)
+    if cmd is None:
+        print("Error: 'uv' command not found. Re-run with --installer pip or install uv.", file=sys.stderr)
+        return 1
+
+    printable_cmd = " ".join(cmd)
+    print(f"Upgrading claude-tap with {installer}: {printable_cmd}")
+    if args.dry_run:
+        return 0
+
+    try:
+        result = subprocess.run(cmd, check=False)
+    except OSError as exc:
+        print(f"Error: failed to run update command: {exc}", file=sys.stderr)
+        return 1
+    return result.returncode
 
 
 # ---------------------------------------------------------------------------
@@ -992,6 +1235,9 @@ def main_entry() -> None:
         from claude_tap.export import export_main
 
         sys.exit(export_main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "update":
+        sys.exit(update_main(sys.argv[2:]))
 
     if len(sys.argv) > 1 and sys.argv[1] == "dashboard":
         args = parse_dashboard_args(sys.argv[2:])

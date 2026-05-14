@@ -44,3 +44,23 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
       - run: python -m pytest tests/ -x --timeout=60
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]" playwright
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m coverage erase
+      - run: python -m coverage run --append -m pytest tests/ --ignore=tests/test_e2e.py --ignore=tests/test_nav_browser.py --ignore=tests/test_responses_browser.py --ignore=tests/test_search_browser.py --ignore=tests/test_perf_viewer.py --ignore=tests/test_viewer_contracts.py -x --timeout=60 -q
+      - run: python -m coverage run --append -m pytest tests/test_e2e.py -q
+      - run: python -m coverage run --append -m pytest tests/test_nav_browser.py tests/test_perf_viewer.py -q
+      - run: python -m coverage run --append -m pytest tests/test_responses_browser.py -q
+      - run: python -m coverage run --append -m pytest tests/test_search_browser.py tests/test_viewer_contracts.py -q
+      - run: python -m coverage json -o .coverage.json
+      - run: python scripts/check_coverage.py --python-coverage .coverage.json

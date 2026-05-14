@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import json
 
+from claude_tap.usage import normalize_usage
+
 
 class SSEReassembler:
     """Parse raw SSE bytes and reconstruct the full API response object
@@ -141,6 +143,7 @@ class SSEReassembler:
         choice = choices[0] if isinstance(choices[0], dict) else {}
         delta = choice.get("delta") or {}
         finish_reason = choice.get("finish_reason")
+        choice_usage = choice.get("usage")
 
         if self._snapshot is None:
             self._snapshot = {
@@ -155,17 +158,20 @@ class SSEReassembler:
                     }
                 ],
                 # Anthropic-shape mirror so the viewer's renderResponseContent
-                # picks it up without schema-specific code. content[0] is the
-                # leading text block; tool_use blocks (mirrored from
-                # msg.tool_calls) follow.
+                # picks it up without schema-specific code. content normally
+                # contains the leading text block; thinking and tool_use blocks
+                # are mirrored in as needed.
                 "content": [{"type": "text", "text": ""}],
             }
 
         msg = self._snapshot["choices"][0]["message"]
-        text_block = self._snapshot["content"][0]
+        text_block = self._chat_completion_text_block()
 
         if isinstance(delta.get("role"), str) and delta["role"]:
             msg["role"] = delta["role"]
+        if isinstance(delta.get("reasoning_content"), str) and delta["reasoning_content"]:
+            msg["reasoning_content"] = (msg.get("reasoning_content") or "") + delta["reasoning_content"]
+            self._mirror_reasoning_to_content(msg["reasoning_content"])
         if isinstance(delta.get("content"), str) and delta["content"]:
             msg["content"] = (msg.get("content") or "") + delta["content"]
             text_block["text"] = (text_block.get("text") or "") + delta["content"]
@@ -203,13 +209,16 @@ class SSEReassembler:
 
         if isinstance(usage, dict):
             self._merge_chat_completion_usage(usage)
+        if isinstance(choice_usage, dict):
+            self._merge_chat_completion_usage(choice_usage)
 
     def _mirror_tool_call_to_content(self, idx: int, tc: dict) -> None:
         """Sync one accumulated tool_call into the `content` array as a
-        tool_use block. content[0] is the leading text block, so tool_use
-        blocks live at content[idx + 1]."""
+        tool_use block. content always has a text block, and may also have a
+        leading thinking block, so tool_use blocks live after those mirrors."""
         content = self._snapshot["content"]
-        target = idx + 1
+        offset = 1 + (1 if self._chat_completion_thinking_block(create=False) is not None else 0)
+        target = idx + offset
         while len(content) <= target:
             content.append({"type": "tool_use", "id": "", "name": "", "input": {}})
         block = content[target]
@@ -227,15 +236,35 @@ class SSEReassembler:
                 # input (or {}) until a complete JSON arrives.
                 pass
 
+    def _chat_completion_text_block(self) -> dict:
+        content = self._snapshot["content"]
+        for block in content:
+            if block.get("type") == "text":
+                return block
+        block = {"type": "text", "text": ""}
+        content.append(block)
+        return block
+
+    def _chat_completion_thinking_block(self, *, create: bool) -> dict | None:
+        content = self._snapshot["content"]
+        for block in content:
+            if block.get("type") == "thinking":
+                return block
+        if not create:
+            return None
+        block = {"type": "thinking", "thinking": ""}
+        content.insert(0, block)
+        return block
+
+    def _mirror_reasoning_to_content(self, reasoning: str) -> None:
+        block = self._chat_completion_thinking_block(create=True)
+        if block is not None:
+            block["thinking"] = reasoning
+
     def _merge_chat_completion_usage(self, usage: dict) -> None:
         """Merge an OpenAI-shape usage dict into the snapshot, exposing both
         prompt/completion and input/output token names for downstream code."""
-        merged = dict(usage)
-        if "prompt_tokens" in usage and "input_tokens" not in usage:
-            merged["input_tokens"] = usage["prompt_tokens"]
-        if "completion_tokens" in usage and "output_tokens" not in usage:
-            merged["output_tokens"] = usage["completion_tokens"]
-        self._snapshot["usage"] = merged
+        self._snapshot["usage"] = normalize_usage(usage)
 
     def reconstruct(self) -> dict | None:
         if self._snapshot is None:

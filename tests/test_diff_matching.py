@@ -231,6 +231,39 @@ def compute_nav_button_states(entries: list[dict], cur_idx: int) -> tuple[bool, 
     return (prev_enabled, next_enabled)
 
 
+def _response_id(entry: dict) -> str:
+    return entry.get("response_id", "")
+
+
+def _previous_response_id(entry: dict) -> str:
+    return entry.get("previous_response_id", "")
+
+
+def _codex_thread_key(entry: dict) -> str:
+    metadata = entry.get("client_metadata") or {}
+    turn_metadata = metadata.get("x-codex-turn-metadata") or {}
+    if isinstance(turn_metadata, str):
+        turn_metadata = json.loads(turn_metadata)
+    return f"{turn_metadata.get('session_id', '')}:{turn_metadata.get('thread_id', '')}"
+
+
+def find_diff_parent_with_response_context(entries: list[dict], idx: int) -> int | None:
+    """Mirror viewer parent matching: response id, Codex thread, then prefix."""
+    previous_id = _previous_response_id(entries[idx])
+    if previous_id:
+        for candidate_idx in range(idx - 1, -1, -1):
+            if _response_id(entries[candidate_idx]) == previous_id:
+                return candidate_idx
+
+    thread_key = _codex_thread_key(entries[idx])
+    if thread_key != ":":
+        for candidate_idx in range(idx - 1, -1, -1):
+            if _codex_thread_key(entries[candidate_idx]) == thread_key:
+                return candidate_idx
+
+    return find_diff_parent_by_prefix(entries, idx)
+
+
 class TestDiffParentMatching:
     """Test that message-prefix-based matching produces correct diff pairs."""
 
@@ -359,6 +392,81 @@ class TestFindNextByPrefix:
         """Can traverse a full chain: 3 -> 6 -> 7."""
         assert find_next_by_prefix(TRACE_ENTRIES, 3) == 6
         assert find_next_by_prefix(TRACE_ENTRIES, 6) == 7
+
+
+class TestResponsesDiffParentMatching:
+    """Responses traces can carry stronger parent hints than message prefixes."""
+
+    def test_direct_previous_response_id_wins(self):
+        entries = [
+            {
+                "messages": [{"role": "user", "content": "first"}],
+                "response_id": "resp_1",
+            },
+            {
+                "messages": [{"role": "user", "content": "not a prefix"}],
+                "previous_response_id": "resp_1",
+                "response_id": "resp_2",
+            },
+        ]
+
+        assert find_diff_parent_with_response_context(entries, 1) == 0
+
+    def test_codex_hidden_prefetch_uses_nearest_visible_same_thread(self):
+        metadata = {
+            "x-codex-turn-metadata": json.dumps(
+                {"session_id": "session-a", "thread_id": "thread-a"}, separators=(",", ":")
+            )
+        }
+        entries = [
+            {
+                "messages": [{"role": "user", "content": "shared initial prompt"}],
+                "client_metadata": metadata,
+                "response_id": "resp_1_1",
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": "shared initial prompt"},
+                    {"role": "assistant", "content": "earlier final text"},
+                    {"role": "user", "content": "limit compare"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "name": "tool_search"}]},
+                    {"role": "tool", "content": [{"type": "tool_result", "content": "github tools"}]},
+                ],
+                "client_metadata": metadata,
+                "response_id": "resp_3_2",
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": "shared initial prompt"},
+                    {"role": "assistant", "content": "earlier final text"},
+                    {"role": "user", "content": "figma domain"},
+                    {"role": "tool", "content": [{"type": "tool_result", "content": "older github tools"}]},
+                ],
+                "client_metadata": metadata,
+                "previous_response_id": "resp_hidden_prefetch",
+                "response_id": "resp_4_1",
+            },
+        ]
+
+        assert find_diff_parent_by_prefix(entries, 2) == 0
+        assert find_diff_parent_with_response_context(entries, 2) == 1
+
+    def test_codex_thread_fallback_does_not_cross_threads(self):
+        entries = [
+            {
+                "messages": [{"role": "user", "content": "shared"}],
+                "client_metadata": {"x-codex-turn-metadata": {"session_id": "session-a", "thread_id": "thread-a"}},
+                "response_id": "resp_a",
+            },
+            {
+                "messages": [{"role": "user", "content": "different"}],
+                "client_metadata": {"x-codex-turn-metadata": {"session_id": "session-b", "thread_id": "thread-b"}},
+                "previous_response_id": "resp_hidden",
+                "response_id": "resp_b",
+            },
+        ]
+
+        assert find_diff_parent_with_response_context(entries, 1) is None
 
 
 class TestNavButtonStates:

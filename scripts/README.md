@@ -1,5 +1,27 @@
 # Scripts
 
+## `check_coverage.py`
+
+Enforce project and incremental coverage targets for backend Python code and the
+inline JavaScript and CSS in `claude_tap/viewer.html`.
+
+Targets are configured in `pyproject.toml` under `[tool.claude_tap.coverage]`:
+
+- Python project coverage: `python_total_min`
+- Python changed executable package lines: `python_diff_min`
+- Viewer JavaScript function coverage: `viewer_js_function_min`
+- Viewer changed JavaScript functions: `viewer_js_diff_min`
+- Viewer CSS selector coverage: `viewer_css_selector_min`
+- Viewer changed CSS selectors: `viewer_css_diff_min`
+
+### Usage
+
+```bash
+python -m coverage run -m pytest tests/ -q
+python -m coverage json -o .coverage.json
+python scripts/check_coverage.py --python-coverage .coverage.json
+```
+
 ## `translate_i18n.py`
 
 Translate missing i18n strings in `claude_tap/viewer.html` using OpenRouter.

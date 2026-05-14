@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from claude_tap.usage import normalize_usage
+
 if TYPE_CHECKING:
     from claude_tap.live import LiveViewerServer
 
@@ -57,6 +59,7 @@ class TraceWriter:
         usage = resp_body.get("usage", {}) if isinstance(resp_body, dict) else {}
         if not usage and isinstance(resp_body, dict):
             usage = resp_body
+        usage = normalize_usage(usage)
 
         input_tokens = usage.get("input_tokens", 0)
         output_tokens = usage.get("output_tokens", 0)
