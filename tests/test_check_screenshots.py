@@ -106,6 +106,17 @@ def test_analyze_file_fails_for_mostly_blank_white_png(tmp_path: Path) -> None:
     assert any("mostly blank/white image" in failure for failure in result.failures)
 
 
+def test_parse_png_dominant_color_ratio_supports_sampling_large_images(tmp_path: Path) -> None:
+    module = _load_module()
+    image = tmp_path / "large-blank.png"
+    _write_png(image, width=1440, height=900, color=(255, 255, 255))
+
+    ratio, dominant_color = module.parse_png_dominant_color_ratio(image.read_bytes(), max_sample_pixels=128)
+
+    assert ratio == 1
+    assert dominant_color == (255, 255, 255, 255)
+
+
 def test_main_warns_when_no_images_are_found(tmp_path: Path, capsys) -> None:
     module = _load_module()
     empty_dir = tmp_path / "no-images"

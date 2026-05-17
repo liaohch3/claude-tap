@@ -38,8 +38,8 @@ Uses Playwright (headless Chromium) to verify that generated viewer HTML files a
 
 Checks:
 - No JavaScript errors on page load
-- Sidebar element exists and has entries
-- Detail panel exists
+- Normal traces render a sidebar with entries and a detail panel
+- Empty embedded traces render the explicit "No API calls captured" state
 - Body text doesn't contain raw JSON dumps or Python tracebacks
 
 ### Run

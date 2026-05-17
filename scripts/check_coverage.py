@@ -295,6 +295,16 @@ def _is_top_level_wrapper(function: dict[str, Any], script_end: int) -> bool:
     return script_end > 0 and widest >= script_end * 0.8
 
 
+def _viewer_script_functions(script: dict[str, Any]) -> list[dict[str, Any]]:
+    all_ranges = [item for function in script["functions"] for item in function.get("ranges", [])]
+    script_end = max((item.get("endOffset", 0) for item in all_ranges), default=0)
+    return [function for function in script["functions"] if not _is_top_level_wrapper(function, script_end)]
+
+
+def _is_function_covered(function: dict[str, Any]) -> bool:
+    return any(item.get("count", 0) > 0 for item in function.get("ranges", []))
+
+
 def _load_viewer_contract_helpers() -> tuple[Any, Any]:
     contracts_path = REPO_ROOT / "tests" / "test_viewer_contracts.py"
     spec = importlib.util.spec_from_file_location("viewer_contracts_for_coverage", contracts_path)
@@ -315,11 +325,13 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
     _contract_cases, _generate_case_html = _load_viewer_contract_helpers()
 
     with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
         html_path = _generate_case_html(
-            Path(tmp),
+            tmp_path,
             "v8_coverage",
             tuple(record for case in _contract_cases() for record in case.records),
         )
+        empty_html_path = _generate_case_html(tmp_path, "empty_coverage", ())
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
@@ -351,21 +363,28 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     }""",
                     index,
                 )
+            page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
+            page.wait_for_selector(".empty-trace-state", timeout=5000)
             coverage = session.send("Profiler.takePreciseCoverage")
             session.send("Profiler.stopPreciseCoverage")
             session.send("Profiler.disable")
             browser.close()
 
-    script = _main_viewer_script(coverage, "v8_coverage.html")
-    all_ranges = [item for function in script["functions"] for item in function.get("ranges", [])]
-    script_end = max((item.get("endOffset", 0) for item in all_ranges), default=0)
-    functions = [function for function in script["functions"] if not _is_top_level_wrapper(function, script_end)]
+    main_functions = _viewer_script_functions(_main_viewer_script(coverage, "v8_coverage.html"))
+    empty_functions = _viewer_script_functions(_main_viewer_script(coverage, "empty_coverage.html"))
+    empty_covered_names = {
+        function.get("functionName", "")
+        for function in empty_functions
+        if function.get("functionName") and _is_function_covered(function)
+    }
     covered_functions = [
-        function for function in functions if any(item.get("count", 0) > 0 for item in function.get("ranges", []))
+        function
+        for function in main_functions
+        if _is_function_covered(function) or function.get("functionName", "") in empty_covered_names
     ]
     covered_names = {function.get("functionName", "") for function in covered_functions if function.get("functionName")}
-    percent = len(covered_functions) / len(functions) * 100 if functions else 100.0
-    return percent, covered_names, len(covered_functions), len(functions)
+    percent = len(covered_functions) / len(main_functions) * 100 if main_functions else 100.0
+    return percent, covered_names, len(covered_functions), len(main_functions)
 
 
 def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
@@ -417,11 +436,13 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
         skipped_selectors.update(snapshot["skipped"])
 
     with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
         html_path = _generate_case_html(
-            Path(tmp),
+            tmp_path,
             "css_usage",
             tuple(record for case in _contract_cases() for record in case.records),
         )
+        empty_html_path = _generate_case_html(tmp_path, "empty_css_usage", ())
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
@@ -450,6 +471,10 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
             merge(page.evaluate(collect_css_script))
             page.set_viewport_size({"width": 390, "height": 900})
             page.evaluate("mobileShowDetail()")
+            merge(page.evaluate(collect_css_script))
+            page.set_viewport_size({"width": 1440, "height": 900})
+            page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
+            page.wait_for_selector(".empty-trace-state", timeout=5000)
             merge(page.evaluate(collect_css_script))
             browser.close()
 

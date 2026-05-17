@@ -34,12 +34,18 @@ def verify_viewer_html(html_path: str) -> list[str]:
         body_text = page.inner_text("body")[:500]
         if '"type":"tool_use"' in body_text or "JSONDecodeError" in body_text:
             issues.append("Page shows raw JSON dump or Python errors")
-        if not page.query_selector(".sidebar"):
-            issues.append("No sidebar — viewer not rendered")
-        if len(page.query_selector_all(".sidebar-item")) == 0:
-            issues.append("No sidebar entries — viewer empty")
-        if not page.query_selector("#detail"):
-            issues.append("No detail panel")
+        empty_trace_state = page.query_selector(".empty-trace-state")
+        if empty_trace_state:
+            empty_text = empty_trace_state.inner_text()
+            if "No API calls captured" not in empty_text or "Captured API calls: 0" not in empty_text:
+                issues.append("Empty trace state is missing its explicit captured-call summary")
+        else:
+            if not page.query_selector(".sidebar"):
+                issues.append("No sidebar — viewer not rendered")
+            if len(page.query_selector_all(".sidebar-item")) == 0:
+                issues.append("No sidebar entries — viewer empty")
+            if not page.query_selector("#detail"):
+                issues.append("No detail panel")
         browser.close()
     return issues
 

@@ -1071,6 +1071,47 @@ def test_viewer_runtime_smoke_handles_degenerate_records_without_js_errors(tmp_p
     assert sidebar_count == len(_runtime_smoke_records())
 
 
+def test_viewer_empty_embedded_trace_renders_explicit_no_api_calls_state(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "empty_trace", ())
+
+    page = chromium_browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+    page.on("console", lambda msg: errors.append(f"console.error: {msg.text}") if msg.type == "error" else None)
+    try:
+        page.goto(html_path.resolve().as_uri(), timeout=10000)
+        page.wait_for_selector(".empty-trace-state", timeout=5000)
+        state = page.evaluate(
+            """() => ({
+              title: document.querySelector('#empty-trace-title')?.textContent || '',
+              description: document.querySelector('#empty-trace-desc')?.textContent || '',
+              count: document.querySelector('#empty-trace-count')?.textContent || '',
+              hint: document.querySelector('#empty-trace-hint')?.textContent || '',
+              sidebarItemCount: document.querySelectorAll('.sidebar-item').length,
+              sidebarDisplay: getComputedStyle(document.querySelector('#sidebar-wrap')).display,
+              detailDisplay: getComputedStyle(document.querySelector('#detail')).display,
+              pathText: document.querySelector('#trace-path-bar')?.innerText || '',
+              oldDropTitlePresent: Boolean(document.querySelector('#drop-title')),
+              fileInputPresent: Boolean(document.querySelector('#file-input')),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["title"] == "No API calls captured"
+    assert "generated" in state["description"]
+    assert state["count"] == "Captured API calls: 0"
+    assert "real empty run" in state["hint"]
+    assert state["sidebarItemCount"] == 0
+    assert state["sidebarDisplay"] == "none"
+    assert state["detailDisplay"] == "none"
+    assert "empty_trace.jsonl" in state["pathText"]
+    assert "empty_trace.html" in state["pathText"]
+    assert state["oldDropTitlePresent"] is False
+    assert state["fileInputPresent"] is True
+
+
 def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, chromium_browser) -> None:
     records = tuple(record for case in _contract_cases() for record in case.records)
     html_path = _generate_case_html(tmp_path, "v8_coverage", records)

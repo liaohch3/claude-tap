@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 
 from scripts.check_coverage import (
+    _is_function_covered,
+    _viewer_script_functions,
     changed_lines_from_diff,
     changed_viewer_css_selectors,
     changed_viewer_functions,
@@ -116,6 +118,22 @@ def test_css_selector_ranges_and_changed_viewer_css_selectors_find_touched_rules
         viewer,
         {"claude_tap/viewer.html": {8}},
     ) == {".header"}
+
+
+def test_viewer_script_functions_filters_top_level_wrapper_and_detects_coverage() -> None:
+    script = {
+        "functions": [
+            {"functionName": "", "ranges": [{"startOffset": 0, "endOffset": 1000, "count": 1}]},
+            {"functionName": "renderEmptyTraceState", "ranges": [{"startOffset": 100, "endOffset": 220, "count": 1}]},
+            {"functionName": "initFileDropZone", "ranges": [{"startOffset": 240, "endOffset": 320, "count": 0}]},
+        ]
+    }
+
+    functions = _viewer_script_functions(script)
+
+    assert [function["functionName"] for function in functions] == ["renderEmptyTraceState", "initFileDropZone"]
+    assert _is_function_covered(functions[0]) is True
+    assert _is_function_covered(functions[1]) is False
 
 
 def test_check_viewer_css_coverage_enforces_changed_selector_matches() -> None:

@@ -15,6 +15,7 @@ MIN_DESKTOP_WIDTH = 1280
 MIN_DIMENSION = 400
 MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 BLANK_DOMINANT_RATIO = 0.90
+MAX_BLANKNESS_SAMPLE_PIXELS = 250_000
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 
@@ -225,7 +226,9 @@ def _unfilter_png_scanlines(filtered: bytes, width: int, height: int, bpp: int) 
     return rows
 
 
-def parse_png_dominant_color_ratio(raw: bytes) -> tuple[float, tuple[int, int, int, int]]:
+def parse_png_dominant_color_ratio(
+    raw: bytes, max_sample_pixels: int = MAX_BLANKNESS_SAMPLE_PIXELS
+) -> tuple[float, tuple[int, int, int, int]]:
     if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("not a PNG file")
     chunks, idat = _parse_png_chunks(raw)
@@ -253,9 +256,16 @@ def parse_png_dominant_color_ratio(raw: bytes) -> tuple[float, tuple[int, int, i
     decompressed = zlib.decompress(idat)
     rows = _unfilter_png_scanlines(decompressed, width, height, channels)
     color_counts: Counter[tuple[int, int, int, int]] = Counter()
+    total_pixels = width * height
+    sample_step = 1
+    if max_sample_pixels > 0:
+        sample_step = max(1, (total_pixels + max_sample_pixels - 1) // max_sample_pixels)
+    sampled_pixels = 0
+    pixel_index = 0
 
     for row in rows:
-        for i in range(0, len(row), channels):
+        first_sample = (-pixel_index) % sample_step
+        for i in range(first_sample * channels, len(row), sample_step * channels):
             px = row[i : i + channels]
             if color_type == 0:
                 color = (px[0], px[0], px[0], 255)
@@ -272,13 +282,14 @@ def parse_png_dominant_color_ratio(raw: bytes) -> tuple[float, tuple[int, int, i
             else:
                 color = (px[0], px[1], px[2], px[3])
             color_counts[color] += 1
+            sampled_pixels += 1
+        pixel_index += width
 
-    if not color_counts:
+    if not color_counts or sampled_pixels == 0:
         raise ValueError("PNG has no pixels")
 
     dominant_color, dominant_count = color_counts.most_common(1)[0]
-    total_pixels = width * height
-    return dominant_count / total_pixels, dominant_color
+    return dominant_count / sampled_pixels, dominant_color
 
 
 def _is_blankish_color(color: tuple[int, int, int, int]) -> bool:
@@ -335,8 +346,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     files = iter_image_files(args.paths)
     if not files:
-        print("[WARN] No image files found for input paths.")
-        print("Summary: PASS=0 WARN=1 FAIL=0")
+        print("[WARN] No image files found for input paths.", flush=True)
+        print("Summary: PASS=0 WARN=1 FAIL=0", flush=True)
         return 0
 
     pass_count = 0
@@ -351,9 +362,9 @@ def main(argv: list[str] | None = None) -> int:
             info_suffix = f" ({result.info.width}x{result.info.height})"
 
         if reasons:
-            print(f"[{result.status}] {file_path}{info_suffix}: {'; '.join(reasons)}")
+            print(f"[{result.status}] {file_path}{info_suffix}: {'; '.join(reasons)}", flush=True)
         else:
-            print(f"[{result.status}] {file_path}{info_suffix}")
+            print(f"[{result.status}] {file_path}{info_suffix}", flush=True)
 
         if result.status == "PASS":
             pass_count += 1
@@ -362,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             fail_count += 1
 
-    print(f"Summary: PASS={pass_count} WARN={warn_count} FAIL={fail_count}")
+    print(f"Summary: PASS={pass_count} WARN={warn_count} FAIL={fail_count}", flush=True)
     return 1 if fail_count else 0
 
 
