@@ -5,7 +5,7 @@
 [![Python version](https://img.shields.io/pypi/pyversions/claude-tap.svg)](https://pypi.org/project/claude-tap/)
 [![License](https://img.shields.io/github/license/liaohch3/claude-tap.svg)](https://github.com/liaohch3/claude-tap/blob/main/LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/liaohch3/claude-tap?style=social)](https://github.com/liaohch3/claude-tap/stargazers)
-[![All Contributors](https://img.shields.io/badge/all_contributors-6-orange.svg)](#贡献者)
+[![All Contributors](https://img.shields.io/badge/all_contributors-9-orange.svg)](#贡献者)
 
 [English](README.md)
 
@@ -26,28 +26,26 @@
 
 </details>
 
-> **OpenClaw：** 如果你要在 OpenClaw 中集成 claude-tap，请阅读 [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md)。英文版见 [OpenClaw setup guide](docs/guides/OPENCLAW_README.md)。
-
 ## 为什么用它
 
-- **看见 agent 真正发了什么**：prompt、messages、tool 定义、tool 输入输出、response chunk 和 token usage。
-- **更快定位 agent 行为问题**：用结构化 diff 和字符级 diff 对比相邻请求。
-- **留下可分享证据**：每次运行都会写 JSONL trace，并生成自包含 HTML 查看器。
-- **覆盖不同客户端架构**：支持 base URL 客户端的 reverse proxy，也支持多 provider 客户端的 forward proxy。
-- **不用云端 dashboard**：trace 保留在本机；常见认证 header 会自动脱敏。
+- 👀 **看见真实上下文**：检查 prompt、messages、工具定义、工具调用、工具结果、流式 chunk 和 token 用量。
+- 🔎 **用证据定位问题**：对比相邻请求，明确是哪段 prompt、消息、工具或参数发生了变化。
+- 📦 **留下可分享证据**：每次运行都会写入 JSONL trace，并生成自包含 HTML 查看器，方便 review 或归档。
+- 🔒 **数据留在本机**：不依赖云端 dashboard；常见认证 header 会在记录前自动脱敏。
+- 🧩 **覆盖主流编码 CLI**：同一套流程可用于 Claude Code、Codex CLI、Gemini CLI、Kimi CLI、OpenCode、Pi、Hermes Agent 和 Cursor CLI。
 
 ## 支持的客户端
 
-| 客户端 | 默认捕获方式 | 典型用途 |
-|--------|--------------|----------|
-| Claude Code | Reverse proxy | Anthropic API，或 DeepSeek / GLM 等 Claude 兼容网关 |
-| Codex CLI | Reverse proxy | OpenAI API key 模式，或 ChatGPT 订阅 OAuth |
-| Gemini CLI | Forward proxy | Google OAuth / Code Assist 的多 Google 端点流量 |
-| Kimi CLI | Reverse proxy | Kimi Code 或 Moonshot Open Platform |
-| OpenCode | Forward proxy | 多 provider OpenCode 会话 |
-| Pi | Forward proxy | Pi 会话，包括 OpenAI Codex OAuth provider |
-| Hermes Agent | Forward proxy | 多 provider Hermes TUI 或 gateway 会话 |
-| Cursor CLI | Forward proxy | Cursor Agent 会话，并导入可读的本地 transcript |
+| 客户端 | 典型用途 |
+|--------|----------|
+| Claude Code | Anthropic API，或 DeepSeek / GLM 等 Claude 兼容网关 |
+| Codex CLI | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
+| Gemini CLI | Google OAuth / Code Assist 的多 Google 端点流量 |
+| Kimi CLI | Kimi Code 或 Moonshot Open Platform |
+| OpenCode | 多提供方 OpenCode 会话 |
+| Pi | Pi 会话，包括 OpenAI Codex OAuth 提供方 |
+| Hermes Agent | 多提供方 Hermes TUI 或 gateway 会话 |
+| Cursor CLI | Cursor Agent 会话，并导入可读的本地 transcript |
 
 ## 安装
 
@@ -276,87 +274,37 @@ claude-tap --tap-client cursor -- -p --trust --model auto --continue "continue"
 
 </details>
 
+## 集成与指南
+
+- [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md)：在 OpenClaw 中集成 `claude-tap`。英文版见 [OpenClaw setup guide](docs/guides/OPENCLAW_README.md)。
+- [Claude Code 搭配 DeepSeek API](docs/guides/deepseek-claude-code.zh.md)：让 Claude Code 走 DeepSeek 的 Anthropic 兼容 API。英文版见 [Claude Code with DeepSeek API](docs/guides/deepseek-claude-code.md)。
+- [客户端支持矩阵](docs/support-matrix.md)：查看各客户端对应的环境变量、代理模式和 URL 改写规则。
+
 <details>
-<summary>浏览器预览、导出和纯代理模式</summary>
+<summary>查看器、导出和高级选项</summary>
 
 ```bash
-# 禁用退出后自动打开 HTML 查看器（默认开启）
-claude-tap --tap-no-open
-
-# 实时模式 — 客户端运行时在浏览器中实时查看
+# 客户端运行时打开实时查看器
 claude-tap --tap-live
-claude-tap --tap-live --tap-live-port 3000    # 固定实时查看器端口
 
-# 独立 Dashboard — 不启动客户端，直接浏览历史 trace
+# 不启动客户端，直接浏览历史 trace
 claude-tap dashboard
-claude-tap dashboard --tap-output-dir ./my-traces --tap-live-port 3000
-```
 
-客户端退出后，也可以手动打开生成的查看器：
-
-```bash
-open .traces/*/trace_*.html
-```
-
-也可以从已有 JSONL trace 重新生成自包含 HTML 查看器：
-
-```bash
+# 从已有 JSONL trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
-# 或：
-claude-tap export .traces/2026-02-28/trace_141557.jsonl --format html
-```
 
-### 纯代理模式
-
-仅启动代理，不自动启动客户端 — 适用于自定义场景或在另一个终端手动连接：
-
-```bash
-# Claude Code
-claude-tap --tap-no-launch --tap-port 8080
-# 在另一个终端:
-ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
-
-# Anthropic Python SDK（或任何基于它构建的自定义 Agent）
-claude-tap --tap-no-launch --tap-port 8080
-# 在你的 Agent 进程中:
-ANTHROPIC_BASE_URL=http://127.0.0.1:8080 python your_agent.py
-
-# Codex CLI（OAuth）
-claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 8080
-# 在另一个终端:
-OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
-
-# Codex CLI（API Key）
-claude-tap --tap-client codex --tap-no-launch --tap-port 8080
-# 在另一个终端:
-OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
-
-# Kimi CLI
-claude-tap --tap-client kimi --tap-no-launch --tap-port 8080
-# 在另一个终端:
-KIMI_BASE_URL=http://127.0.0.1:8080 kimi
-
-# Gemini CLI（仅 reverse 模式）
-claude-tap --tap-client gemini --tap-proxy-mode reverse --tap-no-launch --tap-port 8080
-# 在另一个终端:
-GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8080 GOOGLE_VERTEX_BASE_URL=http://127.0.0.1:8080 gemini
-```
-
-### 常用组合
-
-```bash
-# 追踪 Claude Code：实时查看器 + 自动批准
-claude-tap --tap-live -- --dangerously-skip-permissions
-
-# 追踪 Codex：实时查看器 + 全自动
-claude-tap --tap-client codex --tap-live -- --full-auto
-
-# 自定义 trace 输出目录
+# 自定义 trace 输出目录，或限制保留数量
 claude-tap --tap-output-dir ./my-traces
-
-# 仅保留最近 10 次 trace
 claude-tap --tap-max-traces 10
+
+# 只启动代理，给自定义场景使用
+claude-tap --tap-no-launch --tap-port 8080
+
+# 退出后不自动打开生成的查看器
+claude-tap --tap-no-open
 ```
+
+纯代理模式下，可以在另一个终端启动客户端，并把它的 base URL 或代理配置指向本地代理。具体接法见 [客户端支持矩阵](docs/support-matrix.md)。
 
 ### CLI 选项
 
@@ -381,6 +329,8 @@ claude-tap --tap-max-traces 10
 </details>
 
 ## 查看器功能
+
+上面的“为什么用它”讲使用收益；这里列的是 trace 打开后 viewer 里能用的具体能力。
 
 <details>
 <summary>Trace 查看器能力</summary>
@@ -442,6 +392,11 @@ claude-tap --tap-max-traces 10
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/oxkrypton"><img src="https://avatars.githubusercontent.com/u/154910746?s=100" width="100px;" alt="0xkrypton"/><br /><sub><b>0xkrypton</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=oxkrypton" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/googs1025"><img src="https://avatars.githubusercontent.com/u/86391540?s=100" width="100px;" alt="CYJiang"/><br /><sub><b>CYJiang</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=googs1025" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/TITOCHAN2023"><img src="https://avatars.githubusercontent.com/u/138754853?s=100" width="100px;" alt="陈展鹏"/><br /><sub><b>陈展鹏</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=TITOCHAN2023" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/devtalker"><img src="https://avatars.githubusercontent.com/u/23204195?s=100" width="100px;" alt="devtalker"/><br /><sub><b>devtalker</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=devtalker" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/dingyaguang117"><img src="https://avatars.githubusercontent.com/u/1930778?s=100" width="100px;" alt="Yaguang Ding"/><br /><sub><b>Yaguang Ding</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=dingyaguang117" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sephymartin"><img src="https://avatars.githubusercontent.com/u/299891?s=100" width="100px;" alt="Sephy"/><br /><sub><b>Sephy</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=sephymartin" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>

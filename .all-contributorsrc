@@ -67,6 +67,33 @@
       "contributions": [
         "doc"
       ]
+    },
+    {
+      "login": "devtalker",
+      "name": "devtalker",
+      "avatar_url": "https://avatars.githubusercontent.com/u/23204195",
+      "profile": "https://github.com/devtalker",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "dingyaguang117",
+      "name": "Yaguang Ding",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1930778",
+      "profile": "https://github.com/dingyaguang117",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "sephymartin",
+      "name": "Sephy",
+      "avatar_url": "https://avatars.githubusercontent.com/u/299891",
+      "profile": "https://github.com/sephymartin",
+      "contributions": [
+        "code"
+      ]
     }
   ]
 }

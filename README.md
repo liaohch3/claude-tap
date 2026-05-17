@@ -5,7 +5,7 @@
 [![Python version](https://img.shields.io/pypi/pyversions/claude-tap.svg)](https://pypi.org/project/claude-tap/)
 [![License](https://img.shields.io/github/license/liaohch3/claude-tap.svg)](https://github.com/liaohch3/claude-tap/blob/main/LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/liaohch3/claude-tap?style=social)](https://github.com/liaohch3/claude-tap/stargazers)
-[![All Contributors](https://img.shields.io/badge/all_contributors-6-orange.svg)](#contributors)
+[![All Contributors](https://img.shields.io/badge/all_contributors-9-orange.svg)](#contributors)
 
 [中文文档](README_zh.md)
 
@@ -26,28 +26,26 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 
 </details>
 
-> **OpenClaw:** If you are integrating claude-tap with OpenClaw, read the [OpenClaw setup guide](docs/guides/OPENCLAW_README.md). Simplified Chinese version: [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md).
-
 ## Why use it
 
-- **See what the agent really sent**: prompts, messages, tool definitions, tool inputs, tool results, response chunks, and usage.
-- **Debug agent behavior faster**: compare consecutive requests with structural and character-level diffs.
-- **Use real evidence**: every run writes a JSONL trace plus a self-contained HTML viewer you can share or archive.
-- **Works across client architectures**: reverse proxy for base-URL clients, forward proxy for multi-provider clients.
-- **No cloud dashboard required**: traces stay on your machine; common auth headers are redacted from recorded requests.
+- 👀 **See the exact context**: inspect prompts, messages, tool definitions, tool calls, tool results, streaming chunks, and token usage.
+- 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
+- 📦 **Share one portable artifact**: each run writes a JSONL trace and a self-contained HTML viewer for review or archiving.
+- 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
+- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, and Cursor CLI.
 
 ## Supported Clients
 
-| Client | Default capture mode | Typical use |
-|--------|----------------------|-------------|
-| Claude Code | Reverse proxy | Anthropic API or Claude-compatible gateways such as DeepSeek / GLM |
-| Codex CLI | Reverse proxy | OpenAI API key mode or ChatGPT subscription OAuth |
-| Gemini CLI | Forward proxy | Google OAuth / Code Assist traffic across Google endpoints |
-| Kimi CLI | Reverse proxy | Kimi Code or Moonshot Open Platform |
-| OpenCode | Forward proxy | Multi-provider OpenCode sessions |
-| Pi | Forward proxy | Pi sessions, including OpenAI Codex OAuth providers |
-| Hermes Agent | Forward proxy | Multi-provider Hermes TUI or gateway sessions |
-| Cursor CLI | Forward proxy | Cursor Agent sessions plus readable local transcript import |
+| Client | Typical use |
+|--------|-------------|
+| Claude Code | Anthropic API or Claude-compatible gateways such as DeepSeek / GLM |
+| Codex CLI | OpenAI API key mode or ChatGPT subscription OAuth |
+| Gemini CLI | Google OAuth / Code Assist traffic |
+| Kimi CLI | Kimi Code or Moonshot Open Platform |
+| OpenCode | Multi-provider OpenCode sessions |
+| Pi | Pi sessions, including OpenAI Codex OAuth providers |
+| Hermes Agent | Multi-provider Hermes TUI or gateway sessions |
+| Cursor CLI | Cursor Agent sessions plus readable local transcript import |
 
 ## Install
 
@@ -279,87 +277,37 @@ claude-tap --tap-client cursor -- -p --trust --model auto --continue "continue"
 
 </details>
 
+## Guides and Integrations
+
+- [OpenClaw setup guide](docs/guides/OPENCLAW_README.md) for integrating `claude-tap` with OpenClaw. Simplified Chinese version: [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md).
+- [Claude Code with DeepSeek API](docs/guides/deepseek-claude-code.md) for routing Claude Code through DeepSeek's Anthropic-compatible API. Simplified Chinese version: [Claude Code 搭配 DeepSeek API](docs/guides/deepseek-claude-code.zh.md).
+- [Client support matrix](docs/support-matrix.md) for exact environment variables, proxy modes, and URL rewrite rules.
+
 <details>
-<summary>Browser preview, export, and proxy-only mode</summary>
+<summary>Viewer, export, and advanced options</summary>
 
 ```bash
-# Disable auto-open of HTML viewer after exit (on by default)
-claude-tap --tap-no-open
-
-# Live mode — real-time viewer opens in browser while client runs
+# Live viewer while a client runs
 claude-tap --tap-live
-claude-tap --tap-live --tap-live-port 3000    # fixed port for live viewer
 
-# Standalone dashboard — browse trace history without launching a client
+# Browse saved traces without launching a client
 claude-tap dashboard
-claude-tap dashboard --tap-output-dir ./my-traces --tap-live-port 3000
-```
 
-When the client exits, you can also manually open the generated viewer:
-
-```bash
-open .traces/*/trace_*.html
-```
-
-You can also regenerate a self-contained HTML viewer from an existing JSONL trace:
-
-```bash
+# Regenerate a self-contained HTML viewer from JSONL
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
-# or:
-claude-tap export .traces/2026-02-28/trace_141557.jsonl --format html
-```
 
-### Proxy-only mode
-
-Start the proxy without launching a client — useful for custom setups or connecting from a separate terminal:
-
-```bash
-# Claude Code
-claude-tap --tap-no-launch --tap-port 8080
-# In another terminal:
-ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude
-
-# Anthropic Python SDK (or any custom agent built on it)
-claude-tap --tap-no-launch --tap-port 8080
-# In your agent process:
-ANTHROPIC_BASE_URL=http://127.0.0.1:8080 python your_agent.py
-
-# Codex CLI (OAuth)
-claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 8080
-# In another terminal:
-OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
-
-# Codex CLI (API Key)
-claude-tap --tap-client codex --tap-no-launch --tap-port 8080
-# In another terminal:
-OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex -c 'openai_base_url="http://127.0.0.1:8080/v1"'
-
-# Kimi CLI
-claude-tap --tap-client kimi --tap-no-launch --tap-port 8080
-# In another terminal:
-KIMI_BASE_URL=http://127.0.0.1:8080 kimi
-
-# Gemini CLI (reverse mode only)
-claude-tap --tap-client gemini --tap-proxy-mode reverse --tap-no-launch --tap-port 8080
-# In another terminal:
-GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8080 GOOGLE_VERTEX_BASE_URL=http://127.0.0.1:8080 gemini
-```
-
-### Common Combos
-
-```bash
-# Trace Claude Code with live viewer and auto-accept
-claude-tap --tap-live -- --dangerously-skip-permissions
-
-# Trace Codex with live viewer and full auto
-claude-tap --tap-client codex --tap-live -- --full-auto
-
-# Save traces to a custom directory
+# Store traces in another directory, or keep fewer sessions
 claude-tap --tap-output-dir ./my-traces
-
-# Keep only the last 10 trace sessions
 claude-tap --tap-max-traces 10
+
+# Start only the proxy for custom setups
+claude-tap --tap-no-launch --tap-port 8080
+
+# Disable auto-open of the generated viewer after exit
+claude-tap --tap-no-open
 ```
+
+In proxy-only mode, start your client in another terminal and point its base URL or proxy settings at the local proxy. Use the [client support matrix](docs/support-matrix.md) for exact wiring.
 
 ### CLI Options
 
@@ -384,6 +332,8 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 </details>
 
 ## Viewer Features
+
+The "Why use it" section describes the outcomes; this section lists the concrete viewer controls available after a trace is captured.
 
 <details>
 <summary>Trace viewer capabilities</summary>
@@ -445,6 +395,11 @@ Thanks goes to these contributors:
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/oxkrypton"><img src="https://avatars.githubusercontent.com/u/154910746?s=100" width="100px;" alt="0xkrypton"/><br /><sub><b>0xkrypton</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=oxkrypton" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/googs1025"><img src="https://avatars.githubusercontent.com/u/86391540?s=100" width="100px;" alt="CYJiang"/><br /><sub><b>CYJiang</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=googs1025" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/TITOCHAN2023"><img src="https://avatars.githubusercontent.com/u/138754853?s=100" width="100px;" alt="陈展鹏"/><br /><sub><b>陈展鹏</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=TITOCHAN2023" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/devtalker"><img src="https://avatars.githubusercontent.com/u/23204195?s=100" width="100px;" alt="devtalker"/><br /><sub><b>devtalker</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=devtalker" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/dingyaguang117"><img src="https://avatars.githubusercontent.com/u/1930778?s=100" width="100px;" alt="Yaguang Ding"/><br /><sub><b>Yaguang Ding</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=dingyaguang117" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sephymartin"><img src="https://avatars.githubusercontent.com/u/299891?s=100" width="100px;" alt="Sephy"/><br /><sub><b>Sephy</b></sub></a><br /><a href="https://github.com/liaohch3/claude-tap/commits?author=sephymartin" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
