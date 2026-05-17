@@ -13,18 +13,31 @@
 
 It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), and [Cursor CLI](https://cursor.com/cli).
 
-![Demo](docs/demo.gif)
+<p align="center">
+  <img src="docs/demo.gif" alt="claude-tap demo showing a real Codex trace" width="100%">
+  <br>
+  <sub>Open a real agent run, inspect every request, and compare how context changes between turns.</sub>
+</p>
 
-![Light Mode](docs/viewer-light.png)
-
-<details>
-<summary>Dark Mode / Diff View</summary>
-
-![Dark Mode](docs/viewer-dark.png)
-![Structural Diff](docs/diff-modal.png)
-![Character-level Diff](docs/billing-header-diff.png)
-
-</details>
+<table>
+  <tr>
+    <td width="33%" align="center">
+      <img src="docs/viewer-light.png" alt="Light mode trace viewer" width="100%">
+      <br>
+      <sub>Light viewer overview</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="docs/viewer-dark.png" alt="Dark mode trace viewer" width="100%">
+      <br>
+      <sub>Dark mode for long review sessions</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="docs/diff-modal.png" alt="Structured diff modal" width="100%">
+      <br>
+      <sub>Structured diff across adjacent requests</sub>
+    </td>
+  </tr>
+</table>
 
 ## Why use it
 
@@ -38,14 +51,14 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 
 | Client | Typical use |
 |--------|-------------|
-| Claude Code | Anthropic API or Claude-compatible gateways such as DeepSeek / GLM |
-| Codex CLI | OpenAI API key mode or ChatGPT subscription OAuth |
-| Gemini CLI | Google OAuth / Code Assist traffic |
-| Kimi CLI | Kimi Code or Moonshot Open Platform |
-| OpenCode | Multi-provider OpenCode sessions |
-| Pi | Pi sessions, including OpenAI Codex OAuth providers |
-| Hermes Agent | Multi-provider Hermes TUI or gateway sessions |
-| Cursor CLI | Cursor Agent sessions plus readable local transcript import |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API or Claude-compatible gateways such as DeepSeek / GLM |
+| [Codex CLI](https://github.com/openai/codex) | OpenAI API key mode or ChatGPT subscription OAuth |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code or Moonshot Open Platform |
+| [OpenCode](https://opencode.ai) | Multi-provider OpenCode sessions |
+| [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi sessions, including OpenAI Codex OAuth providers |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Multi-provider Hermes TUI or gateway sessions |
+| [Cursor CLI](https://cursor.com/cli) | Cursor Agent sessions plus readable local transcript import |
 
 ## Install
 

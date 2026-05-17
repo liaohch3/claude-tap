@@ -13,18 +13,31 @@
 
 它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent) 和 [Cursor CLI](https://cursor.com/cli)。
 
-![演示](docs/demo_zh.gif)
+<p align="center">
+  <img src="docs/demo_zh.gif" alt="claude-tap 演示：真实 Codex trace" width="100%">
+  <br>
+  <sub>打开一次真实 agent 运行，检查每个请求，并对比上下文如何在多轮之间变化。</sub>
+</p>
 
-![亮色模式](docs/viewer-zh.png)
-
-<details>
-<summary>暗色模式 / Diff 视图</summary>
-
-![暗色模式](docs/viewer-dark.png)
-![结构化 Diff](docs/diff-modal.png)
-![字符级 Diff](docs/billing-header-diff.png)
-
-</details>
+<table>
+  <tr>
+    <td width="33%" align="center">
+      <img src="docs/viewer-zh.png" alt="亮色模式 trace 查看器" width="100%">
+      <br>
+      <sub>亮色模式总览</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="docs/viewer-dark.png" alt="暗色模式 trace 查看器" width="100%">
+      <br>
+      <sub>适合长时间 review 的暗色模式</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="docs/diff-modal.png" alt="结构化 Diff 弹窗" width="100%">
+      <br>
+      <sub>相邻请求之间的结构化 Diff</sub>
+    </td>
+  </tr>
+</table>
 
 ## 为什么用它
 
@@ -38,14 +51,14 @@
 
 | 客户端 | 典型用途 |
 |--------|----------|
-| Claude Code | Anthropic API，或 DeepSeek / GLM 等 Claude 兼容网关 |
-| Codex CLI | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
-| Gemini CLI | Google OAuth / Code Assist 的多 Google 端点流量 |
-| Kimi CLI | Kimi Code 或 Moonshot Open Platform |
-| OpenCode | 多提供方 OpenCode 会话 |
-| Pi | Pi 会话，包括 OpenAI Codex OAuth 提供方 |
-| Hermes Agent | 多提供方 Hermes TUI 或 gateway 会话 |
-| Cursor CLI | Cursor Agent 会话，并导入可读的本地 transcript |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API，或 DeepSeek / GLM 等 Claude 兼容网关 |
+| [Codex CLI](https://github.com/openai/codex) | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist 的多 Google 端点流量 |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code 或 Moonshot Open Platform |
+| [OpenCode](https://opencode.ai) | 多提供方 OpenCode 会话 |
+| [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi 会话，包括 OpenAI Codex OAuth 提供方 |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 多提供方 Hermes TUI 或 gateway 会话 |
+| [Cursor CLI](https://cursor.com/cli) | Cursor Agent 会话，并导入可读的本地 transcript |
 
 ## 安装
 
