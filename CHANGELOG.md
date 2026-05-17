@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.71] - 2026-05-17
+
+### Changed
+- docs: expand messages in light viewer screenshot (#181)
 ## [0.1.70] - 2026-05-17
 
 ### Changed
