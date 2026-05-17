@@ -45,13 +45,15 @@ Best for: button disabled states, overlay show/hide, keyboard events, click navi
 
 ```python
 def _build_test_html():
-    template = Path("claude_tap/viewer.html").read_text()
+    from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, _read_viewer_template
+
+    template = _read_viewer_template()
     records = [json.dumps(e) for e in TEST_ENTRIES]
     data_js = "const EMBEDDED_TRACE_DATA = [\n" + ",\n".join(records) + "\n];\n"
     # Inject data into template
     return template.replace(
-        "<script>\nconst $ = s =>",
-        f"<script>\n{data_js}</script>\n<script>\nconst $ = s =>",
+        VIEWER_SCRIPT_ANCHOR,
+        f"<script>\n{data_js}</script>\n{VIEWER_SCRIPT_ANCHOR}",
         1,
     )
 ```

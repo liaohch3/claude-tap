@@ -17,6 +17,37 @@ except Exception:
 
 # Threshold: traces with more entries than this use lazy mode
 LAZY_THRESHOLD = 50
+VIEWER_TEMPLATE_PATH = Path(__file__).parent / "viewer.html"
+VIEWER_I18N_PATH = Path(__file__).parent / "viewer_i18n.json"
+VIEWER_SCRIPT_ANCHOR = "<script>\nconst $ = s =>"
+
+
+def _load_viewer_i18n() -> dict[str, dict[str, str]]:
+    data = json.loads(VIEWER_I18N_PATH.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("viewer_i18n.json must contain a JSON object.")
+    for lang, entries in data.items():
+        if not isinstance(lang, str) or not isinstance(entries, dict):
+            raise ValueError("viewer_i18n.json must map language codes to string maps.")
+        if not all(isinstance(key, str) and isinstance(value, str) for key, value in entries.items()):
+            raise ValueError("viewer_i18n.json language maps must contain string keys and values.")
+    return data
+
+
+def _viewer_i18n_script() -> str:
+    payload = json.dumps(_load_viewer_i18n(), ensure_ascii=False, separators=(",", ":"))
+    return f"const __CLAUDE_TAP_I18N__ = {payload};\n"
+
+
+def _read_viewer_template() -> str:
+    html = VIEWER_TEMPLATE_PATH.read_text(encoding="utf-8")
+    if VIEWER_SCRIPT_ANCHOR not in html:
+        raise ValueError("viewer.html is missing the main script anchor.")
+    return html.replace(
+        VIEWER_SCRIPT_ANCHOR,
+        f"<script>\n{_viewer_i18n_script()}</script>\n{VIEWER_SCRIPT_ANCHOR}",
+        1,
+    )
 
 
 def _iter_response_events(resp: dict) -> list[dict]:
@@ -647,8 +678,7 @@ def _extract_metadata(record_json: str) -> dict | None:
 
 def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
     """Read viewer.html template, embed JSONL data, write self-contained HTML."""
-    template = Path(__file__).parent / "viewer.html"
-    if not template.exists():
+    if not VIEWER_TEMPLATE_PATH.exists():
         return
 
     # Read JSONL records
@@ -693,13 +723,13 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
             f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
         )
 
-        html = template.read_text(encoding="utf-8")
+        html = _read_viewer_template()
         # Inject data script + raw JSONL block before the main <script> tag
         html = html.replace(
-            "<script>\nconst $ = s =>",
+            VIEWER_SCRIPT_ANCHOR,
             f"<script>\n{data_js}</script>\n"
             f'<script type="text/plain" id="trace-raw">\n{raw_lines}\n</script>\n'
-            "<script>\nconst $ = s =>",
+            f"{VIEWER_SCRIPT_ANCHOR}",
             1,
         )
     else:
@@ -711,10 +741,10 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
             f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
         )
 
-        html = template.read_text(encoding="utf-8")
+        html = _read_viewer_template()
         html = html.replace(
-            "<script>\nconst $ = s =>",
-            f"<script>\n{data_js}</script>\n<script>\nconst $ = s =>",
+            VIEWER_SCRIPT_ANCHOR,
+            f"<script>\n{data_js}</script>\n{VIEWER_SCRIPT_ANCHOR}",
             1,
         )
 

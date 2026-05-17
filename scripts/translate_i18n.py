@@ -18,7 +18,7 @@ DEFAULT_MODEL = "google/gemini-2.5-flash"
 LANG_ORDER = ["ja", "ko", "fr", "ar", "de", "ru"]
 
 TARGET_CONFIG = {
-    "viewer": {"file": "claude_tap/viewer.html", "object_name": "I18N"},
+    "viewer": {"file": "claude_tap/viewer_i18n.json", "object_name": "I18N"},
     # Future scope: if CLI gains i18n object, this target can be used directly.
     "cli": {"file": "claude_tap/cli.py", "object_name": "I18N"},
 }
@@ -103,6 +103,27 @@ def collect_i18n_data(
     lang_blocks = parse_lang_blocks(object_block.body)
     lang_entries = {lang: parse_lang_entries(block.body) for lang, block in lang_blocks.items()}
     return object_block, lang_blocks, lang_entries
+
+
+def validate_i18n_json(data: object) -> dict[str, dict[str, str]]:
+    if not isinstance(data, dict):
+        raise ValueError("I18N JSON must contain an object.")
+
+    entries: dict[str, dict[str, str]] = {}
+    for lang, values in data.items():
+        if not isinstance(lang, str) or not isinstance(values, dict):
+            raise ValueError("I18N JSON must map language codes to string maps.")
+        lang_entries: dict[str, str] = {}
+        for key, value in values.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise ValueError("I18N JSON language maps must contain string keys and values.")
+            lang_entries[key] = value
+        entries[lang] = lang_entries
+    return entries
+
+
+def load_i18n_json(path: Path) -> dict[str, dict[str, str]]:
+    return validate_i18n_json(json.loads(path.read_text(encoding="utf-8")))
 
 
 def find_missing_keys(lang_entries: dict[str, dict[str, str]], target_languages: list[str]) -> dict[str, list[str]]:
@@ -290,6 +311,18 @@ def apply_translations_to_source(
     return source[: object_block.start] + updated_block + source[object_block.end :]
 
 
+def apply_translations_to_json_entries(
+    lang_entries: dict[str, dict[str, str]],
+    updates: dict[str, dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    updated = {lang: dict(entries) for lang, entries in lang_entries.items()}
+    for lang, translations in updates.items():
+        if lang not in updated or not translations:
+            continue
+        updated[lang].update(translations)
+    return updated
+
+
 def build_updated_lang_body(lang_body: str, translations: dict[str, str]) -> str:
     lines = lang_body.splitlines(keepends=True)
     key_line_indices = [i for i, line in enumerate(lines) if re.search(r"[A-Za-z0-9_]+\s*:\s*\"", line)]
@@ -363,8 +396,13 @@ def main(argv: list[str] | None = None) -> int:
     if not target_path.exists():
         parser.error(f"Target file not found: {target_path}")
 
-    source = target_path.read_text(encoding="utf-8")
-    _, _, lang_entries = collect_i18n_data(source, object_name)
+    is_json_target = target_path.suffix.lower() == ".json"
+    if is_json_target:
+        lang_entries = load_i18n_json(target_path)
+        source = ""
+    else:
+        source = target_path.read_text(encoding="utf-8")
+        _, _, lang_entries = collect_i18n_data(source, object_name)
     missing = find_missing_keys(lang_entries, LANG_ORDER)
 
     if args.dry_run or not missing:
@@ -395,8 +433,12 @@ def main(argv: list[str] | None = None) -> int:
         updates[lang] = lang_update
         translated_summary[lang] = list(lang_update)
 
-    updated_source = apply_translations_to_source(source, object_name, updates)
-    target_path.write_text(updated_source, encoding="utf-8")
+    if is_json_target:
+        updated_entries = apply_translations_to_json_entries(lang_entries, updates)
+        target_path.write_text(json.dumps(updated_entries, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        updated_source = apply_translations_to_source(source, object_name, updates)
+        target_path.write_text(updated_source, encoding="utf-8")
 
     print_summary(missing, translated_summary, dry_run=False)
     print(f"Updated file: {target_path}")

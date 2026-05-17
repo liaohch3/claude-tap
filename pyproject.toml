@@ -44,7 +44,7 @@ version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
 
 [tool.setuptools.package-data]
-claude_tap = ["viewer.html", "py.typed"]
+claude_tap = ["viewer.html", "viewer_i18n.json", "py.typed"]
 
 [project.optional-dependencies]
 dev = [

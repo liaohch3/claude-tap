@@ -10,6 +10,8 @@ from pathlib import Path
 
 from aiohttp import web
 
+from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, VIEWER_TEMPLATE_PATH, _read_viewer_template
+
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -95,11 +97,10 @@ class LiveViewerServer:
 
     async def _handle_index(self, request: web.Request) -> web.Response:
         """Serve the viewer HTML with live mode enabled."""
-        template = Path(__file__).parent / "viewer.html"
-        if not template.exists():
+        if not VIEWER_TEMPLATE_PATH.exists():
             return web.Response(status=404, text="viewer.html not found")
 
-        html = template.read_text(encoding="utf-8")
+        html = _read_viewer_template()
         jsonl_path_js = json.dumps(str(self.trace_path.absolute()))
         html_path = self.trace_path.with_suffix(".html")
         html_path_js = json.dumps(str(html_path.absolute()))
@@ -109,8 +110,8 @@ class LiveViewerServer:
             f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
         )
         html = html.replace(
-            "<script>\nconst $ = s =>",
-            f"<script>\n{live_js}</script>\n<script>\nconst $ = s =>",
+            VIEWER_SCRIPT_ANCHOR,
+            f"<script>\n{live_js}</script>\n{VIEWER_SCRIPT_ANCHOR}",
             1,
         )
         return web.Response(text=html, content_type="text/html")

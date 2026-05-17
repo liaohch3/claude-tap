@@ -177,3 +177,55 @@ def test_main_dry_run_exits_without_api_key(tmp_path: Path, capsys) -> None:
     assert "Dry run: missing keys that would be translated" in out
     assert "- ja: planned 1 key(s)" in out
     assert test_file.read_text(encoding="utf-8") == SAMPLE_SOURCE
+
+
+def test_main_dry_run_supports_json_i18n_source(tmp_path: Path, capsys) -> None:
+    entries = {
+        "en": {"title": "Trace Viewer", "copy": "Copy", "refresh": "Refresh"},
+        "zh-CN": {"title": "追踪查看器", "copy": "复制", "refresh": "刷新"},
+        "ja": {"title": "トレースビューア", "copy": "コピー"},
+    }
+    test_file = tmp_path / "viewer_i18n.json"
+    original = json.dumps(entries, ensure_ascii=False, indent=2) + "\n"
+    test_file.write_text(original, encoding="utf-8")
+
+    code = MODULE.main(["--dry-run", "--file", str(test_file)])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "Dry run: missing keys that would be translated" in out
+    assert "- ja: planned 1 key(s)" in out
+    assert "  - refresh" in out
+    assert test_file.read_text(encoding="utf-8") == original
+
+
+def test_apply_translations_to_json_entries_updates_existing_languages_only() -> None:
+    entries = {
+        "en": {"title": "Trace Viewer"},
+        "zh-CN": {"title": "追踪查看器"},
+        "ja": {"title": "トレースビューア"},
+    }
+
+    updated = MODULE.apply_translations_to_json_entries(
+        entries,
+        {
+            "ja": {"refresh": "更新"},
+            "missing-lang": {"refresh": "ignored"},
+        },
+    )
+
+    assert updated["ja"] == {"title": "トレースビューア", "refresh": "更新"}
+    assert "missing-lang" not in updated
+    assert entries["ja"] == {"title": "トレースビューア"}
+
+
+def test_load_i18n_json_rejects_non_string_values(tmp_path: Path) -> None:
+    test_file = tmp_path / "bad_i18n.json"
+    test_file.write_text(json.dumps({"en": {"title": 123}, "zh-CN": {"title": "追踪查看器"}}), encoding="utf-8")
+
+    try:
+        MODULE.load_i18n_json(test_file)
+    except ValueError as exc:
+        assert "string keys and values" in str(exc)
+    else:
+        raise AssertionError("Expected invalid i18n JSON to be rejected")

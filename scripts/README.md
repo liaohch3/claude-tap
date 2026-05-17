@@ -24,9 +24,9 @@ python scripts/check_coverage.py --python-coverage .coverage.json
 
 ## `translate_i18n.py`
 
-Translate missing i18n strings in `claude_tap/viewer.html` using OpenRouter.
+Translate missing i18n strings in `claude_tap/viewer_i18n.json` using OpenRouter.
 
-It parses the `I18N` object, finds keys present in both `en` and `zh-CN` but missing in other supported languages (`ja`, `ko`, `fr`, `ar`, `de`, `ru`), and writes new translations back into the same object.
+It parses the viewer i18n JSON source, finds keys present in both `en` and `zh-CN` but missing in other supported languages (`ja`, `ko`, `fr`, `ar`, `de`, `ru`), and writes new translations back into the same file.
 
 ### Requirements
 
@@ -39,7 +39,7 @@ It parses the `I18N` object, finds keys present in both `en` and `zh-CN` but mis
 # Show missing keys only (no file changes)
 python scripts/translate_i18n.py --dry-run
 
-# Translate missing keys and update viewer.html in place
+# Translate missing keys and update viewer_i18n.json in place
 python scripts/translate_i18n.py
 
 # Use a specific model

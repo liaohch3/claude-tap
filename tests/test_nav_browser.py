@@ -90,8 +90,9 @@ TRACE_ENTRIES = [
 
 def _build_test_html() -> str:
     """Generate self-contained viewer HTML with embedded test trace data."""
-    template_path = Path(__file__).parent.parent / "claude_tap" / "viewer.html"
-    html = template_path.read_text(encoding="utf-8")
+    from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, _read_viewer_template
+
+    html = _read_viewer_template()
 
     records = [json.dumps(e) for e in TRACE_ENTRIES]
     data_js = (
@@ -100,8 +101,8 @@ def _build_test_html() -> str:
         'const __TRACE_HTML_PATH__ = "/tmp/test.html";\n'
     )
     html = html.replace(
-        "<script>\nconst $ = s =>",
-        f"<script>\n{data_js}</script>\n<script>\nconst $ = s =>",
+        VIEWER_SCRIPT_ANCHOR,
+        f"<script>\n{data_js}</script>\n{VIEWER_SCRIPT_ANCHOR}",
         1,
     )
     return html
