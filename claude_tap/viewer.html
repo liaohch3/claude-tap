@@ -327,31 +327,31 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   border-color: color-mix(in srgb, var(--blue) 45%, transparent);
   background: var(--blue-bg);
 }
-.pro-format-bar {
+.trace-format-bar {
   display: flex; align-items: center; justify-content: flex-end; gap: 4px;
   margin: -2px 0 8px;
 }
-.pro-format-btn {
+.trace-format-btn {
   min-height: 26px; padding: 4px 9px;
   border: 1px solid var(--border); border-radius: 6px;
   background: var(--bg-card); color: var(--text-secondary);
   cursor: pointer; font-family: var(--mono); font-size: 10px; line-height: 1;
   transition: color .15s, border-color .15s, background .15s;
 }
-.pro-format-btn:hover { color: var(--blue); border-color: var(--blue); }
-.pro-format-btn.active {
+.trace-format-btn:hover { color: var(--blue); border-color: var(--blue); }
+.trace-format-btn.active {
   color: var(--blue);
   border-color: color-mix(in srgb, var(--blue) 45%, transparent);
   background: var(--blue-bg);
 }
-.pro-grid { display: grid; gap: 10px; }
-.pro-block {
+.trace-grid { display: grid; gap: 10px; }
+.trace-block {
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--bg-card);
   overflow: hidden;
 }
-.pro-block-title {
+.trace-block-title {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 8px 11px;
   border-bottom: 1px solid var(--border-light);
@@ -360,12 +360,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   font-size: 12px;
   font-weight: 700;
 }
-.pro-block-title .pro-badge {
+.trace-block-title .trace-badge {
   color: var(--text-tertiary);
   font-size: 10px;
   font-weight: 500;
 }
-.pro-code {
+.trace-code {
   padding: 12px 13px;
   max-height: 360px;
   overflow: auto;
@@ -378,7 +378,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   word-break: break-word;
   border: none;
 }
-.pro-pretty {
+.trace-pretty {
   padding: 10px 12px;
   max-height: 360px;
   overflow: auto;
@@ -387,29 +387,29 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   font-size: 12px;
   line-height: 1.55;
 }
-.pro-pretty-object, .pro-pretty-array { display: grid; gap: 7px; }
-.pro-kv, .pro-nested, .pro-array-item {
+.trace-pretty-object, .trace-pretty-array { display: grid; gap: 7px; }
+.trace-kv, .trace-nested, .trace-array-item {
   border-left: 2px solid var(--border-light);
   padding-left: 9px;
 }
-.pro-key, .pro-nested-title, .pro-index {
+.trace-key, .trace-nested-title, .trace-index {
   display: inline-block;
   margin-right: 8px;
   color: var(--text-tertiary);
   font-weight: 700;
 }
-.pro-index {
+.trace-index {
   min-width: 22px;
   color: var(--blue);
 }
-.pro-value { color: var(--text); }
-.pro-string-block {
+.trace-value { color: var(--text); }
+.trace-string-block {
   margin: 5px 0 0;
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text);
 }
-.pro-empty { color: var(--text-tertiary); }
+.trace-empty { color: var(--text-tertiary); }
 
 /* ─── Section ─── */
 .section {
@@ -3191,7 +3191,7 @@ function selectEntry(idx, opts) {
 // Key: section title text, Value: true = open, false = collapsed.
 const sectionCollapseState = {};
 let detailViewMode = 'default';
-let proFormatMode = 'json';
+let traceFormatMode = 'json';
 
 function saveSectionStates() {
   const d = $('#detail');
@@ -3242,27 +3242,27 @@ function detailTabButton(mode, label) {
 function renderDetailViewTabs() {
   return `<div class="detail-inspector-bar" role="tablist" aria-label="Detail view mode"><div class="detail-tabs">
     ${detailTabButton('default', t('tab_default'))}
-    ${detailTabButton('pro', t('tab_trace'))}
+    ${detailTabButton('trace', t('tab_trace'))}
   </div></div>`;
 }
 
-function setProFormatMode(mode) {
+function setTraceFormatMode(mode) {
   if (!['json', 'yaml', 'pretty'].includes(mode)) return;
-  proFormatMode = mode;
+  traceFormatMode = mode;
   const entry = filtered[activeIdx];
   if (!entry) return;
   renderDetail(entry._isStub ? getFullEntry(entry) : entry);
 }
 
-function renderProFormatControls() {
+function renderTraceFormatControls() {
   const modes = [
     ['json', t('format_json')],
     ['yaml', t('format_yaml')],
     ['pretty', t('format_pretty')],
   ];
-  return `<div class="pro-format-bar" role="toolbar" aria-label="Trace format">${modes.map(([mode, label]) => {
-    const active = proFormatMode === mode;
-    return `<button type="button" data-format="${mode}" class="pro-format-btn ${active ? 'active' : ''}" aria-pressed="${active ? 'true' : 'false'}" onclick="setProFormatMode('${mode}')">${esc(label)}</button>`;
+  return `<div class="trace-format-bar" role="toolbar" aria-label="Trace format">${modes.map(([mode, label]) => {
+    const active = traceFormatMode === mode;
+    return `<button type="button" data-format="${mode}" class="trace-format-btn ${active ? 'active' : ''}" aria-pressed="${active ? 'true' : 'false'}" onclick="setTraceFormatMode('${mode}')">${esc(label)}</button>`;
   }).join('')}</div>`;
 }
 
@@ -3290,36 +3290,33 @@ function renderDetail(e) {
   const streamEvents = getResponseEvents(e);
   html += renderDetailViewTabs();
 
-  // Action bar
-  const actionBarHtml = `<div class="action-bar">
-    <button class="act-btn" onclick="copyRequestBody(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>${t('btn_request_json')}</button>
-    <button class="act-btn" onclick="copyCurl(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>${t('btn_curl')}</button>
-    <button class="act-btn" onclick="showDiff(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><path d="M3 6h18M3 18h18" opacity=".4"/></svg>${t('btn_diff')}</button>
-  </div>`;
-
-  const toolsSection = tools && tools.length
-    ? section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'))
-    : '';
-  const systemSection = sysPrompt ? section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt) : '';
-  const messagesSection = msgs && msgs.length
-    ? section(contextOnly ? t('section_context') : t('section_messages'), renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'))
-    : '';
-  const responseSection = respOutput?.content || contextOnly
-    ? section(t('section_response'), renderResponseContent(respOutput, contextOnly), true)
-    : '';
-  const streamSection = streamEvents.length
-    ? section(t('section_sse'), renderSSEEvents(streamEvents), false, null, streamEvents.length + ' ' + t('badge_events'))
-    : '';
-  const jsonSection = section(t('section_json'), `<div class="json-view">${renderJSONTree(e)}</div>`, false, JSON.stringify(e, null, 2));
-
   if (detailViewMode === 'default') {
+    const actionBarHtml = `<div class="action-bar">
+      <button class="act-btn" onclick="copyRequestBody(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>${t('btn_request_json')}</button>
+      <button class="act-btn" onclick="copyCurl(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>${t('btn_curl')}</button>
+      <button class="act-btn" onclick="showDiff(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><path d="M3 6h18M3 18h18" opacity=".4"/></svg>${t('btn_diff')}</button>
+    </div>`;
+    const toolsSection = tools && tools.length
+      ? section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'))
+      : '';
+    const systemSection = sysPrompt ? section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt) : '';
+    const messagesSection = msgs && msgs.length
+      ? section(contextOnly ? t('section_context') : t('section_messages'), renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'))
+      : '';
+    const responseSection = respOutput?.content || contextOnly
+      ? section(t('section_response'), renderResponseContent(respOutput, contextOnly), true)
+      : '';
+    const streamSection = streamEvents.length
+      ? section(t('section_sse'), renderSSEEvents(streamEvents), false, null, streamEvents.length + ' ' + t('badge_events'))
+      : '';
+    const jsonSection = section(t('section_json'), `<div class="json-view">${renderJSONTree(e)}</div>`, false, JSON.stringify(e, null, 2));
     html += actionBarHtml;
     if (usage) html += renderTokenUsage(usage);
     html += toolsSection + systemSection + messagesSection + responseSection;
     if (streamEvents.length) html += streamSection;
     html += jsonSection;
-  } else if (detailViewMode === 'pro') {
-    html += renderProDetail(e, { reqBody, sysPrompt, msgs, tools, respOutput, contextOnly, streamEvents, usage });
+  } else if (detailViewMode === 'trace') {
+    html += renderTraceDetail(e, { reqBody, sysPrompt, msgs, tools, respOutput, contextOnly, streamEvents, usage });
   }
 
   d.innerHTML = html;
@@ -3332,12 +3329,12 @@ function renderDetail(e) {
   }
 }
 
-function renderProBlock(title, content, badge = '') {
-  const badgeHtml = badge ? `<span class="pro-badge">${esc(badge)}</span>` : '';
-  return `<div class="pro-block"><div class="pro-block-title"><span>${esc(title)}</span>${badgeHtml}</div>${content}</div>`;
+function renderTraceBlock(title, content, badge = '') {
+  const badgeHtml = badge ? `<span class="trace-badge">${esc(badge)}</span>` : '';
+  return `<div class="trace-block"><div class="trace-block-title"><span>${esc(title)}</span>${badgeHtml}</div>${content}</div>`;
 }
 
-function renderProDetail(entry, ctx) {
+function renderTraceDetail(entry, ctx) {
   const inputPayload = {
     system: ctx.sysPrompt || undefined,
     messages: ctx.msgs || [],
@@ -3361,41 +3358,41 @@ function renderProDetail(entry, ctx) {
     status: getResponseStatus(entry),
   };
 
-  let html = renderProFormatControls();
+  let html = renderTraceFormatControls();
   if (ctx.usage) html += renderTokenUsage(ctx.usage);
-  html += '<div class="pro-grid">';
-  html += renderProBlock(
+  html += '<div class="trace-grid">';
+  html += renderTraceBlock(
     t('tok_input'),
-    renderProPayload(inputPayload),
+    renderTracePayload(inputPayload),
     `${(ctx.msgs || []).length} ${t('badge_messages')}`
   );
-  html += renderProBlock(
+  html += renderTraceBlock(
     t('tok_output'),
-    renderProPayload(responsePayload),
+    renderTracePayload(responsePayload),
     `${getResponseStatus(entry)}`
   );
   if (ctx.streamEvents.length) {
-    html += renderProBlock(
+    html += renderTraceBlock(
       t('section_sse'),
-      renderProPayload(ctx.streamEvents),
+      renderTracePayload(ctx.streamEvents),
       `${ctx.streamEvents.length} ${t('badge_events')}`
     );
   }
-  html += renderProBlock(
+  html += renderTraceBlock(
     t('section_metadata'),
-    renderProPayload(metadata)
+    renderTracePayload(metadata)
   );
   html += '</div>';
   return html;
 }
 
-function renderProPayload(payload) {
-  if (proFormatMode === 'pretty') return `<div class="pro-pretty">${renderProPrettyValue(payload)}</div>`;
-  const text = proFormatMode === 'yaml' ? toProYaml(payload) : JSON.stringify(payload, null, 2);
-  return `<pre class="pro-code" data-format="${proFormatMode}">${esc(text)}</pre>`;
+function renderTracePayload(payload) {
+  if (traceFormatMode === 'pretty') return `<div class="trace-pretty">${renderTracePrettyValue(payload)}</div>`;
+  const text = traceFormatMode === 'yaml' ? toTraceYaml(payload) : JSON.stringify(payload, null, 2);
+  return `<pre class="trace-code" data-format="${traceFormatMode}">${esc(text)}</pre>`;
 }
 
-function isProScalar(value) {
+function isTraceScalar(value) {
   return value === null || value === undefined || typeof value !== 'object';
 }
 
@@ -3416,45 +3413,45 @@ function yamlScalar(value, indent) {
   return JSON.stringify(str);
 }
 
-function toProYaml(value, indent = 0) {
+function toTraceYaml(value, indent = 0) {
   const pad = ' '.repeat(indent);
-  if (isProScalar(value)) return pad + yamlScalar(value, indent);
+  if (isTraceScalar(value)) return pad + yamlScalar(value, indent);
   if (Array.isArray(value)) {
     if (!value.length) return pad + '[]';
     return value.map(item => {
-      if (isProScalar(item)) return `${pad}- ${yamlScalar(item, indent)}`;
-      return `${pad}-\n${toProYaml(item, indent + 2)}`;
+      if (isTraceScalar(item)) return `${pad}- ${yamlScalar(item, indent)}`;
+      return `${pad}-\n${toTraceYaml(item, indent + 2)}`;
     }).join('\n');
   }
   const keys = Object.keys(value).filter(key => value[key] !== undefined);
   if (!keys.length) return pad + '{}';
   return keys.map(key => {
     const item = value[key];
-    if (isProScalar(item)) return `${pad}${yamlKey(key)}: ${yamlScalar(item, indent)}`;
-    return `${pad}${yamlKey(key)}:\n${toProYaml(item, indent + 2)}`;
+    if (isTraceScalar(item)) return `${pad}${yamlKey(key)}: ${yamlScalar(item, indent)}`;
+    return `${pad}${yamlKey(key)}:\n${toTraceYaml(item, indent + 2)}`;
   }).join('\n');
 }
 
-function renderProPrettyScalar(value) {
-  if (value === null || value === undefined) return `<span class="pro-value">${value === undefined ? 'undefined' : 'null'}</span>`;
-  if (typeof value === 'number' || typeof value === 'boolean') return `<span class="pro-value">${esc(String(value))}</span>`;
+function renderTracePrettyScalar(value) {
+  if (value === null || value === undefined) return `<span class="trace-value">${value === undefined ? 'undefined' : 'null'}</span>`;
+  if (typeof value === 'number' || typeof value === 'boolean') return `<span class="trace-value">${esc(String(value))}</span>`;
   const str = String(value);
-  if (str.length > 90 || str.includes('\n')) return `<pre class="pro-string-block">${esc(str)}</pre>`;
-  return `<span class="pro-value">${esc(JSON.stringify(str))}</span>`;
+  if (str.length > 90 || str.includes('\n')) return `<pre class="trace-string-block">${esc(str)}</pre>`;
+  return `<span class="trace-value">${esc(JSON.stringify(str))}</span>`;
 }
 
-function renderProPrettyValue(value, depth = 0) {
-  if (isProScalar(value)) return renderProPrettyScalar(value);
+function renderTracePrettyValue(value, depth = 0) {
+  if (isTraceScalar(value)) return renderTracePrettyScalar(value);
   if (Array.isArray(value)) {
-    if (!value.length) return '<div class="pro-empty">[]</div>';
-    return `<div class="pro-pretty-array">${value.map((item, index) => `<div class="pro-array-item"><span class="pro-index">#${index}</span>${renderProPrettyValue(item, depth + 1)}</div>`).join('')}</div>`;
+    if (!value.length) return '<div class="trace-empty">[]</div>';
+    return `<div class="trace-pretty-array">${value.map((item, index) => `<div class="trace-array-item"><span class="trace-index">#${index}</span>${renderTracePrettyValue(item, depth + 1)}</div>`).join('')}</div>`;
   }
   const keys = Object.keys(value).filter(key => value[key] !== undefined);
-  if (!keys.length) return '<div class="pro-empty">{}</div>';
-  return `<div class="pro-pretty-object">${keys.map(key => {
+  if (!keys.length) return '<div class="trace-empty">{}</div>';
+  return `<div class="trace-pretty-object">${keys.map(key => {
     const item = value[key];
-    if (isProScalar(item)) return `<div class="pro-kv"><span class="pro-key">${esc(key)}</span>${renderProPrettyScalar(item)}</div>`;
-    return `<div class="pro-nested"><div class="pro-nested-title">${esc(key)}</div>${renderProPrettyValue(item, depth + 1)}</div>`;
+    if (isTraceScalar(item)) return `<div class="trace-kv"><span class="trace-key">${esc(key)}</span>${renderTracePrettyScalar(item)}</div>`;
+    return `<div class="trace-nested"><div class="trace-nested-title">${esc(key)}</div>${renderTracePrettyValue(item, depth + 1)}</div>`;
   }).join('')}</div>`;
 }
 

@@ -371,11 +371,11 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                         jsonToggle.click();
                         jsonToggle.click();
                       }
-                      setDetailViewMode('pro');
-                      setProFormatMode('json');
-                      setProFormatMode('yaml');
-                      setProFormatMode('pretty');
-                      renderProPayload({
+                      setDetailViewMode('trace');
+                      setTraceFormatMode('json');
+                      setTraceFormatMode('yaml');
+                      setTraceFormatMode('pretty');
+                      renderTracePayload({
                         emptyObject: {},
                         emptyArray: [],
                         nested: { key: 'value' },
@@ -486,16 +486,16 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
             for index in range(page.evaluate("filtered.length")):
                 page.evaluate("entryIndex => { detailViewMode = 'default'; selectEntry(entryIndex); }", index)
                 merge(page.evaluate(collect_css_script))
-                page.evaluate("setDetailViewMode('pro')")
+                page.evaluate("setDetailViewMode('trace')")
                 merge(page.evaluate(collect_css_script))
                 for mode in ("json", "yaml", "pretty"):
-                    page.evaluate("mode => setProFormatMode(mode)", mode)
+                    page.evaluate("mode => setTraceFormatMode(mode)", mode)
                     merge(page.evaluate(collect_css_script))
                 page.evaluate(
                     """() => {
                       document.querySelector('#detail')?.insertAdjacentHTML(
                         'beforeend',
-                        renderProPayload({
+                        renderTracePayload({
                           emptyObject: {},
                           emptyArray: [],
                           nested: { key: 'value' },
