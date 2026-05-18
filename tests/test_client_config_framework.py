@@ -20,6 +20,7 @@ SUPPORTED_CLIENTS = {
     "hermes",
     "cursor",
     "qoder",
+    "codebuddy",
 }
 
 SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"gemini"}
@@ -35,6 +36,7 @@ SUPPORTED_DEFAULT_PROXY_MODES = {
     "hermes": "forward",
     "cursor": "forward",
     "qoder": "forward",
+    "codebuddy": "reverse",
 }
 
 

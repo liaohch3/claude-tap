@@ -34,6 +34,7 @@ English version: [Support Matrix](support-matrix.md).
 | Cursor CLI | Cursor 登录（`cursor-agent login`） | Forward proxy 到 `https://api2.cursor.sh` | n/a | HTTPS/protobuf + 本地 transcript import | 真实 E2E 已验证 |
 | Qoder CLI | Qoder 登录 / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy（Qoder 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | Antigravity CLI | Antigravity 登录 | Forward proxy + `CLOUD_CODE_URL` bridge 到 `https://daily-cloudcode-pa.googleapis.com` | `CLOUD_CODE_URL` | HTTP/SSE | 手动 E2E 已验证；启动环境、Code Assist bridge 和 macOS 用户 keychain CA 自动信任已由单测覆盖 |
+| CodeBuddy CLI | CodeBuddy 登录（iOA / WeChat / Google-Github / Enterprise Domain） | 自动从 `~/.codebuddy/local_storage/` 缓存识别；默认 `https://copilot.tencent.com/v2` | `CODEBUDDY_BASE_URL` | HTTP/SSE Chat Completions | iOA 真实 E2E 已验证 |
 
 ## 各客户端默认代理模式
 
@@ -51,6 +52,7 @@ English version: [Support Matrix](support-matrix.md).
 | `cursor` | `forward` | Cursor CLI 没有 base URL 覆盖能力；forward proxy 捕获网络流量，本地 transcript 提供可读对话 |
 | `qoder` | `forward` | Qoder CLI 会访问多个 Qoder 服务端点，且没有可靠的单一 base URL 覆盖能力 |
 | `agy` | `forward` | Antigravity 会访问多个 Google / Antigravity 端点；claude-tap 用 `HTTPS_PROXY` 捕获辅助流量，并用 `CLOUD_CODE_URL` 捕获 Code Assist 模型流量 |
+| `codebuddy` | `reverse` | 单 provider，原生支持 `CODEBUDDY_BASE_URL` 环境变量；支持 `--settings` 环境变量注入；上游 endpoint 自动从 CodeBuddy 登录缓存识别 |
 
 用户始终可以通过 `--tap-proxy-mode {reverse,forward}` 显式覆盖。
 
@@ -116,6 +118,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_parse_args_agy_does_not_require_tap_trust_ca`：验证 Antigravity 使用和其他客户端一致的启动形态
 - `test_auto_ca_trust_*`：验证 Antigravity 会自动请求 macOS 用户 keychain CA 信任，且不需要 sudo
 - `test_macos_*_ca_command_*`：验证 CA 信任命令使用用户 login keychain 且不会调用 sudo
+- `test_codebuddy_*`：验证 CodeBuddy 注册、parse_args 默认 reverse 模式、settings 注入、forward/reverse 环境变量、`CODEBUDDY_BASE_URL` 探测，以及登录缓存读取
 
 ### 手动验证（代理变更合入前）
 
@@ -154,6 +157,10 @@ uv run python -m claude_tap --tap-client gemini -- -p "Reply OK" --yolo --output
 uv run python -m claude_tap --tap-client pi -- \
   --model openai-codex/gpt-5.3-codex-spark -p "Reply OK"
 # 验证 trace 包含 chatgpt.com/backend-api 记录和可读的 OpenAI Responses 区块
+
+# CodeBuddy（登录后自动识别端点）
+uv run python -m claude_tap --tap-client codebuddy -- -p "Reply OK"
+# 验证 trace 包含 /v2/chat/completions 记录,且响应有非零 token 计数
 ```
 
 ### 真实 E2E（有认证时可选）
