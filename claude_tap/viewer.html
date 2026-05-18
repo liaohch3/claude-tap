@@ -327,6 +327,23 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   border-color: color-mix(in srgb, var(--blue) 45%, transparent);
   background: var(--blue-bg);
 }
+.pro-format-bar {
+  display: flex; align-items: center; justify-content: flex-end; gap: 4px;
+  margin: -2px 0 8px;
+}
+.pro-format-btn {
+  min-height: 26px; padding: 4px 9px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-card); color: var(--text-secondary);
+  cursor: pointer; font-family: var(--mono); font-size: 10px; line-height: 1;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.pro-format-btn:hover { color: var(--blue); border-color: var(--blue); }
+.pro-format-btn.active {
+  color: var(--blue);
+  border-color: color-mix(in srgb, var(--blue) 45%, transparent);
+  background: var(--blue-bg);
+}
 .pro-grid { display: grid; gap: 10px; }
 .pro-block {
   border: 1px solid var(--border);
@@ -361,9 +378,38 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   word-break: break-word;
   border: none;
 }
-.pro-stream-list {
-  padding: 8px 10px 10px;
+.pro-pretty {
+  padding: 10px 12px;
+  max-height: 360px;
+  overflow: auto;
+  background: var(--bg-code);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
 }
+.pro-pretty-object, .pro-pretty-array { display: grid; gap: 7px; }
+.pro-kv, .pro-nested, .pro-array-item {
+  border-left: 2px solid var(--border-light);
+  padding-left: 9px;
+}
+.pro-key, .pro-nested-title, .pro-index {
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--text-tertiary);
+  font-weight: 700;
+}
+.pro-index {
+  min-width: 22px;
+  color: var(--blue);
+}
+.pro-value { color: var(--text); }
+.pro-string-block {
+  margin: 5px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+.pro-empty { color: var(--text-tertiary); }
 
 /* ─── Section ─── */
 .section {
@@ -3036,6 +3082,7 @@ function selectEntry(idx, opts) {
 // Key: section title text, Value: true = open, false = collapsed.
 const sectionCollapseState = {};
 let detailViewMode = 'default';
+let proFormatMode = 'json';
 
 function saveSectionStates() {
   const d = $('#detail');
@@ -3088,6 +3135,26 @@ function renderDetailViewTabs() {
     ${detailTabButton('default', t('tab_default'))}
     ${detailTabButton('pro', 'PRO')}
   </div></div>`;
+}
+
+function setProFormatMode(mode) {
+  if (!['json', 'yaml', 'pretty'].includes(mode)) return;
+  proFormatMode = mode;
+  const entry = filtered[activeIdx];
+  if (!entry) return;
+  renderDetail(entry._isStub ? getFullEntry(entry) : entry);
+}
+
+function renderProFormatControls() {
+  const modes = [
+    ['json', t('format_json')],
+    ['yaml', t('format_yaml')],
+    ['pretty', t('format_pretty')],
+  ];
+  return `<div class="pro-format-bar" role="toolbar" aria-label="PRO format">${modes.map(([mode, label]) => {
+    const active = proFormatMode === mode;
+    return `<button type="button" data-format="${mode}" class="pro-format-btn ${active ? 'active' : ''}" aria-pressed="${active ? 'true' : 'false'}" onclick="setProFormatMode('${mode}')">${esc(label)}</button>`;
+  }).join('')}</div>`;
 }
 
 function renderDetail(e) {
@@ -3185,31 +3252,101 @@ function renderProDetail(entry, ctx) {
     status: getResponseStatus(entry),
   };
 
-  let html = ctx.usage ? renderTokenUsage(ctx.usage) : '';
+  let html = renderProFormatControls();
+  if (ctx.usage) html += renderTokenUsage(ctx.usage);
   html += '<div class="pro-grid">';
   html += renderProBlock(
     t('tok_input'),
-    `<pre class="pro-code">${esc(JSON.stringify(inputPayload, null, 2))}</pre>`,
+    renderProPayload(inputPayload),
     `${(ctx.msgs || []).length} ${t('badge_messages')}`
   );
   html += renderProBlock(
     t('tok_output'),
-    `<pre class="pro-code">${esc(JSON.stringify(responsePayload, null, 2))}</pre>`,
+    renderProPayload(responsePayload),
     `${getResponseStatus(entry)}`
   );
   if (ctx.streamEvents.length) {
     html += renderProBlock(
       t('section_sse'),
-      `<div class="pro-stream-list">${renderSSEEvents(ctx.streamEvents)}</div>`,
+      renderProPayload(ctx.streamEvents),
       `${ctx.streamEvents.length} ${t('badge_events')}`
     );
   }
   html += renderProBlock(
     t('section_metadata'),
-    `<pre class="pro-code">${esc(JSON.stringify(metadata, null, 2))}</pre>`
+    renderProPayload(metadata)
   );
   html += '</div>';
   return html;
+}
+
+function renderProPayload(payload) {
+  if (proFormatMode === 'pretty') return `<div class="pro-pretty">${renderProPrettyValue(payload)}</div>`;
+  const text = proFormatMode === 'yaml' ? toProYaml(payload) : JSON.stringify(payload, null, 2);
+  return `<pre class="pro-code" data-format="${proFormatMode}">${esc(text)}</pre>`;
+}
+
+function isProScalar(value) {
+  return value === null || value === undefined || typeof value !== 'object';
+}
+
+function yamlKey(key) {
+  return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key) ? key : JSON.stringify(key);
+}
+
+function yamlScalar(value, indent) {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  const str = String(value);
+  if (str === '') return '""';
+  if (str.includes('\n')) {
+    const pad = ' '.repeat(indent + 2);
+    return `|\n${str.split('\n').map(line => pad + line).join('\n')}`;
+  }
+  if (/^[A-Za-z0-9_./:@+-]+$/.test(str) && !/^(true|false|null|yes|no|on|off)$/i.test(str)) return str;
+  return JSON.stringify(str);
+}
+
+function toProYaml(value, indent = 0) {
+  const pad = ' '.repeat(indent);
+  if (isProScalar(value)) return pad + yamlScalar(value, indent);
+  if (Array.isArray(value)) {
+    if (!value.length) return pad + '[]';
+    return value.map(item => {
+      if (isProScalar(item)) return `${pad}- ${yamlScalar(item, indent)}`;
+      return `${pad}-\n${toProYaml(item, indent + 2)}`;
+    }).join('\n');
+  }
+  const keys = Object.keys(value).filter(key => value[key] !== undefined);
+  if (!keys.length) return pad + '{}';
+  return keys.map(key => {
+    const item = value[key];
+    if (isProScalar(item)) return `${pad}${yamlKey(key)}: ${yamlScalar(item, indent)}`;
+    return `${pad}${yamlKey(key)}:\n${toProYaml(item, indent + 2)}`;
+  }).join('\n');
+}
+
+function renderProPrettyScalar(value) {
+  if (value === null || value === undefined) return `<span class="pro-value">${value === undefined ? 'undefined' : 'null'}</span>`;
+  if (typeof value === 'number' || typeof value === 'boolean') return `<span class="pro-value">${esc(String(value))}</span>`;
+  const str = String(value);
+  if (str.length > 90 || str.includes('\n')) return `<pre class="pro-string-block">${esc(str)}</pre>`;
+  return `<span class="pro-value">${esc(JSON.stringify(str))}</span>`;
+}
+
+function renderProPrettyValue(value, depth = 0) {
+  if (isProScalar(value)) return renderProPrettyScalar(value);
+  if (Array.isArray(value)) {
+    if (!value.length) return '<div class="pro-empty">[]</div>';
+    return `<div class="pro-pretty-array">${value.map((item, index) => `<div class="pro-array-item"><span class="pro-index">#${index}</span>${renderProPrettyValue(item, depth + 1)}</div>`).join('')}</div>`;
+  }
+  const keys = Object.keys(value).filter(key => value[key] !== undefined);
+  if (!keys.length) return '<div class="pro-empty">{}</div>';
+  return `<div class="pro-pretty-object">${keys.map(key => {
+    const item = value[key];
+    if (isProScalar(item)) return `<div class="pro-kv"><span class="pro-key">${esc(key)}</span>${renderProPrettyScalar(item)}</div>`;
+    return `<div class="pro-nested"><div class="pro-nested-title">${esc(key)}</div>${renderProPrettyValue(item, depth + 1)}</div>`;
+  }).join('')}</div>`;
 }
 
 /* ─── Renderers ─── */

@@ -1080,7 +1080,32 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_pro_mode(tmp_path: Path
             """() => ({
               sectionCount: document.querySelectorAll('#detail .section').length,
               blockTitles: Array.from(document.querySelectorAll('#detail .pro-block-title span:first-child')).map(el => el.textContent),
+              formats: Array.from(document.querySelectorAll('#detail .pro-format-btn')).map(el => ({
+                format: el.dataset.format,
+                label: el.textContent,
+                active: el.classList.contains('active'),
+              })),
               text: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+
+        page.locator('#detail .pro-format-btn[data-format="yaml"]').click()
+        page.wait_for_selector('#detail .pro-format-btn[data-format="yaml"].active', timeout=5000)
+        yaml_state = page.evaluate(
+            """() => ({
+              text: document.querySelector('#detail')?.innerText || '',
+              codeFormat: document.querySelector('#detail .pro-code')?.dataset.format || '',
+              prettyCount: document.querySelectorAll('#detail .pro-pretty').length,
+            })"""
+        )
+
+        page.locator('#detail .pro-format-btn[data-format="pretty"]').click()
+        page.wait_for_selector('#detail .pro-format-btn[data-format="pretty"].active', timeout=5000)
+        pretty_state = page.evaluate(
+            """() => ({
+              text: document.querySelector('#detail')?.innerText || '',
+              codeCount: document.querySelectorAll('#detail .pro-code').length,
+              prettyCount: document.querySelectorAll('#detail .pro-pretty').length,
             })"""
         )
 
@@ -1100,9 +1125,22 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_pro_mode(tmp_path: Path
     assert "Diff with Prev" in default_state["text"]
     assert pro_state["sectionCount"] == 0
     assert pro_state["blockTitles"] == ["Input", "Output", "Metadata"]
+    assert pro_state["formats"] == [
+        {"format": "json", "label": "JSON", "active": True},
+        {"format": "yaml", "label": "YAML", "active": False},
+        {"format": "pretty", "label": "Pretty", "active": False},
+    ]
     assert '"messages"' in pro_state["text"]
     assert "req_responses_contract" in pro_state["text"]
     assert "Responses final OK." in pro_state["text"]
+    assert yaml_state["codeFormat"] == "yaml"
+    assert yaml_state["prettyCount"] == 0
+    assert "messages:" in yaml_state["text"]
+    assert "req_responses_contract" in yaml_state["text"]
+    assert pretty_state["codeCount"] == 0
+    assert pretty_state["prettyCount"] == 3
+    assert "messages" in pretty_state["text"]
+    assert "req_responses_contract" in pretty_state["text"]
     assert remaining_tabs == ["default", "pro"]
 
 
