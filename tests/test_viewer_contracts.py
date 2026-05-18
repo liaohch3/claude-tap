@@ -1053,6 +1053,74 @@ def test_viewer_semantic_contracts_across_supported_trace_shapes(
         assert text in result["detailText"]
 
 
+def test_viewer_detail_tabs_keep_default_view_and_expose_pro_mode(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "detail_tabs", (_responses_record(),))
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").first.click()
+        page.wait_for_selector('#detail .detail-tab[data-tab="default"].active', timeout=5000)
+
+        default_state = page.evaluate(
+            """() => ({
+              tabs: Array.from(document.querySelectorAll('#detail .detail-tab')).map(el => ({
+                mode: el.dataset.tab,
+                label: el.querySelector('span:not(.tab-count)')?.textContent || '',
+                count: el.querySelector('.tab-count')?.textContent || null,
+                active: el.classList.contains('active'),
+              })),
+              sectionTitles: Array.from(document.querySelectorAll('#detail .section .title')).map(el => el.textContent),
+              text: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+
+        page.locator('#detail .detail-tab[data-tab="pro"]').click()
+        page.wait_for_selector('#detail .detail-tab[data-tab="pro"].active', timeout=5000)
+        pro_state = page.evaluate(
+            """() => ({
+              sectionCount: document.querySelectorAll('#detail .section').length,
+              blockTitles: Array.from(document.querySelectorAll('#detail .pro-block-title span:first-child')).map(el => el.textContent),
+              text: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+
+        page.locator('#detail .detail-tab[data-tab="stream"]').click()
+        page.wait_for_selector("#detail .tab-empty", timeout=5000)
+        stream_text = page.locator("#detail").inner_text()
+
+        page.locator('#detail .detail-tab[data-tab="raw"]').click()
+        page.wait_for_selector("#detail .section", timeout=5000)
+        raw_titles = page.evaluate(
+            "() => Array.from(document.querySelectorAll('#detail .section .title')).map(el => el.textContent)"
+        )
+
+        page.locator('#detail .detail-tab[data-tab="diff"]').click()
+        page.wait_for_selector("#detail .tab-empty", timeout=5000)
+        diff_text = page.locator("#detail").inner_text()
+    finally:
+        page.close()
+
+    assert errors == []
+    assert default_state["tabs"] == [
+        {"mode": "default", "label": "Default", "count": None, "active": True},
+        {"mode": "pro", "label": "PRO", "count": None, "active": False},
+        {"mode": "stream", "label": "Stream", "count": "0", "active": False},
+        {"mode": "raw", "label": "Raw", "count": None, "active": False},
+        {"mode": "diff", "label": "Diff", "count": None, "active": False},
+    ]
+    assert default_state["sectionTitles"] == ["Tools", "System Prompt", "Messages", "Response", "Full JSON"]
+    assert "Responses final OK." in default_state["text"]
+    assert pro_state["sectionCount"] == 0
+    assert pro_state["blockTitles"] == ["Input", "Output", "Metadata"]
+    assert '"messages"' in pro_state["text"]
+    assert "req_responses_contract" in pro_state["text"]
+    assert "Responses final OK." in pro_state["text"]
+    assert "No stream events captured." in stream_text
+    assert raw_titles == ["Full JSON"]
+    assert "No previous request to compare." in diff_text
+
+
 def test_viewer_runtime_smoke_handles_degenerate_records_without_js_errors(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "runtime_smoke", _runtime_smoke_records())
 

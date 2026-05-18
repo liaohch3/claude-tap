@@ -293,6 +293,94 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   border-color: #3a4048;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
+.detail-inspector-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.07);
+}
+[data-theme="dark"] .detail-inspector-bar {
+  background: rgba(22, 27, 34, 0.9);
+  border-color: #3a4048;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+}
+.detail-tabs {
+  display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap;
+  min-width: 0;
+}
+.detail-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 30px; padding: 5px 10px;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--text-secondary);
+  cursor: pointer; font-family: var(--mono); font-size: 11px; line-height: 1;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.detail-tab:hover { color: var(--blue); border-color: var(--border); background: var(--bg-hover); }
+.detail-tab.active {
+  color: var(--blue);
+  border-color: color-mix(in srgb, var(--blue) 45%, transparent);
+  background: var(--blue-bg);
+}
+.detail-tab .tab-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 16px; padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-card); color: var(--text-tertiary);
+  border: 1px solid var(--border-light);
+  font-size: 10px;
+}
+.tab-empty {
+  padding: 18px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+.pro-grid { display: grid; gap: 10px; }
+.pro-block {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.pro-block-title {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border-light);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+.pro-block-title .pro-badge {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 500;
+}
+.pro-code {
+  padding: 12px 13px;
+  max-height: 360px;
+  overflow: auto;
+  background: var(--bg-code);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: none;
+}
+.pro-stream-list {
+  padding: 8px 10px 10px;
+}
 
 /* ─── Section ─── */
 .section {
@@ -2964,6 +3052,7 @@ function selectEntry(idx, opts) {
 // Persist section collapse state across turn switches.
 // Key: section title text, Value: true = open, false = collapsed.
 const sectionCollapseState = {};
+let detailViewMode = 'default';
 
 function saveSectionStates() {
   const d = $('#detail');
@@ -2999,6 +3088,33 @@ function restoreSectionStates() {
   });
 }
 
+function setDetailViewMode(mode) {
+  detailViewMode = mode;
+  const entry = filtered[activeIdx];
+  if (!entry) return;
+  renderDetail(entry._isStub ? getFullEntry(entry) : entry);
+}
+
+function detailTabButton(mode, label, count = null) {
+  const active = detailViewMode === mode;
+  const countHtml = count !== null ? `<span class="tab-count">${esc(String(count))}</span>` : '';
+  return `<button type="button" role="tab" aria-selected="${active ? 'true' : 'false'}" data-tab="${mode}" class="detail-tab ${active ? 'active' : ''}" onclick="setDetailViewMode('${mode}')"><span>${esc(label)}</span>${countHtml}</button>`;
+}
+
+function renderDetailViewTabs(streamEventCount) {
+  return `<div class="detail-inspector-bar" role="tablist" aria-label="Detail view mode"><div class="detail-tabs">
+    ${detailTabButton('default', t('tab_default'))}
+    ${detailTabButton('pro', 'PRO')}
+    ${detailTabButton('stream', t('tab_stream'), streamEventCount)}
+    ${detailTabButton('raw', t('tab_raw'))}
+    ${detailTabButton('diff', t('tab_diff'))}
+  </div></div>`;
+}
+
+function tabEmpty(message) {
+  return `<div class="tab-empty">${esc(message)}</div>`;
+}
+
 function renderDetail(e) {
   saveSectionStates();
   currentDetailRequestId = e.request_id;
@@ -3015,35 +3131,51 @@ function renderDetail(e) {
   const continuation = getResponsesContinuationInfo(e);
   if (continuation) html += renderResponsesContinuationNotice(continuation);
 
+  const tools = getRequestTools(reqBody);
+  const sysPrompt = extractSystem(reqBody);
+  const respOutput = getResponseOutput(e);
+  const msgs = getMessages(reqBody);
+  const contextOnly = shouldRenderRequestContext(e, reqBody, msgs, respOutput);
+  const streamEvents = getResponseEvents(e);
+  html += renderDetailViewTabs(streamEvents.length);
+
   // Action bar
-  html += `<div class="action-bar">
+  const actionBarHtml = `<div class="action-bar">
     <button class="act-btn" onclick="copyRequestBody(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>${t('btn_request_json')}</button>
     <button class="act-btn" onclick="copyCurl(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>${t('btn_curl')}</button>
     <button class="act-btn" onclick="showDiff(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><path d="M3 6h18M3 18h18" opacity=".4"/></svg>${t('btn_diff')}</button>
   </div>`;
 
-  if (usage) html += renderTokenUsage(usage);
+  const toolsSection = tools && tools.length
+    ? section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'))
+    : '';
+  const systemSection = sysPrompt ? section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt) : '';
+  const messagesSection = msgs && msgs.length
+    ? section(contextOnly ? t('section_context') : t('section_messages'), renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'))
+    : '';
+  const responseSection = respOutput?.content || contextOnly
+    ? section(t('section_response'), renderResponseContent(respOutput, contextOnly), true)
+    : '';
+  const streamSection = streamEvents.length
+    ? section(t('section_sse'), renderSSEEvents(streamEvents), false, null, streamEvents.length + ' ' + t('badge_events'))
+    : tabEmpty(t('tab_stream_empty'));
+  const jsonSection = section(t('section_json'), `<div class="json-view">${renderJSONTree(e)}</div>`, false, JSON.stringify(e, null, 2));
 
-  const tools = getRequestTools(reqBody);
-  if (tools && tools.length) html += section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'));
-
-  const sysPrompt = extractSystem(reqBody);
-  if (sysPrompt) html += section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt);
-
-  const respOutput = getResponseOutput(e);
-  const msgs = getMessages(reqBody);
-  const contextOnly = shouldRenderRequestContext(e, reqBody, msgs, respOutput);
-  if (msgs && msgs.length) {
-    const title = contextOnly ? t('section_context') : t('section_messages');
-    html += section(title, renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'));
+  if (detailViewMode === 'default') {
+    html += actionBarHtml;
+    if (usage) html += renderTokenUsage(usage);
+    html += toolsSection + systemSection + messagesSection + responseSection;
+    if (streamEvents.length) html += streamSection;
+    html += jsonSection;
+  } else if (detailViewMode === 'pro') {
+    html += renderProDetail(e, { reqBody, sysPrompt, msgs, tools, respOutput, contextOnly, streamEvents, usage });
+  } else if (detailViewMode === 'stream') {
+    html += streamSection;
+  } else if (detailViewMode === 'raw') {
+    html += actionBarHtml + jsonSection;
+  } else if (detailViewMode === 'diff') {
+    html += renderInlineDiff();
   }
-
-  if (respOutput?.content || contextOnly) html += section(t('section_response'), renderResponseContent(respOutput, contextOnly), true);
-
-  const streamEvents = getResponseEvents(e);
-  if (streamEvents.length) html += section(t('section_sse'), renderSSEEvents(streamEvents), false, null, streamEvents.length + ' ' + t('badge_events'));
-
-  html += section(t('section_json'), `<div class="json-view">${renderJSONTree(e)}</div>`, false, JSON.stringify(e, null, 2));
 
   d.innerHTML = html;
   bindSections(d);
@@ -3053,6 +3185,76 @@ function renderDetail(e) {
     const localIndex = target && target.requestId === e.request_id ? target.localIndex : 0;
     applyGlobalSearchHighlights(localIndex);
   }
+}
+
+function renderProBlock(title, content, badge = '') {
+  const badgeHtml = badge ? `<span class="pro-badge">${esc(badge)}</span>` : '';
+  return `<div class="pro-block"><div class="pro-block-title"><span>${esc(title)}</span>${badgeHtml}</div>${content}</div>`;
+}
+
+function renderProDetail(entry, ctx) {
+  const inputPayload = {
+    system: ctx.sysPrompt || undefined,
+    messages: ctx.msgs || [],
+    tools: ctx.tools || [],
+  };
+  const responsePayload = {
+    status: getResponseStatus(entry),
+    output: ctx.respOutput?.content || [],
+    usage: ctx.usage || {},
+    body: getResponsePayload(entry) || {},
+  };
+  const metadata = {
+    request_id: entry.request_id || '',
+    turn: entry.turn ?? '',
+    duration_ms: entry.duration_ms ?? 0,
+    transport: entry.transport || 'http',
+    upstream_base_url: entry.upstream_base_url || '',
+    method: entry.request?.method || '',
+    path: entry.request?.path || '',
+    model: ctx.reqBody?.model || '',
+    status: getResponseStatus(entry),
+  };
+
+  let html = ctx.usage ? renderTokenUsage(ctx.usage) : '';
+  html += '<div class="pro-grid">';
+  html += renderProBlock(
+    t('tok_input'),
+    `<pre class="pro-code">${esc(JSON.stringify(inputPayload, null, 2))}</pre>`,
+    `${(ctx.msgs || []).length} ${t('badge_messages')}`
+  );
+  html += renderProBlock(
+    t('tok_output'),
+    `<pre class="pro-code">${esc(JSON.stringify(responsePayload, null, 2))}</pre>`,
+    `${getResponseStatus(entry)}`
+  );
+  if (ctx.streamEvents.length) {
+    html += renderProBlock(
+      t('section_sse'),
+      `<div class="pro-stream-list">${renderSSEEvents(ctx.streamEvents)}</div>`,
+      `${ctx.streamEvents.length} ${t('badge_events')}`
+    );
+  }
+  html += renderProBlock(
+    t('section_metadata'),
+    `<pre class="pro-code">${esc(JSON.stringify(metadata, null, 2))}</pre>`
+  );
+  html += '</div>';
+  return html;
+}
+
+function renderInlineDiff() {
+  if (activeIdx < 0) return tabEmpty(t('tab_diff_empty'));
+  const prev = findPrevSameModel(activeIdx);
+  if (prev.idx < 0) return tabEmpty(t('tab_diff_empty'));
+  const oldEntry = filtered[prev.idx]?._isStub ? getFullEntry(filtered[prev.idx]) : filtered[prev.idx];
+  const newEntry = filtered[activeIdx]?._isStub ? getFullEntry(filtered[activeIdx]) : filtered[activeIdx];
+  const oldBody = oldEntry?.request?.body || {};
+  const newBody = newEntry?.request?.body || {};
+  const warning = prev.isFallback
+    ? `<div class="diff-fallback-banner"><span class="dfb-icon">&#9888;</span><span>${t('diff_fallback_warning')}</span></div>`
+    : '';
+  return warning + renderStructuralDiff(structuralDiff(oldBody, newBody));
 }
 
 /* ─── Renderers ─── */
