@@ -327,23 +327,6 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   border-color: color-mix(in srgb, var(--blue) 45%, transparent);
   background: var(--blue-bg);
 }
-.detail-tab .tab-count {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 18px; height: 16px; padding: 0 5px;
-  border-radius: 999px;
-  background: var(--bg-card); color: var(--text-tertiary);
-  border: 1px solid var(--border-light);
-  font-size: 10px;
-}
-.tab-empty {
-  padding: 18px 16px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-card);
-  color: var(--text-tertiary);
-  font-size: 12px;
-  font-family: var(--mono);
-}
 .pro-grid { display: grid; gap: 10px; }
 .pro-block {
   border: 1px solid var(--border);
@@ -3095,24 +3078,16 @@ function setDetailViewMode(mode) {
   renderDetail(entry._isStub ? getFullEntry(entry) : entry);
 }
 
-function detailTabButton(mode, label, count = null) {
+function detailTabButton(mode, label) {
   const active = detailViewMode === mode;
-  const countHtml = count !== null ? `<span class="tab-count">${esc(String(count))}</span>` : '';
-  return `<button type="button" role="tab" aria-selected="${active ? 'true' : 'false'}" data-tab="${mode}" class="detail-tab ${active ? 'active' : ''}" onclick="setDetailViewMode('${mode}')"><span>${esc(label)}</span>${countHtml}</button>`;
+  return `<button type="button" role="tab" aria-selected="${active ? 'true' : 'false'}" data-tab="${mode}" class="detail-tab ${active ? 'active' : ''}" onclick="setDetailViewMode('${mode}')"><span>${esc(label)}</span></button>`;
 }
 
-function renderDetailViewTabs(streamEventCount) {
+function renderDetailViewTabs() {
   return `<div class="detail-inspector-bar" role="tablist" aria-label="Detail view mode"><div class="detail-tabs">
     ${detailTabButton('default', t('tab_default'))}
     ${detailTabButton('pro', 'PRO')}
-    ${detailTabButton('stream', t('tab_stream'), streamEventCount)}
-    ${detailTabButton('raw', t('tab_raw'))}
-    ${detailTabButton('diff', t('tab_diff'))}
   </div></div>`;
-}
-
-function tabEmpty(message) {
-  return `<div class="tab-empty">${esc(message)}</div>`;
 }
 
 function renderDetail(e) {
@@ -3137,7 +3112,7 @@ function renderDetail(e) {
   const msgs = getMessages(reqBody);
   const contextOnly = shouldRenderRequestContext(e, reqBody, msgs, respOutput);
   const streamEvents = getResponseEvents(e);
-  html += renderDetailViewTabs(streamEvents.length);
+  html += renderDetailViewTabs();
 
   // Action bar
   const actionBarHtml = `<div class="action-bar">
@@ -3158,7 +3133,7 @@ function renderDetail(e) {
     : '';
   const streamSection = streamEvents.length
     ? section(t('section_sse'), renderSSEEvents(streamEvents), false, null, streamEvents.length + ' ' + t('badge_events'))
-    : tabEmpty(t('tab_stream_empty'));
+    : '';
   const jsonSection = section(t('section_json'), `<div class="json-view">${renderJSONTree(e)}</div>`, false, JSON.stringify(e, null, 2));
 
   if (detailViewMode === 'default') {
@@ -3169,12 +3144,6 @@ function renderDetail(e) {
     html += jsonSection;
   } else if (detailViewMode === 'pro') {
     html += renderProDetail(e, { reqBody, sysPrompt, msgs, tools, respOutput, contextOnly, streamEvents, usage });
-  } else if (detailViewMode === 'stream') {
-    html += streamSection;
-  } else if (detailViewMode === 'raw') {
-    html += actionBarHtml + jsonSection;
-  } else if (detailViewMode === 'diff') {
-    html += renderInlineDiff();
   }
 
   d.innerHTML = html;
@@ -3241,20 +3210,6 @@ function renderProDetail(entry, ctx) {
   );
   html += '</div>';
   return html;
-}
-
-function renderInlineDiff() {
-  if (activeIdx < 0) return tabEmpty(t('tab_diff_empty'));
-  const prev = findPrevSameModel(activeIdx);
-  if (prev.idx < 0) return tabEmpty(t('tab_diff_empty'));
-  const oldEntry = filtered[prev.idx]?._isStub ? getFullEntry(filtered[prev.idx]) : filtered[prev.idx];
-  const newEntry = filtered[activeIdx]?._isStub ? getFullEntry(filtered[activeIdx]) : filtered[activeIdx];
-  const oldBody = oldEntry?.request?.body || {};
-  const newBody = newEntry?.request?.body || {};
-  const warning = prev.isFallback
-    ? `<div class="diff-fallback-banner"><span class="dfb-icon">&#9888;</span><span>${t('diff_fallback_warning')}</span></div>`
-    : '';
-  return warning + renderStructuralDiff(structuralDiff(oldBody, newBody));
 }
 
 /* ─── Renderers ─── */

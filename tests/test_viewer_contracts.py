@@ -1067,7 +1067,6 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_pro_mode(tmp_path: Path
               tabs: Array.from(document.querySelectorAll('#detail .detail-tab')).map(el => ({
                 mode: el.dataset.tab,
                 label: el.querySelector('span:not(.tab-count)')?.textContent || '',
-                count: el.querySelector('.tab-count')?.textContent || null,
                 active: el.classList.contains('active'),
               })),
               sectionTitles: Array.from(document.querySelectorAll('#detail .section .title')).map(el => el.textContent),
@@ -1085,40 +1084,26 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_pro_mode(tmp_path: Path
             })"""
         )
 
-        page.locator('#detail .detail-tab[data-tab="stream"]').click()
-        page.wait_for_selector("#detail .tab-empty", timeout=5000)
-        stream_text = page.locator("#detail").inner_text()
-
-        page.locator('#detail .detail-tab[data-tab="raw"]').click()
-        page.wait_for_selector("#detail .section", timeout=5000)
-        raw_titles = page.evaluate(
-            "() => Array.from(document.querySelectorAll('#detail .section .title')).map(el => el.textContent)"
+        remaining_tabs = page.evaluate(
+            "() => Array.from(document.querySelectorAll('#detail .detail-tab')).map(el => el.dataset.tab)"
         )
-
-        page.locator('#detail .detail-tab[data-tab="diff"]').click()
-        page.wait_for_selector("#detail .tab-empty", timeout=5000)
-        diff_text = page.locator("#detail").inner_text()
     finally:
         page.close()
 
     assert errors == []
     assert default_state["tabs"] == [
-        {"mode": "default", "label": "Default", "count": None, "active": True},
-        {"mode": "pro", "label": "PRO", "count": None, "active": False},
-        {"mode": "stream", "label": "Stream", "count": "0", "active": False},
-        {"mode": "raw", "label": "Raw", "count": None, "active": False},
-        {"mode": "diff", "label": "Diff", "count": None, "active": False},
+        {"mode": "default", "label": "Default", "active": True},
+        {"mode": "pro", "label": "PRO", "active": False},
     ]
     assert default_state["sectionTitles"] == ["Tools", "System Prompt", "Messages", "Response", "Full JSON"]
     assert "Responses final OK." in default_state["text"]
+    assert "Diff with Prev" in default_state["text"]
     assert pro_state["sectionCount"] == 0
     assert pro_state["blockTitles"] == ["Input", "Output", "Metadata"]
     assert '"messages"' in pro_state["text"]
     assert "req_responses_contract" in pro_state["text"]
     assert "Responses final OK." in pro_state["text"]
-    assert "No stream events captured." in stream_text
-    assert raw_titles == ["Full JSON"]
-    assert "No previous request to compare." in diff_text
+    assert remaining_tabs == ["default", "pro"]
 
 
 def test_viewer_runtime_smoke_handles_degenerate_records_without_js_errors(tmp_path: Path, chromium_browser) -> None:
