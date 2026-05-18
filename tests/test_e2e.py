@@ -2809,10 +2809,13 @@ async def test_forward_proxy_connect_websocket():
                 await ws.send_json({"model": "gpt-test", "input": "hello"})
 
                 received = []
+                binary_received = False
                 while True:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         received.append(json.loads(msg.data))
+                    elif msg.type == aiohttp.WSMsgType.BINARY:
+                        binary_received = msg.data == b"binary-over-wss"
                     elif msg.type in (
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
@@ -2822,6 +2825,7 @@ async def test_forward_proxy_connect_websocket():
                 await ws.close()
 
             assert len(received) == 3
+            assert binary_received
             assert received[0]["type"] == "response.created"
             assert received[-1]["type"] == "response.completed"
             print("  OK: CONNECT + WSS upgrade works")
@@ -3107,6 +3111,7 @@ async def _start_fake_wss_upstream(tmpdir: Path) -> int:
                         "response": {"id": "resp_ws_1", "model": model, "status": "in_progress"},
                     }
                 )
+                await ws.send_bytes(b"binary-over-wss")
                 await ws.send_json({"type": "response.output_text.delta", "delta": "Hello over WSS"})
                 await ws.send_json(
                     {

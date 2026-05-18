@@ -276,7 +276,7 @@ class ForwardProxyServer:
             client_to_relay_task.cancel()
             try:
                 await asyncio.wait_for(relay_task, timeout=1)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
+            except (asyncio.CancelledError, asyncio.TimeoutError):  # pragma: no cover - defensive shutdown timeout
                 relay_task.cancel()
             await asyncio.gather(relay_task, client_to_relay_task, return_exceptions=True)
 
@@ -733,9 +733,9 @@ class ForwardProxyServer:
         for task in tasks:
             try:
                 await task
-            except asyncio.CancelledError:
+            except asyncio.CancelledError:  # pragma: no cover - cancellation timing is event-loop dependent
                 pass
-            except Exception as exc:
+            except Exception as exc:  # pragma: no cover - defensive relay cleanup logging
                 log.debug(f"{log_prefix} WS relay task ended with error: {exc}")
 
         if not upstream_ws.closed:

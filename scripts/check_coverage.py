@@ -340,8 +340,19 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
             session.send("Profiler.startPreciseCoverage", {"callCount": True, "detailed": True})
             page.goto(html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".sidebar-item", timeout=5000)
-            for index in range(page.evaluate("entries.length")):
-                page.evaluate("entryIndex => renderDetail(entries[entryIndex])", index)
+            page.evaluate(
+                """() => {
+                  activePaths = new Set(entries.map(getPath));
+                  activeTools = null;
+                  searchQuery = '';
+                  applyFilter(true);
+                  setSidebarOrderMode('turn');
+                  setSidebarOrderMode('model');
+                  if (entries.length > 1) compareSidebarModelOrder(entries[0], entries[1]);
+                }"""
+            )
+            for index in range(page.evaluate("filtered.length")):
+                page.evaluate("entryIndex => { detailViewMode = 'default'; selectEntry(entryIndex); }", index)
                 page.wait_for_selector("#detail .section", timeout=5000)
                 page.evaluate(
                     """(entryIndex) => {
@@ -360,6 +371,17 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                         jsonToggle.click();
                         jsonToggle.click();
                       }
+                      setDetailViewMode('pro');
+                      setProFormatMode('json');
+                      setProFormatMode('yaml');
+                      setProFormatMode('pretty');
+                      renderProPayload({
+                        emptyObject: {},
+                        emptyArray: [],
+                        nested: { key: 'value' },
+                        array: [{ key: 'value' }],
+                        multiline: 'line one\\nline two',
+                      });
                     }""",
                     index,
                 )
@@ -448,9 +470,41 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
             page.goto(html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".sidebar-item", timeout=5000)
+            page.evaluate(
+                """() => {
+                  activePaths = new Set(entries.map(getPath));
+                  activeTools = null;
+                  searchQuery = '';
+                  applyFilter(true);
+                }"""
+            )
+            page.evaluate("setSidebarOrderMode('turn')")
+            merge(page.evaluate(collect_css_script))
+            page.evaluate("setSidebarOrderMode('model')")
+            merge(page.evaluate(collect_css_script))
 
-            for index in range(page.evaluate("entries.length")):
-                page.evaluate("entryIndex => renderDetail(entries[entryIndex])", index)
+            for index in range(page.evaluate("filtered.length")):
+                page.evaluate("entryIndex => { detailViewMode = 'default'; selectEntry(entryIndex); }", index)
+                merge(page.evaluate(collect_css_script))
+                page.evaluate("setDetailViewMode('pro')")
+                merge(page.evaluate(collect_css_script))
+                for mode in ("json", "yaml", "pretty"):
+                    page.evaluate("mode => setProFormatMode(mode)", mode)
+                    merge(page.evaluate(collect_css_script))
+                page.evaluate(
+                    """() => {
+                      document.querySelector('#detail')?.insertAdjacentHTML(
+                        'beforeend',
+                        renderProPayload({
+                          emptyObject: {},
+                          emptyArray: [],
+                          nested: { key: 'value' },
+                          array: [{ key: 'value' }],
+                          multiline: 'line one\\nline two',
+                        })
+                      );
+                    }"""
+                )
                 merge(page.evaluate(collect_css_script))
 
             page.evaluate(
