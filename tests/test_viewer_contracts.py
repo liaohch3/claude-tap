@@ -965,6 +965,28 @@ def _runtime_smoke_records() -> tuple[dict[str, Any], ...]:
     )
 
 
+def _sidebar_order_records() -> tuple[dict[str, Any], ...]:
+    base = {
+        "duration_ms": 100,
+        "request": {"method": "POST", "path": "/v1/messages", "headers": {}, "body": {}},
+        "response": {"status": 200, "headers": {}, "body": {"content": [{"type": "text", "text": "OK"}]}},
+    }
+    rows = [
+        ("req_order_unknown", 1, "other-model"),
+        ("req_order_sonnet", 2, "aws.claude-sonnet-4.6"),
+        ("req_order_opus", 3, "aws.claude-opus-4.6"),
+    ]
+    records = []
+    for request_id, turn, model in rows:
+        record = json.loads(json.dumps(base))
+        record["request_id"] = request_id
+        record["turn"] = turn
+        record["timestamp"] = f"2026-05-13T13:2{turn}:00+00:00"
+        record["request"]["body"]["model"] = model
+        records.append(record)
+    return tuple(records)
+
+
 def _write_trace(trace_path: Path, records: tuple[dict[str, Any], ...]) -> None:
     trace_path.write_text(
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
@@ -1142,6 +1164,60 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_pro_mode(tmp_path: Path
     assert "messages" in pretty_state["text"]
     assert "req_responses_contract" in pretty_state["text"]
     assert remaining_tabs == ["default", "pro"]
+
+
+def test_viewer_sidebar_order_can_switch_between_model_groups_and_turn_sequence(
+    tmp_path: Path, chromium_browser
+) -> None:
+    html_path = _generate_case_html(tmp_path, "sidebar_order", _sidebar_order_records())
+
+    page = chromium_browser.new_page()
+    page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'model')")
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        model_state = page.evaluate(
+            """() => ({
+              label: document.querySelector('#sidebar-sort-label')?.textContent || '',
+              buttons: Array.from(document.querySelectorAll('.sidebar-sort-btn')).map(el => ({
+                mode: el.dataset.sortMode,
+                label: el.textContent,
+                active: el.classList.contains('active'),
+              })),
+              groups: Array.from(document.querySelectorAll('.sidebar-group-header .group-name')).map(el => el.textContent),
+              turns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+            })"""
+        )
+
+        page.locator('.sidebar-sort-btn[data-sort-mode="turn"]').click()
+        page.wait_for_selector('.sidebar-sort-btn[data-sort-mode="turn"].active', timeout=5000)
+        turn_state = page.evaluate(
+            """() => ({
+              buttons: Array.from(document.querySelectorAll('.sidebar-sort-btn')).map(el => ({
+                mode: el.dataset.sortMode,
+                label: el.textContent,
+                active: el.classList.contains('active'),
+              })),
+              groupCount: document.querySelectorAll('.sidebar-group-header').length,
+              turns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert model_state["label"] == "Order"
+    assert model_state["buttons"] == [
+        {"mode": "model", "label": "Model", "active": True},
+        {"mode": "turn", "label": "Turn", "active": False},
+    ]
+    assert model_state["groups"] == ["aws.claude-opus-4.6", "aws.claude-sonnet-4.6", "other-model"]
+    assert model_state["turns"] == ["Turn 3", "Turn 2", "Turn 1"]
+    assert turn_state["buttons"] == [
+        {"mode": "model", "label": "Model", "active": False},
+        {"mode": "turn", "label": "Turn", "active": True},
+    ]
+    assert turn_state["groupCount"] == 0
+    assert turn_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
 
 
 def test_viewer_runtime_smoke_handles_degenerate_records_without_js_errors(tmp_path: Path, chromium_browser) -> None:

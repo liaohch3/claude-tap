@@ -852,6 +852,52 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 .search-bar .search-clear:hover { color: var(--text); }
 
+.sidebar-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.sidebar-sort-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  white-space: nowrap;
+}
+.sidebar-sort-segment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.sidebar-sort-btn {
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  transition: background .15s, color .15s;
+}
+.sidebar-sort-btn:hover { color: var(--text); }
+.sidebar-sort-btn.active {
+  background: var(--bg-card);
+  color: var(--blue);
+  box-shadow: var(--shadow-sm);
+}
+
 /* ─── Global find (Cmd/Ctrl+F) ─── */
 .global-search-overlay {
   position: fixed;
@@ -1317,6 +1363,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <input type="text" id="search-input" placeholder="Search messages, tools, prompts..." oninput="onSearch(this.value)">
       <button class="search-clear" id="search-clear" onclick="clearSearch()">&#10005;</button>
     </div>
+    <div class="sidebar-sort" id="sidebar-sort" role="group" aria-label="Sidebar order">
+      <span class="sidebar-sort-label" id="sidebar-sort-label">Order</span>
+      <div class="sidebar-sort-segment">
+        <button type="button" class="sidebar-sort-btn" data-sort-mode="model" onclick="setSidebarOrderMode('model')">Model</button>
+        <button type="button" class="sidebar-sort-btn" data-sort-mode="turn" onclick="setSidebarOrderMode('turn')">Turn</button>
+      </div>
+    </div>
     <div id="tool-filter" style="display:none;padding:4px 8px;border-bottom:1px solid var(--border);font-size:11px;max-height:120px;overflow-y:auto"></div>
     <div class="position-indicator" id="position-indicator">
       <span>Turn <span class="pi-current" id="pi-current">0</span> <span class="pi-total" id="pi-total">of 0</span></span>
@@ -1337,6 +1390,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 const $ = s => document.querySelector(s);
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
 let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
+const SIDEBAR_ORDER_MODES = ['model', 'turn'];
+const savedSidebarOrderMode = localStorage.getItem('claude-tap-sidebar-order');
+let sidebarOrderMode = SIDEBAR_ORDER_MODES.includes(savedSidebarOrderMode) ? savedSidebarOrderMode : 'model';
 
 function cloneJson(value) {
   if (value === undefined || value === null) return value;
@@ -1903,6 +1959,8 @@ function updateStaticTexts() {
   if (e('empty-trace-count')) e('empty-trace-count').textContent = t('empty_trace_count');
   if (e('empty-trace-hint')) e('empty-trace-hint').textContent = t('empty_trace_hint');
   if (e('search-input')) e('search-input').placeholder = t('search_placeholder');
+  if (e('sidebar-sort-label')) e('sidebar-sort-label').textContent = t('sort_label');
+  updateSidebarSortControls();
 }
 
 /* ─── Theme ─── */
@@ -2390,6 +2448,32 @@ function toggleToolFilter(name) {
 }
 function clearToolFilter() { activeTools = null; applyFilter(); }
 
+function setSidebarOrderMode(mode) {
+  if (!SIDEBAR_ORDER_MODES.includes(mode)) return;
+  if (sidebarOrderMode === mode) return;
+  sidebarOrderMode = mode;
+  localStorage.setItem('claude-tap-sidebar-order', mode);
+  updateSidebarSortControls();
+  renderSidebar(true);
+  updatePositionIndicator();
+  if (virtualMode && activeIdx >= 0) {
+    vsScrollToIdx(activeIdx);
+  } else {
+    const activeItem = document.querySelector('.sidebar-item.active');
+    if (activeItem) activeItem.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function updateSidebarSortControls() {
+  document.querySelectorAll('.sidebar-sort-btn').forEach(btn => {
+    const mode = btn.dataset.sortMode;
+    btn.textContent = mode === 'turn' ? t('sort_turn') : t('sort_model');
+    const active = mode === sidebarOrderMode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
 /* ─── Search ─── */
 function onSearch(value) {
   searchQuery = value.toLowerCase().trim();
@@ -2693,6 +2777,15 @@ function modelPriority(m) {
   if (l.includes('haiku')) return 3;
   return 2;
 }
+function compareSidebarModelOrder(a, b) {
+  const ma = a.request?.body?.model || 'unknown';
+  const mb = b.request?.body?.model || 'unknown';
+  const pa = modelPriority(ma), pb = modelPriority(mb);
+  if (pa !== pb) return pa - pb;
+  const modelDiff = ma.localeCompare(mb);
+  if (modelDiff) return modelDiff;
+  return compareTurns(a.turn, b.turn);
+}
 function modelColor(m) {
   const l = m.toLowerCase();
   if (l.includes('opus')) return 'var(--purple)';
@@ -2848,12 +2941,14 @@ function createSidebarItem(e, i) {
 function renderSidebar(preserveDetail) {
   const sb = $('#sidebar');
   const prevScrollTop = sb.scrollTop;
+  updateSidebarSortControls();
 
   // Use virtual scroll for large filtered sets
   if (filtered.length > LAZY_THRESHOLD) {
     virtualMode = true;
     sb.classList.add('virtual-scroll');
     vsFilteredItems = filtered.map((e, i) => ({ entry: e, idx: i }));
+    if (sidebarOrderMode === 'model') vsFilteredItems.sort((a, b) => compareSidebarModelOrder(a.entry, b.entry));
     visualOrder = vsFilteredItems.map(item => item.idx);
     vsInitSidebar(sb, prevScrollTop, preserveDetail);
     return;
@@ -2863,6 +2958,20 @@ function renderSidebar(preserveDetail) {
   virtualMode = false;
   sb.classList.remove('virtual-scroll');
   sb.innerHTML = '';
+  if (sidebarOrderMode === 'turn') {
+    let lastTs = null;
+    filtered.forEach((e, i) => {
+      const gap = _timeGapHtml(e, lastTs);
+      if (gap) sb.insertAdjacentHTML('beforeend', gap);
+      lastTs = e.timestamp ? new Date(e.timestamp).getTime() : null;
+      sb.appendChild(createSidebarItem(e, i));
+    });
+    buildVisualOrder();
+    _restoreSelection(preserveDetail);
+    if (preserveDetail) sb.scrollTop = prevScrollTop;
+    return;
+  }
+
   const groups = new Map();
   filtered.forEach((e, i) => {
     const model = e.request?.body?.model || 'unknown';
