@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import aiohttp
@@ -26,6 +26,7 @@ from aiohttp import web
 from claude_tap.certs import CertificateAuthority, ensure_ca
 from claude_tap.cursor_transcript import import_cursor_transcripts
 from claude_tap.forward_proxy import ForwardProxyServer
+from claude_tap.history import _cleanup_traces, _register_trace, _rel_posix
 from claude_tap.live import LiveViewerServer
 from claude_tap.proxy import proxy_handler
 from claude_tap.trace import TraceWriter
@@ -1130,118 +1131,6 @@ def update_main(argv: list[str] | None = None) -> int:
         print(f"Error: failed to run update command: {exc}", file=sys.stderr)
         return 1
     return result.returncode
-
-
-# ---------------------------------------------------------------------------
-# Trace cleanup – manifest-based
-# ---------------------------------------------------------------------------
-
-_MANIFEST_FILE = ".cloudtap-manifest.json"
-
-
-def _rel_posix(path: Path, base: Path) -> str:
-    # Forward slashes so manifests stay portable when `.traces` is synced across OSes.
-    return path.relative_to(base).as_posix()
-
-
-def _load_manifest(output_dir: Path) -> dict:
-    """Load or create the manifest file."""
-    manifest_path = output_dir / _MANIFEST_FILE
-    if manifest_path.exists():
-        try:
-            data = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if data.get("_cloudtap"):
-                return data
-        except (json.JSONDecodeError, OSError):
-            pass
-    manifest = {"_cloudtap": True, "version": __version__, "traces": []}
-    _maybe_migrate_existing(output_dir, manifest)
-    _save_manifest(output_dir, manifest)
-    return manifest
-
-
-def _save_manifest(output_dir: Path, manifest: dict) -> None:
-    """Save manifest to disk."""
-    manifest_path = output_dir / _MANIFEST_FILE
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-
-def _register_trace(output_dir: Path, ts: str, trace_files: list[str]) -> dict:
-    """Register a new trace session in the manifest."""
-    manifest = _load_manifest(output_dir)
-    entry = {
-        "timestamp": ts,
-        "files": trace_files,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    manifest["traces"].append(entry)
-    _save_manifest(output_dir, manifest)
-    return manifest
-
-
-def _cleanup_traces(output_dir: Path, max_traces: int) -> int:
-    """Remove oldest traces exceeding max_traces. Returns count of deleted sessions."""
-    if max_traces <= 0:
-        return 0
-    manifest = _load_manifest(output_dir)
-    traces = manifest.get("traces", [])
-    if len(traces) <= max_traces:
-        return 0
-    traces.sort(key=lambda t: t.get("timestamp", ""))
-    to_remove = traces[: len(traces) - max_traces]
-    removed = 0
-    for entry in to_remove:
-        parents_to_check: set[Path] = set()
-        for fname in entry.get("files", []):
-            fpath = output_dir / fname
-            if fpath.exists():
-                parents_to_check.add(fpath.parent)
-                try:
-                    fpath.unlink()
-                except OSError:
-                    pass
-        # Remove empty date subdirectories
-        for parent in parents_to_check:
-            if parent != output_dir and parent.is_dir() and not any(parent.iterdir()):
-                try:
-                    parent.rmdir()
-                except OSError:
-                    pass
-        traces.remove(entry)
-        removed += 1
-    manifest["traces"] = traces
-    _save_manifest(output_dir, manifest)
-    return removed
-
-
-def _maybe_migrate_existing(output_dir: Path, manifest: dict) -> None:
-    """Auto-register existing trace_*.jsonl files that are not yet in the manifest."""
-    # Normalize separators so manifests written by older Windows builds (with `\`) still match.
-    known_files: set[str] = {
-        f.replace("\\", "/") for entry in manifest.get("traces", []) for f in entry.get("files", [])
-    }
-
-    for jsonl in sorted(output_dir.glob("**/trace_*.jsonl")):
-        rel = _rel_posix(jsonl, output_dir)
-        if rel in known_files or jsonl.name in known_files:
-            continue
-        stem = jsonl.stem
-        ts = stem.replace("trace_", "", 1)
-        # Prefix with date dir if present
-        if jsonl.parent != output_dir:
-            ts = jsonl.parent.name.replace("-", "") + "_" + ts
-        files = [rel]
-        for suffix in [".log", ".html"]:
-            companion = jsonl.with_suffix(suffix)
-            if companion.exists():
-                files.append(_rel_posix(companion, output_dir))
-        manifest["traces"].append(
-            {
-                "timestamp": ts,
-                "files": files,
-                "created_at": datetime.fromtimestamp(jsonl.stat().st_mtime, tz=timezone.utc).isoformat(),
-            }
-        )
 
 
 def main_entry() -> None:

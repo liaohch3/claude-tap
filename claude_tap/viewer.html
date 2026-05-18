@@ -168,6 +168,39 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .sidebar::-webkit-scrollbar { width: 4px; }
 .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
+.history-bar {
+  display: none; align-items: center; gap: 8px;
+  padding: 6px 12px; border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.history-label { color: var(--text-secondary); white-space: nowrap; }
+.history-select {
+  min-width: 0; flex: 1; padding: 3px 6px;
+  border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg-card); color: var(--text);
+  font-size: 13px; cursor: pointer;
+}
+.history-delete-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 26px; padding: 3px 7px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-card); color: var(--red);
+  font-family: var(--sans); font-size: 12px; line-height: 1;
+  cursor: pointer; transition: color .15s, border-color .15s, background .15s, opacity .15s;
+}
+.history-delete-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+.history-delete-btn:hover:not(:disabled) { border-color: var(--red); background: var(--red-bg); }
+.history-delete-btn:disabled {
+  cursor: not-allowed; opacity: .45; color: var(--text-tertiary);
+}
+.history-delete-status {
+  display: none; padding: 4px 12px; border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--text-secondary); background: var(--bg);
+}
+.history-delete-status.ok { color: var(--green); }
+.history-delete-status.warn { color: var(--amber); }
+.history-delete-status.error { color: var(--red); }
+
 .sidebar-group-header {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 16px; cursor: pointer; user-select: none;
@@ -1354,10 +1387,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     </div>
   </div>
   <div id="sidebar-wrap" style="display:none;display:flex;flex-direction:column">
-    <div id="date-picker" style="display:none;padding:6px 12px;border-bottom:1px solid var(--border);font-size:13px;align-items:center;gap:8px;">
-      <label style="color:var(--text-secondary);white-space:nowrap;">Date:</label>
-      <select id="date-select" onchange="onDateChange(this.value)" style="flex:1;padding:3px 6px;border-radius:4px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-size:13px;cursor:pointer;"></select>
+    <div id="date-picker" class="history-bar">
+      <label class="history-label" id="date-label">Date:</label>
+      <select class="history-select" id="date-select" onchange="onDateChange(this.value)"></select>
+      <button class="history-delete-btn" id="history-delete-btn" type="button" onclick="deleteSelectedTraceDate()" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>
+        <span id="history-delete-text">Delete</span>
+      </button>
     </div>
+    <div class="history-delete-status" id="history-delete-status" role="status" aria-live="polite"></div>
     <div class="search-bar" id="search-bar">
       <span class="search-icon">&#128269;</span>
       <input type="text" id="search-input" placeholder="Search messages, tools, prompts..." oninput="onSearch(this.value)">
@@ -1919,6 +1957,11 @@ function t(key) {
   const en = I18N.en || {};
   return (I18N[currentLang] || en)[key] || en[key] || key;
 }
+function formatText(key, values = {}) {
+  return Object.entries(values).reduce((text, [name, value]) => {
+    return text.replaceAll(`{${name}}`, String(value));
+  }, t(key));
+}
 function setLang(lang) {
   currentLang = lang;
   localStorage.setItem('claude-tap-lang', lang);
@@ -1959,7 +2002,9 @@ function updateStaticTexts() {
   if (e('empty-trace-count')) e('empty-trace-count').textContent = t('empty_trace_count');
   if (e('empty-trace-hint')) e('empty-trace-hint').textContent = t('empty_trace_hint');
   if (e('search-input')) e('search-input').placeholder = t('search_placeholder');
+  if (e('date-label')) e('date-label').textContent = t('history_date');
   if (e('sidebar-sort-label')) e('sidebar-sort-label').textContent = t('sort_label');
+  updateHistoryDeleteButton();
   updateSidebarSortControls();
 }
 
@@ -2106,12 +2151,48 @@ function updateLiveStatus(status, count) {
   el.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:${c.dot};${status === 'connected' ? 'animation:pulse 2s infinite;' : ''}"></span>${labels[status]}${countText}`;
 }
 
-async function fetchDates() {
+function renderLiveWaitingState() {
+  $('#drop-zone').style.display = 'none';
+  $('#sidebar-wrap').style.display = 'flex';
+  $('#date-picker').style.display = 'flex';
+  ['search-bar','sidebar-sort','tool-filter','position-indicator','sidebar'].forEach(id => {
+    const el = $('#' + id);
+    if (el) el.style.display = 'none';
+  });
+  $('#detail').style.display = '';
+  $('#detail').innerHTML = '<div class="empty-state" role="status" aria-live="polite"><div style="font-size:48px;margin-bottom:16px;">📡</div><h2 style="margin-bottom:8px;color:var(--text);font-size:18px;">Waiting for API calls...</h2><p style="color:var(--text-secondary);">Start using Claude Code to see traces here in real-time</p></div>';
+  $('#stats').style.display = 'none';
+  $('#path-filter').style.display = 'none';
+  updateHistoryDeleteButton();
+}
+
+function updateHistoryDeleteButton() {
+  const btn = $('#history-delete-btn');
+  const text = $('#history-delete-text');
+  const sel = $('#date-select');
+  if (!btn || !sel) return;
+  const canDelete = sel.value && sel.value !== 'live';
+  btn.disabled = !canDelete;
+  btn.title = canDelete ? t('history_delete_title') : t('history_delete_live_title');
+  btn.setAttribute('aria-label', btn.title);
+  if (text) text.textContent = t('history_delete_btn');
+}
+
+function setHistoryDeleteStatus(message, tone = '') {
+  const el = $('#history-delete-status');
+  if (!el) return;
+  el.className = `history-delete-status ${tone}`.trim();
+  el.textContent = message || '';
+  el.style.display = message ? 'block' : 'none';
+}
+
+async function fetchDates(preferredValue = null) {
   try {
     const resp = await fetch('/api/dates');
     const data = await resp.json();
     const sel = $('#date-select');
     if (!sel || !data.dates) return;
+    const previous = preferredValue || sel.value || 'live';
     sel.innerHTML = '<option value="live">Live (current session)</option>';
     for (const d of data.dates) {
       sel.insertAdjacentHTML('beforeend', `<option value="${d}">${d}</option>`);
@@ -2119,27 +2200,70 @@ async function fetchDates() {
     if (data.has_legacy) {
       sel.insertAdjacentHTML('beforeend', '<option value="legacy">Legacy (flat)</option>');
     }
+    if ([...sel.options].some(option => option.value === previous)) sel.value = previous;
     const picker = $('#date-picker');
     if (picker) picker.style.display = 'flex';
+    updateHistoryDeleteButton();
   } catch (e) {
     console.error('Failed to fetch dates:', e);
   }
 }
 
 async function onDateChange(value) {
+  setHistoryDeleteStatus('');
+  updateHistoryDeleteButton();
   if (value === 'live') {
     viewingDate = null;
+    activePaths.clear();
     entries = expandWebSocketResponseEntries(liveRecords.slice());
-    renderApp(true);
+    if (entries.length) renderApp(true);
+    else renderLiveWaitingState();
     return;
   }
   viewingDate = value;
   try {
     const resp = await fetch('/api/traces/' + encodeURIComponent(value));
+    activePaths.clear();
     entries = expandWebSocketResponseEntries(await resp.json());
     renderApp();
   } catch (e) {
     console.error('Failed to load traces for date:', value, e);
+  }
+}
+
+async function deleteSelectedTraceDate() {
+  const sel = $('#date-select');
+  if (!sel || !sel.value || sel.value === 'live') return;
+  const value = sel.value;
+  const label = sel.options[sel.selectedIndex]?.textContent || value;
+  if (!window.confirm(formatText('history_delete_confirm', { date: label }))) return;
+
+  const btn = $('#history-delete-btn');
+  if (btn) btn.disabled = true;
+  setHistoryDeleteStatus(t('history_delete_working'), 'warn');
+  try {
+    const resp = await fetch('/api/traces/' + encodeURIComponent(value), { method: 'DELETE' });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || resp.statusText || String(resp.status));
+
+    const deleted = Number(data.deleted_files || 0);
+    setHistoryDeleteStatus(
+      deleted > 0
+        ? formatText('history_delete_done', { count: deleted })
+        : formatText('history_delete_empty', { date: label }),
+      deleted > 0 ? 'ok' : 'warn'
+    );
+    await fetchDates('live');
+    viewingDate = null;
+    activePaths.clear();
+    entries = expandWebSocketResponseEntries(liveRecords.slice());
+    if (entries.length) renderApp(true);
+    else renderLiveWaitingState();
+  } catch (e) {
+    console.error('Failed to delete trace history:', value, e);
+    setHistoryDeleteStatus(formatText('history_delete_failed', { error: e.message || e }), 'error');
+  } finally {
+    updateHistoryDeleteButton();
   }
 }
 
@@ -2151,8 +2275,7 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
     fetchDates();
     if (entries.length) renderApp();
     else {
-      // Show waiting state
-      $('#drop-zone').innerHTML = '<div style="text-align:center;padding:60px 20px;"><div style="font-size:48px;margin-bottom:16px;">📡</div><h2 style="margin-bottom:8px;">Waiting for API calls...</h2><p style="color:var(--text-secondary);">Start using Claude Code to see traces here in real-time</p></div>';
+      renderLiveWaitingState();
     }
   });
 } else if (typeof EMBEDDED_TRACE_META !== 'undefined') {
@@ -2194,6 +2317,10 @@ function getPath(e) { return (e.request?.path || '/unknown').replace(/\?.*$/, ''
 function renderApp(preserveDetail) {
   $('#drop-zone').style.display = 'none';
   $('#sidebar-wrap').style.display = 'flex';
+  $('#search-bar').style.display = '';
+  $('#sidebar-sort').style.display = '';
+  $('#position-indicator').style.display = '';
+  $('#sidebar').style.display = '';
   $('#detail').style.display = '';
   $('#stats').style.display = '';
   $('#path-filter').style.display = '';

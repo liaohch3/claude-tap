@@ -348,6 +348,16 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   applyFilter(true);
                   setSidebarOrderMode('turn');
                   setSidebarOrderMode('model');
+                  formatText('history_delete_done', { count: 1 });
+                  updateHistoryDeleteButton();
+                  setHistoryDeleteStatus('coverage', 'ok');
+                  setHistoryDeleteStatus('', '');
+                  deleteSelectedTraceDate();
+                  getTargetForGlobalMatch(0);
+                  findFilteredIdxByRequestId(entries[0]?.request_id || '');
+                  visualNavigate(1);
+                  visualNavigate(-1);
+                  vsRenderVisible();
                   if (entries.length > 1) compareSidebarModelOrder(entries[0], entries[1]);
                 }"""
             )
@@ -482,6 +492,18 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
             merge(page.evaluate(collect_css_script))
             page.evaluate("setSidebarOrderMode('model')")
             merge(page.evaluate(collect_css_script))
+            page.evaluate(
+                """() => {
+                  const picker = document.querySelector('#date-picker');
+                  if (picker) picker.style.display = 'flex';
+                  setHistoryDeleteStatus('coverage ok', 'ok');
+                }"""
+            )
+            merge(page.evaluate(collect_css_script))
+            page.evaluate("setHistoryDeleteStatus('coverage warn', 'warn')")
+            merge(page.evaluate(collect_css_script))
+            page.evaluate("setHistoryDeleteStatus('coverage error', 'error')")
+            merge(page.evaluate(collect_css_script))
 
             for index in range(page.evaluate("filtered.length")):
                 page.evaluate("entryIndex => { detailViewMode = 'default'; selectEntry(entryIndex); }", index)
@@ -521,6 +543,16 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
                 page.evaluate("showDiffForIdx(1, null, 0)")
                 merge(page.evaluate(collect_css_script))
 
+            page.evaluate(
+                """() => {
+                  setDetailViewMode('default');
+                  document.querySelector('#detail')?.insertAdjacentHTML(
+                    'afterbegin',
+                    '<div class="continuation-banner"><div class="cb-icon"></div><div class="cb-content"><div class="cb-title"></div><div class="cb-message"></div><div class="cb-meta"><div class="cb-key">id</div><div class="cb-val">resp</div></div></div></div>'
+                  );
+                }"""
+            )
+            merge(page.evaluate(collect_css_script))
             page.evaluate("document.documentElement.setAttribute('data-theme', 'dark')")
             merge(page.evaluate(collect_css_script))
             page.set_viewport_size({"width": 390, "height": 900})

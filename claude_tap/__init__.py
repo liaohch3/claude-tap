@@ -11,11 +11,7 @@ from claude_tap.certs import CertificateAuthority, ensure_ca
 from claude_tap.cli import (
     __version__,
     _build_update_command,
-    _cleanup_traces,
     _detect_installer,
-    _load_manifest,
-    _register_trace,
-    _save_manifest,
     _version_tuple,
     async_main,
     dashboard_main,
@@ -26,6 +22,7 @@ from claude_tap.cli import (
     update_main,
 )
 from claude_tap.forward_proxy import ForwardProxyServer
+from claude_tap.history import _cleanup_traces, _load_manifest, _register_trace, _save_manifest
 from claude_tap.live import LiveViewerServer
 from claude_tap.proxy import filter_headers
 from claude_tap.sse import SSEReassembler
