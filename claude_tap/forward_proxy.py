@@ -268,13 +268,17 @@ class ForwardProxyServer:
         try:
             await self._handle_tunneled_requests(hostname, port, tls_reader, tls_writer)
         finally:
-            relay_task.cancel()
-            client_to_relay_task.cancel()
             try:
                 tls_writer.close()
                 await tls_writer.wait_closed()
             except Exception:
                 pass
+            client_to_relay_task.cancel()
+            try:
+                await asyncio.wait_for(relay_task, timeout=1)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                relay_task.cancel()
+            await asyncio.gather(relay_task, client_to_relay_task, return_exceptions=True)
 
     async def _handle_tunneled_requests(
         self,
@@ -697,42 +701,48 @@ class ForwardProxyServer:
                 if msg.type == WSMsgType.TEXT:
                     server_messages.append(msg.data)
                     await ws_writer.send_frame(msg.data.encode("utf-8"), WSMsgType.TEXT)
+                    await writer.drain()
                 elif msg.type == WSMsgType.BINARY:
                     await ws_writer.send_frame(msg.data, WSMsgType.BINARY)
+                    await writer.drain()
                 elif msg.type == WSMsgType.PING:
                     payload = msg.data if isinstance(msg.data, (bytes, bytearray)) else b""
                     await ws_writer.send_frame(bytes(payload), WSMsgType.PING)
+                    await writer.drain()
                 elif msg.type == WSMsgType.PONG:
                     payload = msg.data if isinstance(msg.data, (bytes, bytearray)) else b""
                     await ws_writer.send_frame(bytes(payload), WSMsgType.PONG)
+                    await writer.drain()
                 elif msg.type == WSMsgType.CLOSE:
                     await ws_writer.close(code=msg.data or 1000, message=msg.extra)
+                    await writer.drain()
                     break
                 elif msg.type in (WSMsgType.CLOSING, WSMsgType.CLOSED, WSMsgType.ERROR):
                     break
 
-        tasks = [
-            asyncio.create_task(_pump_client_bytes()),
-            asyncio.create_task(_relay_client_to_upstream()),
-            asyncio.create_task(_relay_upstream_to_client()),
-        ]
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
+        pump_task = asyncio.create_task(_pump_client_bytes())
+        client_task = asyncio.create_task(_relay_client_to_upstream())
+        upstream_task = asyncio.create_task(_relay_upstream_to_client())
+        tasks = [pump_task, client_task, upstream_task]
+
+        await asyncio.wait([client_task, upstream_task], return_when=asyncio.FIRST_COMPLETED)
+        for task in tasks:
+            if task.done():
+                continue
             task.cancel()
+        for task in tasks:
             try:
                 await task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
-        for task in done:
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except Exception as exc:
+                log.debug(f"{log_prefix} WS relay task ended with error: {exc}")
 
         if not upstream_ws.closed:
             await upstream_ws.close()
         try:
             await ws_writer.close()
+            await writer.drain()
         except Exception:
             pass
 
