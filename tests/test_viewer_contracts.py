@@ -1075,7 +1075,7 @@ def test_viewer_semantic_contracts_across_supported_trace_shapes(
         assert text in result["detailText"]
 
 
-def test_viewer_detail_tabs_keep_default_view_and_expose_pro_mode(tmp_path: Path, chromium_browser) -> None:
+def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "detail_tabs", (_responses_record(),))
 
     page = chromium_browser.new_page()
@@ -1140,7 +1140,7 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_pro_mode(tmp_path: Path
     assert errors == []
     assert default_state["tabs"] == [
         {"mode": "default", "label": "Default", "active": True},
-        {"mode": "pro", "label": "PRO", "active": False},
+        {"mode": "pro", "label": "Trace", "active": False},
     ]
     assert default_state["sectionTitles"] == ["Tools", "System Prompt", "Messages", "Response", "Full JSON"]
     assert "Responses final OK." in default_state["text"]

@@ -3242,7 +3242,7 @@ function detailTabButton(mode, label) {
 function renderDetailViewTabs() {
   return `<div class="detail-inspector-bar" role="tablist" aria-label="Detail view mode"><div class="detail-tabs">
     ${detailTabButton('default', t('tab_default'))}
-    ${detailTabButton('pro', 'PRO')}
+    ${detailTabButton('pro', t('tab_trace'))}
   </div></div>`;
 }
 
@@ -3260,7 +3260,7 @@ function renderProFormatControls() {
     ['yaml', t('format_yaml')],
     ['pretty', t('format_pretty')],
   ];
-  return `<div class="pro-format-bar" role="toolbar" aria-label="PRO format">${modes.map(([mode, label]) => {
+  return `<div class="pro-format-bar" role="toolbar" aria-label="Trace format">${modes.map(([mode, label]) => {
     const active = proFormatMode === mode;
     return `<button type="button" data-format="${mode}" class="pro-format-btn ${active ? 'active' : ''}" aria-pressed="${active ? 'true' : 'false'}" onclick="setProFormatMode('${mode}')">${esc(label)}</button>`;
   }).join('')}</div>`;
