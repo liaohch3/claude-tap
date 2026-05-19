@@ -906,6 +906,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--tap-live",
         action="store_true",
         dest="live_viewer",
+        default=True,
         help="Start real-time viewer server (auto-opens browser)",
     )
     viewer_group.add_argument(
