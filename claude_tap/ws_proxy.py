@@ -140,6 +140,27 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
 
     client_messages: list[str] = []
     server_messages: list[str] = []
+    completed_records_written = 0
+    completed_response_keys: set[str] = set()
+
+    async def _write_completed_record(response_key: str) -> None:
+        nonlocal completed_records_written
+        if response_key in completed_response_keys:
+            return
+        completed_response_keys.add(response_key)
+        completed_records_written += 1
+        snapshot_turn: int | str = turn if completed_records_written == 1 else f"{turn}.{completed_records_written}"
+        record = _build_ws_record(
+            req_id=req_id if completed_records_written == 1 else f"{req_id}_{completed_records_written}",
+            turn=snapshot_turn,
+            duration_ms=int((time.monotonic() - t0) * 1000),
+            path_qs=request.path_qs,
+            req_headers=request.headers,
+            client_messages=client_messages.copy(),
+            server_messages=server_messages.copy(),
+            upstream_base_url=target,
+        )
+        await writer.write(record)
 
     async def _relay_client_to_upstream():
         try:
@@ -166,6 +187,9 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     server_messages.append(msg.data)
                     await client_ws.send_str(msg.data)
+                    response_key = _response_completed_message_key(msg.data)
+                    if response_key is not None:
+                        await _write_completed_record(response_key)
                 elif msg.type == aiohttp.WSMsgType.BINARY:
                     await client_ws.send_bytes(msg.data)
                 elif msg.type in (
@@ -199,17 +223,18 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
 
     duration_ms = int((time.monotonic() - t0) * 1000)
 
-    record = _build_ws_record(
-        req_id=req_id,
-        turn=turn,
-        duration_ms=duration_ms,
-        path_qs=request.path_qs,
-        req_headers=request.headers,
-        client_messages=client_messages,
-        server_messages=server_messages,
-        upstream_base_url=target,
-    )
-    await writer.write(record)
+    if completed_records_written == 0:
+        record = _build_ws_record(
+            req_id=req_id,
+            turn=turn,
+            duration_ms=duration_ms,
+            path_qs=request.path_qs,
+            req_headers=request.headers,
+            client_messages=client_messages,
+            server_messages=server_messages,
+            upstream_base_url=target,
+        )
+        await writer.write(record)
 
     log.info(
         f"{log_prefix} ← WS closed ({duration_ms}ms, "
@@ -222,7 +247,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
 
 def _build_ws_record(
     req_id: str,
-    turn: int,
+    turn: int | str,
     duration_ms: int,
     path_qs: str,
     req_headers: dict,
@@ -284,6 +309,19 @@ def _parse_ws_messages(messages: list[str]) -> list[dict]:
         except (json.JSONDecodeError, ValueError):
             parsed_messages.append({"raw": msg})
     return parsed_messages
+
+
+def _response_completed_message_key(message: str) -> str | None:
+    try:
+        parsed = json.loads(message)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, dict) or parsed.get("type") not in ("response.completed", "response.done"):
+        return None
+    response = parsed.get("response")
+    if isinstance(response, dict) and response.get("id"):
+        return str(response["id"])
+    return json.dumps(parsed, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
 def _reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
