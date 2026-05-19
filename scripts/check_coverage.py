@@ -347,12 +347,46 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     """(entryIndex) => {
                       const entry = entries[entryIndex];
                       const body = entry.request.body;
-                      getMessages(body);
+                      const messages = getMessages(body);
                       getRequestTools(body);
                       extractSystem(body);
                       getUsage(entry);
                       getResponseEvents(entry);
                       getResponseOutput(entry);
+                      const imageBlock = messages
+                        .flatMap(message => Array.isArray(message.content) ? message.content : [])
+                        .find(block => block?.type === 'image');
+                      if (imageBlock) {
+                        renderImageSource(imageBlock.source || {});
+                        imageSrcFromSource(imageBlock.source || {});
+                        traceAssets();
+                        hydrateTraceAssets(body);
+                        filtered = entries;
+                        activeIdx = entryIndex;
+                        writeClipboardText = text => {
+                          window.__lastCopiedText = text;
+                          return Promise.resolve();
+                        };
+                        copyRequestBody(document.createElement('button'));
+                        copyCurl(document.createElement('button'));
+                      }
+                      const inputImageBlock = messages
+                        .flatMap(message => Array.isArray(message.content) ? message.content : [])
+                        .find(block => block?.type === 'input_image');
+                      if (inputImageBlock) {
+                        renderImageUrl(inputImageBlock.image_url);
+                        imageSrcFromImageUrl(inputImageBlock.image_url);
+                        traceAssets();
+                        hydrateTraceAssets(body);
+                        filtered = entries;
+                        activeIdx = entryIndex;
+                        writeClipboardText = text => {
+                          window.__lastCopiedText = text;
+                          return Promise.resolve();
+                        };
+                        copyRequestBody(document.createElement('button'));
+                        copyCurl(document.createElement('button'));
+                      }
                       const jsonSection = Array.from(document.querySelectorAll('#detail .section'))
                         .find(el => el.querySelector('.title')?.textContent === t('section_json'));
                       const jsonToggle = jsonSection?.querySelector('.jt-toggle');

@@ -25,6 +25,11 @@ except ImportError:
 
 pytestmark = pytest.mark.skipif(pw_missing, reason="playwright not installed")
 
+IMAGE_CONTRACT_DATA = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+CODEX_IMAGE_CONTRACT_DATA = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGP4z8AAR0jM/wxDSwIA6TA/wRjsoYgAAAAASUVORK5CYII="
+)
+
 
 @dataclass(frozen=True)
 class ViewerContractCase:
@@ -107,6 +112,47 @@ def _anthropic_messages_record() -> dict[str, Any]:
     }
 
 
+def _anthropic_image_record() -> dict[str, Any]:
+    return {
+        "timestamp": "2026-05-13T13:20:30+00:00",
+        "request_id": "req_anthropic_image_contract",
+        "turn": 1,
+        "duration_ms": 100,
+        "request": {
+            "method": "POST",
+            "path": "/v1/messages",
+            "headers": {},
+            "body": {
+                "model": "claude-opus-4-6",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Image contract prompt."},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": IMAGE_CONTRACT_DATA,
+                                },
+                            },
+                        ],
+                    }
+                ],
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {
+                "content": [{"type": "text", "text": "Image response OK."}],
+                "usage": {"input_tokens": 80, "output_tokens": 6},
+            },
+        },
+    }
+
+
 def _responses_record() -> dict[str, Any]:
     return {
         "timestamp": "2026-05-13T13:21:00+00:00",
@@ -151,6 +197,55 @@ def _responses_record() -> dict[str, Any]:
                     "input_tokens": 130,
                     "output_tokens": 14,
                     "input_tokens_details": {"cached_tokens": 50},
+                },
+            },
+        },
+    }
+
+
+def _responses_image_record() -> dict[str, Any]:
+    return {
+        "timestamp": "2026-05-13T13:21:30+00:00",
+        "request_id": "req_responses_image_contract",
+        "turn": 1,
+        "duration_ms": 100,
+        "request": {
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": {},
+            "body": {
+                "model": "gpt-5.5",
+                "instructions": "You are Codex image contract system prompt.",
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Codex image contract prompt."},
+                            {
+                                "type": "input_image",
+                                "image_url": f"data:image/png;base64,{CODEX_IMAGE_CONTRACT_DATA}",
+                            },
+                        ],
+                    }
+                ],
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Codex image response OK."}],
+                    },
+                ],
+                "usage": {
+                    "input_tokens": 90,
+                    "output_tokens": 7,
+                    "input_tokens_details": {"cached_tokens": 20},
                 },
             },
         },
@@ -842,6 +937,17 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             required_detail_text=("Read pyproject.toml.", "project metadata", "Anthropic response OK."),
         ),
         ViewerContractCase(
+            name="anthropic_image_asset",
+            records=(_anthropic_image_record(),),
+            expected_sections=("Messages", "Response"),
+            expected_system=None,
+            expected_roles=("user",),
+            expected_tools=(),
+            expected_output_types=("text",),
+            expected_usage={"input_tokens": 80, "output_tokens": 6},
+            required_detail_text=("Image contract prompt.", "Image response OK."),
+        ),
+        ViewerContractCase(
             name="openai_responses",
             records=(_responses_record(),),
             expected_sections=("Tools", "System Prompt", "Messages", "Response"),
@@ -851,6 +957,17 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             expected_output_types=("tool_use", "text"),
             expected_usage={"input_tokens": 130, "output_tokens": 14, "cache_read_input_tokens": 50},
             required_detail_text=("Run pwd.", "exec_command", "Responses final OK."),
+        ),
+        ViewerContractCase(
+            name="openai_responses_image_asset",
+            records=(_responses_image_record(),),
+            expected_sections=("System Prompt", "Messages", "Response"),
+            expected_system="You are Codex image contract system prompt.",
+            expected_roles=("developer", "user"),
+            expected_tools=(),
+            expected_output_types=("text",),
+            expected_usage={"input_tokens": 90, "output_tokens": 7, "cache_read_input_tokens": 20},
+            required_detail_text=("Codex image contract prompt.", "Codex image response OK."),
         ),
         ViewerContractCase(
             name="codex_websocket",
@@ -1126,6 +1243,16 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
         "geminiMessages",
         "geminiResponseOutput",
         "renderTools",
+        "traceAssets",
+        "assetDataUrl",
+        "imageSrcFromSource",
+        "imageSrcFromImageUrl",
+        "renderImageElement",
+        "renderImageSource",
+        "renderImageUrl",
+        "hydrateTraceAssets",
+        "copyRequestBody",
+        "copyCurl",
     }
 
     page = chromium_browser.new_page()
@@ -1143,12 +1270,46 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
                 """(entryIndex) => {
                   const entry = entries[entryIndex];
                   const body = entry.request.body;
-                  getMessages(body);
+                  const messages = getMessages(body);
                   getRequestTools(body);
                   extractSystem(body);
                   getUsage(entry);
                   getResponseEvents(entry);
                   getResponseOutput(entry);
+                  const imageBlock = messages
+                    .flatMap(message => Array.isArray(message.content) ? message.content : [])
+                    .find(block => block?.type === 'image');
+                  if (imageBlock) {
+                    renderImageSource(imageBlock.source || {});
+                    imageSrcFromSource(imageBlock.source || {});
+                    traceAssets();
+                    hydrateTraceAssets(body);
+                    filtered = entries;
+                    activeIdx = entryIndex;
+                    writeClipboardText = text => {
+                      window.__lastCopiedText = text;
+                      return Promise.resolve();
+                    };
+                    copyRequestBody(document.createElement('button'));
+                    copyCurl(document.createElement('button'));
+                  }
+                  const inputImageBlock = messages
+                    .flatMap(message => Array.isArray(message.content) ? message.content : [])
+                    .find(block => block?.type === 'input_image');
+                  if (inputImageBlock) {
+                    renderImageUrl(inputImageBlock.image_url);
+                    imageSrcFromImageUrl(inputImageBlock.image_url);
+                    traceAssets();
+                    hydrateTraceAssets(body);
+                    filtered = entries;
+                    activeIdx = entryIndex;
+                    writeClipboardText = text => {
+                      window.__lastCopiedText = text;
+                      return Promise.resolve();
+                    };
+                    copyRequestBody(document.createElement('button'));
+                    copyCurl(document.createElement('button'));
+                  }
                   const jsonSection = Array.from(document.querySelectorAll('#detail .section'))
                     .find(el => el.querySelector('.title')?.textContent === t('section_json'));
                   const jsonToggle = jsonSection?.querySelector('.jt-toggle');

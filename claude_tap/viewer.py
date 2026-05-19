@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -554,6 +555,114 @@ def _dict_or_empty(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _image_asset_id(media_type: str, data: str) -> str:
+    digest = hashlib.sha256(f"{media_type}\0{data}".encode("utf-8")).hexdigest()
+    return f"img_{digest[:24]}"
+
+
+def _image_data_url_parts(value: str) -> tuple[str, str] | None:
+    if not value.lower().startswith("data:") or "," not in value:
+        return None
+
+    header, data = value[5:].split(",", 1)
+    header_parts = [part.strip() for part in header.split(";") if part.strip()]
+    if not data or not any(part.lower() == "base64" for part in header_parts):
+        return None
+
+    media_type = "image/png"
+    if header_parts and header_parts[0].lower() != "base64":
+        media_type = header_parts[0]
+    if not media_type.startswith("image/"):
+        return None
+
+    return media_type, data
+
+
+def _dedupe_image_sources(value: object, assets: dict[str, dict[str, str]]) -> tuple[object, bool]:
+    if isinstance(value, list):
+        changed = False
+        items = []
+        for item in value:
+            next_item, item_changed = _dedupe_image_sources(item, assets)
+            changed = changed or item_changed
+            items.append(next_item)
+        return items, changed
+
+    if not isinstance(value, dict):
+        return value, False
+
+    if value.get("type") == "image":
+        source = value.get("source")
+        if isinstance(source, dict) and source.get("type") == "base64" and isinstance(source.get("data"), str):
+            data = source["data"]
+            if data:
+                media_type_value = source.get("media_type")
+                media_type = media_type_value if isinstance(media_type_value, str) and media_type_value else "image/png"
+                asset_id = _image_asset_id(media_type, data)
+                assets.setdefault(asset_id, {"media_type": media_type, "data": data})
+                ref_source: dict[str, object] = {"type": "base64_ref", "asset_id": asset_id}
+                if media_type_value is not None:
+                    ref_source["media_type"] = media_type_value
+                for key, item in source.items():
+                    if key not in {"type", "data", "media_type"}:
+                        ref_source[key] = item
+
+                result = {}
+                changed = True
+                for key, item in value.items():
+                    if key == "source":
+                        result[key] = ref_source
+                        continue
+                    next_item, item_changed = _dedupe_image_sources(item, assets)
+                    changed = changed or item_changed
+                    result[key] = next_item
+                return result, changed
+
+    if value.get("type") == "input_image" and isinstance(value.get("image_url"), str):
+        image_url = value["image_url"]
+        data_url_parts = _image_data_url_parts(image_url)
+        if data_url_parts is not None:
+            media_type, data = data_url_parts
+            asset_id = _image_asset_id(media_type, data)
+            assets.setdefault(asset_id, {"media_type": media_type, "data": data})
+            ref: dict[str, object] = {
+                "type": "data_url_ref",
+                "asset_id": asset_id,
+                "media_type": media_type,
+            }
+
+            result = {}
+            changed = True
+            for key, item in value.items():
+                if key == "image_url":
+                    result[key] = ref
+                    continue
+                next_item, item_changed = _dedupe_image_sources(item, assets)
+                changed = changed or item_changed
+                result[key] = next_item
+            return result, changed
+
+    changed = False
+    result = {}
+    for key, item in value.items():
+        next_item, item_changed = _dedupe_image_sources(item, assets)
+        changed = changed or item_changed
+        result[key] = next_item
+    return result, changed
+
+
+def _dedupe_record_image_assets(record_json: str, assets: dict[str, dict[str, str]]) -> str:
+    try:
+        record = json.loads(record_json)
+    except (json.JSONDecodeError, TypeError):
+        return record_json
+
+    deduped, changed = _dedupe_image_sources(record, assets)
+    if not changed:
+        return record_json
+    return json.dumps(deduped, ensure_ascii=False, separators=(",", ":"))
+
+
 def _tool_display_name(tool: dict) -> str:
     for value in (
         tool.get("name"),
@@ -690,6 +799,13 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
                 if line:
                     records.append(_normalize_record_for_viewer(line))
 
+    jsonl_path_js = json.dumps(str(trace_path.absolute()))
+    html_path_js = json.dumps(str(html_path.absolute()))
+    version_js = json.dumps(CLAUDE_TAP_VERSION)
+    assets: dict[str, dict[str, str]] = {}
+    records = [_dedupe_record_image_assets(rec, assets) for rec in records]
+    assets_js = json.dumps(assets, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+
     # Escape </ sequences so embedded record JSON cannot prematurely close the
     # surrounding <script> / <script type="text/plain"> blocks. Forward-proxy
     # mode can capture arbitrary HTTPS upstreams whose bodies legitimately
@@ -697,10 +813,6 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
     # and renders the captured HTML as page content. JSON's \/ is a valid
     # escape for /, so the parsed JSON value is unchanged.
     records = [rec.replace("</", "<\\/") for rec in records]
-
-    jsonl_path_js = json.dumps(str(trace_path.absolute()))
-    html_path_js = json.dumps(str(html_path.absolute()))
-    version_js = json.dumps(CLAUDE_TAP_VERSION)
 
     use_lazy = len(records) > LAZY_THRESHOLD
 
@@ -718,6 +830,7 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
 
         data_js = (
             f"const EMBEDDED_TRACE_META = {meta_js};\n"
+            f"const EMBEDDED_TRACE_ASSETS = {assets_js};\n"
             f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
             f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
             f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
@@ -736,6 +849,7 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
         # Small trace: inline all data as before
         data_js = (
             "const EMBEDDED_TRACE_DATA = [\n" + ",\n".join(records) + "\n];\n"
+            f"const EMBEDDED_TRACE_ASSETS = {assets_js};\n"
             f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
             f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
             f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
