@@ -143,100 +143,266 @@ button { cursor: pointer; }
 }
 .trace-path-bar .tp-copy:hover { color: var(--blue); background: var(--blue-bg); }
 
-.main { display: flex; flex: 1; overflow: hidden; }
-#sidebar-wrap {
-  width: 340px; min-width: 300px; flex-shrink: 0;
-  border-right: 1px solid var(--border);
-  background: var(--bg-card);
-  display: flex; flex-direction: column; min-height: 0;
+.main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  background: var(--bg);
+  padding: 14px 20px 20px;
 }
-.history-bar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px; border-bottom: 1px solid var(--border);
-  font-size: 13px; flex-shrink: 0;
+.main::-webkit-scrollbar { width: 6px; }
+.main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.dashboard-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
 }
-.history-label { color: var(--text-secondary); white-space: nowrap; }
+.dashboard-title {
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.dashboard-clock {
+  margin-left: auto;
+  color: var(--red);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: .18em;
+  white-space: nowrap;
+}
+.control-panel {
+  display: grid;
+  grid-template-columns: minmax(190px, 260px) minmax(160px, 210px) minmax(260px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.control-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.control-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .history-select,
 .session-search input {
-  min-width: 0; flex: 1; padding: 3px 6px;
-  border-radius: 4px; border: 1px solid var(--border);
-  background: var(--bg-card); color: var(--text);
-  font-size: 13px; outline: none;
+  min-width: 0;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
 }
 .history-select:hover,
 .session-search input:hover,
 .session-search input:focus { border-color: var(--blue); }
+.session-search { display: flex; align-items: center; min-width: 0; }
 .history-refresh {
   display: inline-flex; align-items: center; justify-content: center;
-  min-height: 26px; min-width: 30px; padding: 3px 8px;
+  min-height: 32px; min-width: 38px; padding: 5px 12px;
   border: 1px solid var(--border); border-radius: 6px;
   background: var(--bg-card); color: var(--text-secondary);
   font-family: var(--mono); font-size: 12px; line-height: 1;
   transition: color .15s, border-color .15s, background .15s;
 }
 .history-refresh:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
-.session-search {
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 12px; border-bottom: 1px solid var(--border);
-  background: var(--bg);
+.overview-card {
+  display: grid;
+  grid-template-columns: repeat(4, max-content);
+  gap: 34px;
+  align-items: start;
+  min-height: 84px;
+  padding: 20px 22px;
+  margin-bottom: 14px;
+  border: 1px solid #cfd8e7;
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+[data-theme="dark"] .overview-card { border-color: var(--border); }
+.metric-label {
+  color: #5f6b7a;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .08em;
+}
+[data-theme="dark"] .metric-label { color: var(--text-tertiary); }
+.metric-value {
+  margin-top: 8px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1;
+}
+.table-panel {
+  border: 1px solid #cfd8e7;
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
   flex-shrink: 0;
 }
-.sidebar {
-  overflow-y: auto;
-  min-height: 0;
+[data-theme="dark"] .table-panel { border-color: var(--border); }
+.table-scroll {
+  max-height: min(55vh, 620px);
+  overflow: auto;
 }
-.sidebar::-webkit-scrollbar { width: 4px; }
-.sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-.sidebar-group-header {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 16px; user-select: none;
-  font-size: 12px; font-weight: 600; color: var(--text-secondary);
-  background: var(--bg); border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; z-index: 1;
-  text-transform: uppercase; letter-spacing: .5px;
-}
-.sidebar-group-header .group-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--blue); }
-.sidebar-group-header .group-name { flex: 1; }
-.sidebar-group-header .group-count {
-  font-size: 10px; font-weight: 500; color: var(--text-tertiary);
-  background: var(--bg-hover); padding: 1px 6px; border-radius: 8px;
-}
-.sidebar-item {
+.table-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.session-table {
   width: 100%;
-  padding: 10px 16px; text-align: left;
-  border: none; border-bottom: 1px solid var(--border-light); border-left: 3px solid transparent;
-  background: var(--bg-card); color: var(--text);
-  transition: background .1s;
+  min-width: 1040px;
+  border-collapse: collapse;
 }
-.sidebar-item:hover { background: var(--bg-hover); }
-.sidebar-item.active { background: var(--blue-bg); border-left-color: var(--blue); }
-.sidebar-item.is-error { border-left-color: var(--red); }
-.sidebar-item .si-row1 { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-.sidebar-item .si-turn { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-item .si-model {
-  font-size: 11px; padding: 1px 6px; border-radius: 4px;
-  font-weight: 500; margin-left: auto; color: var(--blue); background: var(--blue-bg);
-  max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.session-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 14px 16px;
+  border-bottom: 1px solid #c1ccdc;
+  background: var(--bg-card);
+  color: #515b69;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-align: left;
+  text-transform: uppercase;
 }
-.sidebar-item .si-row2 { display: flex; gap: 10px; font-size: 11px; }
-.sidebar-item .si-tok { color: var(--green); font-family: var(--mono); font-weight: 500; }
-.sidebar-item .si-dur { color: var(--amber); font-family: var(--mono); font-weight: 500; }
-.sidebar-item .si-time { color: var(--text-tertiary); font-family: var(--mono); font-weight: 500; margin-left: auto; }
-.sidebar-item .si-task {
-  font-size: 10px; padding: 1px 5px; border-radius: 3px;
-  font-weight: 500; white-space: nowrap; color: var(--orange); background: var(--orange-bg);
+[data-theme="dark"] .session-table th {
+  border-bottom-color: var(--border);
+  color: var(--text-tertiary);
 }
-.sidebar-item .si-path {
-  font-size: 10px; color: var(--text-tertiary); font-family: var(--mono);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px;
+.session-table td {
+  padding: 13px 16px;
+  border-bottom: 1px solid #d8dfeb;
+  color: var(--text);
+  font-size: 13px;
+  vertical-align: middle;
 }
-.sidebar-empty {
-  padding: 18px 16px;
+[data-theme="dark"] .session-table td { border-bottom-color: var(--border-light); }
+.session-table tr:last-child td { border-bottom: 0; }
+.session-row {
+  cursor: pointer;
+  transition: background .12s;
+}
+.session-row:hover { background: var(--bg-hover); }
+.session-row.active { background: var(--blue-bg); }
+.session-row.active td:first-child { box-shadow: inset 3px 0 0 var(--blue); }
+.mono-cell {
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+.first-message {
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.trace-count {
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.token-pill,
+.model-pill,
+.agent-pill,
+.status-pill,
+.live-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+.token-pill {
+  color: #c45a11;
+  background: #fff8ea;
+  border: 1px solid #ffd99b;
+}
+.model-pill {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #6d3dff;
+  background: #f4f0ff;
+  border: 1px solid #d8caff;
+}
+.agent-pill {
+  color: var(--blue);
+  background: var(--blue-bg);
+  border: 1px solid color-mix(in srgb, var(--blue) 28%, transparent);
+}
+.status-pill.ok,
+.status-pill.live {
+  color: #18a449;
+  background: #eafbf1;
+  border: 1px solid #9ee6b4;
+}
+.status-pill.err {
+  color: #ef3350;
+  background: #fff0f3;
+  border: 1px solid #ffb5c1;
+}
+.status-pill.empty-status {
+  color: #c57a00;
+  background: #fff8e7;
+  border: 1px solid #ffdca3;
+}
+[data-theme="dark"] .token-pill { color: var(--orange); background: var(--orange-bg); border-color: #6f3b0c; }
+[data-theme="dark"] .model-pill { color: var(--purple); background: var(--purple-bg); border-color: #4a2d83; }
+[data-theme="dark"] .status-pill.ok,
+[data-theme="dark"] .status-pill.live { color: var(--green); background: var(--green-bg); border-color: #1e6a37; }
+[data-theme="dark"] .status-pill.err { color: var(--red); background: var(--red-bg); border-color: #7a2730; }
+[data-theme="dark"] .status-pill.empty-status { color: var(--amber); background: var(--amber-bg); border-color: #6f5200; }
+.row-action {
+  min-height: 26px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-card);
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 12px;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.row-action:hover {
+  border-color: var(--blue);
+  background: var(--blue-bg);
+}
+.table-empty {
+  padding: 28px 16px;
+  text-align: center;
   color: var(--text-tertiary);
   font-size: 13px;
 }
 
-.detail { flex: 1; overflow-y: auto; padding: 12px 20px; background: var(--bg); }
+.detail {
+  flex: none;
+  overflow: visible;
+  padding: 12px 0 0;
+  background: var(--bg);
+}
 .detail::-webkit-scrollbar { width: 6px; }
 .detail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .empty {
@@ -382,9 +548,13 @@ pre {
   .header { flex-wrap: wrap; padding: 10px 12px; }
   .stats { order: 4; width: 100%; flex-wrap: wrap; margin-left: 0; }
   .trace-path-bar { display: none; }
-  .main { flex-direction: column; overflow: visible; }
-  #sidebar-wrap { width: 100%; min-width: 0; max-height: 420px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .detail { overflow: visible; padding: 12px; }
+  .main { overflow: visible; padding: 12px; }
+  .dashboard-title-row { flex-wrap: wrap; }
+  .dashboard-clock { width: 100%; margin-left: 0; }
+  .control-panel { grid-template-columns: 1fr; }
+  .overview-card { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+  .table-scroll { max-height: none; }
+  .detail { padding-top: 12px; }
 }
 </style>
 </head>
@@ -410,14 +580,18 @@ pre {
 </div>
 
 <div class="main">
-  <aside id="sidebar-wrap">
-    <div class="history-bar">
-      <span class="history-label">Date:</span>
+  <div class="dashboard-title-row">
+    <h1 class="dashboard-title">Conversation Log</h1>
+    <span class="dashboard-clock" id="dashboard-clock"></span>
+  </div>
+
+  <div class="control-panel">
+    <label class="control-field">
+      <span class="control-label">Date</span>
       <select id="date-filter" class="history-select"></select>
-      <button id="refresh" class="history-refresh" title="Refresh">R</button>
-    </div>
-    <div class="history-bar">
-      <span class="history-label">Status:</span>
+    </label>
+    <label class="control-field">
+      <span class="control-label">Status</span>
       <select id="status-filter" class="history-select">
         <option value="all">All status</option>
         <option value="active">Active</option>
@@ -425,12 +599,51 @@ pre {
         <option value="error">Error</option>
         <option value="empty">Empty</option>
       </select>
-    </div>
-    <div class="session-search">
+    </label>
+    <div class="session-search" role="search">
       <input id="search" type="search" placeholder="Search messages, agents, models, paths...">
     </div>
-    <div id="session-list" class="sidebar"></div>
-  </aside>
+    <button id="refresh" class="history-refresh" title="Refresh">R</button>
+  </div>
+
+  <section class="overview-card" aria-label="Dashboard summary">
+    <div class="metric">
+      <div class="metric-label">Threads</div>
+      <div class="metric-value" id="overview-threads">0</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Traces</div>
+      <div class="metric-value" id="overview-traces">0</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Error Rate</div>
+      <div class="metric-value" id="overview-error-rate">0.0%</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Total Tokens</div>
+      <div class="metric-value" id="overview-tokens">0</div>
+    </div>
+  </section>
+
+  <section class="table-panel" aria-label="Trace sessions">
+    <div class="table-scroll">
+      <table class="session-table">
+        <thead>
+          <tr>
+            <th>Start Time</th>
+            <th>First Message</th>
+            <th>Traces</th>
+            <th>Tokens</th>
+            <th>Model</th>
+            <th>Agent</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="session-list"></tbody>
+      </table>
+    </div>
+  </section>
 
   <section id="detail" class="detail">
     <div class="empty">No trace sessions found.</div>
@@ -459,6 +672,27 @@ function fmtTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function fmtTableTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const pad = number => String(number).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + " " + [
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join(":");
+}
+
+function updateClock() {
+  const clock = $("#dashboard-clock");
+  if (clock) clock.textContent = fmtTableTime(new Date().toISOString());
 }
 
 function esc(value) {
@@ -500,13 +734,13 @@ async function refreshSessions({preserveSelection = true} = {}) {
   state.sessions = payload.sessions || [];
   renderFilters();
   renderAgents();
-  renderSessions();
 
   const visible = filteredSessions();
   const stillVisible = visible.some(session => session.id === state.selectedSessionId);
   if (!preserveSelection || !state.selectedSessionId || !stillVisible) {
     state.selectedSessionId = visible[0]?.id || null;
   }
+  renderSessions();
   if (state.selectedSessionId) {
     await loadSession(state.selectedSessionId);
   } else {
@@ -562,51 +796,60 @@ function renderAgents() {
 
 function renderSessions() {
   const sessions = filteredSessions();
+  renderOverview(sessions);
   if (!sessions.length) {
-    $("#session-list").innerHTML = '<div class="sidebar-empty">No matching trace sessions.</div>';
+    $("#session-list").innerHTML = '<tr><td class="table-empty" colspan="8">No matching trace sessions.</td></tr>';
     return;
   }
 
-  const grouped = new Map();
-  for (const session of sessions) {
-    const key = state.selectedAgent === "all" ? session.agent_key : "selected";
-    const label = state.selectedAgent === "all" ? session.agent : "Sessions";
-    if (!grouped.has(key)) grouped.set(key, {key, label, items: []});
-    grouped.get(key).items.push(session);
-  }
-  const groups = Array.from(grouped.values()).sort((a, b) => a.label.localeCompare(b.label));
-
-  $("#session-list").innerHTML = groups.map(group => `
-    <div class="sidebar-group-header">
-      <span class="group-dot"></span>
-      <span class="group-name">${esc(group.label)}</span>
-      <span class="group-count">${fmtNumber(group.items.length)}</span>
-    </div>
-    ${group.items.map(session => sessionRow(session)).join("")}
-  `).join("");
-  document.querySelectorAll("[data-session]").forEach(button => {
-    button.addEventListener("click", () => selectSession(button.dataset.session));
+  $("#session-list").innerHTML = sessions.map(session => sessionRow(session)).join("");
+  document.querySelectorAll("[data-session]").forEach(row => {
+    row.addEventListener("click", event => {
+      event.preventDefault();
+      selectSession(row.dataset.session);
+    });
+    row.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectSession(row.dataset.session);
+      }
+    });
   });
 }
 
 function sessionRow(session) {
-  const isError = session.status === "error";
   const preview = session.first_user || session.last_response || session.rel_trace_path;
-  const elapsed = session.duration_ms ? `${(session.duration_ms / 1000).toFixed(1)}s` : "0s";
+  const status = statusInfo(session);
   return `
-    <button class="sidebar-item ${state.selectedSessionId === session.id ? "active" : ""} ${isError ? "is-error" : ""}" data-session="${esc(session.id)}">
-      <div class="si-row1">
-        <span class="si-turn">${esc(preview || "No captured messages yet.")}</span>
-        <span class="si-model">${esc(session.model || "unknown")}</span>
-      </div>
-      <div class="si-row2">
-        <span class="si-tok">${fmtNumber(session.total_tokens)} tok</span>
-        <span class="si-dur">${esc(elapsed)}</span>
-        <span class="si-time">${esc(fmtTime(session.updated_at))}</span>
-      </div>
-      <div class="si-path">${esc(session.rel_trace_path)}</div>
-    </button>
+    <tr class="session-row ${state.selectedSessionId === session.id ? "active" : ""}" data-session="${esc(session.id)}" tabindex="0">
+      <td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
+      <td><div class="first-message" title="${esc(preview || "No captured messages yet.")}">${esc(preview || "No captured messages yet.")}</div></td>
+      <td><span class="trace-count">${fmtNumber(session.record_count)}</span></td>
+      <td><span class="token-pill">${fmtNumber(session.total_tokens)}</span></td>
+      <td><span class="model-pill" title="${esc(session.model || "unknown")}">${esc(session.model || "unknown")}</span></td>
+      <td><span class="agent-pill">${esc(session.agent || "unknown")}</span></td>
+      <td><span class="status-pill ${status.className}">${esc(status.label)}</span></td>
+      <td><button class="row-action" type="button" aria-label="View session">View</button></td>
+    </tr>
   `;
+}
+
+function renderOverview(sessions) {
+  const traces = sessions.reduce((sum, session) => sum + session.record_count, 0);
+  const tokens = sessions.reduce((sum, session) => sum + session.total_tokens, 0);
+  const errors = sessions.filter(session => session.status === "error").length;
+  const errorRate = sessions.length ? `${((errors / sessions.length) * 100).toFixed(1)}%` : "0.0%";
+  $("#overview-threads").textContent = fmtNumber(sessions.length);
+  $("#overview-traces").textContent = fmtNumber(traces);
+  $("#overview-error-rate").textContent = errorRate;
+  $("#overview-tokens").textContent = fmtNumber(tokens);
+}
+
+function statusInfo(session) {
+  if (session.status === "error") return {label: "ERR", className: "err"};
+  if (session.status === "empty") return {label: "EMPTY", className: "empty-status"};
+  if (session.live || session.status === "active") return {label: "LIVE", className: "live"};
+  return {label: "OK", className: "ok"};
 }
 
 async function selectSession(sessionId) {
@@ -864,6 +1107,10 @@ function applyTheme(theme) {
 $("#search").addEventListener("input", event => {
   state.search = event.target.value;
   renderSessions();
+  const visible = filteredSessions();
+  if (state.selectedSessionId && visible.some(session => session.id === state.selectedSessionId)) return;
+  const first = visible[0];
+  first ? selectSession(first.id) : renderEmpty();
 });
 
 $("#date-filter").addEventListener("change", event => {
@@ -886,6 +1133,8 @@ $("#refresh").addEventListener("click", () => refreshSessions({preserveSelection
 $("#theme-toggle").addEventListener("click", toggleTheme);
 
 initTheme();
+updateClock();
+setInterval(updateClock, 1000);
 connectEvents();
 refreshSessions({preserveSelection: false}).catch(error => {
   $("#detail").innerHTML = `<div class="empty">Unable to load dashboard: ${esc(error.message)}</div>`;
