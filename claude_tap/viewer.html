@@ -3981,6 +3981,22 @@ function normalizeResponseOutput(output) {
   return content.length > 0 ? { content } : null;
 }
 
+function appendMergeableResponseBlock(content, block) {
+  if (!block || typeof block !== 'object') return;
+  const prev = content.length ? content[content.length - 1] : null;
+  if (prev && prev.type === block.type) {
+    if (block.type === 'thinking') {
+      prev.thinking = (prev.thinking || '') + (block.thinking || '');
+      return;
+    }
+    if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') {
+      prev.text = (prev.text || '') + (block.text || '');
+      return;
+    }
+  }
+  content.push(block);
+}
+
 function reconstructOutputFromEvents(events) {
   if (!Array.isArray(events) || events.length === 0) return null;
   const outputItems = [];
@@ -4024,15 +4040,6 @@ function geminiUsageFromPayloads(entry) {
 function geminiResponseOutput(entry) {
   if (!isGeminiRequestBody(entry?.request?.body)) return null;
   const content = [];
-  let textBlock = null;
-  const appendText = text => {
-    if (typeof text !== 'string' || !text.trim()) return;
-    if (!textBlock) {
-      textBlock = { type: 'text', text: '' };
-      content.push(textBlock);
-    }
-    textBlock.text += text;
-  };
   for (const payload of geminiResponsePayloads(entry)) {
     const response = payload?.response && typeof payload.response === 'object' ? payload.response : payload;
     const candidates = response?.candidates;
@@ -4043,8 +4050,11 @@ function geminiResponseOutput(entry) {
       for (const part of parts) {
         if (!part || typeof part !== 'object') continue;
         if (typeof part.text === 'string') {
-          if (part.thought === true && part.text.trim()) content.push({ type: 'thinking', thinking: part.text });
-          else appendText(part.text);
+          if (part.thought === true && part.text.trim()) {
+            appendMergeableResponseBlock(content, { type: 'thinking', thinking: part.text });
+          } else if (part.text.trim()) {
+            appendMergeableResponseBlock(content, { type: 'text', text: part.text });
+          }
         }
         if (part.functionCall && typeof part.functionCall === 'object') {
           const call = part.functionCall;

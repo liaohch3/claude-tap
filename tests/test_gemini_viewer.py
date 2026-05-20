@@ -103,7 +103,28 @@ def _gemini_record() -> dict:
                                     "content": {
                                         "role": "model",
                                         "parts": [
-                                            {"thought": True, "text": "I need to run a shell command."},
+                                            {"thought": True, "text": "I need"},
+                                        ],
+                                    }
+                                }
+                            ],
+                            "usageMetadata": {
+                                "promptTokenCount": 100,
+                                "candidatesTokenCount": 4,
+                                "cachedContentTokenCount": 40,
+                            },
+                        }
+                    }
+                )
+                + _sse_frame(
+                    {
+                        "response": {
+                            "candidates": [
+                                {
+                                    "content": {
+                                        "role": "model",
+                                        "parts": [
+                                            {"thought": True, "text": " to run a shell command."},
                                             {
                                                 "functionCall": {
                                                     "name": "run_shell_command",
@@ -234,11 +255,12 @@ def test_viewer_renders_gemini_semantic_sections(gemini_html_file: Path) -> None
     assert result["roles"] == ["user", "assistant", "tool"]
     assert result["tools"] == ["run_shell_command"]
     assert [block["type"] for block in result["output"]] == ["thinking", "tool_use", "text"]
+    assert result["output"][0]["thinking"] == "I need to run a shell command."
     assert result["output"][1]["name"] == "run_shell_command"
     assert result["usage"]["input_tokens"] == 110
     assert result["usage"]["output_tokens"] == 12
     assert result["usage"]["cache_read_input_tokens"] == 40
-    assert result["eventCount"] == 2
+    assert result["eventCount"] == 3
     detail = result["detail"]
     assert "System Prompt" in detail
     assert "Messages" in detail

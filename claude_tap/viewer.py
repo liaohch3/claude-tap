@@ -338,16 +338,22 @@ def _gemini_payloads_from_response_body(body: object) -> list[dict]:
 def _extract_gemini_response_output(body: object) -> dict | None:
     payloads = _gemini_payloads_from_response_body(body)
     content: list[dict] = []
-    text_block: dict[str, str] | None = None
+
+    def append_mergeable_block(block: dict[str, str]) -> None:
+        previous = content[-1] if content else None
+        if previous and previous.get("type") == block.get("type"):
+            if block.get("type") == "thinking":
+                previous["thinking"] = f"{previous.get('thinking', '')}{block.get('thinking', '')}"
+                return
+            if block.get("type") in {"text", "input_text", "output_text"}:
+                previous["text"] = f"{previous.get('text', '')}{block.get('text', '')}"
+                return
+        content.append(block)
 
     def append_text(text: str) -> None:
-        nonlocal text_block
         if not text.strip():
             return
-        if text_block is None:
-            text_block = {"type": "text", "text": ""}
-            content.append(text_block)
-        text_block["text"] += text
+        append_mergeable_block({"type": "text", "text": text})
 
     for payload in payloads:
         response = payload.get("response") if isinstance(payload.get("response"), dict) else payload
@@ -367,7 +373,7 @@ def _extract_gemini_response_output(body: object) -> dict | None:
                     if part.get("thought") is True:
                         thinking = part["text"]
                         if thinking.strip():
-                            content.append({"type": "thinking", "thinking": thinking})
+                            append_mergeable_block({"type": "thinking", "thinking": thinking})
                     else:
                         append_text(part["text"])
                 call = part.get("functionCall")
