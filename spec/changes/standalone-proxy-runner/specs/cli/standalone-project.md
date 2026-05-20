@@ -2,19 +2,19 @@
 
 ## Requirement
 
-The change must create a minimum standalone Python project that can be built, tested, and run without importing `claude_tap` runtime modules. The project must keep its package, CLI entry point, tests, and README isolated from the current viewer-heavy package so the core runner can evolve independently.
+The change must create a minimum standalone Python repository at `/Users/hezhang/repos/coding-cli` that can be built, tested, and run without importing `claude_tap` runtime modules. The project must keep its package, CLI entry point, tests, and README isolated from the current viewer-heavy package so the core runner can evolve independently.
 
 ## Scenarios
 
 ### Scenario: Fresh project layout
 
-**WHEN** a maintainer opens the standalone subproject
+**WHEN** a maintainer opens `/Users/hezhang/repos/coding-cli`
 **THEN** they can identify package source, tests, CLI entry point, and README without reading the old viewer code
 **AND** the package metadata declares only the dependencies needed for proxying, certs, logging, and tests.
 
-### Scenario: Existing project remains intact
+### Scenario: Source project remains intact
 
-**WHEN** the standalone project is added in this repository
+**WHEN** the standalone project is created in `/Users/hezhang/repos/coding-cli`
 **THEN** current `claude_tap` package imports and tests remain unaffected
 **AND** no existing public docs or UI files are required to run the standalone tool.
 
@@ -34,7 +34,7 @@ Not applicable.
 
 | Surface | Method | Request | Response |
 |---------|--------|---------|----------|
-| CLI package | build/run | `python -m <package>` or console script | Help text or command execution |
+| CLI package | build/run | `python -m coding_cli` or `coding-cli` | Help text or command execution |
 | Project metadata | packaging | `pyproject.toml` | PEP 621 metadata with minimal dependencies |
 | Test suite | pytest | `uv run pytest <standalone-tests>` | Passing focused unit/integration tests |
 
@@ -42,7 +42,7 @@ Not applicable.
 
 | Storage | Key | Value | Lifecycle |
 |---------|-----|-------|-----------|
-| Filesystem | standalone project directory | Source, tests, README, package metadata | Created during implementation and versioned |
+| Filesystem | `/Users/hezhang/repos/coding-cli` | Source, tests, README, package metadata | Created during implementation and versioned |
 
 ---
 *Spec for: standalone-proxy-runner*

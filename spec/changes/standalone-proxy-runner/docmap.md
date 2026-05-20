@@ -47,7 +47,7 @@ Legend:
 - **Failure patterns to expect:** Missing `codex` binary, auth file unreadable, base URL override ignored by a CLI release, custom CA not accepted, WebSocket connection blocked by proxy settings.
 - **Best docs to read first:** Official Codex CLI page and the `openai/codex` repository README/changelog.
 - **Sources:** [Codex CLI docs](https://developers.openai.com/codex/cli) (`O`), [openai/codex](https://github.com/openai/codex) (`O`)
-- **Example sketch:** `agent-tap codex -- exec "hello"` starts a local proxy, injects local OpenAI base URL, launches Codex, and writes `.traces/YYYY-MM-DD/trace_HHMMSS.jsonl`.
+- **Example sketch:** `coding-cli codex -- exec "hello"` starts a local proxy, injects local OpenAI base URL, launches Codex, and writes `.traces/YYYY-MM-DD/trace_HHMMSS.jsonl`.
 
 ### Claude Code Settings and Anthropic Messages
 - **Likely usage in this change:** Launch `claude` while capturing Messages requests/responses and preserving thinking blocks, tool calls, and usage.
@@ -57,7 +57,7 @@ Legend:
 - **Failure patterns to expect:** Missing `claude` binary, conflicting settings base URL, proxy env not propagated into subprocess settings, streaming connection closed before final usage delta.
 - **Best docs to read first:** Claude Code settings, Messages API, Extended thinking, and Streaming Messages.
 - **Sources:** [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings) (`O`), [Messages API](https://docs.anthropic.com/en/api/messages) (`O`), [Extended thinking](https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking) (`O`)
-- **Example sketch:** `agent-tap claude -- --model claude-sonnet-4-6` injects `ANTHROPIC_BASE_URL` through Claude settings/env, captures `/v1/messages`, and writes JSONL records with SSE event arrays.
+- **Example sketch:** `coding-cli claude -- --model claude-sonnet-4-6` injects `ANTHROPIC_BASE_URL` through Claude settings/env, captures `/v1/messages`, and writes JSONL records with SSE event arrays.
 
 ### aiohttp Proxy Runtime
 - **Likely usage in this change:** Implement the standalone async reverse proxy, upstream client, and WebSocket relay without adding a heavier framework.
@@ -73,9 +73,9 @@ Legend:
 
 | Command/Phase Surface | External Dependencies | Required Checks |
 |-----------------------|-----------------------|-----------------|
-| `agent-tap claude` reverse mode | Claude Code settings, Anthropic Messages | Verify `ANTHROPIC_BASE_URL`/settings injection, `/v1/messages` forwarding, SSE thinking accumulation, auth redaction. |
-| `agent-tap codex` reverse mode | Codex CLI, OpenAI Responses, ChatGPT Codex backend | Verify target detection, `OPENAI_BASE_URL`, `openai_base_url` config override, `/v1` strip behavior, WebSocket capture. |
-| `agent-tap codex --proxy-mode forward` | Codex CLI, local CA, aiohttp/asyncio TLS bridge | Verify `HTTPS_PROXY`, `SSL_CERT_FILE`, `CODEX_CA_CERTIFICATE`, CONNECT/TLS interception, WebSocket relay. |
+| `coding-cli claude` reverse mode | Claude Code settings, Anthropic Messages | Verify `ANTHROPIC_BASE_URL`/settings injection, `/v1/messages` forwarding, SSE thinking accumulation, auth redaction. |
+| `coding-cli codex` reverse mode | Codex CLI, OpenAI Responses, ChatGPT Codex backend | Verify target detection, `OPENAI_BASE_URL`, `openai_base_url` config override, `/v1` strip behavior, WebSocket capture. |
+| `coding-cli codex --proxy-mode forward` | Codex CLI, local CA, aiohttp/asyncio TLS bridge | Verify `HTTPS_PROXY`, `SSL_CERT_FILE`, `CODEX_CA_CERTIFICATE`, CONNECT/TLS interception, WebSocket relay. |
 | Trace summary | OpenAI/Anthropic usage schemas | Verify input/output/cache/reasoning counters, best-effort visible thinking flags, and no raw credentials. |
 
 ## Seed Links by Planning Phase

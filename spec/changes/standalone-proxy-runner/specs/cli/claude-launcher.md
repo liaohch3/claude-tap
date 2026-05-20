@@ -34,7 +34,7 @@ Not applicable.
 
 | Surface | Method | Request | Response |
 |---------|--------|---------|----------|
-| CLI | command | `agent-tap claude -- [claude args]` | Exit code from child process |
+| CLI | command | `coding-cli claude -- [claude args]` | Exit code from child process |
 | Launcher | function | `run_client(client="claude", proxy_mode, extra_args)` | Child exit code |
 | Target detection | function | environment/settings paths | Anthropic upstream URL |
 

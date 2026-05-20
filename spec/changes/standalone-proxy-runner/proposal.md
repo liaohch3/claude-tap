@@ -2,7 +2,7 @@
 
 ## Why
 
-`claude-tap` has the proxy behavior needed to inspect Claude Code and Codex CLI traffic, but the current project mixes that core with viewer generation, live browser support, dashboard/export commands, multi-client routing, update checks, public docs assets, screenshot evidence, and broad provider compatibility. The requested project should make the capture path small enough to audit, test, and run in automation without dragging along UI or unrelated clients.
+`claude-tap` has the proxy behavior needed to inspect Claude Code and Codex CLI traffic, but the current project mixes that core with viewer generation, live browser support, dashboard/export commands, multi-client routing, update checks, public docs assets, screenshot evidence, and broad provider compatibility. The requested project should be a separate clean repository at `/Users/hezhang/repos/coding-cli`, making the capture path small enough to audit, test, and run in automation without dragging along UI or unrelated clients.
 
 - The core launch/proxy/logging behavior is concentrated in `claude_tap/cli.py`, `proxy.py`, `forward_proxy.py`, `ws_proxy.py`, `sse.py`, `trace.py`, `usage.py`, and `certs.py`.
 - Current shutdown generates HTML and manifests even when the desired output is only efficient logs.
@@ -13,7 +13,7 @@
 
 ### New Capabilities
 
-- **Standalone Project Shell**: Create an isolated Python package for the minimal runner and test suite.
+- **Standalone Project Shell**: Create an isolated Python repository at `/Users/hezhang/repos/coding-cli` for the minimal runner and test suite.
   - Spec: `specs/cli/standalone-project.md`
 - **Claude Code Launcher**: Launch `claude` with reverse or forward proxy configuration while preserving TUI behavior.
   - Spec: `specs/cli/claude-launcher.md`
@@ -32,8 +32,8 @@
 
 ### Modified Capabilities
 
-- **Current `claude-tap` core extraction**: Use existing implementation as evidence and test input, but rewrite boundaries for the standalone package rather than importing UI-bound modules.
-  - Delta spec: Not applicable because this is a standalone subproject plan.
+- **Current `claude-tap` core extraction**: Use existing implementation as evidence and test input, but rewrite clean module boundaries in the new repository rather than importing UI-bound modules.
+  - Delta spec: Not applicable because this is a separate-repository plan.
 
 ### Removed Capabilities
 
@@ -45,7 +45,7 @@
 
 ### Code Changes
 
-- Add a new standalone subproject directory with its own package metadata and tests.
+- Add a new standalone repository at `/Users/hezhang/repos/coding-cli` with its own package metadata and tests.
 - Copy/rewrite only the proven algorithms from:
   - `claude_tap/cli.py`
   - `claude_tap/proxy.py`
@@ -60,9 +60,9 @@
 ### Interface Changes
 
 - New CLI examples use a narrow shape:
-  - `agent-tap claude -- [claude args]`
-  - `agent-tap codex -- [codex args]`
-  - `agent-tap proxy --client claude|codex --no-launch`
+  - `coding-cli claude -- [claude args]`
+  - `coding-cli codex -- [codex args]`
+  - `coding-cli proxy --client claude|codex`
 - Output files remain local:
   - `trace_*.jsonl`
   - `trace_*.log`
@@ -77,8 +77,8 @@
 
 ## Success Criteria
 
-- [ ] `agent-tap claude -- -p "hello"` can run against an authenticated Claude Code installation and write at least one valid trace record.
-- [ ] `agent-tap codex -- exec "hello"` can run against an authenticated Codex CLI installation and write valid HTTP/SSE or WebSocket trace records.
+- [ ] `coding-cli claude -- -p "hello"` can run against an authenticated Claude Code installation and write at least one valid trace record.
+- [ ] `coding-cli codex -- exec "hello"` can run against an authenticated Codex CLI installation and write valid HTTP/SSE or WebSocket trace records.
 - [ ] Unit and fake-upstream integration tests cover launch env injection, reverse HTTP/SSE, forward CONNECT/TLS, WebSocket capture, and redaction.
 - [ ] Trace summaries include `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, and `reasoning_tokens` when present.
 - [ ] No viewer, dashboard, export, update, screenshot, or non-Claude/Codex client code appears in the standalone package.

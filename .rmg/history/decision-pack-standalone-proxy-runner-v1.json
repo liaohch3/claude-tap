@@ -1,0 +1,40 @@
+{
+  "idempotency_key": "standalone-proxy-runner:decision-pack:v1",
+  "work_id": "standalone-proxy-runner",
+  "pack_version": "v1",
+  "created_at": "2026-05-20T22:04:03Z",
+  "status": "ACTIVE",
+  "decision": {
+    "target_repo": "/Users/hezhang/repos/coding-cli",
+    "approved_approach": "clean",
+    "package_name": "coding_cli",
+    "console_script": "coding-cli"
+  },
+  "scope": {
+    "clients": ["claude", "codex"],
+    "included": [
+      "reverse proxy",
+      "forward proxy",
+      "Codex websocket capture",
+      "SSE reconstruction",
+      "efficient JSONL trace logging",
+      "reasoning and visible thinking accounting"
+    ],
+    "excluded": [
+      "HTML viewer",
+      "live viewer",
+      "dashboard",
+      "export command",
+      "auto-update",
+      "non-Claude/Codex clients",
+      "hosted telemetry"
+    ]
+  },
+  "evidence": [
+    "spec/changes/standalone-proxy-runner/requirements.md",
+    "spec/changes/standalone-proxy-runner/codemap.md",
+    "spec/changes/standalone-proxy-runner/docmap.md",
+    "spec/changes/standalone-proxy-runner/proposal.md",
+    "spec/changes/standalone-proxy-runner/design.md"
+  ]
+}

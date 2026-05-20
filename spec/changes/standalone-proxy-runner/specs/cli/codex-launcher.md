@@ -34,7 +34,7 @@ Not applicable.
 
 | Surface | Method | Request | Response |
 |---------|--------|---------|----------|
-| CLI | command | `agent-tap codex -- [codex args]` | Exit code from child process |
+| CLI | command | `coding-cli codex -- [codex args]` | Exit code from child process |
 | Launcher | function | `run_client(client="codex", proxy_mode, extra_args)` | Child exit code |
 | Target detection | function | `CODEX_HOME` or `~/.codex/auth.json` | OpenAI API or ChatGPT Codex backend target |
 

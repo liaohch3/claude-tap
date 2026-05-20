@@ -6,6 +6,8 @@ updated: "2026-05-20T22:04:03Z"
 owner: codex
 command: jimmy-code-plan
 summary: "Plan a clean standalone proxy runner for Claude Code and Codex CLI with efficient trace logs and thinking-token accounting."
+target-repo: /Users/hezhang/repos/coding-cli
+approved-approach: clean
 system-ref: null
 memory:
   mode: strict

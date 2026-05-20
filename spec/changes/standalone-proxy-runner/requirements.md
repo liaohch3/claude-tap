@@ -6,7 +6,7 @@ IMPLEMENTATION
 
 ## Summary
 
-Create a clean, minimum, standalone Python project that extracts and rewrites the core proxy runner needed to launch Claude Code and Codex CLI, route them through a local proxy, and collect efficient structured logs including reasoning/thinking token data where the upstream exposes it. The new project should intentionally exclude the HTML viewer, dashboard, multi-client surface, public docs machinery, update command, and other nonessential pieces from `claude-tap`.
+Create a clean, minimum, standalone Python project in `/Users/hezhang/repos/coding-cli` that rewrites the core proxy runner needed to launch Claude Code and Codex CLI, route them through a local proxy, and collect efficient structured logs including reasoning/thinking token data where the upstream exposes it. The new repository should intentionally exclude the HTML viewer, dashboard, multi-client surface, public docs machinery, update command, and other nonessential pieces from `claude-tap`.
 
 ## Success Criteria
 
@@ -22,7 +22,7 @@ Create a clean, minimum, standalone Python project that extracts and rewrites th
 
 ### In Scope
 
-- A standalone Python package with its own `pyproject.toml`, CLI entry point, tests, and README.
+- A standalone Python repository at `/Users/hezhang/repos/coding-cli` with its own `pyproject.toml`, CLI entry point, tests, and README.
 - Two supported clients only: `claude` for Claude Code and `codex` for Codex CLI.
 - Reverse proxy mode for base-URL-compatible flows.
 - Forward proxy mode with CONNECT/TLS interception only where it is necessary for CLI compatibility.
@@ -44,7 +44,7 @@ Create a clean, minimum, standalone Python project that extracts and rewrites th
 
 ### Problem Statement
 
-`claude-tap` has grown into a broad multi-client trace viewer. The user now wants a smaller standalone tool that keeps the hard-won proxy/launch/logging behavior for Claude Code and Codex CLI, but removes everything that is not essential to reliable CLI execution and efficient log collection.
+`claude-tap` has grown into a broad multi-client trace viewer. The user now wants a separate repository that keeps the hard-won proxy/launch/logging behavior for Claude Code and Codex CLI, but removes everything that is not essential to reliable CLI execution and efficient log collection.
 
 ### User Impact
 
@@ -65,19 +65,19 @@ Maintainers and agent engineers get a compact project that is easier to audit, t
 
 ### Questions Asked
 
-1. Where should the standalone project live? -> Assumption: create it as an isolated subproject in this repository first, with no dependency on `claude_tap` internals after extraction.
+1. Where should the standalone project live? -> User clarified it will be a separate repository at `/Users/hezhang/repos/coding-cli`.
 2. Which clients are required? -> User specified Claude Code and Codex CLI only.
 3. Should the UI be kept? -> User explicitly said no UI or nonessential system parts.
 4. Which logs matter? -> Assumption: keep raw structured request/response JSONL plus a concise process/proxy log and summary counters.
 5. What does "thinking tokens" mean across providers? -> Assumption: collect numeric reasoning-token fields when exposed, preserve Anthropic thinking blocks or summarized thinking text when returned, and separately report best-effort thinking content presence when a provider bills thinking through output tokens without a separate counter.
 6. Should the rewrite preserve every current client mode? -> Assumption: preserve only modes needed for Claude Code and Codex CLI reliability: reverse base URL, forward proxy with local CA, Codex target auto-detection, and Codex WebSocket capture.
-7. Should implementation prioritize smallest diff or clean design? -> Assumption: use a pragmatic rewrite: copy only validated algorithms, rename and simplify boundaries, and leave UI/multi-client abstractions behind.
+7. Should implementation prioritize smallest diff or clean design? -> User approved the clean architecture approach.
 
 ### Assumptions Made
 
-- The first implementation target is a local subproject rather than a separate GitHub repository, so it can reuse this repository's test fixtures during extraction and be split later.
+- The first implementation target is a separate local repository at `/Users/hezhang/repos/coding-cli`; it may reference this repository as source evidence during implementation but must not import `claude_tap`.
 - Python remains the implementation language because the current proven proxy logic is Python/aiohttp and the user asked for robust log collection rather than a new platform experiment.
-- The standalone CLI can use a different command name from `claude-tap`; final naming is deferred to implementation but examples will use `agent-tap` in planning.
+- The standalone CLI uses `coding-cli` as the working command name and `coding_cli` as the Python package name unless implementation discovers a conflict.
 - The project should default to no browser open, no HTML generation, no live server, and no generated assets.
 - Efficient logging means no full-session buffering and no expensive post-processing in the critical path.
 
