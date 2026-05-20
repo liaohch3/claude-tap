@@ -224,7 +224,7 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
     "agy": ClientConfig(
         cmd="agy",
         label="Antigravity CLI",
-        install_url="https://antigravity.dev",
+        install_url="https://antigravity.google/product/antigravity-cli",
         base_url_env="CLOUD_CODE_URL",
         base_url_suffix="",
         default_target="https://daily-cloudcode-pa.googleapis.com",
