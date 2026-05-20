@@ -1,10 +1,37 @@
+import asyncio
 import json
 from pathlib import Path
 
 import aiohttp
 import pytest
 
-from claude_tap.dashboard import list_trace_agents, list_trace_sessions, load_trace_session
+from claude_tap.dashboard import (
+    _content_text,
+    _event_payload,
+    _first_error,
+    _infer_agent,
+    _iter_trace_files,
+    _manifest_by_trace_path,
+    _parts_text,
+    _preview,
+    _read_jsonl_records,
+    _record_host,
+    _record_model,
+    _record_response_text,
+    _record_usage,
+    _request_user_text,
+    _response_events,
+    _response_text,
+    _summarize_session,
+    dashboard_trace_snapshot,
+    list_trace_agents,
+    list_trace_sessions,
+    load_trace_session,
+    read_dashboard_template,
+    rel_path_for_session_id,
+    session_id_for_rel_path,
+    trace_path_for_session_id,
+)
 from claude_tap.live import LiveViewerServer
 from claude_tap.trace import TraceWriter
 
@@ -102,11 +129,176 @@ def test_dashboard_loads_session_by_id(tmp_path: Path) -> None:
     assert payload["records"][0]["request_id"] == "req_claude"
 
 
+def test_dashboard_rejects_unsafe_or_missing_session_ids(tmp_path: Path) -> None:
+    assert "session-list" in read_dashboard_template()
+    assert rel_path_for_session_id("not-valid-@@") is None
+    assert rel_path_for_session_id(session_id_for_rel_path("/tmp/trace.jsonl")) is None
+    assert rel_path_for_session_id(session_id_for_rel_path("../trace.jsonl")) is None
+    assert trace_path_for_session_id(tmp_path, "not-valid-@@") is None
+
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.txt"
+    trace_path.parent.mkdir()
+    trace_path.write_text("{}", encoding="utf-8")
+    session_id = session_id_for_rel_path("2026-05-20/trace_080000.txt")
+    assert trace_path_for_session_id(tmp_path, session_id) is None
+    assert load_trace_session(tmp_path, "not-valid-@@") is None
+
+
+def test_dashboard_handles_empty_malformed_and_manifest_history(tmp_path: Path) -> None:
+    missing_dir = tmp_path / "missing"
+    assert dashboard_trace_snapshot(missing_dir) == {}
+    assert _iter_trace_files(missing_dir) == []
+    assert _read_jsonl_records(missing_dir / "trace_missing.jsonl") == []
+    assert _manifest_by_trace_path(tmp_path) == {}
+
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    trace_path.parent.mkdir()
+    trace_path.write_text(
+        '\nnot-json\n[]\n{"request_id":"ok"}\n',
+        encoding="utf-8",
+    )
+    assert _read_jsonl_records(trace_path) == [{"request_id": "ok"}]
+
+    manifest_path = tmp_path / ".cloudtap-manifest.json"
+    manifest_path.write_text("[]", encoding="utf-8")
+    assert _manifest_by_trace_path(tmp_path) == {}
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "traces": [
+                    "bad",
+                    {"files": [1, "2026-05-20/trace_080000.log"]},
+                    {
+                        "client": "kimi",
+                        "files": ["2026-05-20/trace_080000.jsonl"],
+                        "created_at": "2026-05-20T00:00:00+00:00",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = _manifest_by_trace_path(tmp_path)
+    assert manifest["2026-05-20/trace_080000.jsonl"]["client"] == "kimi"
+
+    summary = _summarize_session(
+        output_dir=tmp_path,
+        trace_path=trace_path,
+        rel_path="2026-05-20/trace_080000.jsonl",
+        records=[],
+        manifest_entry=manifest["2026-05-20/trace_080000.jsonl"],
+        is_current=False,
+    )
+    assert summary["status"] == "empty"
+    assert summary["agent"] == "Kimi"
+
+
+def test_dashboard_parses_provider_fallbacks(tmp_path: Path) -> None:
+    html_trace = tmp_path / "2026-05-20" / "trace_090000.jsonl"
+    html_trace.parent.mkdir()
+    _write_jsonl(html_trace, [_antigravity_record()])
+    html_trace.with_suffix(".html").write_text("<!doctype html>", encoding="utf-8")
+    html_trace.with_suffix(".log").write_text("log", encoding="utf-8")
+
+    summary = list_trace_sessions(tmp_path, current_trace_path=html_trace)[0]
+    assert summary["status"] == "active"
+    assert summary["html_path"].endswith("trace_090000.html")
+    assert summary["log_path"].endswith("trace_090000.log")
+    assert summary["model"] == "unknown"
+
+    provider_cases = [
+        ({"metadata": {"client": "agy"}}, [], "Antigravity"),
+        ({}, [{"capture": {"client": "cursor"}}], "Cursor"),
+        ({}, [{"request": {"headers": {"host": "generativelanguage.googleapis.com"}}}], "Gemini"),
+        ({}, [{"request": {"path": "/v1/responses"}}], "Codex"),
+        ({}, [{"request": {"headers": {"Host": "api.moonshot.cn"}}}], "Kimi"),
+        ({}, [{"request": {"headers": {"Host": "qoder.example"}}}], "Qoder"),
+        ({}, [{"request": {"headers": {"Host": "opencode.example"}}}], "OpenCode"),
+        ({}, [{"request": {"headers": {"Host": "hermes.example"}}}], "Hermes"),
+        ({}, [{"upstream_base_url": "https://api.anthropic.com/v1"}], "Claude Code"),
+        ({}, [], "Unknown"),
+    ]
+    for manifest_entry, records, expected in provider_cases:
+        assert _infer_agent(records, manifest_entry) == expected
+
+    assert _record_host({"request": {"headers": {"host": "lowercase.example"}}}) == "lowercase.example"
+    assert _record_host({"upstream_base_url": "https://upstream.example/path"}) == "upstream.example"
+
+
+def test_dashboard_extracts_usage_models_errors_and_text() -> None:
+    assert _record_usage({"response": {"body": {"usageMetadata": {"promptTokenCount": 3}}}})["input_tokens"] == 3
+    assert (
+        _record_usage(
+            {"response": {"ws_events": [{"data": '{"response":{"usage":{"input_tokens":4,"output_tokens":2}}}'}]}}
+        )["output_tokens"]
+        == 2
+    )
+    assert _record_usage({"response": {"body": {"input_tokens": 5}}})["input_tokens"] == 5
+
+    assert _record_model({"request": {"body": {"modelId": "gemini-3.1"}}}) == "gemini-3.1"
+    assert _record_model({"request": {"body": {"request": {"model": "sonnet-4-6"}}}}) == "sonnet-4-6"
+    assert _record_model({"response": {"body": {"model": "gpt-oss"}}}) == "gpt-oss"
+    assert _record_model({"request": {"path": "/v1beta/models/gemini-pro:generateContent"}}) == "gemini-pro"
+    assert _record_model({}) == ""
+
+    assert _first_error([{"response": {"error": "failed hard"}}]) == "failed hard"
+    assert _first_error([{"response": {"body": {"error": "body failed"}}}]) == "body failed"
+    assert _first_error([{"response": {"body": {"error": {"message": "nested failed"}}}}]) == "nested failed"
+    assert _first_error([{"response": {"body": {}}}]) == ""
+
+    assert _request_user_text("raw prompt") == "raw prompt"
+    assert _request_user_text(None) == ""
+    assert _request_user_text({"prompt": "fallback prompt"}) == "fallback prompt"
+    assert _request_user_text({"input": [{"type": "message", "content": [{"text": "input text"}]}]}) == "input text"
+    assert _request_user_text({"messages": [{"role": "user", "content": ["hello", {"text": "world"}]}]}) == (
+        "hello\nworld"
+    )
+    assert (
+        _request_user_text(
+            {"contents": [{"role": "model", "parts": [{"text": "skip"}]}, {"role": "USER", "parts": [{"text": "use"}]}]}
+        )
+        == "use"
+    )
+
+    assert _response_text("raw response") == "raw response"
+    assert _response_text(None) == ""
+    assert _response_text({"choices": [{"message": {"content": "choice"}}]}) == "choice"
+    assert _response_text({"choices": [{"delta": {"content": [{"text": "delta"}]}}]}) == "delta"
+    assert _response_text({"output": [{"output_text": "out"}]}) == "out"
+    assert _response_text({"response": {"content": "response field"}}) == "response field"
+    assert _content_text({"text": ["nested", {"content": "dict"}]}) == "nested\ndict"
+    assert _content_text([{"type": "message", "content": [{"output_text": "message text"}]}]) == "message text"
+    assert _parts_text("not-list") == ""
+    assert _preview(" a \n b ", 20) == "a b"
+    assert _preview("abcdef", 4) == "abc..."
+
+    assert _response_events({"response": "bad"}) == []
+    assert _response_events({"response": {"sse_events": [{"data": "{}"}, "bad"]}}) == [{"data": "{}"}]
+    assert _event_payload({"data": "not-json"}) == {}
+    assert _event_payload({"data": {"response": {"content": "payload"}}}) == {"content": "payload"}
+    assert _event_payload({"data": 1}) == {}
+
+    assert _record_response_text({"response": {"body": "body text"}}) == "body text"
+    assert (
+        _record_response_text(
+            {"response": {"ws_events": [{"item": {"content": "item text"}}, {"part": {"text": "part text"}}]}}
+        )
+        == "part text"
+    )
+    assert _record_response_text({"response": {"ws_events": [{"text": "event text"}]}}) == "event text"
+    assert (
+        _record_response_text({"response": {"ws_events": [{"data": '{"content":"payload text"}'}]}}) == "payload text"
+    )
+    assert _record_response_text({"response": {}}) == ""
+
+
 @pytest.mark.asyncio
 async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     html_path = trace_path.with_suffix(".html")
+    no_html_trace_path = tmp_path / "2026-05-20" / "trace_081500.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
+    _write_jsonl(no_html_trace_path, [_anthropic_record(turn=2)])
     html_path.write_text("<!doctype html><title>trace</title>", encoding="utf-8")
 
     server = LiveViewerServer(tmp_path / "dashboard.jsonl", port=0, output_dir=tmp_path, dashboard_mode=True)
@@ -121,8 +313,9 @@ async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> N
             async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
                 assert resp.status == 200
                 payload = await resp.json()
-                assert len(payload["sessions"]) == 1
-                session_id = payload["sessions"][0]["id"]
+                assert len(payload["sessions"]) == 2
+                session_id = next(item["id"] for item in payload["sessions"] if item["html_path"])
+                no_html_session_id = next(item["id"] for item in payload["sessions"] if not item["html_path"])
 
             async with session.get(f"http://127.0.0.1:{port}/api/agents") as resp:
                 assert resp.status == 200
@@ -138,8 +331,63 @@ async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> N
                 assert resp.status == 200
                 html = await resp.text()
                 assert "<title>trace</title>" in html
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/bad/records") as resp:
+                assert resp.status == 404
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/bad/html") as resp:
+                assert resp.status == 404
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{no_html_session_id}/html") as resp:
+                assert resp.status == 404
+                assert await resp.text() == "HTML viewer not generated yet"
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_server_no_output_dir_and_sse_events(tmp_path: Path) -> None:
+    server = LiveViewerServer(tmp_path / "trace_current.jsonl", port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/agents") as resp:
+                assert resp.status == 200
+                assert await resp.json() == {"agents": []}
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                assert resp.status == 200
+                assert await resp.json() == {"sessions": []}
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/anything/records") as resp:
+                assert resp.status == 404
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/anything/html") as resp:
+                assert resp.status == 404
+
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/events") as resp:
+                assert resp.status == 200
+                assert await asyncio.wait_for(resp.content.readline(), timeout=1) == b"event: ready\n"
+                ready_data = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                assert b'"type":"ready"' in ready_data
+                assert await asyncio.wait_for(resp.content.readline(), timeout=1) == b"\n"
+
+                await server._broadcast_dashboard_event({"type": "refresh"})
+                assert await asyncio.wait_for(resp.content.readline(), timeout=1) == b"event: refresh\n"
+                refresh_data = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                assert b'"type":"refresh"' in refresh_data
+    finally:
+        await server.stop()
+
+
+def test_dashboard_current_session_id_handles_output_dir_boundaries(tmp_path: Path) -> None:
+    current = tmp_path / "2026-05-20" / "trace_current.jsonl"
+    server = LiveViewerServer(current, output_dir=tmp_path)
+    assert server._current_session_id() == session_id_for_rel_path("2026-05-20/trace_current.jsonl")
+
+    assert LiveViewerServer(current)._current_session_id() is None
+    assert LiveViewerServer(tmp_path.parent / "trace_outside.jsonl", output_dir=tmp_path)._current_session_id() is None
 
 
 @pytest.mark.asyncio

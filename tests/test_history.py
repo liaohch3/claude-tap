@@ -75,6 +75,21 @@ def test_delete_trace_history_removes_legacy_flat_files(tmp_path: Path) -> None:
     assert _load_manifest(output_dir)["traces"] == []
 
 
+def test_register_trace_stores_client_metadata(tmp_path: Path) -> None:
+    output_dir = tmp_path
+    _save_manifest(output_dir, {"_cloudtap": True, "version": "test", "traces": []})
+
+    manifest = _register_trace(
+        output_dir,
+        "20260520_120000",
+        ["2026-05-20/trace_120000.jsonl"],
+        metadata={"client": "agy", "proxy_mode": "reverse"},
+    )
+
+    assert manifest["traces"][0]["client"] == "agy"
+    assert manifest["traces"][0]["proxy_mode"] == "reverse"
+
+
 @pytest.mark.asyncio
 async def test_live_viewer_delete_history_endpoint(tmp_path: Path) -> None:
     import aiohttp
