@@ -292,6 +292,67 @@ def test_dashboard_extracts_usage_models_errors_and_text() -> None:
     assert _record_response_text({"response": {}}) == ""
 
 
+def test_dashboard_preview_skips_auxiliary_auth_records(tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_100000.jsonl"
+    _write_jsonl(
+        trace_path,
+        [
+            {
+                "timestamp": "2026-05-20T10:00:00+00:00",
+                "turn": 1,
+                "request": {
+                    "method": "POST",
+                    "path": "/token",
+                    "body": "refresh_token=secret-token&client_id=client",
+                },
+                "response": {"status": 200, "body": {}},
+            },
+            {
+                "timestamp": "2026-05-20T10:00:01+00:00",
+                "turn": 2,
+                "request": {"method": "POST", "path": "/log?format=json", "body": {}},
+                "response": {"status": 403, "body": "<!DOCTYPE html> challenge page"},
+            },
+            {
+                "timestamp": "2026-05-20T10:00:02+00:00",
+                "turn": 3,
+                "request": {
+                    "method": "POST",
+                    "path": "/v1internal:streamGenerateContent?alt=sse",
+                    "headers": {"Host": "generativelanguage.googleapis.com"},
+                    "body": {
+                        "request": {
+                            "contents": [
+                                {
+                                    "role": "user",
+                                    "parts": [{"text": "Gemini dashboard prompt"}],
+                                }
+                            ]
+                        }
+                    },
+                },
+                "response": {
+                    "status": 200,
+                    "body": {
+                        "candidates": [
+                            {
+                                "content": {
+                                    "parts": [{"text": "Gemini dashboard response."}],
+                                }
+                            }
+                        ]
+                    },
+                },
+            },
+        ],
+    )
+
+    summary = list_trace_sessions(tmp_path)[0]
+
+    assert summary["first_user"] == "Gemini dashboard prompt"
+    assert summary["last_response"] == "Gemini dashboard response."
+
+
 @pytest.mark.asyncio
 async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"

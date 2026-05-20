@@ -244,6 +244,7 @@ def _summarize_session(
     if not records:
         status = "empty"
 
+    preview_records = _preview_records(records)
     return {
         "id": session_id_for_rel_path(rel_path),
         "date": trace_path.parent.name if _DATE_RE.match(trace_path.parent.name) else "legacy",
@@ -266,8 +267,8 @@ def _summarize_session(
         "cache_create_tokens": cache_create_tokens,
         "total_tokens": input_tokens + output_tokens + cache_read_tokens + cache_create_tokens,
         "model": _top_key(models) or _record_model(last_record) or "unknown",
-        "first_user": _first_user_preview(records),
-        "last_response": _last_response_preview(records),
+        "first_user": _first_user_preview(preview_records),
+        "last_response": _last_response_preview(preview_records),
         "error": _first_error(records),
         "size_bytes": stat.st_size,
     }
@@ -442,6 +443,53 @@ def _record_path(record: dict[str, Any]) -> str:
 def _agent_key(agent: str) -> str:
     key = re.sub(r"[^a-z0-9]+", "-", agent.lower()).strip("-")
     return key or "unknown"
+
+
+def _preview_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    primary = [record for record in records if _is_primary_model_record(record)]
+    if primary:
+        return primary
+    return [record for record in records if not _is_auxiliary_record(record)]
+
+
+def _is_primary_model_record(record: dict[str, Any]) -> bool:
+    path = _record_path(record).lower()
+    if not path:
+        return False
+    primary_fragments = (
+        "/v1/messages",
+        "/zen/v1/messages",
+        "/v1/responses",
+        "/responses",
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/v1/completions",
+        "/completions",
+        "streamgeneratecontent",
+        "generatecontent",
+    )
+    return any(fragment in path for fragment in primary_fragments)
+
+
+def _is_auxiliary_record(record: dict[str, Any]) -> bool:
+    path = _record_path(record).lower()
+    auxiliary_fragments = (
+        "/token",
+        "oauth",
+        "userinfo",
+        "quota",
+        "experiments",
+        "admincontrols",
+        "features",
+        "register",
+        "manifest",
+        "/metrics",
+        "/log",
+        "loadcodeassist",
+        "fetchavailablemodels",
+        "fetchuserinfo",
+    )
+    return any(fragment in path for fragment in auxiliary_fragments)
 
 
 def _first_user_preview(records: list[dict[str, Any]]) -> str:
