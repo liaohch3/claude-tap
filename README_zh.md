@@ -318,7 +318,7 @@ claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
 <details>
 <summary>Antigravity CLI 示例</summary>
 
-Antigravity CLI 会访问多个 Google / Antigravity 端点，因此 `--tap-client agy` 默认使用 **forward proxy** 模式。
+Antigravity CLI 会访问多个 Google / Antigravity 端点，因此 `--tap-client agy` 默认使用 **forward proxy** 模式。它的 Code Assist 模型 API 还会读取 `CLOUD_CODE_URL`；claude-tap 会自动注入这个变量，让 `/v1internal:streamGenerateContent` 这类模型请求也进入同一个本地代理。
 
 在 macOS 上，Antigravity 可能不读取进程级 CA 环境变量。首次启动 `agy` 时，claude-tap 会自动把本地 CA 信任到当前用户的 login keychain。这个操作不会使用 `sudo`，也不会写入 System keychain，但 macOS 可能要求解锁 login keychain。
 

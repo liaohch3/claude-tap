@@ -25,6 +25,7 @@ import logging
 import time
 import uuid
 import zlib
+from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import WSMessage, WSMsgType
@@ -47,6 +48,49 @@ from claude_tap.ws_proxy import (
 )
 
 log = logging.getLogger("claude-tap")
+
+
+def _matches_path_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
+    clean = path.split("?", 1)[0].rstrip("/")
+    return any(
+        clean == prefix or clean.startswith(prefix + "/") or clean.startswith(prefix + ":") for prefix in prefixes
+    )
+
+
+async def _read_chunked_body(reader: asyncio.StreamReader) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        size_line = await asyncio.wait_for(reader.readline(), timeout=60)
+        if not size_line:
+            break
+        size_token = size_line.split(b";", 1)[0].strip()
+        try:
+            size = int(size_token, 16)
+        except ValueError:
+            break
+        if size == 0:
+            while True:
+                trailer_line = await asyncio.wait_for(reader.readline(), timeout=30)
+                if trailer_line in (b"\r\n", b"\n", b""):
+                    break
+            break
+        chunks.append(await asyncio.wait_for(reader.readexactly(size), timeout=60))
+        await asyncio.wait_for(reader.readexactly(2), timeout=30)
+    return b"".join(chunks)
+
+
+async def _read_http_body(reader: asyncio.StreamReader, headers: dict[str, str]) -> bytes:
+    content_length = headers.get("Content-Length") or headers.get("content-length")
+    if content_length:
+        try:
+            length = int(content_length)
+            return await asyncio.wait_for(reader.readexactly(length), timeout=60)
+        except (ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError):
+            return b""
+    transfer_encoding = headers.get("Transfer-Encoding") or headers.get("transfer-encoding", "")
+    if "chunked" in transfer_encoding.lower():
+        return await _read_chunked_body(reader)
+    return b""
 
 
 class _RawWSProtocol:
@@ -89,12 +133,16 @@ class ForwardProxyServer:
         ca: CertificateAuthority,
         writer: TraceWriter,
         session: aiohttp.ClientSession,
+        local_reverse_target: str | None = None,
+        local_reverse_allowed_path_prefixes: tuple[str, ...] = (),
     ) -> None:
         self.host = host
         self.port = port
         self._ca = ca
         self._writer = writer
         self._session = session
+        self._local_reverse_target = local_reverse_target
+        self._local_reverse_allowed_path_prefixes = local_reverse_allowed_path_prefixes
         self._server: asyncio.Server | None = None
         self._client_tasks: set[asyncio.Task] = set()
         self._client_writers: set[asyncio.StreamWriter] = set()
@@ -314,15 +362,7 @@ class ForwardProxyServer:
                     key, value = decoded.split(":", 1)
                     headers[key.strip()] = value.strip()
 
-            # Read body if Content-Length is present
-            body = b""
-            content_length = headers.get("Content-Length") or headers.get("content-length")
-            if content_length:
-                try:
-                    length = int(content_length)
-                    body = await asyncio.wait_for(reader.readexactly(length), timeout=60)
-                except (ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError):
-                    pass
+            body = await _read_http_body(reader, headers)
 
             if _is_websocket_upgrade(headers):
                 await self._forward_websocket(
@@ -788,22 +828,20 @@ class ForwardProxyServer:
                 key, value = decoded.split(":", 1)
                 headers[key.strip()] = value.strip()
 
-        # Read body
-        body = b""
-        content_length = headers.get("Content-Length") or headers.get("content-length")
-        if content_length:
-            try:
-                length = int(content_length)
-                body = await asyncio.wait_for(reader.readexactly(length), timeout=60)
-            except (ValueError, asyncio.IncompleteReadError, asyncio.TimeoutError):
-                pass
-
-        # Extract path from absolute URL
-        from urllib.parse import urlparse
+        body = await _read_http_body(reader, headers)
 
         parsed = urlparse(url)
         path = parsed.path
         if parsed.query:
             path = f"{path}?{parsed.query}"
+
+        if (
+            not parsed.scheme
+            and self._local_reverse_target
+            and _matches_path_prefix(path, self._local_reverse_allowed_path_prefixes)
+        ):
+            upstream_url = self._local_reverse_target.rstrip("/") + "/" + path.lstrip("/")
+            await self._forward_and_record(method, path, headers, body, upstream_url, writer)
+            return
 
         await self._forward_and_record(method, path, headers, body, url, writer)

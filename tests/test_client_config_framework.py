@@ -95,6 +95,15 @@ def test_gemini_declares_both_reverse_base_url_envs() -> None:
     }
 
 
+def test_agy_declares_cloud_code_bridge_env() -> None:
+    cfg = CLIENT_CONFIGS["agy"]
+
+    assert cfg.base_url_env == "CLOUD_CODE_URL"
+    assert cfg.default_target == "https://daily-cloudcode-pa.googleapis.com"
+    assert cfg.forward_base_url_envs == ("CLOUD_CODE_URL",)
+    assert cfg.forward_base_url_allowed_path_prefixes == ("/v1internal",)
+
+
 def test_reverse_base_url_envs_deduplicate_primary_and_extra_envs() -> None:
     cfg = ClientConfig(
         cmd="multi-cli",
@@ -159,3 +168,39 @@ async def test_run_client_reverse_sets_all_base_url_envs_and_settings(
     out = capsys.readouterr().out
     assert out.count("PRIMARY_BASE_URL=http://127.0.0.1:43123/v1") == 1
     assert out.count("SECONDARY_BASE_URL=http://127.0.0.1:43123/v1") == 1
+
+
+@pytest.mark.asyncio
+async def test_run_client_agy_forward_sets_proxy_ca_and_cloud_code_url(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda name: f"/tmp/{name}")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(
+        43123,
+        ["--print", "ok"],
+        client="agy",
+        proxy_mode="forward",
+        ca_cert_path=Path("/tmp/claude-tap-ca.pem"),
+    )
+
+    assert code == 0
+    env = captured["env"]
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:43123"
+    assert env["CLOUD_CODE_URL"] == "http://127.0.0.1:43123"
+    assert "AGY_BASE_URL" not in env
+    assert captured["cmd"] == ("/tmp/agy", "--print", "ok")
+
+    out = capsys.readouterr().out
+    assert "HTTPS_PROXY=http://127.0.0.1:43123" in out
+    assert "CLOUD_CODE_URL=http://127.0.0.1:43123" in out

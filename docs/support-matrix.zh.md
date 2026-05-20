@@ -33,7 +33,7 @@ English version: [Support Matrix](support-matrix.md).
 | Hermes Agent | 自定义 OpenAI 兼容 provider（`--tap-proxy-mode reverse`） | `https://api.openai.com` | `/v1` | HTTP/SSE | 单测覆盖 |
 | Cursor CLI | Cursor 登录（`cursor-agent login`） | Forward proxy 到 `https://api2.cursor.sh` | n/a | HTTPS/protobuf + 本地 transcript import | 真实 E2E 已验证 |
 | Qoder CLI | Qoder 登录 / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy（Qoder 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
-| Antigravity CLI | Antigravity 登录 | Forward proxy（Google / Antigravity 端点） | n/a | HTTP/SSE | 手动 E2E 待验证；启动环境和 macOS 用户 keychain CA 自动信任已由单测覆盖 |
+| Antigravity CLI | Antigravity 登录 | Forward proxy + `CLOUD_CODE_URL` bridge 到 `https://daily-cloudcode-pa.googleapis.com` | `CLOUD_CODE_URL` | HTTP/SSE | 手动 E2E 已验证；启动环境、Code Assist bridge 和 macOS 用户 keychain CA 自动信任已由单测覆盖 |
 
 ## 各客户端默认代理模式
 
@@ -50,7 +50,7 @@ English version: [Support Matrix](support-matrix.md).
 | `hermes` | `forward` | 多 provider 的 Python agent；`httpx` 与 `requests` 都原生认 `HTTPS_PROXY`，forward proxy 捕获是最自然的默认 |
 | `cursor` | `forward` | Cursor CLI 没有 base URL 覆盖能力；forward proxy 捕获网络流量，本地 transcript 提供可读对话 |
 | `qoder` | `forward` | Qoder CLI 会访问多个 Qoder 服务端点，且没有可靠的单一 base URL 覆盖能力 |
-| `agy` | `forward` | Antigravity 会访问多个 Google / Antigravity 端点；macOS 会自动把本地 CA 信任到用户 login keychain，让 Go TLS 栈接受 forward-proxy TLS |
+| `agy` | `forward` | Antigravity 会访问多个 Google / Antigravity 端点；claude-tap 用 `HTTPS_PROXY` 捕获辅助流量，并用 `CLOUD_CODE_URL` 捕获 Code Assist 模型流量 |
 
 用户始终可以通过 `--tap-proxy-mode {reverse,forward}` 显式覆盖。
 
@@ -140,7 +140,7 @@ uv run python -m claude_tap --tap-client qoder -- -p "Reply OK" --permission-mod
 # Antigravity CLI（macOS）
 uv run python -m claude_tap --tap-client agy --tap-live
 # 首次运行时，验证 macOS 只要求解锁用户 login keychain，不要求 sudo/admin 写 System keychain。
-# 然后验证 trace 包含 Google / Antigravity 端点记录。
+# 然后验证 trace 包含 /v1internal:streamGenerateContent 模型记录。
 
 # Kimi CLI
 uv run python -m claude_tap --tap-client kimi -- --thinking

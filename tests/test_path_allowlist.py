@@ -27,6 +27,8 @@ from claude_tap.proxy import _is_allowed_path
         "/v1beta/models/gemini-2.5-pro:streamGenerateContent",
         "/v1beta/models/gemini-2.5-flash:generateContent",
         "/v1alpha/models/gemini-test:generateContent",
+        "/v1internal:loadCodeAssist",
+        "/v1internal:streamGenerateContent?alt=sse",
         "/search",
         "/fetch",
         "/usages",

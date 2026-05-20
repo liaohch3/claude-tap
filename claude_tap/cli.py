@@ -80,6 +80,11 @@ class ClientConfig:
     # Some non-Python/non-Node macOS clients do not honor per-process CA env
     # variables, so they need the forward-proxy CA in the user login keychain.
     auto_trust_ca_macos: bool = False
+    # Some clients honor a native provider URL for the core model API but ignore
+    # HTTPS_PROXY for that API. In forward mode, point those env vars back at the
+    # local proxy and let the forward proxy bridge selected paths to target.
+    forward_base_url_envs: tuple[str, ...] = ()
+    forward_base_url_allowed_path_prefixes: tuple[str, ...] = ()
 
     @property
     def missing_help(self) -> str:
@@ -219,11 +224,13 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         cmd="agy",
         label="Antigravity CLI",
         install_url="https://antigravity.dev",
-        base_url_env="AGY_BASE_URL",
+        base_url_env="CLOUD_CODE_URL",
         base_url_suffix="",
-        default_target="https://antigravity.goog",
+        default_target="https://daily-cloudcode-pa.googleapis.com",
         default_proxy_mode="forward",
         auto_trust_ca_macos=True,
+        forward_base_url_envs=("CLOUD_CODE_URL",),
+        forward_base_url_allowed_path_prefixes=("/v1internal",),
     ),
 }
 
@@ -262,6 +269,9 @@ async def run_client(
         env["https_proxy"] = proxy_url
         env["all_proxy"] = proxy_url
         _extend_no_proxy(env, ("localhost", "127.0.0.1", "::1"))
+        forward_base_url = cfg.reverse_base_url(port)
+        for env_key in cfg.forward_base_url_envs:
+            env[env_key] = forward_base_url
         if ca_cert_path:
             env["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
             # Codex is a Rust binary; NODE_EXTRA_CA_CERTS does not affect its TLS stack.
@@ -286,7 +296,7 @@ async def run_client(
                 if ca_cert_path:
                     settings_payload["env"]["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
                 cmd_args = _settings_arg(settings_payload["env"]) + cmd_args
-        # Don't set provider-specific base URL in forward mode
+        # Don't set reverse-mode provider-specific base URL in forward mode.
     else:
         reverse_env = cfg.reverse_base_url_env_map(port)
         env.update(reverse_env)
@@ -306,6 +316,8 @@ async def run_client(
     print(f"\n🚀 Starting {cfg.label}: {' '.join([cfg.cmd, *cmd_args])}")
     if proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
+        for env_key in cfg.forward_base_url_envs:
+            print(f"   {env_key}={cfg.reverse_base_url(port)}")
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     else:
@@ -606,6 +618,8 @@ async def async_main(args: argparse.Namespace):
             ca=ca,
             writer=writer,
             session=session,
+            local_reverse_target=args.target,
+            local_reverse_allowed_path_prefixes=CLIENT_CONFIGS[args.client].forward_base_url_allowed_path_prefixes,
         )
         actual_port = await forward_server.start()
         print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")

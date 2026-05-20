@@ -214,6 +214,8 @@ def test_viewer_renders_gemini_semantic_sections(gemini_html_file: Path) -> None
               const entry = entries[0];
               const body = entry.request.body;
               return {
+                tier: pathTier(entry.request.path),
+                primary: isPathPrimary(entry.request.path),
                 system: extractSystem(body),
                 roles: getMessages(body).map(message => message.role),
                 tools: getRequestTools(body).map(toolDisplayName),
@@ -226,6 +228,8 @@ def test_viewer_renders_gemini_semantic_sections(gemini_html_file: Path) -> None
         )
         browser.close()
 
+    assert result["tier"] == 0
+    assert result["primary"] is True
     assert result["system"].startswith("You are Gemini CLI")
     assert result["roles"] == ["user", "assistant", "tool"]
     assert result["tools"] == ["run_shell_command"]

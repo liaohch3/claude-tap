@@ -2757,6 +2757,73 @@ async def test_forward_proxy_connect():
 
 
 @pytest.mark.asyncio
+async def test_forward_proxy_local_reverse_bridge():
+    """Test local origin requests bridged through forward proxy to a target."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+    from claude_tap.trace import TraceWriter
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        trace_path = tmpdir_path / "trace.jsonl"
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port = await _start_fake_https_upstream(tmpdir_path)
+        writer = TraceWriter(trace_path)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False)
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+            local_reverse_target=f"https://127.0.0.1:{upstream_port}",
+            local_reverse_allowed_path_prefixes=("/v1internal",),
+        )
+        proxy_port = await server.start()
+
+        try:
+
+            async def chunked_body():
+                yield b'{"request":{"contents":['
+                yield b'{"role":"user","parts":[{"text":"hello"}]}'
+                yield b"]}}"
+
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                async with client.post(
+                    f"http://127.0.0.1:{proxy_port}/v1internal:loadCodeAssist",
+                    data=chunked_body(),
+                    headers={"Content-Type": "application/json"},
+                ) as resp:
+                    assert resp.status == 200
+                    body = await resp.json()
+                    assert body["content"][0]["text"] == "Hello from HTTPS!"
+
+            await asyncio.sleep(0.1)
+            writer.close()
+            records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            assert len(records) == 1
+            assert records[0]["request"]["path"] == "/v1internal:loadCodeAssist"
+            assert records[0]["request"]["body"]["request"]["contents"][0]["role"] == "user"
+            assert records[0]["response"]["status"] == 200
+        finally:
+            await server.stop()
+            await session.close()
+
+    print("  test_forward_proxy_local_reverse_bridge PASSED")
+
+
+@pytest.mark.asyncio
 async def test_forward_proxy_connect_websocket():
     """Test the forward proxy CONNECT/TLS flow with a fake WSS upstream."""
     import ssl
