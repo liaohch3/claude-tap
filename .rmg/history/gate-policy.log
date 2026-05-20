@@ -1,0 +1,1 @@
+{"command":"plan","memory_mode":"strict","degraded_compat":false,"policy_reason":"default_strict","policy_timestamp":"2026-05-20T22:04:03Z","gate_status":"pass","blocking_conflicts_count":0,"warning_conflicts_count":0,"work_id":"standalone-proxy-runner","receipt":"initial planning gate created because this repository had no existing .rmg history"}

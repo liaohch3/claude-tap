@@ -1,0 +1,12 @@
+change: standalone-proxy-runner
+category: IMPLEMENTATION
+status: planning
+created: "2026-05-20T22:04:03Z"
+updated: "2026-05-20T22:04:03Z"
+owner: codex
+command: jimmy-code-plan
+summary: "Plan a clean standalone proxy runner for Claude Code and Codex CLI with efficient trace logs and thinking-token accounting."
+system-ref: null
+memory:
+  mode: strict
+  gate-policy-log: .rmg/history/gate-policy.log
