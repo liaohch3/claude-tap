@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-17
+last_reviewed: 2026-05-20
 source_of_truth: AGENTS.md
 ---
 
@@ -33,6 +33,7 @@ English version: [Support Matrix](support-matrix.md).
 | Hermes Agent | 自定义 OpenAI 兼容 provider（`--tap-proxy-mode reverse`） | `https://api.openai.com` | `/v1` | HTTP/SSE | 单测覆盖 |
 | Cursor CLI | Cursor 登录（`cursor-agent login`） | Forward proxy 到 `https://api2.cursor.sh` | n/a | HTTPS/protobuf + 本地 transcript import | 真实 E2E 已验证 |
 | Qoder CLI | Qoder 登录 / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy（Qoder 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
+| Antigravity CLI | Antigravity 登录 | Forward proxy（Google / Antigravity 端点） | n/a | HTTP/SSE | 手动 E2E 待验证；启动环境和 macOS 用户 keychain CA 信任已由单测覆盖 |
 
 ## 各客户端默认代理模式
 
@@ -49,6 +50,7 @@ English version: [Support Matrix](support-matrix.md).
 | `hermes` | `forward` | 多 provider 的 Python agent；`httpx` 与 `requests` 都原生认 `HTTPS_PROXY`，forward proxy 捕获是最自然的默认 |
 | `cursor` | `forward` | Cursor CLI 没有 base URL 覆盖能力；forward proxy 捕获网络流量，本地 transcript 提供可读对话 |
 | `qoder` | `forward` | Qoder CLI 会访问多个 Qoder 服务端点，且没有可靠的单一 base URL 覆盖能力 |
+| `agy` | `forward` | Antigravity 会访问多个 Google / Antigravity 端点；macOS 客户端可能还需要 `--tap-trust-ca` 让 Go TLS 栈信任本地 CA |
 
 用户始终可以通过 `--tap-proxy-mode {reverse,forward}` 显式覆盖。
 
@@ -111,6 +113,8 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_import_cursor_transcripts_appends_viewer_friendly_records`：验证 Cursor transcript import 会追加 viewer 友好的记录
 - `test_import_cursor_transcripts_preserves_tool_uses`：验证 Cursor tool_use block 能在 viewer trace shape 中渲染
 - `test_qoder_*`：验证 Qoder 注册、parse_args 默认模式解析、forward/reverse 环境变量和参数透传
+- `test_parse_args_accepts_tap_trust_ca`：验证 Antigravity 可以请求 macOS 用户 keychain CA 信任，且不需要 sudo
+- `test_macos_*_ca_command_*`：验证 CA 信任命令使用用户 login keychain 且不会调用 sudo
 
 ### 手动验证（代理变更合入前）
 
@@ -131,6 +135,11 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Repl
 # Qoder CLI
 uv run python -m claude_tap --tap-client qoder -- -p "Reply OK" --permission-mode dont_ask
 # 验证 stdout 包含 assistant 响应，trace 包含 Qoder 端点记录
+
+# Antigravity CLI（macOS）
+uv run python -m claude_tap --tap-client agy --tap-trust-ca --tap-live
+# 验证 macOS 只要求解锁用户 login keychain，不要求 sudo/admin 写 System keychain。
+# 然后验证 trace 包含 Google / Antigravity 端点记录。
 
 # Kimi CLI
 uv run python -m claude_tap --tap-client kimi -- --thinking

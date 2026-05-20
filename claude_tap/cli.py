@@ -23,7 +23,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-from claude_tap.certs import CertificateAuthority, ensure_ca
+from claude_tap.certs import CertificateAuthority, ensure_ca, is_macos_ca_trusted, trust_macos_ca
 from claude_tap.cursor_transcript import import_cursor_transcripts
 from claude_tap.forward_proxy import ForwardProxyServer
 from claude_tap.live import LiveViewerServer
@@ -485,6 +485,35 @@ def _settings_arg(env_values: dict[str, str]) -> list[str]:
     return ["--settings", json.dumps(settings_payload, separators=(",", ":"))]
 
 
+def _trust_ca_for_current_user(ca_cert_path: Path) -> int:
+    """Trust the forward-proxy CA in the current user's macOS login keychain."""
+    if sys.platform != "darwin":
+        print("--tap-trust-ca is currently only supported on macOS.", file=sys.stderr)
+        print(f"CA certificate: {ca_cert_path}", file=sys.stderr)
+        return 1
+
+    if is_macos_ca_trusted(ca_cert_path):
+        print(f"🔐 CA already trusted in the macOS login keychain: {ca_cert_path}")
+        return 0
+
+    result = trust_macos_ca(ca_cert_path)
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "").strip()
+        print("Error: failed to trust claude-tap CA in the macOS login keychain.", file=sys.stderr)
+        if details:
+            print(details, file=sys.stderr)
+        print("This command does not use sudo; macOS may require unlocking your login keychain.", file=sys.stderr)
+        return result.returncode or 1
+
+    if not is_macos_ca_trusted(ca_cert_path):
+        print("Error: macOS did not report the claude-tap CA as trusted after installation.", file=sys.stderr)
+        print(f"CA certificate: {ca_cert_path}", file=sys.stderr)
+        return 1
+
+    print(f"🔐 Trusted claude-tap CA in the current user's macOS login keychain: {ca_cert_path}")
+    return 0
+
+
 async def async_main(args: argparse.Namespace):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -538,6 +567,10 @@ async def async_main(args: argparse.Namespace):
 
     if args.proxy_mode == "forward":
         ca_cert_path, ca_key_path = ensure_ca()
+        if args.trust_ca:
+            trust_result = _trust_ca_for_current_user(ca_cert_path)
+            if trust_result != 0:
+                return trust_result
         ca = CertificateAuthority(ca_cert_path, ca_key_path)
         forward_server = ForwardProxyServer(
             host=args.host,
@@ -549,6 +582,8 @@ async def async_main(args: argparse.Namespace):
         actual_port = await forward_server.start()
         print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
         print(f"   CA cert: {ca_cert_path}")
+        if args.client == "agy" and sys.platform == "darwin" and not args.trust_ca:
+            print("   Tip: agy on macOS may require --tap-trust-ca once if TLS shows x509 trust errors.")
     else:
         app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
         app["trace_ctx"] = {
@@ -775,7 +810,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="claude-tap",
         description=(
             "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, "
-            "Cursor CLI, or Qoder CLI API requests via a local proxy. All flags not listed below are "
+            "Cursor CLI, Qoder CLI, or Antigravity CLI API requests via a local proxy. All flags not listed below are "
             "forwarded to the selected client."
         ),
         epilog=(
@@ -833,6 +868,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             '  claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask\n'
             "  # Authenticate first with `qodercli login` or QODER_PERSONAL_ACCESS_TOKEN / QODER_JOB_TOKEN\n"
             "\n"
+            "antigravity cli (defaults to forward proxy mode):\n"
+            "  # On macOS, --tap-trust-ca trusts the local CA in your user login keychain without sudo\n"
+            "  claude-tap --tap-client agy --tap-trust-ca\n"
+            "\n"
             "proxy-only mode (connect from another terminal):\n"
             "  claude-tap --tap-no-launch --tap-port 8080\n"
             "  # then: ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude\n"
@@ -850,6 +889,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
             "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
+            "\n"
+            "trust local CA:\n"
+            "  claude-tap trust-ca                        Trust forward-proxy CA in macOS user keychain\n"
             "\n"
             "homepage: https://github.com/liaohch3/claude-tap"
         ),
@@ -887,7 +929,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
             "Default depends on the client: 'reverse' for claude/codex/kimi, "
-            "'forward' for gemini/opencode/pi/hermes/cursor/qoder."
+            "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder."
+        ),
+    )
+    proxy_group.add_argument(
+        "--tap-trust-ca",
+        action="store_true",
+        dest="trust_ca",
+        help=(
+            "On macOS, trust the forward-proxy CA in the current user's login keychain before launch "
+            "(no sudo; may prompt to unlock the keychain)"
         ),
     )
     proxy_group.add_argument(
@@ -963,6 +1014,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
     if args.proxy_mode is None:
         args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
+    if args.trust_ca and args.proxy_mode != "forward":
+        tap_parser.error("--tap-trust-ca only applies to forward proxy mode")
 
     # Validate --tap-allow-path prefixes
     for prefix in args.extra_allowed_paths:
@@ -1141,6 +1194,25 @@ def update_main(argv: list[str] | None = None) -> int:
     return result.returncode
 
 
+def parse_trust_ca_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse arguments for the trust-ca subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="claude-tap trust-ca",
+        description=(
+            "Trust the claude-tap forward-proxy CA in the current user's macOS login keychain. "
+            "This does not use sudo or the System keychain."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def trust_ca_main(argv: list[str] | None = None) -> int:
+    """Entry point for the trust-ca subcommand."""
+    parse_trust_ca_args(argv)
+    ca_cert_path, _ = ensure_ca()
+    return _trust_ca_for_current_user(ca_cert_path)
+
+
 # ---------------------------------------------------------------------------
 # Trace cleanup – manifest-based
 # ---------------------------------------------------------------------------
@@ -1263,6 +1335,9 @@ def main_entry() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "update":
         sys.exit(update_main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "trust-ca":
+        sys.exit(trust_ca_main(sys.argv[2:]))
 
     if len(sys.argv) > 1 and sys.argv[1] == "dashboard":
         args = parse_dashboard_args(sys.argv[2:])

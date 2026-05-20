@@ -11,6 +11,7 @@ import datetime
 import ipaddress
 import logging
 import ssl
+import subprocess
 from pathlib import Path
 
 from cryptography import x509
@@ -106,6 +107,70 @@ def ensure_ca(ca_dir: Path | None = None) -> tuple[Path, Path]:
 
     log.info(f"CA certificate written to {ca_cert_path}")
     return ca_cert_path, ca_key_path
+
+
+def macos_login_keychain_path() -> Path:
+    """Return the current user's login keychain path on modern macOS."""
+    return Path.home() / "Library" / "Keychains" / "login.keychain-db"
+
+
+def build_macos_verify_ca_command(ca_cert_path: Path, keychain_path: Path | None = None) -> list[str]:
+    """Build a non-mutating command that checks whether the CA is trusted for TLS."""
+    keychain = keychain_path or macos_login_keychain_path()
+    return [
+        "security",
+        "verify-cert",
+        "-c",
+        str(ca_cert_path),
+        "-p",
+        "ssl",
+        "-l",
+        "-L",
+        "-q",
+        "-k",
+        str(keychain),
+    ]
+
+
+def build_macos_trust_ca_command(ca_cert_path: Path, keychain_path: Path | None = None) -> list[str]:
+    """Build the no-sudo command that trusts the CA in the current user's keychain."""
+    keychain = keychain_path or macos_login_keychain_path()
+    return [
+        "security",
+        "add-trusted-cert",
+        "-r",
+        "trustRoot",
+        "-p",
+        "ssl",
+        "-k",
+        str(keychain),
+        str(ca_cert_path),
+    ]
+
+
+def is_macos_ca_trusted(ca_cert_path: Path, keychain_path: Path | None = None) -> bool:
+    """Return True when macOS already trusts the CA for TLS in the user keychain."""
+    result = subprocess.run(
+        build_macos_verify_ca_command(ca_cert_path, keychain_path),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def trust_macos_ca(ca_cert_path: Path, keychain_path: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """Trust the CA for TLS in the current user's macOS login keychain.
+
+    This intentionally does not use ``sudo`` or the System keychain. macOS may
+    still prompt for the user's login-keychain password.
+    """
+    return subprocess.run(
+        build_macos_trust_ca_command(ca_cert_path, keychain_path),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def _load_ca(ca_cert_path: Path, ca_key_path: Path) -> tuple[x509.Certificate, rsa.RSAPrivateKey]:

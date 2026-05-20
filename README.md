@@ -106,7 +106,7 @@ claude-tap --tap-client cursor -- -p --trust --model auto "hello"
 claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
 
 # Antigravity CLI
-claude-tap --tap-client agy
+claude-tap --tap-client agy --tap-trust-ca
 ```
 
 <details>
@@ -319,6 +319,22 @@ claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
 </details>
 
 <details>
+<summary>Antigravity CLI examples</summary>
+
+Antigravity CLI talks to multiple Google/Antigravity endpoints, so claude-tap defaults to **forward proxy** mode for `--tap-client agy`.
+
+On macOS, Antigravity may not honor per-process CA environment variables. Use `--tap-trust-ca` once to trust the local claude-tap CA in your current user's login keychain. This does not use `sudo` or the System keychain, though macOS may prompt to unlock the login keychain.
+
+```bash
+claude-tap --tap-client agy --tap-trust-ca
+
+# After the CA is trusted, this is enough.
+claude-tap --tap-client agy --tap-live
+```
+
+</details>
+
+<details>
 <summary>Viewer, export, and advanced options</summary>
 
 ```bash
@@ -349,7 +365,7 @@ In proxy-only mode, start your client in another terminal and point its base URL
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default), codex, gemini, kimi, opencode, pi, hermes, cursor, or qoder
+--tap-client CLIENT      Client to launch: claude (default), agy, codex, gemini, kimi, opencode, pi, hermes, cursor, or qoder
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer (auto-opens browser)
 --tap-live-port PORT     Port for live viewer server (default: auto)
@@ -361,7 +377,8 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi, forward for gemini/opencode/pi/hermes/cursor/qoder)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi, forward for agy/gemini/opencode/pi/hermes/cursor/qoder)
+--tap-trust-ca           On macOS, trust the local CA in the user login keychain before launch (no sudo)
 ```
 
 </details>

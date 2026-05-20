@@ -22,7 +22,9 @@ from claude_tap.cli import (
     main_entry,
     parse_args,
     parse_dashboard_args,
+    parse_trust_ca_args,
     parse_update_args,
+    trust_ca_main,
     update_main,
 )
 from claude_tap.forward_proxy import ForwardProxyServer
@@ -44,7 +46,9 @@ __all__ = [
     "main_entry",
     "parse_args",
     "parse_dashboard_args",
+    "parse_trust_ca_args",
     "parse_update_args",
+    "trust_ca_main",
     "update_main",
     "async_main",
     "dashboard_main",
