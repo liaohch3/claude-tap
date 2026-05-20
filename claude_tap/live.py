@@ -18,6 +18,7 @@ from claude_tap.dashboard import (
     read_dashboard_template,
     session_id_for_rel_path,
 )
+from claude_tap.history import delete_trace_history
 from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, VIEWER_TEMPLATE_PATH, _read_viewer_template
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -64,6 +65,7 @@ class LiveViewerServer:
         app.router.add_get("/records", self._handle_records)
         app.router.add_get("/api/dates", self._handle_dates)
         app.router.add_get("/api/traces/{date}", self._handle_traces_by_date)
+        app.router.add_delete("/api/traces/{date}", self._handle_delete_traces_by_date)
         app.router.add_get("/api/agents", self._handle_agents)
         app.router.add_get("/api/sessions", self._handle_sessions)
         app.router.add_get("/api/sessions/{session_id}/records", self._handle_session_records)
@@ -381,3 +383,16 @@ class LiveViewerServer:
         except ValueError:
             return None
         return session_id_for_rel_path(rel_path)
+
+    async def _handle_delete_traces_by_date(self, request: web.Request) -> web.Response:
+        """Delete stored trace files for a selected history date."""
+        date = request.match_info["date"]
+        if not self.output_dir or not self.output_dir.is_dir():
+            return web.json_response({"date": date, "deleted_files": 0, "deleted_traces": 0, "skipped_files": 0})
+        if date != "legacy" and not _DATE_RE.match(date):
+            return web.json_response({"error": "Invalid date format"}, status=400)
+        try:
+            result = delete_trace_history(self.output_dir, date, protected_paths=[self.trace_path])
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(result)

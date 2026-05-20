@@ -103,6 +103,8 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     # Gemini API
     "/v1beta/models",
     "/v1alpha/models",
+    # Google Code Assist / Antigravity internal API
+    "/v1internal",
     # Kimi Code auxiliary APIs (when users proxy Kimi Code services explicitly)
     "/search",
     "/fetch",
@@ -115,7 +117,9 @@ def _is_allowed_path(path: str, extra_prefixes: tuple[str, ...] = ()) -> bool:
     """Check whether the request path matches a known API endpoint."""
     clean = path.split("?", 1)[0].rstrip("/")
     prefixes = ALLOWED_PATH_PREFIXES + extra_prefixes
-    return any(clean == prefix or clean.startswith(prefix + "/") for prefix in prefixes)
+    return any(
+        clean == prefix or clean.startswith(prefix + "/") or clean.startswith(prefix + ":") for prefix in prefixes
+    )
 
 
 _ANTHROPIC_METADATA_USER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")

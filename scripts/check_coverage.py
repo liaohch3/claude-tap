@@ -340,8 +340,29 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
             session.send("Profiler.startPreciseCoverage", {"callCount": True, "detailed": True})
             page.goto(html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".sidebar-item", timeout=5000)
-            for index in range(page.evaluate("entries.length")):
-                page.evaluate("entryIndex => renderDetail(entries[entryIndex])", index)
+            page.evaluate(
+                """() => {
+                  activePaths = new Set(entries.map(getPath));
+                  activeTools = null;
+                  searchQuery = '';
+                  applyFilter(true);
+                  setSidebarOrderMode('turn');
+                  setSidebarOrderMode('model');
+                  formatText('history_delete_done', { count: 1 });
+                  updateHistoryDeleteButton();
+                  setHistoryDeleteStatus('coverage', 'ok');
+                  setHistoryDeleteStatus('', '');
+                  deleteSelectedTraceDate();
+                  getTargetForGlobalMatch(0);
+                  findFilteredIdxByRequestId(entries[0]?.request_id || '');
+                  visualNavigate(1);
+                  visualNavigate(-1);
+                  vsRenderVisible();
+                  if (entries.length > 1) compareSidebarModelOrder(entries[0], entries[1]);
+                }"""
+            )
+            for index in range(page.evaluate("filtered.length")):
+                page.evaluate("entryIndex => { detailViewMode = 'default'; selectEntry(entryIndex); }", index)
                 page.wait_for_selector("#detail .section", timeout=5000)
                 page.evaluate(
                     """(entryIndex) => {
@@ -360,6 +381,17 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                         jsonToggle.click();
                         jsonToggle.click();
                       }
+                      setDetailViewMode('trace');
+                      setTraceFormatMode('json');
+                      setTraceFormatMode('yaml');
+                      setTraceFormatMode('pretty');
+                      renderTracePayload({
+                        emptyObject: {},
+                        emptyArray: [],
+                        nested: { key: 'value' },
+                        array: [{ key: 'value' }],
+                        multiline: 'line one\\nline two',
+                      });
                     }""",
                     index,
                 )
@@ -448,9 +480,53 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
             page.goto(html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".sidebar-item", timeout=5000)
+            page.evaluate(
+                """() => {
+                  activePaths = new Set(entries.map(getPath));
+                  activeTools = null;
+                  searchQuery = '';
+                  applyFilter(true);
+                }"""
+            )
+            page.evaluate("setSidebarOrderMode('turn')")
+            merge(page.evaluate(collect_css_script))
+            page.evaluate("setSidebarOrderMode('model')")
+            merge(page.evaluate(collect_css_script))
+            page.evaluate(
+                """() => {
+                  const picker = document.querySelector('#date-picker');
+                  if (picker) picker.style.display = 'flex';
+                  setHistoryDeleteStatus('coverage ok', 'ok');
+                }"""
+            )
+            merge(page.evaluate(collect_css_script))
+            page.evaluate("setHistoryDeleteStatus('coverage warn', 'warn')")
+            merge(page.evaluate(collect_css_script))
+            page.evaluate("setHistoryDeleteStatus('coverage error', 'error')")
+            merge(page.evaluate(collect_css_script))
 
-            for index in range(page.evaluate("entries.length")):
-                page.evaluate("entryIndex => renderDetail(entries[entryIndex])", index)
+            for index in range(page.evaluate("filtered.length")):
+                page.evaluate("entryIndex => { detailViewMode = 'default'; selectEntry(entryIndex); }", index)
+                merge(page.evaluate(collect_css_script))
+                page.evaluate("setDetailViewMode('trace')")
+                merge(page.evaluate(collect_css_script))
+                for mode in ("json", "yaml", "pretty"):
+                    page.evaluate("mode => setTraceFormatMode(mode)", mode)
+                    merge(page.evaluate(collect_css_script))
+                page.evaluate(
+                    """() => {
+                      document.querySelector('#detail')?.insertAdjacentHTML(
+                        'beforeend',
+                        renderTracePayload({
+                          emptyObject: {},
+                          emptyArray: [],
+                          nested: { key: 'value' },
+                          array: [{ key: 'value' }],
+                          multiline: 'line one\\nline two',
+                        })
+                      );
+                    }"""
+                )
                 merge(page.evaluate(collect_css_script))
 
             page.evaluate(
@@ -467,6 +543,16 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
                 page.evaluate("showDiffForIdx(1, null, 0)")
                 merge(page.evaluate(collect_css_script))
 
+            page.evaluate(
+                """() => {
+                  setDetailViewMode('default');
+                  document.querySelector('#detail')?.insertAdjacentHTML(
+                    'afterbegin',
+                    '<div class="continuation-banner"><div class="cb-icon"></div><div class="cb-content"><div class="cb-title"></div><div class="cb-message"></div><div class="cb-meta"><div class="cb-key">id</div><div class="cb-val">resp</div></div></div></div>'
+                  );
+                }"""
+            )
+            merge(page.evaluate(collect_css_script))
             page.evaluate("document.documentElement.setAttribute('data-theme', 'dark')")
             merge(page.evaluate(collect_css_script))
             page.set_viewport_size({"width": 390, "height": 900})

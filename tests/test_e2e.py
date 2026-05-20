@@ -2757,6 +2757,133 @@ async def test_forward_proxy_connect():
 
 
 @pytest.mark.asyncio
+async def test_forward_proxy_local_reverse_bridge():
+    """Test local origin requests bridged through forward proxy to a target."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+    from claude_tap.trace import TraceWriter
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        trace_path = tmpdir_path / "trace.jsonl"
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port = await _start_fake_https_upstream(tmpdir_path)
+        writer = TraceWriter(trace_path)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False)
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+            local_reverse_target=f"https://127.0.0.1:{upstream_port}",
+            local_reverse_allowed_path_prefixes=("/v1internal",),
+        )
+        proxy_port = await server.start()
+
+        try:
+
+            async def chunked_body():
+                yield b'{"request":{"contents":['
+                yield b'{"role":"user","parts":[{"text":"hello"}]}'
+                yield b"]}}"
+
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                async with client.post(
+                    f"http://127.0.0.1:{proxy_port}/v1internal:loadCodeAssist",
+                    data=chunked_body(),
+                    headers={"Content-Type": "application/json"},
+                ) as resp:
+                    assert resp.status == 200
+                    body = await resp.json()
+                    assert body["content"][0]["text"] == "Hello from HTTPS!"
+
+            await asyncio.sleep(0.1)
+            writer.close()
+            records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            assert len(records) == 1
+            assert records[0]["request"]["path"] == "/v1internal:loadCodeAssist"
+            assert records[0]["request"]["body"]["request"]["contents"][0]["role"] == "user"
+            assert records[0]["response"]["status"] == 200
+        finally:
+            await server.stop()
+            await session.close()
+
+    print("  test_forward_proxy_local_reverse_bridge PASSED")
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_records_upstream_error():
+    """Test forward proxy records a 502 trace record when upstream is unreachable."""
+    import socket
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+    from claude_tap.trace import TraceWriter
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        trace_path = tmpdir_path / "trace.jsonl"
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        unreachable_port = sock.getsockname()[1]
+        sock.close()
+
+        writer = TraceWriter(trace_path)
+        session = aiohttp.ClientSession(auto_decompress=False)
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+            local_reverse_target=f"http://127.0.0.1:{unreachable_port}",
+            local_reverse_allowed_path_prefixes=("/v1internal",),
+        )
+        proxy_port = await server.start()
+
+        try:
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                async with client.post(
+                    f"http://127.0.0.1:{proxy_port}/v1internal:listExperiments",
+                    json={"request": {"client": "agy"}},
+                ) as resp:
+                    assert resp.status == 502
+                    assert await resp.text()
+
+            await asyncio.sleep(0.1)
+            writer.close()
+            records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            assert len(records) == 1
+            assert records[0]["turn"] == 1
+            assert records[0]["request"]["path"] == "/v1internal:listExperiments"
+            assert records[0]["request"]["body"]["request"]["client"] == "agy"
+            assert records[0]["response"]["status"] == 502
+            assert records[0]["response"]["body"]["error"]
+        finally:
+            await server.stop()
+            await session.close()
+
+    print("  test_forward_proxy_records_upstream_error PASSED")
+
+
+@pytest.mark.asyncio
 async def test_forward_proxy_connect_websocket():
     """Test the forward proxy CONNECT/TLS flow with a fake WSS upstream."""
     import ssl
@@ -2809,10 +2936,13 @@ async def test_forward_proxy_connect_websocket():
                 await ws.send_json({"model": "gpt-test", "input": "hello"})
 
                 received = []
+                binary_received = False
                 while True:
                     msg = await asyncio.wait_for(ws.receive(), timeout=5)
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         received.append(json.loads(msg.data))
+                    elif msg.type == aiohttp.WSMsgType.BINARY:
+                        binary_received = msg.data == b"binary-over-wss"
                     elif msg.type in (
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSING,
@@ -2822,6 +2952,7 @@ async def test_forward_proxy_connect_websocket():
                 await ws.close()
 
             assert len(received) == 3
+            assert binary_received
             assert received[0]["type"] == "response.created"
             assert received[-1]["type"] == "response.completed"
             print("  OK: CONNECT + WSS upgrade works")
@@ -3107,6 +3238,7 @@ async def _start_fake_wss_upstream(tmpdir: Path) -> int:
                         "response": {"id": "resp_ws_1", "model": model, "status": "in_progress"},
                     }
                 )
+                await ws.send_bytes(b"binary-over-wss")
                 await ws.send_json({"type": "response.output_text.delta", "delta": "Hello over WSS"})
                 await ws.send_json(
                     {

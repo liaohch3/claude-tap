@@ -159,6 +159,76 @@ async def test_websocket_proxy_basic(trace_dir):
         await upstream_runner.cleanup()
 
 
+@pytest.mark.asyncio
+async def test_websocket_completed_response_is_written_before_socket_close(trace_dir):
+    """A completed WS response should be visible before a long-lived socket closes."""
+    allow_close = asyncio.Event()
+
+    async def ws_upstream_handler(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                model = data.get("model", "test-model")
+                await ws.send_json(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_live",
+                            "model": model,
+                            "status": "completed",
+                            "output": [{"type": "message", "content": [{"type": "output_text", "text": "done"}]}],
+                            "usage": {"input_tokens": 3, "output_tokens": 1},
+                        },
+                    }
+                )
+                await allow_close.wait()
+                await ws.close()
+                break
+        return ws
+
+    trace_path = Path(trace_dir) / "trace_ws_live.jsonl"
+    writer = TraceWriter(trace_path)
+
+    upstream_runner, upstream_port = await _start_ws_upstream(ws_upstream_handler)
+    proxy_runner, proxy_port, proxy_session = await _start_proxy(
+        f"http://127.0.0.1:{upstream_port}",
+        writer,
+        strip_prefix="/v1",
+    )
+
+    try:
+        async with aiohttp.ClientSession() as client:
+            ws = await client.ws_connect(f"http://127.0.0.1:{proxy_port}/v1/responses")
+            await ws.send_json({"model": "gpt-test", "input": "hello"})
+
+            msg = await asyncio.wait_for(ws.receive(), timeout=5)
+            assert msg.type == aiohttp.WSMsgType.TEXT
+            assert json.loads(msg.data)["type"] == "response.completed"
+
+            await asyncio.sleep(0.1)
+            records = [json.loads(line) for line in trace_path.read_text().splitlines() if line.strip()]
+            assert len(records) == 1
+            assert records[0]["response"]["body"]["status"] == "completed"
+            assert records[0]["request"]["body"]["model"] == "gpt-test"
+
+            allow_close.set()
+            await ws.close()
+
+        await asyncio.sleep(0.1)
+        writer.close()
+
+        records = [json.loads(line) for line in trace_path.read_text().splitlines() if line.strip()]
+        assert len(records) == 1
+
+    finally:
+        allow_close.set()
+        await proxy_session.close()
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
 # ---------------------------------------------------------------------------
 # Test 2: upstream ws_connect should inherit trust_env proxy behavior
 # ---------------------------------------------------------------------------

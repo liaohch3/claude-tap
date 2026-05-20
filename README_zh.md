@@ -11,7 +11,7 @@
 
 `claude-tap` 是给 AI 编程 agent 用的本地代理和 trace 查看器。把 CLI 通过它启动，就能看到真实 API 流量：system prompt、对话历史、工具 schema、工具调用、流式响应、token 用量和请求 diff。
 
-它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli) 和 [Qoder CLI](https://qoder.com/cli)。
+它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli)、[Qoder CLI](https://qoder.com/cli) 和 [Antigravity CLI](https://antigravity.dev)。
 
 <p align="center">
   <img src="docs/demo_zh.gif" alt="claude-tap 演示：真实 Codex trace" width="100%">
@@ -45,7 +45,7 @@
 - 🔎 **用证据定位问题**：对比相邻请求，明确是哪段 prompt、消息、工具或参数发生了变化。
 - 📦 **留下可分享证据**：每次运行都会写入 JSONL trace，并生成自包含 HTML 查看器，方便 review 或归档。
 - 🔒 **数据留在本机**：不依赖云端 dashboard；常见认证 header 会在记录前自动脱敏。
-- 🧩 **覆盖主流编码 CLI**：同一套流程可用于 Claude Code、Codex CLI、Gemini CLI、Kimi CLI、OpenCode、Pi、Hermes Agent、Cursor CLI 和 Qoder CLI。
+- 🧩 **覆盖主流编码 CLI**：同一套流程可用于 Claude Code、Codex CLI、Gemini CLI、Kimi CLI、OpenCode、Pi、Hermes Agent、Cursor CLI、Qoder CLI 和 Antigravity CLI。
 
 ## 支持的客户端
 
@@ -60,6 +60,7 @@
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 多提供方 Hermes TUI 或 gateway 会话 |
 | [Cursor CLI](https://cursor.com/cli) | Cursor Agent 会话，并导入可读的本地 transcript |
 | [Qoder CLI](https://qoder.com/cli) | 通过 forward proxy 捕获 Qoder Agent 会话 |
+| [Antigravity CLI](https://antigravity.dev) | 通过 forward proxy 捕获 Antigravity Agent 会话 |
 
 ## 安装
 
@@ -103,6 +104,9 @@ claude-tap --tap-client cursor -- -p --trust --model auto "hello"
 
 # Qoder CLI
 claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
+
+# Antigravity CLI
+claude-tap --tap-client agy
 ```
 
 <details>
@@ -312,6 +316,22 @@ claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
 </details>
 
 <details>
+<summary>Antigravity CLI 示例</summary>
+
+Antigravity CLI 会访问多个 Google / Antigravity 端点，因此 `--tap-client agy` 默认使用 **forward proxy** 模式。它的 Code Assist 模型 API 还会读取 `CLOUD_CODE_URL`；claude-tap 会自动注入这个变量，让 `/v1internal:streamGenerateContent` 这类模型请求也进入同一个本地代理。
+
+在 macOS 上，Antigravity 可能不读取进程级 CA 环境变量。首次启动 `agy` 时，claude-tap 会自动把本地 CA 信任到当前用户的 login keychain。这个操作不会使用 `sudo`，也不会写入 System keychain，但 macOS 可能要求解锁 login keychain。
+
+```bash
+claude-tap --tap-client agy --tap-live
+
+# 可选：也可以先单独信任 CA，再启动 forward proxy 客户端。
+claude-tap trust-ca
+```
+
+</details>
+
+<details>
 <summary>查看器、导出和高级选项</summary>
 
 ```bash
@@ -342,7 +362,7 @@ claude-tap --tap-no-open
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动的客户端: claude（默认）/ codex / gemini / kimi / opencode / pi / hermes / cursor / qoder
+--tap-client CLIENT      启动的客户端: claude（默认）/ agy / codex / gemini / kimi / opencode / pi / hermes / cursor / qoder
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               启动实时查看器（自动打开浏览器）
 --tap-live-port PORT     实时查看器端口（默认: 自动分配）
@@ -354,7 +374,8 @@ claude-tap --tap-no-open
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
---tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi 用 reverse，gemini/opencode/pi/hermes/cursor/qoder 用 forward）
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi 用 reverse，agy/gemini/opencode/pi/hermes/cursor/qoder 用 forward）
+--tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy 会自动执行）
 ```
 
 </details>

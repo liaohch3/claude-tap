@@ -17,15 +17,16 @@ import urllib.error
 import urllib.request
 import webbrowser
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import aiohttp
 from aiohttp import web
 
-from claude_tap.certs import CertificateAuthority, ensure_ca
+from claude_tap.certs import CertificateAuthority, ensure_ca, is_macos_ca_trusted, trust_macos_ca
 from claude_tap.cursor_transcript import import_cursor_transcripts
 from claude_tap.forward_proxy import ForwardProxyServer
+from claude_tap.history import _cleanup_traces, _register_trace, _rel_posix
 from claude_tap.live import LiveViewerServer
 from claude_tap.proxy import proxy_handler
 from claude_tap.trace import TraceWriter
@@ -77,6 +78,14 @@ class ClientConfig:
     # Multi-provider clients (e.g. hermes, opencode, pi) default to "forward" so that all
     # provider traffic is captured regardless of which env var the client honors.
     default_proxy_mode: str = "reverse"
+    # Some non-Python/non-Node macOS clients do not honor per-process CA env
+    # variables, so they need the forward-proxy CA in the user login keychain.
+    auto_trust_ca_macos: bool = False
+    # Some clients honor a native provider URL for the core model API but ignore
+    # HTTPS_PROXY for that API. In forward mode, point those env vars back at the
+    # local proxy and let the forward proxy bridge selected paths to target.
+    forward_base_url_envs: tuple[str, ...] = ()
+    forward_base_url_allowed_path_prefixes: tuple[str, ...] = ()
 
     @property
     def missing_help(self) -> str:
@@ -212,6 +221,18 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         default_target="https://api2.qoder.sh",
         default_proxy_mode="forward",
     ),
+    "agy": ClientConfig(
+        cmd="agy",
+        label="Antigravity CLI",
+        install_url="https://antigravity.dev",
+        base_url_env="CLOUD_CODE_URL",
+        base_url_suffix="",
+        default_target="https://daily-cloudcode-pa.googleapis.com",
+        default_proxy_mode="forward",
+        auto_trust_ca_macos=True,
+        forward_base_url_envs=("CLOUD_CODE_URL",),
+        forward_base_url_allowed_path_prefixes=("/v1internal",),
+    ),
 }
 
 
@@ -249,6 +270,9 @@ async def run_client(
         env["https_proxy"] = proxy_url
         env["all_proxy"] = proxy_url
         _extend_no_proxy(env, ("localhost", "127.0.0.1", "::1"))
+        forward_base_url = cfg.reverse_base_url(port)
+        for env_key in cfg.forward_base_url_envs:
+            env[env_key] = forward_base_url
         if ca_cert_path:
             env["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
             # Codex is a Rust binary; NODE_EXTRA_CA_CERTS does not affect its TLS stack.
@@ -273,7 +297,7 @@ async def run_client(
                 if ca_cert_path:
                     settings_payload["env"]["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
                 cmd_args = _settings_arg(settings_payload["env"]) + cmd_args
-        # Don't set provider-specific base URL in forward mode
+        # Don't set reverse-mode provider-specific base URL in forward mode.
     else:
         reverse_env = cfg.reverse_base_url_env_map(port)
         env.update(reverse_env)
@@ -293,6 +317,8 @@ async def run_client(
     print(f"\n🚀 Starting {cfg.label}: {' '.join([cfg.cmd, *cmd_args])}")
     if proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
+        for env_key in cfg.forward_base_url_envs:
+            print(f"   {env_key}={cfg.reverse_base_url(port)}")
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     else:
@@ -476,6 +502,55 @@ def _settings_arg(env_values: dict[str, str]) -> list[str]:
     return ["--settings", json.dumps(settings_payload, separators=(",", ":"))]
 
 
+def _trust_ca_for_current_user(ca_cert_path: Path) -> int:
+    """Trust the forward-proxy CA in the current user's macOS login keychain."""
+    if sys.platform != "darwin":
+        print("--tap-trust-ca is currently only supported on macOS.", file=sys.stderr)
+        print(f"CA certificate: {ca_cert_path}", file=sys.stderr)
+        return 1
+
+    if is_macos_ca_trusted(ca_cert_path):
+        print(f"🔐 CA already trusted in the macOS login keychain: {ca_cert_path}")
+        return 0
+
+    result = trust_macos_ca(ca_cert_path)
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "").strip()
+        print("Error: failed to trust claude-tap CA in the macOS login keychain.", file=sys.stderr)
+        if details:
+            print(details, file=sys.stderr)
+        print("This command does not use sudo; macOS may require unlocking your login keychain.", file=sys.stderr)
+        return result.returncode or 1
+
+    if not is_macos_ca_trusted(ca_cert_path):
+        print("Error: macOS did not report the claude-tap CA as trusted after installation.", file=sys.stderr)
+        print(f"CA certificate: {ca_cert_path}", file=sys.stderr)
+        return 1
+
+    print(f"🔐 Trusted claude-tap CA in the current user's macOS login keychain: {ca_cert_path}")
+    return 0
+
+
+def _ensure_ca_trust_for_forward_proxy(args: argparse.Namespace, ca_cert_path: Path) -> int:
+    """Ensure CA trust when forward-proxy clients need macOS keychain trust."""
+    if args.proxy_mode != "forward":
+        return 0
+
+    if args.trust_ca:
+        return _trust_ca_for_current_user(ca_cert_path)
+
+    cfg = CLIENT_CONFIGS[args.client]
+    if sys.platform != "darwin" or not cfg.auto_trust_ca_macos:
+        return 0
+
+    if is_macos_ca_trusted(ca_cert_path):
+        return 0
+
+    print(f"🔐 {cfg.label} needs the claude-tap CA trusted in your macOS login keychain.")
+    print("   Installing for the current user only; no sudo or System keychain write is used.")
+    return _trust_ca_for_current_user(ca_cert_path)
+
+
 async def async_main(args: argparse.Namespace):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -488,6 +563,14 @@ async def async_main(args: argparse.Namespace):
     date_dir.mkdir(parents=True, exist_ok=True)
     trace_path = date_dir / f"trace_{time_str}.jsonl"
     log_path = date_dir / f"trace_{time_str}.log"
+
+    ca_cert_path: Path | None = None
+    ca_key_path: Path | None = None
+    if args.proxy_mode == "forward":
+        ca_cert_path, ca_key_path = ensure_ca()
+        trust_result = _ensure_ca_trust_for_forward_proxy(args, ca_cert_path)
+        if trust_result != 0:
+            return trust_result
 
     # Start live viewer server if requested
     live_server: LiveViewerServer | None = None
@@ -526,10 +609,10 @@ async def async_main(args: argparse.Namespace):
     # Reverse proxy mode: aiohttp web app (current behavior)
     forward_server: ForwardProxyServer | None = None
     runner: web.AppRunner | None = None
-    ca_cert_path: Path | None = None
 
     if args.proxy_mode == "forward":
-        ca_cert_path, ca_key_path = ensure_ca()
+        assert ca_cert_path is not None
+        assert ca_key_path is not None
         ca = CertificateAuthority(ca_cert_path, ca_key_path)
         forward_server = ForwardProxyServer(
             host=args.host,
@@ -537,6 +620,8 @@ async def async_main(args: argparse.Namespace):
             ca=ca,
             writer=writer,
             session=session,
+            local_reverse_target=args.target,
+            local_reverse_allowed_path_prefixes=CLIENT_CONFIGS[args.client].forward_base_url_allowed_path_prefixes,
         )
         actual_port = await forward_server.start()
         print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
@@ -767,7 +852,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="claude-tap",
         description=(
             "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, "
-            "Cursor CLI, or Qoder CLI API requests via a local proxy. All flags not listed below are "
+            "Cursor CLI, Qoder CLI, or Antigravity CLI API requests via a local proxy. All flags not listed below are "
             "forwarded to the selected client."
         ),
         epilog=(
@@ -825,6 +910,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             '  claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask\n'
             "  # Authenticate first with `qodercli login` or QODER_PERSONAL_ACCESS_TOKEN / QODER_JOB_TOKEN\n"
             "\n"
+            "antigravity cli (defaults to forward proxy mode):\n"
+            "  # On macOS, claude-tap auto-trusts the local CA in your user login keychain without sudo\n"
+            "  claude-tap --tap-client agy --tap-live\n"
+            "\n"
             "proxy-only mode (connect from another terminal):\n"
             "  claude-tap --tap-no-launch --tap-port 8080\n"
             "  # then: ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude\n"
@@ -842,6 +931,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
             "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
+            "\n"
+            "trust local CA:\n"
+            "  claude-tap trust-ca                        Trust forward-proxy CA in macOS user keychain\n"
             "\n"
             "homepage: https://github.com/liaohch3/claude-tap"
         ),
@@ -879,7 +971,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
             "Default depends on the client: 'reverse' for claude/codex/kimi, "
-            "'forward' for gemini/opencode/pi/hermes/cursor/qoder."
+            "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder."
+        ),
+    )
+    proxy_group.add_argument(
+        "--tap-trust-ca",
+        action="store_true",
+        dest="trust_ca",
+        help=(
+            "On macOS, explicitly trust the forward-proxy CA in the current user's login keychain before launch "
+            "(no sudo; agy does this automatically when needed)"
         ),
     )
     proxy_group.add_argument(
@@ -955,6 +1056,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
     if args.proxy_mode is None:
         args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
+    if args.trust_ca and args.proxy_mode != "forward":
+        tap_parser.error("--tap-trust-ca only applies to forward proxy mode")
 
     # Validate --tap-allow-path prefixes
     for prefix in args.extra_allowed_paths:
@@ -1135,118 +1238,23 @@ def update_main(argv: list[str] | None = None) -> int:
     return result.returncode
 
 
-# ---------------------------------------------------------------------------
-# Trace cleanup – manifest-based
-# ---------------------------------------------------------------------------
-
-_MANIFEST_FILE = ".cloudtap-manifest.json"
-
-
-def _rel_posix(path: Path, base: Path) -> str:
-    # Forward slashes so manifests stay portable when `.traces` is synced across OSes.
-    return path.relative_to(base).as_posix()
-
-
-def _load_manifest(output_dir: Path) -> dict:
-    """Load or create the manifest file."""
-    manifest_path = output_dir / _MANIFEST_FILE
-    if manifest_path.exists():
-        try:
-            data = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if data.get("_cloudtap"):
-                return data
-        except (json.JSONDecodeError, OSError):
-            pass
-    manifest = {"_cloudtap": True, "version": __version__, "traces": []}
-    _maybe_migrate_existing(output_dir, manifest)
-    _save_manifest(output_dir, manifest)
-    return manifest
+def parse_trust_ca_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse arguments for the trust-ca subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="claude-tap trust-ca",
+        description=(
+            "Trust the claude-tap forward-proxy CA in the current user's macOS login keychain. "
+            "This does not use sudo or the System keychain."
+        ),
+    )
+    return parser.parse_args(argv)
 
 
-def _save_manifest(output_dir: Path, manifest: dict) -> None:
-    """Save manifest to disk."""
-    manifest_path = output_dir / _MANIFEST_FILE
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-
-def _register_trace(output_dir: Path, ts: str, trace_files: list[str], metadata: dict[str, str] | None = None) -> dict:
-    """Register a new trace session in the manifest."""
-    manifest = _load_manifest(output_dir)
-    entry = {
-        "timestamp": ts,
-        "files": trace_files,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if metadata:
-        entry.update(metadata)
-    manifest["traces"].append(entry)
-    _save_manifest(output_dir, manifest)
-    return manifest
-
-
-def _cleanup_traces(output_dir: Path, max_traces: int) -> int:
-    """Remove oldest traces exceeding max_traces. Returns count of deleted sessions."""
-    if max_traces <= 0:
-        return 0
-    manifest = _load_manifest(output_dir)
-    traces = manifest.get("traces", [])
-    if len(traces) <= max_traces:
-        return 0
-    traces.sort(key=lambda t: t.get("timestamp", ""))
-    to_remove = traces[: len(traces) - max_traces]
-    removed = 0
-    for entry in to_remove:
-        parents_to_check: set[Path] = set()
-        for fname in entry.get("files", []):
-            fpath = output_dir / fname
-            if fpath.exists():
-                parents_to_check.add(fpath.parent)
-                try:
-                    fpath.unlink()
-                except OSError:
-                    pass
-        # Remove empty date subdirectories
-        for parent in parents_to_check:
-            if parent != output_dir and parent.is_dir() and not any(parent.iterdir()):
-                try:
-                    parent.rmdir()
-                except OSError:
-                    pass
-        traces.remove(entry)
-        removed += 1
-    manifest["traces"] = traces
-    _save_manifest(output_dir, manifest)
-    return removed
-
-
-def _maybe_migrate_existing(output_dir: Path, manifest: dict) -> None:
-    """Auto-register existing trace_*.jsonl files that are not yet in the manifest."""
-    # Normalize separators so manifests written by older Windows builds (with `\`) still match.
-    known_files: set[str] = {
-        f.replace("\\", "/") for entry in manifest.get("traces", []) for f in entry.get("files", [])
-    }
-
-    for jsonl in sorted(output_dir.glob("**/trace_*.jsonl")):
-        rel = _rel_posix(jsonl, output_dir)
-        if rel in known_files or jsonl.name in known_files:
-            continue
-        stem = jsonl.stem
-        ts = stem.replace("trace_", "", 1)
-        # Prefix with date dir if present
-        if jsonl.parent != output_dir:
-            ts = jsonl.parent.name.replace("-", "") + "_" + ts
-        files = [rel]
-        for suffix in [".log", ".html"]:
-            companion = jsonl.with_suffix(suffix)
-            if companion.exists():
-                files.append(_rel_posix(companion, output_dir))
-        manifest["traces"].append(
-            {
-                "timestamp": ts,
-                "files": files,
-                "created_at": datetime.fromtimestamp(jsonl.stat().st_mtime, tz=timezone.utc).isoformat(),
-            }
-        )
+def trust_ca_main(argv: list[str] | None = None) -> int:
+    """Entry point for the trust-ca subcommand."""
+    parse_trust_ca_args(argv)
+    ca_cert_path, _ = ensure_ca()
+    return _trust_ca_for_current_user(ca_cert_path)
 
 
 def main_entry() -> None:
@@ -1259,6 +1267,9 @@ def main_entry() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "update":
         sys.exit(update_main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "trust-ca":
+        sys.exit(trust_ca_main(sys.argv[2:]))
 
     if len(sys.argv) > 1 and sys.argv[1] == "dashboard":
         args = parse_dashboard_args(sys.argv[2:])

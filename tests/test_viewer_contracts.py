@@ -965,6 +965,28 @@ def _runtime_smoke_records() -> tuple[dict[str, Any], ...]:
     )
 
 
+def _sidebar_order_records() -> tuple[dict[str, Any], ...]:
+    base = {
+        "duration_ms": 100,
+        "request": {"method": "POST", "path": "/v1/messages", "headers": {}, "body": {}},
+        "response": {"status": 200, "headers": {}, "body": {"content": [{"type": "text", "text": "OK"}]}},
+    }
+    rows = [
+        ("req_order_unknown", 1, "other-model"),
+        ("req_order_sonnet", 2, "aws.claude-sonnet-4.6"),
+        ("req_order_opus", 3, "aws.claude-opus-4.6"),
+    ]
+    records = []
+    for request_id, turn, model in rows:
+        record = json.loads(json.dumps(base))
+        record["request_id"] = request_id
+        record["turn"] = turn
+        record["timestamp"] = f"2026-05-13T13:2{turn}:00+00:00"
+        record["request"]["body"]["model"] = model
+        records.append(record)
+    return tuple(records)
+
+
 def _write_trace(trace_path: Path, records: tuple[dict[str, Any], ...]) -> None:
     trace_path.write_text(
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
@@ -1051,6 +1073,151 @@ def test_viewer_semantic_contracts_across_supported_trace_shapes(
     assert result["eventCount"] >= case.min_stream_events
     for text in case.required_detail_text:
         assert text in result["detailText"]
+
+
+def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "detail_tabs", (_responses_record(),))
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").first.click()
+        page.wait_for_selector('#detail .detail-tab[data-tab="default"].active', timeout=5000)
+
+        default_state = page.evaluate(
+            """() => ({
+              tabs: Array.from(document.querySelectorAll('#detail .detail-tab')).map(el => ({
+                mode: el.dataset.tab,
+                label: el.querySelector('span:not(.tab-count)')?.textContent || '',
+                active: el.classList.contains('active'),
+              })),
+              sectionTitles: Array.from(document.querySelectorAll('#detail .section .title')).map(el => el.textContent),
+              text: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+
+        page.locator('#detail .detail-tab[data-tab="trace"]').click()
+        page.wait_for_selector('#detail .detail-tab[data-tab="trace"].active', timeout=5000)
+        trace_state = page.evaluate(
+            """() => ({
+              sectionCount: document.querySelectorAll('#detail .section').length,
+              blockTitles: Array.from(document.querySelectorAll('#detail .trace-block-title span:first-child')).map(el => el.textContent),
+              formats: Array.from(document.querySelectorAll('#detail .trace-format-btn')).map(el => ({
+                format: el.dataset.format,
+                label: el.textContent,
+                active: el.classList.contains('active'),
+              })),
+              text: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+
+        page.locator('#detail .trace-format-btn[data-format="yaml"]').click()
+        page.wait_for_selector('#detail .trace-format-btn[data-format="yaml"].active', timeout=5000)
+        yaml_state = page.evaluate(
+            """() => ({
+              text: document.querySelector('#detail')?.innerText || '',
+              codeFormat: document.querySelector('#detail .trace-code')?.dataset.format || '',
+              prettyCount: document.querySelectorAll('#detail .trace-pretty').length,
+            })"""
+        )
+
+        page.locator('#detail .trace-format-btn[data-format="pretty"]').click()
+        page.wait_for_selector('#detail .trace-format-btn[data-format="pretty"].active', timeout=5000)
+        pretty_state = page.evaluate(
+            """() => ({
+              text: document.querySelector('#detail')?.innerText || '',
+              codeCount: document.querySelectorAll('#detail .trace-code').length,
+              prettyCount: document.querySelectorAll('#detail .trace-pretty').length,
+            })"""
+        )
+
+        remaining_tabs = page.evaluate(
+            "() => Array.from(document.querySelectorAll('#detail .detail-tab')).map(el => el.dataset.tab)"
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert default_state["tabs"] == [
+        {"mode": "default", "label": "Default", "active": True},
+        {"mode": "trace", "label": "Trace", "active": False},
+    ]
+    assert default_state["sectionTitles"] == ["Tools", "System Prompt", "Messages", "Response", "Full JSON"]
+    assert "Responses final OK." in default_state["text"]
+    assert "Diff with Prev" in default_state["text"]
+    assert trace_state["sectionCount"] == 0
+    assert trace_state["blockTitles"] == ["Input", "Output", "Metadata"]
+    assert trace_state["formats"] == [
+        {"format": "json", "label": "JSON", "active": True},
+        {"format": "yaml", "label": "YAML", "active": False},
+        {"format": "pretty", "label": "Pretty", "active": False},
+    ]
+    assert '"messages"' in trace_state["text"]
+    assert "req_responses_contract" in trace_state["text"]
+    assert "Responses final OK." in trace_state["text"]
+    assert yaml_state["codeFormat"] == "yaml"
+    assert yaml_state["prettyCount"] == 0
+    assert "messages:" in yaml_state["text"]
+    assert "req_responses_contract" in yaml_state["text"]
+    assert pretty_state["codeCount"] == 0
+    assert pretty_state["prettyCount"] == 3
+    assert "messages" in pretty_state["text"]
+    assert "req_responses_contract" in pretty_state["text"]
+    assert remaining_tabs == ["default", "trace"]
+
+
+def test_viewer_sidebar_order_can_switch_between_model_groups_and_turn_sequence(
+    tmp_path: Path, chromium_browser
+) -> None:
+    html_path = _generate_case_html(tmp_path, "sidebar_order", _sidebar_order_records())
+
+    page = chromium_browser.new_page()
+    page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'model')")
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        model_state = page.evaluate(
+            """() => ({
+              label: document.querySelector('#sidebar-sort-label')?.textContent || '',
+              buttons: Array.from(document.querySelectorAll('.sidebar-sort-btn')).map(el => ({
+                mode: el.dataset.sortMode,
+                label: el.textContent,
+                active: el.classList.contains('active'),
+              })),
+              groups: Array.from(document.querySelectorAll('.sidebar-group-header .group-name')).map(el => el.textContent),
+              turns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+            })"""
+        )
+
+        page.locator('.sidebar-sort-btn[data-sort-mode="turn"]').click()
+        page.wait_for_selector('.sidebar-sort-btn[data-sort-mode="turn"].active', timeout=5000)
+        turn_state = page.evaluate(
+            """() => ({
+              buttons: Array.from(document.querySelectorAll('.sidebar-sort-btn')).map(el => ({
+                mode: el.dataset.sortMode,
+                label: el.textContent,
+                active: el.classList.contains('active'),
+              })),
+              groupCount: document.querySelectorAll('.sidebar-group-header').length,
+              turns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert model_state["label"] == "Order"
+    assert model_state["buttons"] == [
+        {"mode": "model", "label": "Model", "active": True},
+        {"mode": "turn", "label": "Turn", "active": False},
+    ]
+    assert model_state["groups"] == ["aws.claude-opus-4.6", "aws.claude-sonnet-4.6", "other-model"]
+    assert model_state["turns"] == ["Turn 3", "Turn 2", "Turn 1"]
+    assert turn_state["buttons"] == [
+        {"mode": "model", "label": "Model", "active": False},
+        {"mode": "turn", "label": "Turn", "active": True},
+    ]
+    assert turn_state["groupCount"] == 0
+    assert turn_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
 
 
 def test_viewer_runtime_smoke_handles_degenerate_records_without_js_errors(tmp_path: Path, chromium_browser) -> None:
