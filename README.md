@@ -11,7 +11,7 @@
 
 `claude-tap` is a local proxy and trace viewer for AI coding agents. Run your CLI through it, then inspect the real API traffic: system prompts, conversation history, tool schemas, tool calls, streaming responses, token usage, and request diffs.
 
-It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), and [Qoder CLI](https://qoder.com/cli).
+It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), and [Antigravity CLI](https://antigravity.dev).
 
 <p align="center">
   <img src="docs/demo.gif" alt="claude-tap demo showing a real Codex trace" width="100%">
@@ -60,6 +60,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Multi-provider Hermes TUI or gateway sessions |
 | [Cursor CLI](https://cursor.com/cli) | Cursor Agent sessions plus readable local transcript import |
 | [Qoder CLI](https://qoder.com/cli) | Qoder Agent sessions through forward proxy mode |
+| [Antigravity CLI](https://antigravity.dev) | Antigravity Agent sessions through forward proxy mode |
 
 ## Install
 
@@ -103,6 +104,9 @@ claude-tap --tap-client cursor -- -p --trust --model auto "hello"
 
 # Qoder CLI
 claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
+
+# Antigravity CLI
+claude-tap --tap-client agy
 ```
 
 <details>
