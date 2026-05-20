@@ -527,6 +527,15 @@ async def async_main(args: argparse.Namespace):
     trace_path = date_dir / f"trace_{time_str}.jsonl"
     log_path = date_dir / f"trace_{time_str}.log"
 
+    ca_cert_path: Path | None = None
+    ca_key_path: Path | None = None
+    if args.proxy_mode == "forward":
+        ca_cert_path, ca_key_path = ensure_ca()
+        if args.trust_ca:
+            trust_result = _trust_ca_for_current_user(ca_cert_path)
+            if trust_result != 0:
+                return trust_result
+
     # Start live viewer server if requested
     live_server: LiveViewerServer | None = None
     if args.live_viewer:
@@ -563,14 +572,10 @@ async def async_main(args: argparse.Namespace):
     # Reverse proxy mode: aiohttp web app (current behavior)
     forward_server: ForwardProxyServer | None = None
     runner: web.AppRunner | None = None
-    ca_cert_path: Path | None = None
 
     if args.proxy_mode == "forward":
-        ca_cert_path, ca_key_path = ensure_ca()
-        if args.trust_ca:
-            trust_result = _trust_ca_for_current_user(ca_cert_path)
-            if trust_result != 0:
-                return trust_result
+        assert ca_cert_path is not None
+        assert ca_key_path is not None
         ca = CertificateAuthority(ca_cert_path, ca_key_path)
         forward_server = ForwardProxyServer(
             host=args.host,
