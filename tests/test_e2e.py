@@ -2824,6 +2824,66 @@ async def test_forward_proxy_local_reverse_bridge():
 
 
 @pytest.mark.asyncio
+async def test_forward_proxy_records_upstream_error():
+    """Test forward proxy records a 502 trace record when upstream is unreachable."""
+    import socket
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+    from claude_tap.trace import TraceWriter
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        trace_path = tmpdir_path / "trace.jsonl"
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        unreachable_port = sock.getsockname()[1]
+        sock.close()
+
+        writer = TraceWriter(trace_path)
+        session = aiohttp.ClientSession(auto_decompress=False)
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+            local_reverse_target=f"http://127.0.0.1:{unreachable_port}",
+            local_reverse_allowed_path_prefixes=("/v1internal",),
+        )
+        proxy_port = await server.start()
+
+        try:
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                async with client.post(
+                    f"http://127.0.0.1:{proxy_port}/v1internal:listExperiments",
+                    json={"request": {"client": "agy"}},
+                ) as resp:
+                    assert resp.status == 502
+                    assert await resp.text()
+
+            await asyncio.sleep(0.1)
+            writer.close()
+            records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            assert len(records) == 1
+            assert records[0]["turn"] == 1
+            assert records[0]["request"]["path"] == "/v1internal:listExperiments"
+            assert records[0]["request"]["body"]["request"]["client"] == "agy"
+            assert records[0]["response"]["status"] == 502
+            assert records[0]["response"]["body"]["error"]
+        finally:
+            await server.stop()
+            await session.close()
+
+    print("  test_forward_proxy_records_upstream_error PASSED")
+
+
+@pytest.mark.asyncio
 async def test_forward_proxy_connect_websocket():
     """Test the forward proxy CONNECT/TLS flow with a fake WSS upstream."""
     import ssl

@@ -429,8 +429,23 @@ class ForwardProxyServer:
                 timeout=aiohttp.ClientTimeout(total=600, sock_read=300),
             )
         except Exception as exc:
+            duration_ms = int((time.monotonic() - t0) * 1000)
             log.error(f"{log_prefix} upstream error: {exc}")
-            error_body = str(exc).encode()
+            error_text = str(exc)
+            error_body = error_text.encode("utf-8", errors="replace")
+            record = _build_record(
+                req_id,
+                turn,
+                duration_ms,
+                method,
+                path,
+                headers,
+                req_body,
+                502,
+                {"Content-Type": "text/plain"},
+                {"error": error_text},
+            )
+            await self._writer.write(record)
             response_line = b"HTTP/1.1 502 Bad Gateway\r\n"
             resp_headers = f"Content-Length: {len(error_body)}\r\nContent-Type: text/plain\r\n\r\n"
             client_writer.write(response_line + resp_headers.encode() + error_body)
