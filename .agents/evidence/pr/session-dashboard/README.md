@@ -1,8 +1,7 @@
 # Session Dashboard Evidence
 
-Generated from real trace fixtures served through `claude-tap dashboard`:
+Generated from a real local `.traces/` capture served through `claude-tap dashboard`:
 
-- `tests/fixtures/openai_responses_trace.jsonl`
-- `tests/fixtures/codex_ws_multi_response_trace.jsonl`
+- `.traces/2026-05-20/trace_161929.jsonl`
 
-The screenshot verifies the session-first dashboard with agent filters, session list, selected session details, and live watch status.
+The screenshot verifies the session-first dashboard using the existing viewer theme, agent filters, session list, selected session details, and live watch status.

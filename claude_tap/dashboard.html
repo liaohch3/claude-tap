@@ -7,552 +7,418 @@
 <title>claude-tap dashboard</title>
 <style>
 :root {
-  color-scheme: light;
-  --bg: #f6f7f4;
-  --panel: #ffffff;
-  --panel-soft: #f0f3f1;
-  --line: #d9ded9;
-  --line-strong: #b9c2ba;
-  --ink: #202722;
-  --muted: #667069;
-  --faint: #909991;
-  --blue: #266df0;
-  --blue-soft: #e9f0ff;
-  --green: #009b6a;
-  --green-soft: #e3f6ee;
-  --orange: #bd6b00;
-  --orange-soft: #fff0dc;
-  --red: #bd2f35;
-  --red-soft: #ffe8e9;
-  --mono: "SFMono-Regular", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
-  --sans: "Avenir Next", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  --bg: #f4f5f7;
+  --bg-card: #ffffff;
+  --bg-hover: #f0f1f4;
+  --bg-active: #e8ecf4;
+  --bg-code: #f6f8fa;
+  --border: #e2e4e9;
+  --border-light: #edeef1;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.08);
+  --radius: 10px;
+  --radius-sm: 6px;
+
+  --text: #1c2024;
+  --text-secondary: #60646c;
+  --text-tertiary: #a0a4ab;
+
+  --blue: #3b82f6;
+  --blue-bg: #eff6ff;
+  --green: #10b981;
+  --green-bg: #ecfdf5;
+  --amber: #f59e0b;
+  --amber-bg: #fffbeb;
+  --red: #ef4444;
+  --red-bg: #fef2f2;
+  --purple: #8b5cf6;
+  --purple-bg: #f5f3ff;
+  --cyan: #06b6d4;
+  --cyan-bg: #ecfeff;
+  --orange: #f97316;
+  --orange-bg: #fff7ed;
+  --indigo: #6366f1;
+
+  --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', 'Consolas', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
 }
 
-* {
-  box-sizing: border-box;
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --bg-card: #161b22;
+  --bg-hover: #1c2128;
+  --bg-active: #252c35;
+  --bg-code: #1c2128;
+  --border: #30363d;
+  --border-light: #21262d;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.4);
+  --text: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-tertiary: #6e7681;
+  --blue: #58a6ff;
+  --blue-bg: #0d2240;
+  --green: #3fb950;
+  --green-bg: #0d2d1a;
+  --amber: #d29922;
+  --amber-bg: #2d2200;
+  --red: #f85149;
+  --red-bg: #3d1117;
+  --purple: #bc8cff;
+  --purple-bg: #1f1338;
+  --cyan: #39d2c0;
+  --cyan-bg: #0a2e2c;
+  --orange: #f0883e;
+  --orange-bg: #2d1b00;
+  --indigo: #8b8fff;
 }
 
-html,
+*,*::before,*::after { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-  height: 100%;
-}
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--ink);
   font-family: var(--sans);
-  font-size: 14px;
-  letter-spacing: 0;
-}
-
-button,
-input,
-select {
-  font: inherit;
-}
-
-button {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--ink);
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: var(--line-strong);
-  background: #fbfcfb;
-}
-
-button.active {
-  border-color: var(--blue);
-  background: var(--blue-soft);
-  color: var(--blue);
-}
-
-.app {
-  display: grid;
-  grid-template-rows: 54px 1fr;
+  background: var(--bg);
+  color: var(--text);
   height: 100vh;
-  min-height: 640px;
-}
-
-.topbar {
-  display: grid;
-  grid-template-columns: 220px 1fr auto;
-  align-items: center;
-  gap: 16px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(12px);
-}
-
-.brand {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 700;
-  font-size: 17px;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
 
-.mark {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 2px solid var(--ink);
-  border-radius: 50%;
-  font-family: var(--mono);
+.header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 20px; min-height: 52px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0; z-index: 10;
+}
+.header .logo { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.header .logo svg { width: 22px; height: 22px; }
+.header .logo span { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: -0.3px; }
+.header .divider { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; }
+.path-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; flex: 1 1 0; }
+.filter-chip {
+  font-size: 12px; font-family: var(--mono); padding: 4px 10px; border-radius: 20px;
+  border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary);
+  transition: all .15s; white-space: nowrap; line-height: 1;
+}
+.filter-chip:hover { border-color: var(--blue); color: var(--blue); }
+.filter-chip.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+.filter-chip .chip-count { font-size: 10px; margin-left: 4px; opacity: .68; }
+.stats {
+  margin-left: auto; display: flex; gap: 16px; font-size: 12px; color: var(--text-tertiary); flex-shrink: 0;
+}
+.stats .stat-group { display: flex; align-items: center; gap: 4px; }
+.stats .stat-val { font-weight: 600; color: var(--text-secondary); font-family: var(--mono); }
+.live-status {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 12px;
+  color: var(--green); background: var(--green-bg);
+  font-size: 12px; font-weight: 500;
+}
+.live-status::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+}
+.theme-toggle {
+  background: none; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 4px 8px; color: var(--text-secondary); display: flex; align-items: center;
+  transition: all .15s; font-size: 14px; line-height: 1;
+}
+.theme-toggle:hover { border-color: var(--blue); color: var(--blue); }
+
+.trace-path-bar {
+  display: flex; align-items: center; gap: 6px; padding: 4px 12px;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--text-tertiary); font-family: var(--mono);
+  flex-shrink: 0;
+}
+.trace-path-bar .tp-label { font-family: var(--sans); font-weight: 500; color: var(--text-secondary); flex-shrink: 0; }
+.trace-path-bar .tp-val { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.trace-path-bar .tp-sep { width: 1px; height: 14px; background: var(--border); flex-shrink: 0; }
+.trace-path-bar .tp-copy {
+  flex-shrink: 0; border: none; background: none;
+  color: var(--text-tertiary); padding: 2px 4px; border-radius: 3px; line-height: 1;
+}
+.trace-path-bar .tp-copy:hover { color: var(--blue); background: var(--blue-bg); }
+
+.main { display: flex; flex: 1; overflow: hidden; }
+#sidebar-wrap {
+  width: 340px; min-width: 300px; flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-card);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.history-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-bottom: 1px solid var(--border);
+  font-size: 13px; flex-shrink: 0;
+}
+.history-label { color: var(--text-secondary); white-space: nowrap; }
+.history-select,
+.session-search input {
+  min-width: 0; flex: 1; padding: 3px 6px;
+  border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg-card); color: var(--text);
+  font-size: 13px; outline: none;
+}
+.history-select:hover,
+.session-search input:hover,
+.session-search input:focus { border-color: var(--blue); }
+.history-refresh {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 26px; min-width: 30px; padding: 3px 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-card); color: var(--text-secondary);
+  font-family: var(--mono); font-size: 12px; line-height: 1;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.history-refresh:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
+.session-search {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.sidebar {
+  overflow-y: auto;
+  min-height: 0;
+}
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.sidebar-group-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; user-select: none;
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 1;
+  text-transform: uppercase; letter-spacing: .5px;
+}
+.sidebar-group-header .group-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--blue); }
+.sidebar-group-header .group-name { flex: 1; }
+.sidebar-group-header .group-count {
+  font-size: 10px; font-weight: 500; color: var(--text-tertiary);
+  background: var(--bg-hover); padding: 1px 6px; border-radius: 8px;
+}
+.sidebar-item {
+  width: 100%;
+  padding: 10px 16px; text-align: left;
+  border: none; border-bottom: 1px solid var(--border-light); border-left: 3px solid transparent;
+  background: var(--bg-card); color: var(--text);
+  transition: background .1s;
+}
+.sidebar-item:hover { background: var(--bg-hover); }
+.sidebar-item.active { background: var(--blue-bg); border-left-color: var(--blue); }
+.sidebar-item.is-error { border-left-color: var(--red); }
+.sidebar-item .si-row1 { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.sidebar-item .si-turn { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-item .si-model {
+  font-size: 11px; padding: 1px 6px; border-radius: 4px;
+  font-weight: 500; margin-left: auto; color: var(--blue); background: var(--blue-bg);
+  max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-item .si-row2 { display: flex; gap: 10px; font-size: 11px; }
+.sidebar-item .si-tok { color: var(--green); font-family: var(--mono); font-weight: 500; }
+.sidebar-item .si-dur { color: var(--amber); font-family: var(--mono); font-weight: 500; }
+.sidebar-item .si-time { color: var(--text-tertiary); font-family: var(--mono); font-weight: 500; margin-left: auto; }
+.sidebar-item .si-task {
+  font-size: 10px; padding: 1px 5px; border-radius: 3px;
+  font-weight: 500; white-space: nowrap; color: var(--orange); background: var(--orange-bg);
+}
+.sidebar-item .si-path {
+  font-size: 10px; color: var(--text-tertiary); font-family: var(--mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px;
+}
+.sidebar-empty {
+  padding: 18px 16px;
+  color: var(--text-tertiary);
   font-size: 13px;
 }
 
-.searchbar {
-  display: grid;
-  grid-template-columns: minmax(220px, 420px) 170px 120px;
-  gap: 10px;
-  align-items: center;
-}
-
-.searchbar input,
-.searchbar select {
-  width: 100%;
-  height: 34px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #fff;
-  color: var(--ink);
-  padding: 0 10px;
-}
-
-.topstats {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.live-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--muted);
-}
-
-.live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 0 4px rgba(0, 155, 106, 0.12);
-}
-
-.main {
-  display: grid;
-  grid-template-columns: 190px minmax(320px, 430px) minmax(0, 1fr);
-  min-height: 0;
-}
-
-.agents,
-.sessions,
-.detail {
-  min-height: 0;
-  overflow: auto;
-}
-
-.agents {
-  border-right: 1px solid var(--line);
-  background: #fbfcfb;
-  padding: 16px 12px;
-}
-
-.section-title {
-  margin: 0 0 10px;
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.agent-list {
-  display: grid;
-  gap: 6px;
-}
-
-.agent-button {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  width: 100%;
-  min-height: 34px;
-  padding: 7px 9px;
-  text-align: left;
-}
-
-.agent-button span:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.count {
-  min-width: 24px;
-  height: 20px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--panel-soft);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 12px;
-  text-align: center;
-}
-
-.sessions {
-  border-right: 1px solid var(--line);
-  background: var(--panel);
-}
-
-.session-list-header {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  height: 44px;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(8px);
-}
-
-.refresh-button {
-  width: 32px;
-  height: 28px;
-  font-family: var(--mono);
-}
-
-.session-list {
-  display: grid;
-}
-
-.session-row {
-  display: grid;
-  gap: 8px;
-  padding: 14px;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
-  background: var(--panel);
-  text-align: left;
-}
-
-.session-row:hover,
-.session-row.active {
-  background: #f7faff;
-}
-
-.session-row.active {
-  box-shadow: inset 3px 0 0 var(--blue);
-}
-
-.session-top,
-.session-meta,
-.metric-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.session-top {
-  justify-content: space-between;
-}
-
-.session-agent {
-  overflow: hidden;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--panel-soft);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.badge.active {
-  background: var(--green-soft);
-  color: var(--green);
-}
-
-.badge.error {
-  background: var(--red-soft);
-  color: var(--red);
-}
-
-.badge.empty {
-  background: var(--orange-soft);
-  color: var(--orange);
-}
-
-.session-preview {
-  color: var(--muted);
-  line-height: 1.4;
-}
-
-.metric-row {
-  flex-wrap: wrap;
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 12px;
-}
-
-.detail {
-  background: var(--bg);
-  padding: 18px;
-}
-
+.detail { flex: 1; overflow-y: auto; padding: 12px 20px; background: var(--bg); }
+.detail::-webkit-scrollbar { width: 6px; }
+.detail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .empty {
-  display: grid;
-  place-items: center;
-  min-height: 360px;
-  color: var(--muted);
+  display: grid; place-items: center; min-height: 360px;
+  color: var(--text-tertiary); font-size: 13px;
 }
-
-.detail-head {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 16px;
-  align-items: start;
-  margin-bottom: 14px;
-}
-
-.detail-title {
-  margin: 0 0 6px;
-  font-size: 22px;
-  line-height: 1.2;
-}
-
-.detail-subtitle {
-  margin: 0;
-  color: var(--muted);
-  font-family: var(--mono);
-  overflow-wrap: anywhere;
-}
-
-.tabs,
-.actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.tabs button,
-.actions button {
-  min-height: 32px;
-  padding: 0 10px;
-}
-
-.metrics {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(110px, 1fr));
-  gap: 8px;
-  margin-bottom: 14px;
-}
-
-.metric {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  padding: 10px;
-}
-
-.metric label {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.metric strong {
-  font-family: var(--mono);
-  font-size: 17px;
-}
-
-.records {
-  display: grid;
-  gap: 10px;
-}
-
-.record {
-  border: 1px solid var(--line);
+.detail-inspector-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 6px;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--panel);
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.07);
 }
-
-.record-head {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 12px;
-  align-items: center;
-  padding: 11px 12px;
-  border-bottom: 1px solid var(--line);
+[data-theme="dark"] .detail-inspector-bar {
+  background: rgba(22, 27, 34, 0.9);
+  border-color: #3a4048;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
 }
-
-.record-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+.detail-tabs { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; min-width: 0; }
+.detail-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 30px; padding: 5px 10px;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--text-secondary);
+  font-family: var(--mono); font-size: 11px; line-height: 1;
+  transition: color .15s, border-color .15s, background .15s;
 }
-
-.record-title strong {
-  font-family: var(--mono);
+.detail-tab:hover { color: var(--blue); border-color: var(--border); background: var(--bg-hover); }
+.detail-tab.active {
+  color: var(--blue);
+  border-color: color-mix(in srgb, var(--blue) 45%, transparent);
+  background: var(--blue-bg);
 }
-
-.path {
-  color: var(--muted);
-  font-family: var(--mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
+.action-bar {
+  display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  margin-left: auto;
+}
+.act-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; padding: 4px 8px; border-radius: 6px;
+  border: none; background: transparent;
+  color: var(--text-secondary); font-family: var(--sans);
+  transition: all .15s;
+}
+.act-btn:hover { background: var(--bg-hover); color: var(--blue); }
+.session-summary {
+  margin-bottom: 8px; border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+  background: var(--bg-card); box-shadow: var(--shadow-sm);
+}
+.session-summary-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-light);
+}
+.session-summary-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.session-summary-path {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-tertiary); font-family: var(--mono); font-size: 11px; margin-left: auto;
+}
+.token-bar { display: flex; gap: 12px; font-size: 11px; padding: 8px 12px; flex-wrap: wrap; }
+.tok-item { display: flex; align-items: center; gap: 4px; }
+.tok-dot { width: 6px; height: 6px; border-radius: 50%; }
+.tok-label { color: var(--text-tertiary); font-size: 11px; }
+.tok-val { color: var(--text-secondary); font-weight: 600; font-family: var(--mono); font-size: 11px; }
+.badge {
+  display: inline-flex; align-items: center;
+  font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  background: var(--bg); color: var(--text-tertiary); font-weight: 500;
   white-space: nowrap;
 }
-
-.conversation {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
+.badge.active { background: var(--green-bg); color: var(--green); }
+.badge.error { background: var(--red-bg); color: var(--red); }
+.badge.empty { background: var(--amber-bg); color: var(--amber); }
+.records { display: grid; gap: 8px; }
+.section {
+  margin-bottom: 0; border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+  background: var(--bg-card); box-shadow: var(--shadow-sm);
 }
-
-.bubble {
-  display: grid;
-  gap: 6px;
-  max-width: 980px;
+.section-header {
+  display: flex; align-items: center; padding: 8px 12px;
+  gap: 8px; transition: background .1s;
 }
-
-.bubble-label {
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.section-header .chevron { font-size: 10px; color: var(--text-tertiary); width: 12px; }
+.section-header .title { font-size: 13px; font-weight: 600; color: var(--text); }
+.section-header .path {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-tertiary); font-family: var(--mono); font-size: 11px;
 }
-
-.bubble-body {
-  width: fit-content;
-  max-width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfcfb;
-  line-height: 1.48;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.section-header .copy-btn,
+.section-header .json-btn {
+  font-size: 11px; padding: 3px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: var(--text-tertiary); margin-left: auto; transition: all .15s;
 }
-
-.bubble.assistant .bubble-body {
-  background: #f6f9ff;
-  border-color: #d5e2ff;
+.section-header .json-btn:hover { color: var(--blue); border-color: var(--blue); }
+.section-body { padding: 0 16px 16px; overflow-x: auto; }
+.conversation { display: grid; gap: 8px; }
+.msg {
+  margin-bottom: 0; border-radius: var(--radius-sm);
+  padding: 12px 16px; font-size: 13px; line-height: 1.6;
+  border: 1px solid var(--border-light);
 }
-
-.json-panel {
+.msg.user { background: var(--blue-bg); border-color: #c7d2fe; }
+.msg.assistant { background: var(--green-bg); border-color: #a7f3d0; }
+[data-theme="dark"] .msg.user { border-color: #1f3a5f; }
+[data-theme="dark"] .msg.assistant { border-color: #1a3a26; }
+.msg-role {
+  display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .5px; padding: 2px 8px; border-radius: 4px; margin-bottom: 8px;
+}
+.msg.user .msg-role { background: var(--blue); color: #fff; }
+.msg.assistant .msg-role { background: var(--green); color: #fff; }
+.content-block { margin-top: 8px; white-space: pre-wrap; word-break: break-word; }
+.content-block:first-child { margin-top: 0; }
+.json-view {
   display: none;
-  margin: 0 12px 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #101612;
-  color: #dce9de;
-  overflow: auto;
+  margin-top: 10px;
+  font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word;
+  max-height: 600px; overflow-y: auto; line-height: 1.55;
+  background: var(--bg-code); color: var(--text);
+  padding: 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
 }
-
-.json-panel.open {
-  display: block;
-}
-
+.json-view.open { display: block; }
 pre {
   margin: 0;
-  padding: 12px;
   font-family: var(--mono);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.hidden { display: none !important; }
 
-.hidden {
-  display: none !important;
-}
-
-@media (max-width: 1120px) {
-  .topbar {
-    grid-template-columns: 1fr;
-    height: auto;
-    padding: 12px;
-  }
-
-  .searchbar {
-    grid-template-columns: 1fr 140px 110px;
-  }
-
-  .app {
-    grid-template-rows: auto 1fr;
-  }
-
-  .main {
-    grid-template-columns: 160px minmax(280px, 360px) minmax(0, 1fr);
-  }
-
-  .metrics {
-    grid-template-columns: repeat(2, minmax(110px, 1fr));
-  }
-}
-
-@media (max-width: 820px) {
-  .main {
-    grid-template-columns: 1fr;
-  }
-
-  .agents,
-  .sessions {
-    max-height: 260px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .searchbar {
-    grid-template-columns: 1fr;
-  }
+@media (max-width: 900px) {
+  body { overflow: auto; height: auto; min-height: 100vh; }
+  .header { flex-wrap: wrap; padding: 10px 12px; }
+  .stats { order: 4; width: 100%; flex-wrap: wrap; margin-left: 0; }
+  .trace-path-bar { display: none; }
+  .main { flex-direction: column; overflow: visible; }
+  #sidebar-wrap { width: 100%; min-width: 0; max-height: 420px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .detail { overflow: visible; padding: 12px; }
 }
 </style>
 </head>
 <body>
-<div class="app">
-  <header class="topbar">
-    <div class="brand"><span class="mark">ct</span><span>claude-tap</span></div>
-    <div class="searchbar">
-      <input id="search" type="search" placeholder="Search sessions, prompts, models, paths">
-      <select id="date-filter"></select>
-      <select id="status-filter">
+<div class="header">
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    <span>claude-tap</span>
+  </div>
+  <div class="divider"></div>
+  <div class="path-filter" id="agent-list"></div>
+  <div class="stats">
+    <div class="stat-group"><span>Sessions</span> <span class="stat-val" id="stat-sessions">0</span></div>
+    <div class="stat-group"><span>Records</span> <span class="stat-val" id="stat-records">0</span></div>
+    <div class="live-status"><span id="live-label">Watching</span></div>
+  </div>
+  <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">&#9790;</button>
+</div>
+
+<div class="trace-path-bar" id="trace-path-bar">
+  <span class="tp-label">Dashboard</span>
+  <span class="tp-val">trace history sessions</span>
+</div>
+
+<div class="main">
+  <aside id="sidebar-wrap">
+    <div class="history-bar">
+      <span class="history-label">Date:</span>
+      <select id="date-filter" class="history-select"></select>
+      <button id="refresh" class="history-refresh" title="Refresh">R</button>
+    </div>
+    <div class="history-bar">
+      <span class="history-label">Status:</span>
+      <select id="status-filter" class="history-select">
         <option value="all">All status</option>
         <option value="active">Active</option>
         <option value="complete">Complete</option>
@@ -560,30 +426,15 @@ pre {
         <option value="empty">Empty</option>
       </select>
     </div>
-    <div class="topstats">
-      <span id="top-summary">0 sessions</span>
-      <span class="live-pill"><span class="live-dot"></span><span id="live-label">Watching</span></span>
+    <div class="session-search">
+      <input id="search" type="search" placeholder="Search messages, agents, models, paths...">
     </div>
-  </header>
+    <div id="session-list" class="sidebar"></div>
+  </aside>
 
-  <main class="main">
-    <aside class="agents">
-      <h2 class="section-title">Agents</h2>
-      <div id="agent-list" class="agent-list"></div>
-    </aside>
-
-    <section class="sessions">
-      <div class="session-list-header">
-        <h2 class="section-title" style="margin:0">Sessions</h2>
-        <button id="refresh" class="refresh-button" title="Refresh">R</button>
-      </div>
-      <div id="session-list" class="session-list"></div>
-    </section>
-
-    <section id="detail" class="detail">
-      <div class="empty">No trace sessions found.</div>
-    </section>
-  </main>
+  <section id="detail" class="detail">
+    <div class="empty">No trace sessions found.</div>
+  </section>
 </div>
 
 <script>
@@ -674,7 +525,8 @@ function renderFilters() {
   dateFilter.value = state.date;
 
   const totalRecords = state.sessions.reduce((sum, session) => sum + session.record_count, 0);
-  $("#top-summary").textContent = `${fmtNumber(state.sessions.length)} sessions / ${fmtNumber(totalRecords)} records`;
+  $("#stat-sessions").textContent = fmtNumber(state.sessions.length);
+  $("#stat-records").textContent = fmtNumber(totalRecords);
 }
 
 function renderAgents() {
@@ -687,9 +539,9 @@ function renderAgents() {
   const agents = [{key: "all", label: "All agents", sessions: state.sessions.length}]
     .concat(Array.from(buckets.values()).sort((a, b) => a.label.localeCompare(b.label)));
   $("#agent-list").innerHTML = agents.map(agent => `
-    <button class="agent-button ${state.selectedAgent === agent.key ? "active" : ""}" data-agent="${esc(agent.key)}">
+    <button class="filter-chip ${state.selectedAgent === agent.key ? "active" : ""}" data-agent="${esc(agent.key)}">
       <span>${esc(agent.label)}</span>
-      <span class="count">${fmtNumber(agent.sessions)}</span>
+      <span class="chip-count">${fmtNumber(agent.sessions)}</span>
     </button>
   `).join("");
   document.querySelectorAll("[data-agent]").forEach(button => {
@@ -710,28 +562,49 @@ function renderAgents() {
 
 function renderSessions() {
   const sessions = filteredSessions();
-  $("#session-list").innerHTML = sessions.map(session => sessionRow(session)).join("");
+  if (!sessions.length) {
+    $("#session-list").innerHTML = '<div class="sidebar-empty">No matching trace sessions.</div>';
+    return;
+  }
+
+  const grouped = new Map();
+  for (const session of sessions) {
+    const key = state.selectedAgent === "all" ? session.agent_key : "selected";
+    const label = state.selectedAgent === "all" ? session.agent : "Sessions";
+    if (!grouped.has(key)) grouped.set(key, {key, label, items: []});
+    grouped.get(key).items.push(session);
+  }
+  const groups = Array.from(grouped.values()).sort((a, b) => a.label.localeCompare(b.label));
+
+  $("#session-list").innerHTML = groups.map(group => `
+    <div class="sidebar-group-header">
+      <span class="group-dot"></span>
+      <span class="group-name">${esc(group.label)}</span>
+      <span class="group-count">${fmtNumber(group.items.length)}</span>
+    </div>
+    ${group.items.map(session => sessionRow(session)).join("")}
+  `).join("");
   document.querySelectorAll("[data-session]").forEach(button => {
     button.addEventListener("click", () => selectSession(button.dataset.session));
   });
 }
 
 function sessionRow(session) {
-  const statusClass = ["active", "error", "empty"].includes(session.status) ? session.status : "";
+  const isError = session.status === "error";
   const preview = session.first_user || session.last_response || session.rel_trace_path;
+  const elapsed = session.duration_ms ? `${(session.duration_ms / 1000).toFixed(1)}s` : "0s";
   return `
-    <button class="session-row ${state.selectedSessionId === session.id ? "active" : ""}" data-session="${esc(session.id)}">
-      <div class="session-top">
-        <span class="session-agent">${esc(session.agent)}</span>
-        <span class="badge ${statusClass}">${esc(session.status)}</span>
+    <button class="sidebar-item ${state.selectedSessionId === session.id ? "active" : ""} ${isError ? "is-error" : ""}" data-session="${esc(session.id)}">
+      <div class="si-row1">
+        <span class="si-turn">${esc(preview || "No captured messages yet.")}</span>
+        <span class="si-model">${esc(session.model || "unknown")}</span>
       </div>
-      <div class="session-preview">${esc(preview || "No captured messages yet.")}</div>
-      <div class="metric-row">
-        <span>${esc(session.model || "unknown")}</span>
-        <span>${fmtNumber(session.record_count)} req</span>
-        <span>${fmtNumber(session.total_tokens)} tok</span>
-        <span>${esc(fmtTime(session.updated_at))}</span>
+      <div class="si-row2">
+        <span class="si-tok">${fmtNumber(session.total_tokens)} tok</span>
+        <span class="si-dur">${esc(elapsed)}</span>
+        <span class="si-time">${esc(fmtTime(session.updated_at))}</span>
       </div>
+      <div class="si-path">${esc(session.rel_trace_path)}</div>
     </button>
   `;
 }
@@ -753,37 +626,50 @@ async function loadSession(sessionId) {
 
 function renderEmpty() {
   $("#detail").innerHTML = '<div class="empty">No matching trace sessions.</div>';
+  $("#trace-path-bar").innerHTML = '<span class="tp-label">Dashboard</span><span class="tp-val">trace history sessions</span>';
 }
 
 function renderDetail(session, records) {
   const statusClass = ["active", "error", "empty"].includes(session.status) ? session.status : "";
+  $("#trace-path-bar").innerHTML = `
+    <span class="tp-label">JSONL</span>
+    <span class="tp-val">${esc(session.trace_path || session.rel_trace_path)}</span>
+    <span class="tp-sep"></span>
+    <span class="tp-label">HTML</span>
+    <span class="tp-val">${esc(session.html_path || "not generated")}</span>
+  `;
   $("#detail").innerHTML = `
-    <div class="detail-head">
-      <div>
-        <h1 class="detail-title">${esc(session.agent)} <span class="badge ${statusClass}">${esc(session.status)}</span></h1>
-        <p class="detail-subtitle">${esc(session.rel_trace_path)}</p>
+    <div class="detail-inspector-bar">
+      <div class="detail-tabs">
+        <button class="detail-tab ${state.activeTab === "conversation" ? "active" : ""}" data-tab="conversation">Default</button>
+        <button class="detail-tab ${state.activeTab === "raw" ? "active" : ""}" data-tab="raw">Trace</button>
       </div>
-      <div class="actions">
-        ${session.html_path ? `<button data-open-html="${esc(session.id)}">Open HTML</button>` : ""}
-        <button data-copy-path="${esc(session.trace_path)}">Copy path</button>
+      <div class="action-bar">
+        ${session.html_path ? `<button class="act-btn" data-open-html="${esc(session.id)}">Open HTML</button>` : ""}
+        <button class="act-btn" data-copy-path="${esc(session.trace_path)}">Copy path</button>
       </div>
     </div>
-    <div class="metrics">
-      ${metric("Records", session.record_count)}
-      ${metric("Turns", session.turn_count)}
-      ${metric("Input", session.input_tokens)}
-      ${metric("Output", session.output_tokens)}
-      ${metric("Total", session.total_tokens)}
-    </div>
-    <div class="tabs">
-      <button class="${state.activeTab === "conversation" ? "active" : ""}" data-tab="conversation">Conversation</button>
-      <button class="${state.activeTab === "raw" ? "active" : ""}" data-tab="raw">Raw JSON</button>
+    <div class="session-summary">
+      <div class="session-summary-head">
+        <span class="session-summary-title">${esc(session.agent)}</span>
+        <span class="badge ${statusClass}">${esc(session.status)}</span>
+        <span class="session-summary-path">${esc(session.rel_trace_path)}</span>
+      </div>
+      <div class="token-bar">
+        ${tokenItem("var(--blue)", "Records", session.record_count)}
+        ${tokenItem("var(--purple)", "Turns", session.turn_count)}
+        ${tokenItem("var(--blue)", "Input", session.input_tokens)}
+        ${tokenItem("var(--green)", "Output", session.output_tokens)}
+        ${tokenItem("var(--cyan)", "Cache R", session.cache_read_tokens)}
+        ${tokenItem("var(--amber)", "Cache W", session.cache_create_tokens)}
+        ${tokenItem("var(--text-tertiary)", "Total", session.total_tokens)}
+      </div>
     </div>
     <div id="conversation-tab" class="${state.activeTab === "conversation" ? "" : "hidden"}">
       <div class="records">${records.map((record, index) => renderRecord(record, index)).join("") || emptyRecord()}</div>
     </div>
     <div id="raw-tab" class="${state.activeTab === "raw" ? "" : "hidden"}">
-      <div class="json-panel open"><pre>${esc(JSON.stringify(records, null, 2))}</pre></div>
+      <div class="json-view open"><pre>${esc(JSON.stringify(records, null, 2))}</pre></div>
     </div>
   `;
 
@@ -807,8 +693,14 @@ function renderDetail(session, records) {
   });
 }
 
-function metric(label, value) {
-  return `<div class="metric"><label>${esc(label)}</label><strong>${fmtNumber(value)}</strong></div>`;
+function tokenItem(color, label, value) {
+  return `
+    <span class="tok-item">
+      <span class="tok-dot" style="background:${esc(color)}"></span>
+      <span class="tok-label">${esc(label)}</span>
+      <span class="tok-val">${fmtNumber(value)}</span>
+    </span>
+  `;
 }
 
 function renderRecord(record, index) {
@@ -821,26 +713,27 @@ function renderRecord(record, index) {
   const jsonId = `json-${index}`;
   const statusClass = Number(status) >= 400 ? "error" : "";
   return `
-    <article class="record">
-      <div class="record-head">
-        <div class="record-title">
-          <strong>Turn ${esc(record.turn ?? index + 1)}</strong>
-          <span class="badge ${statusClass}">${esc(status || "ok")}</span>
-          <span class="path">${esc(path)}</span>
-        </div>
-        <button data-json-toggle="${jsonId}">JSON</button>
+    <article class="section">
+      <div class="section-header">
+        <span class="chevron">&#9654;</span>
+        <span class="title">Turn ${esc(record.turn ?? index + 1)}</span>
+        <span class="badge ${statusClass}">${esc(status || "ok")}</span>
+        <span class="path">${esc(path)}</span>
+        <button class="json-btn" data-json-toggle="${jsonId}">JSON</button>
       </div>
-      <div class="conversation">
-        <div class="bubble user">
-          <span class="bubble-label">Request</span>
-          <div class="bubble-body">${esc(userText)}</div>
+      <div class="section-body">
+        <div class="conversation">
+          <div class="msg user">
+            <span class="msg-role">Request</span>
+            <div class="content-block">${esc(userText)}</div>
+          </div>
+          <div class="msg assistant">
+            <span class="msg-role">Response</span>
+            <div class="content-block">${esc(responseText)}</div>
+          </div>
         </div>
-        <div class="bubble assistant">
-          <span class="bubble-label">Response</span>
-          <div class="bubble-body">${esc(responseText)}</div>
-        </div>
+        <div id="${jsonId}" class="json-view"><pre>${esc(JSON.stringify(record, null, 2))}</pre></div>
       </div>
-      <div id="${jsonId}" class="json-panel"><pre>${esc(JSON.stringify(record, null, 2))}</pre></div>
     </article>
   `;
 }
@@ -946,6 +839,28 @@ function connectEvents() {
   });
 }
 
+function initTheme() {
+  const saved = localStorage.getItem("claude-tap-theme");
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(saved || (prefersDark ? "dark" : "light"));
+}
+
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  localStorage.setItem("claude-tap-theme", next);
+  applyTheme(next);
+}
+
+function applyTheme(theme) {
+  if (theme === "dark") {
+    document.documentElement.dataset.theme = "dark";
+    $("#theme-toggle").textContent = "\u2600";
+  } else {
+    delete document.documentElement.dataset.theme;
+    $("#theme-toggle").textContent = "\u263E";
+  }
+}
+
 $("#search").addEventListener("input", event => {
   state.search = event.target.value;
   renderSessions();
@@ -968,7 +883,9 @@ $("#status-filter").addEventListener("change", event => {
 });
 
 $("#refresh").addEventListener("click", () => refreshSessions({preserveSelection: true}).catch(console.error));
+$("#theme-toggle").addEventListener("click", toggleTheme);
 
+initTheme();
 connectEvents();
 refreshSessions({preserveSelection: false}).catch(error => {
   $("#detail").innerHTML = `<div class="empty">Unable to load dashboard: ${esc(error.message)}</div>`;
