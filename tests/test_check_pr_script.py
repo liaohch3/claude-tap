@@ -25,7 +25,30 @@ if [ "$cmd1" = "pr" ] && [ "$cmd2" = "view" ]; then
   # Check if this is a body-only query
   case "$*" in
     *--json\\ body*)
-      echo '## Evidence\n![trace](https://example.com/evidence/trace.png)'
+      if [ "${GH_BODY_MODE:-}" = "missing_evidence" ]; then
+        cat <<'EOF'
+## Summary
+- Improve merge readiness automation.
+
+## Validation
+- `uv run pytest tests/ -x --timeout=60`
+EOF
+        exit 0
+      fi
+      cat <<'EOF'
+## Summary
+- Improve merge readiness automation.
+
+## Validation
+- `uv run pytest tests/ -x --timeout=60`
+
+## Evidence
+![trace](https://raw.githubusercontent.com/octo/demo/feature/checker/.agents/evidence/pr/trace.png)
+EOF
+      exit 0
+      ;;
+    *--json\\ files*)
+      echo 'claude_tap/viewer.html'
       exit 0
       ;;
   esac
@@ -149,3 +172,26 @@ def test_check_pr_handles_pending_checks_exit_code(tmp_path: Path) -> None:
     assert result.returncode == 2
     assert "Checks: pass=1 fail=0 pending=1 total=2" in result.stdout
     assert "VERDICT: NOT_READY - 1 CI check(s) pending" in result.stdout
+
+
+def test_check_pr_reports_pr_policy_failure(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "gh", GH_STUB)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["GH_BODY_MODE"] = "missing_evidence"
+
+    result = subprocess.run(
+        [str(SCRIPT_PATH), "42", "--no-tests"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        cwd=SCRIPT_PATH.parent.parent,
+    )
+
+    assert result.returncode == 2
+    assert "PR Policy: FAIL" in result.stdout
+    assert "VERDICT: NOT_READY - PR policy failed" in result.stdout
