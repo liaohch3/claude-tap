@@ -106,7 +106,7 @@ claude-tap --tap-client cursor -- -p --trust --model auto "hello"
 claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
 
 # Antigravity CLI
-claude-tap --tap-client agy --tap-trust-ca
+claude-tap --tap-client agy
 ```
 
 <details>
@@ -323,13 +323,13 @@ claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
 
 Antigravity CLI talks to multiple Google/Antigravity endpoints, so claude-tap defaults to **forward proxy** mode for `--tap-client agy`.
 
-On macOS, Antigravity may not honor per-process CA environment variables. Use `--tap-trust-ca` once to trust the local claude-tap CA in your current user's login keychain. This does not use `sudo` or the System keychain, though macOS may prompt to unlock the login keychain.
+On macOS, Antigravity may not honor per-process CA environment variables. claude-tap automatically trusts the local CA in your current user's login keychain on first `agy` launch. This does not use `sudo` or the System keychain, though macOS may prompt to unlock the login keychain.
 
 ```bash
-claude-tap --tap-client agy --tap-trust-ca
-
-# After the CA is trusted, this is enough.
 claude-tap --tap-client agy --tap-live
+
+# Optional: trust the CA separately before launching a forward-proxy client.
+claude-tap trust-ca
 ```
 
 </details>
@@ -378,7 +378,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
 --tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi, forward for agy/gemini/opencode/pi/hermes/cursor/qoder)
---tap-trust-ca           On macOS, trust the local CA in the user login keychain before launch (no sudo)
+--tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 
 </details>

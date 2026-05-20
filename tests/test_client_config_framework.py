@@ -58,6 +58,12 @@ def test_client_matrix_contains_only_supported_clients() -> None:
     assert set(CLIENT_CONFIGS) == SUPPORTED_CLIENTS
 
 
+def test_only_agy_auto_trusts_ca_on_macos() -> None:
+    auto_trust_clients = {client for client, cfg in CLIENT_CONFIGS.items() if cfg.auto_trust_ca_macos}
+
+    assert auto_trust_clients == {"agy"}
+
+
 @pytest.mark.parametrize("client", sorted(SUPPORTED_CLIENTS))
 def test_supported_client_default_proxy_modes_are_unchanged(
     monkeypatch: pytest.MonkeyPatch,

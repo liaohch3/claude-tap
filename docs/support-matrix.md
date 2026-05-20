@@ -33,7 +33,7 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
 | Cursor CLI | Cursor login (`cursor-agent login`) | Forward proxy to `https://api2.cursor.sh` | n/a | HTTPS/protobuf + local transcript import | Real E2E verified |
 | Qoder CLI | Qoder login / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy (Qoder endpoints) | n/a | HTTP/SSE | Real E2E verified |
-| Antigravity CLI | Antigravity login | Forward proxy (Google / Antigravity endpoints) | n/a | HTTP/SSE | Manual E2E pending; launch env and macOS user-keychain CA trust are unit-tested |
+| Antigravity CLI | Antigravity login | Forward proxy (Google / Antigravity endpoints) | n/a | HTTP/SSE | Manual E2E pending; launch env and automatic macOS user-keychain CA trust are unit-tested |
 
 ## Default Proxy Mode by Client
 
@@ -51,7 +51,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
 | `cursor` | `forward` | Cursor CLI has no base URL override; forward proxy captures network traffic and local transcripts provide readable turns |
 | `qoder` | `forward` | Qoder CLI uses multiple Qoder service endpoints and has no reliable single base URL override |
-| `agy` | `forward` | Antigravity uses multiple Google / Antigravity endpoints; macOS clients may also need `--tap-trust-ca` so the Go TLS stack trusts the local CA |
+| `agy` | `forward` | Antigravity uses multiple Google / Antigravity endpoints; macOS automatically trusts the local CA in the user login keychain so the Go TLS stack accepts forward-proxy TLS |
 
 Users can always override with `--tap-proxy-mode {reverse,forward}`.
 
@@ -119,7 +119,8 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_import_cursor_transcripts_appends_viewer_friendly_records` — verifies readable Cursor transcript import
 - `test_import_cursor_transcripts_preserves_tool_uses` — verifies Cursor tool_use blocks render in the viewer trace shape
 - `test_qoder_*` — verifies Qoder registration, parse_args default-mode resolution, forward/reverse env, and argument preservation
-- `test_parse_args_accepts_tap_trust_ca` — verifies Antigravity can request macOS user-keychain CA trust without sudo
+- `test_parse_args_agy_does_not_require_tap_trust_ca` — verifies Antigravity uses the same launch shape as other clients
+- `test_auto_ca_trust_*` — verifies Antigravity automatically requests macOS user-keychain CA trust without sudo
 - `test_macos_*_ca_command_*` — verifies CA trust commands use the user login keychain and do not invoke sudo
 
 ### Manual (pre-merge for proxy changes)
@@ -143,8 +144,8 @@ uv run python -m claude_tap --tap-client qoder -- -p "Reply OK" --permission-mod
 # Verify stdout contains the assistant response and the trace contains Qoder endpoint records
 
 # Antigravity CLI (macOS)
-uv run python -m claude_tap --tap-client agy --tap-trust-ca --tap-live
-# Verify macOS prompts only for the user login keychain, not sudo/admin System keychain writes.
+uv run python -m claude_tap --tap-client agy --tap-live
+# On first run, verify macOS prompts only for the user login keychain, not sudo/admin System keychain writes.
 # Then verify the trace contains Google / Antigravity endpoint records.
 
 # Kimi CLI

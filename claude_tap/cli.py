@@ -77,6 +77,9 @@ class ClientConfig:
     # Multi-provider clients (e.g. hermes, opencode, pi) default to "forward" so that all
     # provider traffic is captured regardless of which env var the client honors.
     default_proxy_mode: str = "reverse"
+    # Some non-Python/non-Node macOS clients do not honor per-process CA env
+    # variables, so they need the forward-proxy CA in the user login keychain.
+    auto_trust_ca_macos: bool = False
 
     @property
     def missing_help(self) -> str:
@@ -220,6 +223,7 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_suffix="",
         default_target="https://antigravity.goog",
         default_proxy_mode="forward",
+        auto_trust_ca_macos=True,
     ),
 }
 
@@ -514,6 +518,26 @@ def _trust_ca_for_current_user(ca_cert_path: Path) -> int:
     return 0
 
 
+def _ensure_ca_trust_for_forward_proxy(args: argparse.Namespace, ca_cert_path: Path) -> int:
+    """Ensure CA trust when forward-proxy clients need macOS keychain trust."""
+    if args.proxy_mode != "forward":
+        return 0
+
+    if args.trust_ca:
+        return _trust_ca_for_current_user(ca_cert_path)
+
+    cfg = CLIENT_CONFIGS[args.client]
+    if sys.platform != "darwin" or not cfg.auto_trust_ca_macos:
+        return 0
+
+    if is_macos_ca_trusted(ca_cert_path):
+        return 0
+
+    print(f"🔐 {cfg.label} needs the claude-tap CA trusted in your macOS login keychain.")
+    print("   Installing for the current user only; no sudo or System keychain write is used.")
+    return _trust_ca_for_current_user(ca_cert_path)
+
+
 async def async_main(args: argparse.Namespace):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -531,10 +555,9 @@ async def async_main(args: argparse.Namespace):
     ca_key_path: Path | None = None
     if args.proxy_mode == "forward":
         ca_cert_path, ca_key_path = ensure_ca()
-        if args.trust_ca:
-            trust_result = _trust_ca_for_current_user(ca_cert_path)
-            if trust_result != 0:
-                return trust_result
+        trust_result = _ensure_ca_trust_for_forward_proxy(args, ca_cert_path)
+        if trust_result != 0:
+            return trust_result
 
     # Start live viewer server if requested
     live_server: LiveViewerServer | None = None
@@ -587,8 +610,6 @@ async def async_main(args: argparse.Namespace):
         actual_port = await forward_server.start()
         print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
         print(f"   CA cert: {ca_cert_path}")
-        if args.client == "agy" and sys.platform == "darwin" and not args.trust_ca:
-            print("   Tip: agy on macOS may require --tap-trust-ca once if TLS shows x509 trust errors.")
     else:
         app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
         app["trace_ctx"] = {
@@ -874,8 +895,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # Authenticate first with `qodercli login` or QODER_PERSONAL_ACCESS_TOKEN / QODER_JOB_TOKEN\n"
             "\n"
             "antigravity cli (defaults to forward proxy mode):\n"
-            "  # On macOS, --tap-trust-ca trusts the local CA in your user login keychain without sudo\n"
-            "  claude-tap --tap-client agy --tap-trust-ca\n"
+            "  # On macOS, claude-tap auto-trusts the local CA in your user login keychain without sudo\n"
+            "  claude-tap --tap-client agy --tap-live\n"
             "\n"
             "proxy-only mode (connect from another terminal):\n"
             "  claude-tap --tap-no-launch --tap-port 8080\n"
@@ -942,8 +963,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         dest="trust_ca",
         help=(
-            "On macOS, trust the forward-proxy CA in the current user's login keychain before launch "
-            "(no sudo; may prompt to unlock the keychain)"
+            "On macOS, explicitly trust the forward-proxy CA in the current user's login keychain before launch "
+            "(no sudo; agy does this automatically when needed)"
         ),
     )
     proxy_group.add_argument(

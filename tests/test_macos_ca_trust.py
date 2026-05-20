@@ -13,7 +13,7 @@ from claude_tap.certs import (
     is_macos_ca_trusted,
     trust_macos_ca,
 )
-from claude_tap.cli import _trust_ca_for_current_user, async_main, trust_ca_main
+from claude_tap.cli import _ensure_ca_trust_for_forward_proxy, _trust_ca_for_current_user, async_main, trust_ca_main
 
 
 def test_parse_args_accepts_tap_trust_ca() -> None:
@@ -22,6 +22,14 @@ def test_parse_args_accepts_tap_trust_ca() -> None:
     assert args.client == "agy"
     assert args.proxy_mode == "forward"
     assert args.trust_ca is True
+
+
+def test_parse_args_agy_does_not_require_tap_trust_ca() -> None:
+    args = parse_args(["--tap-client", "agy"])
+
+    assert args.client == "agy"
+    assert args.proxy_mode == "forward"
+    assert args.trust_ca is False
 
 
 def test_parse_args_rejects_tap_trust_ca_with_reverse_proxy() -> None:
@@ -186,6 +194,70 @@ def test_trust_ca_main_uses_generated_ca(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert trusted == [ca_path]
 
 
+def test_auto_ca_trust_skips_non_agy_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    ca_path = Path("/tmp/claude-tap-ca.pem")
+    args = parse_args(["--tap-client", "gemini"])
+
+    monkeypatch.setattr("claude_tap.cli.sys.platform", "darwin")
+    monkeypatch.setattr(
+        "claude_tap.cli.is_macos_ca_trusted",
+        lambda _: (_ for _ in ()).throw(AssertionError("non-agy clients should not auto-check CA trust")),
+    )
+
+    assert _ensure_ca_trust_for_forward_proxy(args, ca_path) == 0
+
+
+def test_auto_ca_trust_skips_when_agy_ca_is_already_trusted(monkeypatch: pytest.MonkeyPatch) -> None:
+    ca_path = Path("/tmp/claude-tap-ca.pem")
+    args = parse_args(["--tap-client", "agy"])
+
+    monkeypatch.setattr("claude_tap.cli.sys.platform", "darwin")
+    monkeypatch.setattr("claude_tap.cli.is_macos_ca_trusted", lambda _: True)
+    monkeypatch.setattr(
+        "claude_tap.cli._trust_ca_for_current_user",
+        lambda _: (_ for _ in ()).throw(AssertionError("already-trusted CA should not reinstall")),
+    )
+
+    assert _ensure_ca_trust_for_forward_proxy(args, ca_path) == 0
+
+
+def test_auto_ca_trust_installs_for_agy_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    ca_path = Path("/tmp/claude-tap-ca.pem")
+    args = parse_args(["--tap-client", "agy"])
+    trusted: list[Path] = []
+
+    monkeypatch.setattr("claude_tap.cli.sys.platform", "darwin")
+    monkeypatch.setattr("claude_tap.cli.is_macos_ca_trusted", lambda _: False)
+    monkeypatch.setattr("claude_tap.cli._trust_ca_for_current_user", lambda path: trusted.append(path) or 0)
+
+    assert _ensure_ca_trust_for_forward_proxy(args, ca_path) == 0
+    assert trusted == [ca_path]
+
+
+def test_auto_ca_trust_skips_agy_on_non_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    ca_path = Path("/tmp/claude-tap-ca.pem")
+    args = parse_args(["--tap-client", "agy"])
+
+    monkeypatch.setattr("claude_tap.cli.sys.platform", "linux")
+    monkeypatch.setattr(
+        "claude_tap.cli.is_macos_ca_trusted",
+        lambda _: (_ for _ in ()).throw(AssertionError("non-macOS should not auto-check CA trust")),
+    )
+
+    assert _ensure_ca_trust_for_forward_proxy(args, ca_path) == 0
+
+
+def test_explicit_ca_trust_still_runs_for_other_forward_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    ca_path = Path("/tmp/claude-tap-ca.pem")
+    args = parse_args(["--tap-client", "gemini", "--tap-trust-ca"])
+    trusted: list[Path] = []
+
+    monkeypatch.setattr("claude_tap.cli._trust_ca_for_current_user", lambda path: trusted.append(path) or 0)
+
+    assert _ensure_ca_trust_for_forward_proxy(args, ca_path) == 0
+    assert trusted == [ca_path]
+
+
 @pytest.mark.asyncio
 async def test_async_main_returns_before_starting_proxy_when_trust_ca_fails(
     monkeypatch: pytest.MonkeyPatch,
@@ -201,7 +273,7 @@ async def test_async_main_returns_before_starting_proxy_when_trust_ca_fails(
         raise AssertionError("proxy should not start when CA trust fails")
 
     monkeypatch.setattr("claude_tap.cli.ensure_ca", lambda: (ca_path, key_path))
-    monkeypatch.setattr("claude_tap.cli._trust_ca_for_current_user", lambda _: 7)
+    monkeypatch.setattr("claude_tap.cli._ensure_ca_trust_for_forward_proxy", lambda _args, _path: 7)
     monkeypatch.setattr("claude_tap.cli.ForwardProxyServer", fail_if_proxy_starts)
 
     code = await async_main(

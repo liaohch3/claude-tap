@@ -106,7 +106,7 @@ claude-tap --tap-client cursor -- -p --trust --model auto "hello"
 claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
 
 # Antigravity CLI
-claude-tap --tap-client agy --tap-trust-ca
+claude-tap --tap-client agy
 ```
 
 <details>
@@ -320,13 +320,13 @@ claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
 
 Antigravity CLI 会访问多个 Google / Antigravity 端点，因此 `--tap-client agy` 默认使用 **forward proxy** 模式。
 
-在 macOS 上，Antigravity 可能不读取进程级 CA 环境变量。首次使用时可以加 `--tap-trust-ca`，把 claude-tap 本地 CA 信任到当前用户的 login keychain。这个操作不会使用 `sudo`，也不会写入 System keychain，但 macOS 可能要求解锁 login keychain。
+在 macOS 上，Antigravity 可能不读取进程级 CA 环境变量。首次启动 `agy` 时，claude-tap 会自动把本地 CA 信任到当前用户的 login keychain。这个操作不会使用 `sudo`，也不会写入 System keychain，但 macOS 可能要求解锁 login keychain。
 
 ```bash
-claude-tap --tap-client agy --tap-trust-ca
-
-# CA 已信任后，后续这样启动即可。
 claude-tap --tap-client agy --tap-live
+
+# 可选：也可以先单独信任 CA，再启动 forward proxy 客户端。
+claude-tap trust-ca
 ```
 
 </details>
@@ -375,7 +375,7 @@ claude-tap --tap-no-open
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
 --tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi 用 reverse，agy/gemini/opencode/pi/hermes/cursor/qoder 用 forward）
---tap-trust-ca           macOS 上启动前把本地 CA 信任到当前用户 login keychain（不需要 sudo）
+--tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy 会自动执行）
 ```
 
 </details>
