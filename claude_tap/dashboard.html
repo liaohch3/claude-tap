@@ -637,7 +637,7 @@ pre {
             <th>Model</th>
             <th>Agent</th>
             <th>Status</th>
-            <th>Action</th>
+            <th>Detail</th>
           </tr>
         </thead>
         <tbody id="session-list"></tbody>
@@ -829,7 +829,7 @@ function sessionRow(session) {
       <td><span class="model-pill" title="${esc(session.model || "unknown")}">${esc(session.model || "unknown")}</span></td>
       <td><span class="agent-pill">${esc(session.agent || "unknown")}</span></td>
       <td><span class="status-pill ${status.className}">${esc(status.label)}</span></td>
-      <td><button class="row-action" type="button" aria-label="View session">View</button></td>
+      <td><button class="row-action" type="button" aria-label="View session details">Details</button></td>
     </tr>
   `;
 }
@@ -888,7 +888,6 @@ function renderDetail(session, records) {
         <button class="detail-tab ${state.activeTab === "raw" ? "active" : ""}" data-tab="raw">Trace</button>
       </div>
       <div class="action-bar">
-        ${session.html_path ? `<button class="act-btn" data-open-html="${esc(session.id)}">Open HTML</button>` : ""}
         <button class="act-btn" data-copy-path="${esc(session.trace_path)}">Copy path</button>
       </div>
     </div>
@@ -930,9 +929,6 @@ function renderDetail(session, records) {
   });
   document.querySelectorAll("[data-copy-path]").forEach(button => {
     button.addEventListener("click", () => navigator.clipboard?.writeText(button.dataset.copyPath || ""));
-  });
-  document.querySelectorAll("[data-open-html]").forEach(button => {
-    button.addEventListener("click", () => window.open(`/api/sessions/${encodeURIComponent(button.dataset.openHtml)}/html`, "_blank"));
   });
 }
 
