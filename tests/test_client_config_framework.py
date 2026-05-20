@@ -10,6 +10,7 @@ from claude_tap import parse_args
 from claude_tap.cli import CLIENT_CONFIGS, ClientConfig, run_client
 
 SUPPORTED_CLIENTS = {
+    "agy",
     "claude",
     "codex",
     "gemini",
@@ -24,6 +25,7 @@ SUPPORTED_CLIENTS = {
 SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"gemini"}
 
 SUPPORTED_DEFAULT_PROXY_MODES = {
+    "agy": "forward",
     "claude": "reverse",
     "codex": "reverse",
     "gemini": "forward",
