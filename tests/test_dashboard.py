@@ -6,10 +6,12 @@ import aiohttp
 import pytest
 
 from claude_tap.dashboard import (
+    _clean_user_prompt_text,
     _content_text,
     _event_payload,
     _first_error,
     _infer_agent,
+    _input_user_text,
     _iter_trace_files,
     _manifest_by_trace_path,
     _parts_text,
@@ -117,6 +119,40 @@ def test_dashboard_lists_sessions_across_agents(tmp_path: Path) -> None:
     assert [(agent["label"], agent["sessions"]) for agent in agents] == [("Antigravity", 1), ("Claude Code", 1)]
 
 
+def test_dashboard_first_message_uses_first_user_prompt(tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_100000.jsonl"
+    _write_jsonl(
+        trace_path,
+        [
+            {
+                "timestamp": "2026-05-20T10:00:00+00:00",
+                "turn": 1,
+                "request": {
+                    "method": "POST",
+                    "path": "/v1/responses",
+                    "body": {
+                        "model": "gpt-5.5",
+                        "input": [
+                            {"role": "developer", "content": [{"type": "input_text", "text": "developer setup"}]},
+                            {"type": "function_call_output", "output": "tool result"},
+                            {
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "# AGENTS.md instructions\nSkip"}],
+                            },
+                            {"role": "user", "content": [{"type": "input_text", "text": "What is this project?"}]},
+                        ],
+                    },
+                },
+                "response": {"status": 200, "body": {"model": "gpt-5.5", "usage": {"input_tokens": 1}}},
+            }
+        ],
+    )
+
+    summary = list_trace_sessions(tmp_path)[0]
+
+    assert summary["first_user"] == "What is this project?"
+
+
 def test_dashboard_loads_session_by_id(tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
@@ -130,7 +166,11 @@ def test_dashboard_loads_session_by_id(tmp_path: Path) -> None:
 
 
 def test_dashboard_rejects_unsafe_or_missing_session_ids(tmp_path: Path) -> None:
-    assert "session-list" in read_dashboard_template()
+    template = read_dashboard_template()
+    assert "session-list" in template
+    assert "lang-select" in template
+    assert "DASHBOARD_I18N" in template
+    assert 'data-i18n="table_first_message"' in template
     assert rel_path_for_session_id("not-valid-@@") is None
     assert rel_path_for_session_id(session_id_for_rel_path("/tmp/trace.jsonl")) is None
     assert rel_path_for_session_id(session_id_for_rel_path("../trace.jsonl")) is None
@@ -249,7 +289,55 @@ def test_dashboard_extracts_usage_models_errors_and_text() -> None:
     assert _request_user_text("raw prompt") == "raw prompt"
     assert _request_user_text(None) == ""
     assert _request_user_text({"prompt": "fallback prompt"}) == "fallback prompt"
+    assert _request_user_text({"messages": [{"role": "user", "content": "<session>\nwrapped prompt\n</session>"}]}) == (
+        "wrapped prompt"
+    )
+    assert (
+        _request_user_text(
+            {
+                "request": {
+                    "contents": [
+                        {"role": "user", "parts": [{"text": "<session_context>\ncontext\n</session_context>"}]},
+                        {"role": "user", "parts": [{"text": "actual Gemini prompt"}]},
+                    ]
+                }
+            }
+        )
+        == "actual Gemini prompt"
+    )
+    assert (
+        _request_user_text(
+            {
+                "request": {
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "text": "<USER_REQUEST>\n--print-timeout\n</USER_REQUEST>\n"
+                                    "<ADDITIONAL_METADATA>time</ADDITIONAL_METADATA>"
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        )
+        == "--print-timeout"
+    )
     assert _request_user_text({"input": [{"type": "message", "content": [{"text": "input text"}]}]}) == "input text"
+    assert (
+        _request_user_text(
+            {
+                "input": [
+                    {"role": "developer", "content": [{"type": "input_text", "text": "developer setup"}]},
+                    {"type": "function_call_output", "output": "tool result"},
+                    {"role": "user", "content": [{"type": "input_text", "text": "raw user prompt"}]},
+                ]
+            }
+        )
+        == "raw user prompt"
+    )
     assert _request_user_text({"messages": [{"role": "user", "content": ["hello", {"text": "world"}]}]}) == (
         "hello\nworld"
     )
@@ -267,7 +355,11 @@ def test_dashboard_extracts_usage_models_errors_and_text() -> None:
     assert _response_text({"output": [{"output_text": "out"}]}) == "out"
     assert _response_text({"response": {"content": "response field"}}) == "response field"
     assert _content_text({"text": ["nested", {"content": "dict"}]}) == "nested\ndict"
+    assert _content_text({"input_text": "typed prompt"}) == "typed prompt"
     assert _content_text([{"type": "message", "content": [{"output_text": "message text"}]}]) == "message text"
+    assert _input_user_text([{"role": "developer", "content": "dev"}, {"content": "implicit user"}]) == "implicit user"
+    assert _clean_user_prompt_text('"quoted prompt"') == "quoted prompt"
+    assert _clean_user_prompt_text("<system-reminder>\nskip\n</system-reminder>") == ""
     assert _parts_text("not-list") == ""
     assert _preview(" a \n b ", 20) == "a b"
     assert _preview("abcdef", 4) == "abc..."

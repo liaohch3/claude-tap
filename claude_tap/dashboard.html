@@ -127,6 +127,12 @@ button { cursor: pointer; }
   transition: all .15s; font-size: 14px; line-height: 1;
 }
 .theme-toggle:hover { border-color: var(--blue); color: var(--blue); }
+.lang-select {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 4px 8px; color: var(--text-secondary); transition: all .15s;
+  font-size: 12px; line-height: 1; min-width: 72px;
+}
+.lang-select:hover { border-color: var(--blue); color: var(--blue); }
 
 .trace-path-bar {
   display: flex; align-items: center; gap: 6px; padding: 4px 12px;
@@ -644,11 +650,15 @@ pre {
   <div class="divider"></div>
   <div class="path-filter" id="agent-list"></div>
   <div class="stats">
-    <div class="stat-group"><span>Sessions</span> <span class="stat-val" id="stat-sessions">0</span></div>
-    <div class="stat-group"><span>Records</span> <span class="stat-val" id="stat-records">0</span></div>
+    <div class="stat-group"><span data-i18n="stats_sessions">Sessions</span> <span class="stat-val" id="stat-sessions">0</span></div>
+    <div class="stat-group"><span data-i18n="stats_records">Records</span> <span class="stat-val" id="stat-records">0</span></div>
     <div class="live-status"><span id="live-label">Watching</span></div>
   </div>
-  <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">&#9790;</button>
+  <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode" data-i18n-title="theme_toggle">&#9790;</button>
+  <select class="lang-select" id="lang-select" title="Language" data-i18n-title="language">
+    <option value="en">English</option>
+    <option value="zh-CN">简体中文</option>
+  </select>
 </div>
 
 <div class="trace-path-bar" id="trace-path-bar">
@@ -659,17 +669,17 @@ pre {
 <div class="main">
   <section id="list-view" class="list-view">
     <div class="dashboard-title-row">
-      <h1 class="dashboard-title">Conversation Log</h1>
+      <h1 class="dashboard-title" data-i18n="dashboard_title">Conversation Log</h1>
       <span class="dashboard-clock" id="dashboard-clock"></span>
     </div>
 
     <div class="control-panel">
       <label class="control-field">
-        <span class="control-label">Date</span>
+        <span class="control-label" data-i18n="filter_date">Date</span>
         <select id="date-filter" class="history-select"></select>
       </label>
       <label class="control-field">
-        <span class="control-label">Status</span>
+        <span class="control-label" data-i18n="filter_status">Status</span>
         <select id="status-filter" class="history-select">
           <option value="all">All status</option>
           <option value="active">Active</option>
@@ -679,26 +689,26 @@ pre {
         </select>
       </label>
       <div class="session-search" role="search">
-        <input id="search" type="search" placeholder="Search messages, agents, models, paths...">
+        <input id="search" type="search" placeholder="Search messages, agents, models, paths..." data-i18n-placeholder="search_placeholder">
       </div>
-      <button id="refresh" class="history-refresh" title="Refresh">R</button>
+      <button id="refresh" class="history-refresh" title="Refresh" data-i18n-title="refresh">R</button>
     </div>
 
     <section class="overview-card" aria-label="Dashboard summary">
       <div class="metric">
-        <div class="metric-label">Threads</div>
+        <div class="metric-label" data-i18n="metric_threads">Threads</div>
         <div class="metric-value" id="overview-threads">0</div>
       </div>
       <div class="metric">
-        <div class="metric-label">Traces</div>
+        <div class="metric-label" data-i18n="metric_traces">Traces</div>
         <div class="metric-value" id="overview-traces">0</div>
       </div>
       <div class="metric">
-        <div class="metric-label">Error Rate</div>
+        <div class="metric-label" data-i18n="metric_error_rate">Error Rate</div>
         <div class="metric-value" id="overview-error-rate">0.0%</div>
       </div>
       <div class="metric">
-        <div class="metric-label">Total Tokens</div>
+        <div class="metric-label" data-i18n="metric_total_tokens">Total Tokens</div>
         <div class="metric-value" id="overview-tokens">0</div>
       </div>
     </section>
@@ -708,14 +718,14 @@ pre {
         <table class="session-table">
           <thead>
             <tr>
-              <th>Start Time</th>
-              <th>First Message</th>
-              <th>Traces</th>
-              <th>Tokens</th>
-              <th>Model</th>
-              <th>Agent</th>
-              <th>Status</th>
-              <th>Detail</th>
+              <th data-i18n="table_start_time">Start Time</th>
+              <th data-i18n="table_first_message">First Message</th>
+              <th data-i18n="table_traces">Traces</th>
+              <th data-i18n="table_tokens">Tokens</th>
+              <th data-i18n="table_model">Model</th>
+              <th data-i18n="table_agent">Agent</th>
+              <th data-i18n="table_status">Status</th>
+              <th data-i18n="table_detail">Detail</th>
             </tr>
           </thead>
           <tbody id="session-list"></tbody>
@@ -726,14 +736,14 @@ pre {
 
   <section id="detail-view" class="detail-view hidden">
     <div class="detail-page-head">
-      <button id="back-to-list" class="back-btn" type="button">Back to sessions</button>
+      <button id="back-to-list" class="back-btn" type="button" data-i18n="back_to_sessions">Back to sessions</button>
       <div class="detail-heading">
-        <div class="detail-title" id="detail-title">Session detail</div>
-        <div class="detail-subtitle" id="detail-subtitle">No session selected.</div>
+        <div class="detail-title" id="detail-title" data-i18n="session_detail">Session detail</div>
+        <div class="detail-subtitle" id="detail-subtitle" data-i18n="no_session_selected">No session selected.</div>
       </div>
     </div>
     <section id="detail" class="detail">
-      <div class="empty">Select a session to view details.</div>
+      <div class="empty" data-i18n="select_session">Select a session to view details.</div>
     </section>
   </section>
 </div>
@@ -751,6 +761,194 @@ const state = {
 };
 
 const $ = selector => document.querySelector(selector);
+
+const DASHBOARD_I18N = {
+  en: {
+    document_title: "claude-tap dashboard",
+    stats_sessions: "Sessions",
+    stats_records: "Records",
+    live_watching: "Watching",
+    live_polling: "Polling",
+    live_reconnecting: "Reconnecting",
+    theme_toggle: "Toggle dark mode",
+    language: "Language",
+    dashboard: "Dashboard",
+    trace_history_sessions: "trace history sessions",
+    dashboard_title: "Conversation Log",
+    filter_date: "Date",
+    filter_status: "Status",
+    status_all: "All status",
+    status_active: "Active",
+    status_complete: "Complete",
+    status_error: "Error",
+    status_empty: "Empty",
+    status_empty_short: "EMPTY",
+    search_placeholder: "Search messages, agents, models, paths...",
+    refresh: "Refresh",
+    metric_threads: "Threads",
+    metric_traces: "Traces",
+    metric_error_rate: "Error Rate",
+    metric_total_tokens: "Total Tokens",
+    table_start_time: "Start Time",
+    table_first_message: "First Message",
+    table_traces: "Traces",
+    table_tokens: "Tokens",
+    table_model: "Model",
+    table_agent: "Agent",
+    table_status: "Status",
+    table_detail: "Detail",
+    all_dates: "All dates",
+    all_agents: "All agents",
+    no_matching_sessions: "No matching trace sessions.",
+    no_user_prompt: "No captured user prompt.",
+    unknown: "unknown",
+    view_details: "View session details",
+    details: "Details",
+    back_to_sessions: "Back to sessions",
+    session_detail: "Session detail",
+    session_details: "{agent} details",
+    no_session_selected: "No session selected.",
+    select_session: "Select a session to view details.",
+    jsonl: "JSONL",
+    html: "HTML",
+    not_generated: "not generated",
+    unable_load_session: "Unable to load session: {error}",
+    unable_load_dashboard: "Unable to load dashboard: {error}",
+    fallback_viewer: "HTML viewer is not generated yet. Showing captured records.",
+    copy_path: "Copy path",
+    records: "Records",
+    turns: "Turns",
+    input: "Input",
+    output: "Output",
+    cache_read: "Cache R",
+    cache_write: "Cache W",
+    total: "Total",
+    tab_default: "Default",
+    tab_trace: "Trace",
+    request_empty: "Request body has no user-facing message.",
+    response_empty: "Response body has no assistant text.",
+    request: "Request",
+    response: "Response",
+    json: "JSON",
+    ok: "ok",
+    empty_session: "This session has no captured API records yet."
+  },
+  "zh-CN": {
+    document_title: "claude-tap 会话面板",
+    stats_sessions: "会话",
+    stats_records: "记录",
+    live_watching: "监听中",
+    live_polling: "轮询中",
+    live_reconnecting: "重连中",
+    theme_toggle: "切换深色模式",
+    language: "语言",
+    dashboard: "面板",
+    trace_history_sessions: "trace 历史会话",
+    dashboard_title: "对话日志",
+    filter_date: "日期",
+    filter_status: "状态",
+    status_all: "全部状态",
+    status_active: "进行中",
+    status_complete: "已完成",
+    status_error: "错误",
+    status_empty: "空会话",
+    status_empty_short: "空",
+    search_placeholder: "搜索消息、Agent、模型、路径...",
+    refresh: "刷新",
+    metric_threads: "会话数",
+    metric_traces: "Trace 数",
+    metric_error_rate: "错误率",
+    metric_total_tokens: "总 Token",
+    table_start_time: "开始时间",
+    table_first_message: "首条用户 Prompt",
+    table_traces: "Trace",
+    table_tokens: "Token",
+    table_model: "模型",
+    table_agent: "Agent",
+    table_status: "状态",
+    table_detail: "详情",
+    all_dates: "全部日期",
+    all_agents: "全部 Agent",
+    no_matching_sessions: "没有匹配的 trace 会话。",
+    no_user_prompt: "未捕获到用户 prompt。",
+    unknown: "未知",
+    view_details: "查看会话详情",
+    details: "详情",
+    back_to_sessions: "返回会话列表",
+    session_detail: "会话详情",
+    session_details: "{agent} 详情",
+    no_session_selected: "未选择会话。",
+    select_session: "选择一个会话查看详情。",
+    jsonl: "JSONL",
+    html: "HTML",
+    not_generated: "尚未生成",
+    unable_load_session: "无法加载会话：{error}",
+    unable_load_dashboard: "无法加载面板：{error}",
+    fallback_viewer: "HTML viewer 尚未生成，正在展示已捕获记录。",
+    copy_path: "复制路径",
+    records: "记录",
+    turns: "轮次",
+    input: "输入",
+    output: "输出",
+    cache_read: "缓存读",
+    cache_write: "缓存写",
+    total: "总计",
+    tab_default: "默认",
+    tab_trace: "Trace",
+    request_empty: "请求体里没有面向用户的消息。",
+    response_empty: "响应体里没有 assistant 文本。",
+    request: "请求",
+    response: "响应",
+    json: "JSON",
+    ok: "正常",
+    empty_session: "这个会话还没有捕获到 API 记录。"
+  }
+};
+
+let currentLang = localStorage.getItem("claude-tap-lang") || detectLang();
+
+function detectLang() {
+  const nav = navigator.language || navigator.userLanguage || "en";
+  return nav.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+}
+
+function t(key, params = {}) {
+  const template = (DASHBOARD_I18N[currentLang] || DASHBOARD_I18N.en)[key] || DASHBOARD_I18N.en[key] || key;
+  return Object.entries(params).reduce((text, [name, value]) => {
+    return text.replaceAll(`{${name}}`, String(value ?? ""));
+  }, template);
+}
+
+function applyI18n() {
+  document.documentElement.lang = currentLang;
+  document.documentElement.dir = currentLang === "ar" ? "rtl" : "ltr";
+  document.title = t("document_title");
+  $("#lang-select").value = currentLang;
+  document.querySelectorAll("[data-i18n]").forEach(element => {
+    element.textContent = t(element.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach(element => {
+    element.setAttribute("title", t(element.dataset.i18nTitle));
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach(element => {
+    element.setAttribute("placeholder", t(element.dataset.i18nPlaceholder));
+  });
+  $("#live-label").textContent = t("live_watching");
+  renderStatusOptions();
+  updateTracePathBar();
+}
+
+function setLang(lang) {
+  currentLang = DASHBOARD_I18N[lang] ? lang : "en";
+  localStorage.setItem("claude-tap-lang", currentLang);
+  applyI18n();
+  renderFilters();
+  renderAgents();
+  renderSessions();
+  if (state.view === "detail" && state.selectedSessionId) {
+    loadSession(state.selectedSessionId).catch(console.error);
+  }
+}
 
 function fmtNumber(value) {
   return Number(value || 0).toLocaleString();
@@ -818,6 +1016,39 @@ function filteredSessions() {
   });
 }
 
+function renderStatusOptions() {
+  const statusFilter = $("#status-filter");
+  const current = state.status;
+  const options = [
+    ["all", t("status_all")],
+    ["active", t("status_active")],
+    ["complete", t("status_complete")],
+    ["error", t("status_error")],
+    ["empty", t("status_empty")],
+  ];
+  statusFilter.innerHTML = options
+    .map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`)
+    .join("");
+  statusFilter.value = current;
+}
+
+function updateTracePathBar(session = null) {
+  if (state.view === "detail" && session) {
+    $("#trace-path-bar").innerHTML = `
+      <span class="tp-label">${esc(t("jsonl"))}</span>
+      <span class="tp-val">${esc(session.trace_path || session.rel_trace_path)}</span>
+      <span class="tp-sep"></span>
+      <span class="tp-label">${esc(t("html"))}</span>
+      <span class="tp-val">${esc(session.html_path || t("not_generated"))}</span>
+    `;
+    return;
+  }
+  $("#trace-path-bar").innerHTML = `
+    <span class="tp-label">${esc(t("dashboard"))}</span>
+    <span class="tp-val">${esc(t("trace_history_sessions"))}</span>
+  `;
+}
+
 async function refreshSessions({preserveSelection = true} = {}) {
   const payload = await fetchJSON("/api/sessions");
   state.sessions = payload.sessions || [];
@@ -843,11 +1074,12 @@ function renderFilters() {
   const dates = Array.from(new Set(state.sessions.map(session => session.date))).sort().reverse();
   const dateFilter = $("#date-filter");
   const current = state.date;
-  dateFilter.innerHTML = '<option value="all">All dates</option>' + dates
+  dateFilter.innerHTML = `<option value="all">${esc(t("all_dates"))}</option>` + dates
     .map(date => `<option value="${esc(date)}">${esc(date)}</option>`)
     .join("");
   state.date = dates.includes(current) ? current : "all";
   dateFilter.value = state.date;
+  renderStatusOptions();
 
   const totalRecords = state.sessions.reduce((sum, session) => sum + session.record_count, 0);
   $("#stat-sessions").textContent = fmtNumber(state.sessions.length);
@@ -861,7 +1093,7 @@ function renderAgents() {
     bucket.sessions += 1;
     buckets.set(session.agent_key, bucket);
   }
-  const agents = [{key: "all", label: "All agents", sessions: state.sessions.length}]
+  const agents = [{key: "all", label: t("all_agents"), sessions: state.sessions.length}]
     .concat(Array.from(buckets.values()).sort((a, b) => a.label.localeCompare(b.label)));
   $("#agent-list").innerHTML = agents.map(agent => `
     <button class="filter-chip ${state.selectedAgent === agent.key ? "active" : ""}" data-agent="${esc(agent.key)}">
@@ -885,7 +1117,7 @@ function renderSessions() {
   const sessions = filteredSessions();
   renderOverview(sessions);
   if (!sessions.length) {
-    $("#session-list").innerHTML = '<tr><td class="table-empty" colspan="8">No matching trace sessions.</td></tr>';
+    $("#session-list").innerHTML = `<tr><td class="table-empty" colspan="8">${esc(t("no_matching_sessions"))}</td></tr>`;
     return;
   }
 
@@ -905,18 +1137,19 @@ function renderSessions() {
 }
 
 function sessionRow(session) {
-  const preview = session.first_user || session.last_response || session.rel_trace_path;
+  const preview = session.first_user || "";
+  const firstMessage = preview || t("no_user_prompt");
   const status = statusInfo(session);
   return `
     <tr class="session-row ${state.selectedSessionId === session.id ? "active" : ""}" data-session="${esc(session.id)}" tabindex="0">
       <td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
-      <td><div class="first-message" title="${esc(preview || "No captured messages yet.")}">${esc(preview || "No captured messages yet.")}</div></td>
+      <td><div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></td>
       <td><span class="trace-count">${fmtNumber(session.record_count)}</span></td>
       <td><span class="token-pill">${fmtNumber(session.total_tokens)}</span></td>
-      <td><span class="model-pill" title="${esc(session.model || "unknown")}">${esc(session.model || "unknown")}</span></td>
-      <td><span class="agent-pill">${esc(session.agent || "unknown")}</span></td>
+      <td><span class="model-pill" title="${esc(session.model || t("unknown"))}">${esc(session.model || t("unknown"))}</span></td>
+      <td><span class="agent-pill">${esc(session.agent || t("unknown"))}</span></td>
       <td><span class="status-pill ${status.className}">${esc(status.label)}</span></td>
-      <td><button class="row-action" type="button" aria-label="View session details">Details</button></td>
+      <td><button class="row-action" type="button" aria-label="${esc(t("view_details"))}">${esc(t("details"))}</button></td>
     </tr>
   `;
 }
@@ -934,7 +1167,7 @@ function renderOverview(sessions) {
 
 function statusInfo(session) {
   if (session.status === "error") return {label: "ERR", className: "err"};
-  if (session.status === "empty") return {label: "EMPTY", className: "empty-status"};
+  if (session.status === "empty") return {label: t("status_empty_short"), className: "empty-status"};
   if (session.live || session.status === "active") return {label: "LIVE", className: "live"};
   return {label: "OK", className: "ok"};
 }
@@ -951,7 +1184,7 @@ function showListView() {
   state.view = "list";
   $("#list-view").classList.remove("hidden");
   $("#detail-view").classList.add("hidden");
-  $("#trace-path-bar").innerHTML = '<span class="tp-label">Dashboard</span><span class="tp-val">trace history sessions</span>';
+  updateTracePathBar();
 }
 
 function showDetailView() {
@@ -965,21 +1198,15 @@ async function loadSession(sessionId) {
     renderDetail(payload.session, payload.records || []);
   } catch (error) {
     showDetailView();
-    $("#detail").innerHTML = `<div class="empty">Unable to load session: ${esc(error.message)}</div>`;
+    $("#detail").innerHTML = `<div class="empty">${esc(t("unable_load_session", {error: error.message}))}</div>`;
   }
 }
 
 function renderDetail(session, records) {
   const statusClass = ["active", "error", "empty"].includes(session.status) ? session.status : "";
-  $("#detail-title").textContent = `${session.agent || "Session"} details`;
-  $("#detail-subtitle").textContent = session.rel_trace_path || session.trace_path || "No trace path";
-  $("#trace-path-bar").innerHTML = `
-    <span class="tp-label">JSONL</span>
-    <span class="tp-val">${esc(session.trace_path || session.rel_trace_path)}</span>
-    <span class="tp-sep"></span>
-    <span class="tp-label">HTML</span>
-    <span class="tp-val">${esc(session.html_path || "not generated")}</span>
-  `;
+  $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
+  $("#detail-subtitle").textContent = session.rel_trace_path || session.trace_path || "";
+  updateTracePathBar(session);
   if (session.html_path) {
     $("#detail").innerHTML = `
       <div class="viewer-frame-wrap">
@@ -993,14 +1220,14 @@ function renderDetail(session, records) {
     return;
   }
   $("#detail").innerHTML = `
-    <div class="detail-fallback-note">HTML viewer is not generated yet. Showing captured records.</div>
+    <div class="detail-fallback-note">${esc(t("fallback_viewer"))}</div>
     <div class="detail-inspector-bar">
       <div class="detail-tabs">
-        <button class="detail-tab ${state.activeTab === "conversation" ? "active" : ""}" data-tab="conversation">Default</button>
-        <button class="detail-tab ${state.activeTab === "raw" ? "active" : ""}" data-tab="raw">Trace</button>
+        <button class="detail-tab ${state.activeTab === "conversation" ? "active" : ""}" data-tab="conversation">${esc(t("tab_default"))}</button>
+        <button class="detail-tab ${state.activeTab === "raw" ? "active" : ""}" data-tab="raw">${esc(t("tab_trace"))}</button>
       </div>
       <div class="action-bar">
-        <button class="act-btn" data-copy-path="${esc(session.trace_path)}">Copy path</button>
+        <button class="act-btn" data-copy-path="${esc(session.trace_path)}">${esc(t("copy_path"))}</button>
       </div>
     </div>
     <div class="session-summary">
@@ -1010,13 +1237,13 @@ function renderDetail(session, records) {
         <span class="session-summary-path">${esc(session.rel_trace_path)}</span>
       </div>
       <div class="token-bar">
-        ${tokenItem("var(--blue)", "Records", session.record_count)}
-        ${tokenItem("var(--purple)", "Turns", session.turn_count)}
-        ${tokenItem("var(--blue)", "Input", session.input_tokens)}
-        ${tokenItem("var(--green)", "Output", session.output_tokens)}
-        ${tokenItem("var(--cyan)", "Cache R", session.cache_read_tokens)}
-        ${tokenItem("var(--amber)", "Cache W", session.cache_create_tokens)}
-        ${tokenItem("var(--text-tertiary)", "Total", session.total_tokens)}
+        ${tokenItem("var(--blue)", t("records"), session.record_count)}
+        ${tokenItem("var(--purple)", t("turns"), session.turn_count)}
+        ${tokenItem("var(--blue)", t("input"), session.input_tokens)}
+        ${tokenItem("var(--green)", t("output"), session.output_tokens)}
+        ${tokenItem("var(--cyan)", t("cache_read"), session.cache_read_tokens)}
+        ${tokenItem("var(--amber)", t("cache_write"), session.cache_create_tokens)}
+        ${tokenItem("var(--text-tertiary)", t("total"), session.total_tokens)}
       </div>
     </div>
     <div id="conversation-tab" class="${state.activeTab === "conversation" ? "" : "hidden"}">
@@ -1057,8 +1284,8 @@ function tokenItem(color, label, value) {
 function renderRecord(record, index) {
   const request = record.request || {};
   const response = record.response || {};
-  const userText = requestText(request.body) || "Request body has no user-facing message.";
-  const responseText = responseTextFromRecord(record) || response.error || "Response body has no assistant text.";
+  const userText = requestText(request.body) || t("request_empty");
+  const responseText = responseTextFromRecord(record) || response.error || t("response_empty");
   const status = response.status ?? "";
   const path = request.path || "";
   const jsonId = `json-${index}`;
@@ -1068,18 +1295,18 @@ function renderRecord(record, index) {
       <div class="section-header">
         <span class="chevron">&#9654;</span>
         <span class="title">Turn ${esc(record.turn ?? index + 1)}</span>
-        <span class="badge ${statusClass}">${esc(status || "ok")}</span>
+        <span class="badge ${statusClass}">${esc(status || t("ok"))}</span>
         <span class="path">${esc(path)}</span>
-        <button class="json-btn" data-json-toggle="${jsonId}">JSON</button>
+        <button class="json-btn" data-json-toggle="${jsonId}">${esc(t("json"))}</button>
       </div>
       <div class="section-body">
         <div class="conversation">
           <div class="msg user">
-            <span class="msg-role">Request</span>
+            <span class="msg-role">${esc(t("request"))}</span>
             <div class="content-block">${esc(userText)}</div>
           </div>
           <div class="msg assistant">
-            <span class="msg-role">Response</span>
+            <span class="msg-role">${esc(t("response"))}</span>
             <div class="content-block">${esc(responseText)}</div>
           </div>
         </div>
@@ -1090,7 +1317,7 @@ function renderRecord(record, index) {
 }
 
 function emptyRecord() {
-  return '<div class="empty">This session has no captured API records yet.</div>';
+  return `<div class="empty">${esc(t("empty_session"))}</div>`;
 }
 
 function requestText(body) {
@@ -1162,12 +1389,12 @@ function partsText(parts) {
 
 function connectEvents() {
   if (!window.EventSource) {
-    $("#live-label").textContent = "Polling";
+    $("#live-label").textContent = t("live_polling");
     return;
   }
   const events = new EventSource("/dashboard/events");
   events.addEventListener("open", () => {
-    $("#live-label").textContent = "Watching";
+    $("#live-label").textContent = t("live_watching");
   });
   events.addEventListener("refresh", () => {
     refreshSessions({preserveSelection: true}).catch(console.error);
@@ -1176,7 +1403,7 @@ function connectEvents() {
     refreshSessions({preserveSelection: true}).catch(console.error);
   });
   events.addEventListener("error", () => {
-    $("#live-label").textContent = "Reconnecting";
+    $("#live-label").textContent = t("live_reconnecting");
   });
 }
 
@@ -1233,13 +1460,15 @@ $("#back-to-list").addEventListener("click", () => {
   showListView();
 });
 $("#theme-toggle").addEventListener("click", toggleTheme);
+$("#lang-select").addEventListener("change", event => setLang(event.target.value));
 
+applyI18n();
 initTheme();
 updateClock();
 setInterval(updateClock, 1000);
 connectEvents();
 refreshSessions({preserveSelection: false}).catch(error => {
-  $("#detail").innerHTML = `<div class="empty">Unable to load dashboard: ${esc(error.message)}</div>`;
+  $("#detail").innerHTML = `<div class="empty">${esc(t("unable_load_dashboard", {error: error.message}))}</div>`;
 });
 setInterval(() => refreshSessions({preserveSelection: true}).catch(console.error), 5000);
 </script>

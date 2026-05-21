@@ -569,13 +569,14 @@ def _request_user_text(body: Any) -> str:
     messages = body.get("messages")
     if isinstance(messages, list):
         for message in messages:
-            if isinstance(message, dict) and message.get("role") == "user":
+            role = str(message.get("role") or "").lower() if isinstance(message, dict) else ""
+            if isinstance(message, dict) and role == "user":
                 text = _content_text(message.get("content"))
-                if text:
-                    return text
+                prompt = _clean_user_prompt_text(text)
+                if prompt:
+                    return prompt
 
-    value = body.get("input")
-    text = _content_text(value)
+    text = _input_user_text(body.get("input"))
     if text:
         return text
 
@@ -588,15 +589,91 @@ def _request_user_text(body: Any) -> str:
         for content in contents:
             if not isinstance(content, dict):
                 continue
-            role = str(content.get("role") or "user")
-            if role not in ("user", "USER"):
+            role = str(content.get("role") or "user").lower()
+            if role != "user":
                 continue
             text = _parts_text(content.get("parts"))
-            if text:
-                return text
+            prompt = _clean_user_prompt_text(text)
+            if prompt:
+                return prompt
 
     prompt = body.get("prompt")
-    return prompt if isinstance(prompt, str) else ""
+    return _clean_user_prompt_text(prompt) if isinstance(prompt, str) else ""
+
+
+def _input_user_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        role = str(value.get("role") or "").lower()
+        if role == "user":
+            return _clean_user_prompt_text(_content_text(value.get("content") or value.get("text")))
+        return ""
+    if not isinstance(value, list):
+        return ""
+
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").lower()
+        if role == "user":
+            text = _content_text(item.get("content") or item.get("text"))
+            prompt = _clean_user_prompt_text(text)
+            if prompt:
+                return prompt
+
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").lower()
+        item_type = str(item.get("type") or "").lower()
+        if role or item_type in ("function_call_output", "tool_result", "reasoning"):
+            continue
+        if item_type in ("message", "input_text") or "content" in item:
+            text = _content_text(item.get("content") or item.get("text"))
+            prompt = _clean_user_prompt_text(text)
+            if prompt:
+                return prompt
+    return ""
+
+
+def _clean_user_prompt_text(text: str) -> str:
+    text = text.strip()
+    if not text:
+        return ""
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, str) and decoded:
+            text = decoded.strip()
+
+    request = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", text, flags=re.DOTALL | re.IGNORECASE)
+    if request:
+        return request.group(1).strip()
+
+    session = re.fullmatch(r"<session>\s*(.*?)\s*</session>", text, flags=re.DOTALL | re.IGNORECASE)
+    if session:
+        return session.group(1).strip()
+
+    first_tag = re.match(r"^<([A-Za-z_-]+)>", text)
+    if first_tag and first_tag.group(1).lower() in {
+        "artifacts",
+        "environment_context",
+        "session_context",
+        "skills",
+        "slash_commands",
+        "subagents",
+        "system-reminder",
+        "user_information",
+    }:
+        return ""
+
+    if text.startswith("# AGENTS.md instructions") or text.startswith("<INSTRUCTIONS>"):
+        return ""
+
+    return text
 
 
 def _response_text(body: Any) -> str:
@@ -653,7 +730,7 @@ def _content_text(value: Any) -> str:
             if isinstance(item, str):
                 parts.append(item)
             elif isinstance(item, dict):
-                for key in ("text", "content", "output_text"):
+                for key in ("text", "content", "output_text", "input_text"):
                     text = item.get(key)
                     if isinstance(text, str):
                         parts.append(text)
@@ -666,7 +743,7 @@ def _content_text(value: Any) -> str:
                         parts.append(_content_text(item.get("content")))
         return "\n".join(part for part in parts if part).strip()
     if isinstance(value, dict):
-        for key in ("text", "content", "output_text"):
+        for key in ("text", "content", "output_text", "input_text"):
             text = value.get(key)
             if isinstance(text, (str, list, dict)):
                 return _content_text(text)
