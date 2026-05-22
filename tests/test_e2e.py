@@ -1227,22 +1227,77 @@ def test_parse_args(monkeypatch, tmp_path):
 async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tmp_path):
     """Default live viewer starts, and --tap-no-open controls browser opening."""
     from claude_tap import async_main, parse_args
+    from claude_tap.live import LiveViewerServer
 
     opened_urls = []
+    spawned_servers: list[LiveViewerServer] = []
 
     async def fake_run_client(*args, **kwargs):
         return 0
 
+    async def fake_ensure_shared_dashboard(*, host, port, output_dir, open_browser, open_browser_fn):
+        server = LiveViewerServer(port=0, migrate_from=output_dir, dashboard_mode=True)
+        await server.start()
+        spawned_servers.append(server)
+        if open_browser:
+            open_browser_fn(server.url)
+        return server.url, True
+
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+    monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", fake_ensure_shared_dashboard)
 
     args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-update-check"])
-    code = await async_main(args)
+    try:
+        code = await async_main(args)
+    finally:
+        for server in spawned_servers:
+            await server.stop()
 
     assert code == 0
-    assert len(opened_urls) >= 1
+    assert len(opened_urls) == 1
     assert all(url.startswith("http://127.0.0.1:") for url in opened_urls)
+
+
+@pytest.mark.asyncio
+async def test_async_main_reuses_existing_dashboard_without_opening_browser(monkeypatch, tmp_path):
+    """A second claude-tap run should attach to an existing dashboard without opening a browser."""
+    from claude_tap import async_main, parse_args
+    from claude_tap.live import LiveViewerServer
+
+    opened_urls = []
+    spawned_servers: list[LiveViewerServer] = []
+    attach_calls = {"count": 0}
+
+    async def fake_run_client(*args, **kwargs):
+        return 0
+
+    async def fake_ensure_shared_dashboard(*, host, port, output_dir, open_browser, open_browser_fn):
+        attach_calls["count"] += 1
+        if attach_calls["count"] == 1:
+            server = LiveViewerServer(port=0, migrate_from=output_dir, dashboard_mode=True)
+            await server.start()
+            spawned_servers.append(server)
+            if open_browser:
+                open_browser_fn(server.url)
+            return server.url, True
+        return f"http://{host}:{port}", False
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-shared.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+    monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", fake_ensure_shared_dashboard)
+
+    args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-update-check"])
+    try:
+        assert await async_main(args) == 0
+        assert await async_main(args) == 0
+    finally:
+        for server in spawned_servers:
+            await server.stop()
+
+    assert len(opened_urls) == 1
 
 
 @pytest.mark.asyncio
@@ -1255,9 +1310,15 @@ async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypat
     async def fake_run_client(*args, **kwargs):
         return 0
 
+    from unittest.mock import AsyncMock
+
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-no-live.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+    monkeypatch.setattr(
+        "claude_tap.cli.ensure_shared_dashboard",
+        AsyncMock(side_effect=AssertionError("dashboard should stay disabled")),
+    )
 
     args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-update-check", "--tap-no-live", "--tap-no-open"])
     code = await async_main(args)
@@ -3335,6 +3396,9 @@ async def test_live_viewer_server():
 @pytest.mark.asyncio
 async def test_dashboard_main_serves_viewer(monkeypatch, tmp_path):
     """Test the dashboard command starts a standalone dashboard server."""
+    import socket
+    from unittest.mock import AsyncMock
+
     import aiohttp
 
     from claude_tap import dashboard_main, parse_dashboard_args
@@ -3342,8 +3406,13 @@ async def test_dashboard_main_serves_viewer(monkeypatch, tmp_path):
     opened_urls: list[str] = []
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=False))
 
-    args = parse_dashboard_args(["--tap-output-dir", str(tmp_path), "--tap-live-port", "0"])
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        dashboard_port = sock.getsockname()[1]
+
+    args = parse_dashboard_args(["--tap-output-dir", str(tmp_path), "--tap-live-port", str(dashboard_port)])
     task = asyncio.create_task(dashboard_main(args))
     try:
         for _ in range(50):

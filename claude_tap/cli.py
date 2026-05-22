@@ -28,6 +28,13 @@ from claude_tap.forward_proxy import ForwardProxyServer
 from claude_tap.history import cleanup_trace_sessions, migrate_legacy_traces
 from claude_tap.live import LiveViewerServer
 from claude_tap.proxy import proxy_handler
+from claude_tap.shared_dashboard import (
+    DEFAULT_DASHBOARD_PORT,
+    dashboard_url,
+    ensure_shared_dashboard,
+    is_dashboard_healthy,
+    resolve_dashboard_port,
+)
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
 from claude_tap.trace_store import get_trace_store, resolve_db_path
@@ -568,21 +575,27 @@ async def async_main(args: argparse.Namespace):
         if trust_result != 0:
             return trust_result
 
-    # Start live viewer server if requested
-    live_server: LiveViewerServer | None = None
+    # Ensure the shared dashboard is running (one port for all sessions).
+    dashboard_url_value: str | None = None
     if args.live_viewer:
-        live_server = LiveViewerServer(
-            session_id,
-            port=args.live_port,
-            host=args.host,
-            migrate_from=output_dir,
-        )
-        await live_server.start()
-        print(f"🌐 Live viewer: {live_server.url}")
-        if args.open_viewer:
-            _open_browser(live_server.url)
+        dashboard_host = "127.0.0.1"
+        dashboard_port = resolve_dashboard_port(args.live_port)
+        try:
+            dashboard_url_value, spawned = await ensure_shared_dashboard(
+                host=dashboard_host,
+                port=dashboard_port,
+                output_dir=output_dir,
+                open_browser=args.open_viewer,
+                open_browser_fn=_open_browser,
+            )
+            if spawned:
+                print(f"🌐 Dashboard: {dashboard_url_value}")
+            else:
+                print(f"🌐 Dashboard: {dashboard_url_value} (shared)")
+        except RuntimeError as exc:
+            print(f"⚠️  {exc}", file=sys.stderr)
 
-    writer = TraceWriter(session_id, live_server=live_server, metadata=trace_metadata, store=store)
+    writer = TraceWriter(session_id, live_server=None, metadata=trace_metadata, store=store)
 
     # Proxy logs go to SQLite, not terminal (avoids polluting Claude TUI)
     sqlite_handler = SQLiteLogHandler(session_id, store=store)
@@ -699,12 +712,7 @@ async def async_main(args: argparse.Namespace):
             except Exception:
                 pass
 
-        # Stop live viewer server if running
-        if live_server:
-            try:
-                await live_server.stop()
-            except Exception:
-                pass
+        # Shared dashboard runs in a detached process; nothing to stop here.
         try:
             await asyncio.wait_for(session.close(), timeout=5)
         except asyncio.TimeoutError:
@@ -741,13 +749,8 @@ async def async_main(args: argparse.Namespace):
 
         print(f"   Session: {session_id}")
         print(f"   Database: {resolve_db_path()}")
-
-        if args.open_viewer and live_server:
-            print("\n🌐 Opening live viewer in browser...")
-            _open_browser(live_server.url)
-        elif args.open_viewer:
-            print("\n🌐 Open the dashboard to browse traces:")
-            print("   claude-tap dashboard")
+        if dashboard_url_value:
+            print(f"   Dashboard: {dashboard_url_value}")
 
     return exit_code
 
@@ -998,20 +1001,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         dest="live_viewer",
         default=True,
-        help="Start real-time viewer server while the client runs (default: on)",
+        help="Use the shared local dashboard while the client runs (default: on)",
     )
     viewer_group.add_argument(
         "--tap-no-live",
         action="store_false",
         dest="live_viewer",
-        help="Disable the real-time viewer server (restores pre-v0.1.75 behavior)",
+        help="Disable the shared dashboard (restores pre-v0.1.75 behavior)",
     )
     viewer_group.add_argument(
         "--tap-live-port",
         type=int,
         default=0,
         dest="live_port",
-        help="Port for live viewer server (default: auto)",
+        help=f"Port for the shared dashboard (default: {DEFAULT_DASHBOARD_PORT})",
     )
 
     # -- Storage & update options --
@@ -1112,13 +1115,28 @@ async def dashboard_main(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    host = args.host
+    port = resolve_dashboard_port(args.live_port)
+    if await is_dashboard_healthy(host, port):
+        url = dashboard_url(host, port)
+        print(f"🌐 claude-tap dashboard already running: {url}")
+        print(f"🗄️  Trace database: {resolve_db_path()}")
+        return 0
+
     server = LiveViewerServer(
-        port=args.live_port,
-        host=args.host,
+        port=port,
+        host=host,
         migrate_from=output_dir,
         dashboard_mode=True,
     )
-    await server.start()
+    try:
+        await server.start()
+    except OSError:
+        if await is_dashboard_healthy(host, port):
+            url = dashboard_url(host, port)
+            print(f"🌐 claude-tap dashboard already running: {url}")
+            return 0
+        raise
     print(f"🌐 claude-tap dashboard: {server.url}")
     print(f"🗄️  Trace database: {resolve_db_path()}")
     if output_dir.exists():

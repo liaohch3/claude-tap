@@ -380,7 +380,13 @@ class LiveViewerServer:
         date_key = request.match_info["date"]
         if date_key != "legacy" and not _DATE_RE.match(date_key):
             return web.json_response({"error": "Invalid date format"}, status=400)
-        protected = {self.session_id} if self.session_id else set()
+        protected: set[str] = set()
+        if self.session_id:
+            protected.add(self.session_id)
+        else:
+            for row in get_trace_store().list_session_rows():
+                if (row["status"] or "") == "active":
+                    protected.add(row["id"])
         try:
             result = delete_trace_history(date_key, protected_session_ids=protected)
         except ValueError as exc:
