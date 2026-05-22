@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+
+## [0.1.76] - 2026-05-22
+
+### Changed
+- fix: unblock protected auto release (#208)
 ## [0.1.75] - 2026-05-22
 
 ### Added
