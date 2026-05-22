@@ -139,6 +139,18 @@ def test_dashboard_indexes_sessions_in_sqlite(tmp_path: Path) -> None:
     assert [record["turn"] for record in payload["records"]] == [1, 2]
 
 
+def test_dashboard_load_session_can_page_sqlite_records(tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])
+    session_id = list_trace_sessions(tmp_path)[0]["id"]
+
+    payload = load_trace_session(tmp_path, session_id, record_limit=1, record_offset=1)
+
+    assert payload is not None
+    assert payload["session"]["record_count"] == 3
+    assert [record["turn"] for record in payload["records"]] == [2]
+
+
 def test_dashboard_detail_uses_sqlite_cache_without_rereading_jsonl(monkeypatch, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
@@ -487,7 +499,7 @@ async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> N
     html_path = trace_path.with_suffix(".html")
     no_html_trace_path = tmp_path / "2026-05-20" / "trace_081500.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
-    _write_jsonl(no_html_trace_path, [_anthropic_record(turn=2)])
+    _write_jsonl(no_html_trace_path, [_anthropic_record(turn=2), _anthropic_record(turn=3)])
     html_path.write_text("<!doctype html><title>trace</title>", encoding="utf-8")
 
     server = LiveViewerServer(tmp_path / "dashboard.jsonl", port=0, output_dir=tmp_path, dashboard_mode=True)
@@ -515,6 +527,14 @@ async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> N
                 assert resp.status == 200
                 payload = await resp.json()
                 assert payload["records"][0]["request_id"] == "req_claude"
+
+            async with session.get(
+                f"http://127.0.0.1:{port}/api/sessions/{no_html_session_id}/records?offset=1&limit=1"
+            ) as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["session"]["record_count"] == 2
+                assert [record["turn"] for record in payload["records"]] == [3]
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/html") as resp:
                 assert resp.status == 200

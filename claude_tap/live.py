@@ -36,6 +36,17 @@ def _record_limit_from_request(request: web.Request) -> int | None:
     return max(0, min(limit, MAX_SESSION_RECORD_LIMIT))
 
 
+def _record_offset_from_request(request: web.Request) -> int:
+    value = request.query.get("offset")
+    if value is None:
+        return 0
+    try:
+        offset = int(value)
+    except ValueError:
+        return 0
+    return max(0, offset)
+
+
 class LiveViewerServer:
     """HTTP server for real-time trace viewing via SSE."""
 
@@ -332,6 +343,7 @@ class LiveViewerServer:
             request.match_info["session_id"],
             current_trace_path=self.trace_path,
             record_limit=_record_limit_from_request(request),
+            record_offset=_record_offset_from_request(request),
         )
         if session is None:
             return web.json_response({"error": "Session not found"}, status=404)
@@ -346,6 +358,7 @@ class LiveViewerServer:
             request.match_info["session_id"],
             current_trace_path=self.trace_path,
             record_limit=0,
+            record_offset=0,
         )
         if session is None:
             return web.Response(status=404, text="Session not found")

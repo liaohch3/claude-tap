@@ -111,6 +111,7 @@ def load_trace_session(
     session_id: str,
     current_trace_path: Path | None = None,
     record_limit: int | None = None,
+    record_offset: int = 0,
 ) -> dict[str, Any] | None:
     """Load one session summary and its records by session id."""
     trace_path = trace_path_for_session_id(output_dir, session_id)
@@ -124,7 +125,7 @@ def load_trace_session(
     try:
         store = _sync_trace_store(output_dir, manifest)
         summary = store.load_summary(rel_path)
-        records = store.load_records(rel_path, limit=record_limit)
+        records = store.load_records(rel_path, limit=record_limit, offset=record_offset)
     except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
         summary = None
     if summary is None:
@@ -138,7 +139,7 @@ def load_trace_session(
             manifest_entry=manifest.get(rel_path, {}),
             is_current=current_resolved == trace_path.resolve(),
         )
-        records = _limit_records(all_records, record_limit)
+        records = _limit_records(all_records, record_limit, record_offset)
     else:
         summary = _apply_current_session_state(summary, current_trace_path)
     return {"session": summary, "records": records}
@@ -242,10 +243,15 @@ def _read_jsonl_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _limit_records(records: list[dict[str, Any]], record_limit: int | None) -> list[dict[str, Any]]:
+def _limit_records(
+    records: list[dict[str, Any]],
+    record_limit: int | None,
+    record_offset: int = 0,
+) -> list[dict[str, Any]]:
+    record_offset = max(0, record_offset)
     if record_limit is None:
-        return records
-    return records[: max(0, record_limit)]
+        return records[record_offset:]
+    return records[record_offset : record_offset + max(0, record_limit)]
 
 
 def _manifest_by_trace_path(output_dir: Path) -> dict[str, dict[str, Any]]:

@@ -535,6 +535,31 @@ button { cursor: pointer; }
   color: var(--amber);
   font-size: 12px;
 }
+.detail-load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+.load-more-btn {
+  min-height: 32px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 12px;
+  transition: background .15s, border-color .15s;
+}
+.load-more-btn:hover {
+  border-color: var(--blue);
+  background: var(--blue-bg);
+}
+.load-more-btn:disabled {
+  cursor: progress;
+  color: var(--text-tertiary);
+  background: var(--bg-hover);
+}
 .detail::-webkit-scrollbar { width: 6px; }
 .detail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .empty {
@@ -863,7 +888,9 @@ const DASHBOARD_I18N = {
     loading_sessions: "Loading sessions...",
     loading_session: "Loading session detail...",
     loading_viewer: "Loading viewer...",
-    limited_records: "Showing the first {shown} of {total} records. Open the generated HTML viewer for the full trace.",
+    loading_more_records: "Loading more records...",
+    load_more_records: "Load more records",
+    limited_records: "Showing {shown} of {total} records.",
     no_user_prompt: "No captured user prompt.",
     unknown: "unknown",
     view_details: "View session details",
@@ -937,7 +964,9 @@ const DASHBOARD_I18N = {
     loading_sessions: "正在加载会话...",
     loading_session: "正在加载会话详情...",
     loading_viewer: "正在加载 viewer...",
-    limited_records: "正在展示前 {shown} / {total} 条记录。完整 trace 请打开生成的 HTML viewer。",
+    loading_more_records: "正在加载更多记录...",
+    load_more_records: "加载更多记录",
+    limited_records: "正在展示 {shown} / {total} 条记录。",
     no_user_prompt: "未捕获到用户 prompt。",
     unknown: "未知",
     view_details: "查看会话详情",
@@ -1328,7 +1357,7 @@ function showDetailLoading(sessionId) {
 async function loadSession(sessionId) {
   state.loadingSessionId = sessionId;
   try {
-    const payload = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionId)}/records?limit=${MAX_INLINE_DETAIL_RECORDS}`);
+    const payload = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionId)}/records?offset=0&limit=${MAX_INLINE_DETAIL_RECORDS}`);
     if (state.selectedSessionId !== sessionId) return;
     renderDetail(payload.session, payload.records || []);
   } catch (error) {
@@ -1343,11 +1372,29 @@ async function loadSession(sessionId) {
   }
 }
 
+async function loadMoreSessionRecords(session, records, button) {
+  const sessionId = session.id;
+  const offset = records.length;
+  button.disabled = true;
+  button.textContent = t("loading_more_records");
+  try {
+    const payload = await fetchJSON(
+      `/api/sessions/${encodeURIComponent(sessionId)}/records?offset=${offset}&limit=${MAX_INLINE_DETAIL_RECORDS}`
+    );
+    if (state.selectedSessionId !== sessionId) return;
+    const nextRecords = payload.records || [];
+    renderDetail(payload.session, records.concat(nextRecords));
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = t("load_more_records");
+    console.error(error);
+  }
+}
+
 function renderDetail(session, records) {
   const statusClass = ["active", "error", "empty"].includes(session.status) ? session.status : "";
-  const inlineRecords = records.slice(0, MAX_INLINE_DETAIL_RECORDS);
   const totalRecords = Number(session.record_count || records.length);
-  const hasHiddenRecords = totalRecords > inlineRecords.length;
+  const hasHiddenRecords = totalRecords > records.length;
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.rel_trace_path || session.trace_path || "";
   updateTracePathBar(session);
@@ -1369,7 +1416,7 @@ function renderDetail(session, records) {
   }
   $("#detail").innerHTML = `
     <div class="detail-fallback-note">${esc(t("fallback_viewer"))}</div>
-    ${hasHiddenRecords ? `<div class="detail-fallback-note">${esc(t("limited_records", {shown: inlineRecords.length, total: totalRecords}))}</div>` : ""}
+    ${hasHiddenRecords ? `<div class="detail-fallback-note">${esc(t("limited_records", {shown: records.length, total: totalRecords}))}</div>` : ""}
     <div class="detail-inspector-bar">
       <div class="detail-tabs">
         <button class="detail-tab ${state.activeTab === "conversation" ? "active" : ""}" data-tab="conversation">${esc(t("tab_default"))}</button>
@@ -1396,10 +1443,12 @@ function renderDetail(session, records) {
       </div>
     </div>
     <div id="conversation-tab" class="${state.activeTab === "conversation" ? "" : "hidden"}">
-      <div class="records">${inlineRecords.map((record, index) => renderRecord(record, index)).join("") || emptyRecord()}</div>
+      <div class="records">${records.map((record, index) => renderRecord(record, index)).join("") || emptyRecord()}</div>
+      ${hasHiddenRecords ? `<div class="detail-load-more"><button class="load-more-btn" type="button" data-load-more>${esc(t("load_more_records"))}</button></div>` : ""}
     </div>
     <div id="raw-tab" class="${state.activeTab === "raw" ? "" : "hidden"}">
-      <div class="json-view open"><pre>${esc(JSON.stringify(inlineRecords, null, 2))}</pre></div>
+      <div class="json-view open"><pre>${esc(JSON.stringify(records, null, 2))}</pre></div>
+      ${hasHiddenRecords ? `<div class="detail-load-more"><button class="load-more-btn" type="button" data-load-more>${esc(t("load_more_records"))}</button></div>` : ""}
     </div>
   `;
 
@@ -1415,11 +1464,14 @@ function renderDetail(session, records) {
       const pre = panel?.querySelector("[data-json-index]");
       if (pre && !pre.dataset.rendered) {
         const index = Number(pre.dataset.jsonIndex);
-        pre.textContent = JSON.stringify(inlineRecords[index] || {}, null, 2);
+        pre.textContent = JSON.stringify(records[index] || {}, null, 2);
         pre.dataset.rendered = "true";
       }
       panel?.classList.toggle("open");
     });
+  });
+  document.querySelectorAll("[data-load-more]").forEach(button => {
+    button.addEventListener("click", () => loadMoreSessionRecords(session, records, button));
   });
   document.querySelectorAll("[data-copy-path]").forEach(button => {
     button.addEventListener("click", () => navigator.clipboard?.writeText(button.dataset.copyPath || ""));
