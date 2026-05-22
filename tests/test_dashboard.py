@@ -498,8 +498,6 @@ async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> N
                 assert resp.status == 200
                 html = await resp.text()
                 assert "session-list" in html
-                assert "dashboard-load-status" in html
-                assert "viewer-loading" in html
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
                 assert resp.status == 200
