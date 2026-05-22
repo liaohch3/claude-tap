@@ -107,7 +107,7 @@ python scripts/check_changelog.py --tag v0.1.40
 
 Insert a release section in `CHANGELOG.md` when one is missing.
 
-Auto-release uses this before tagging so normal feature/fix PRs are not blocked by changelog bookkeeping. If the main branch is protected, auto-release opens a changelog PR, enables auto-merge, and publishes after that PR is merged.
+Auto-release uses this before tagging so normal feature/fix PRs are not blocked by changelog bookkeeping. If the main branch is protected, auto-release opens or updates a changelog PR with the standard PR body, waits for the PR checks, merges it with the release bot's admin bypass, and publishes after that PR is merged.
 
 ### Usage
 
