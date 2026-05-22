@@ -21,7 +21,7 @@ This runs:
    - `uv run ruff check .`
    - `uv run ruff format --check .`
    - `uv run pytest tests/ -x --timeout=60`
-4. **Screenshot evidence** — scans PR body for image links (required by project policy)
+4. **PR body policy** — validates required sections, evidence links, and blocked artifacts
 5. **Verdict** — `READY` or `NOT_READY` with specific reasons
 
 ### Options
@@ -62,7 +62,7 @@ The script reports `NOT_READY` if any of these are true:
 - Any CI check is failing
 - Any CI check is still pending
 - Local gates (lint/format/tests) fail
-- No screenshot evidence in PR body
+- PR body policy fails, such as missing evidence for runtime/viewer/client changes
 
 ## Typical workflow
 

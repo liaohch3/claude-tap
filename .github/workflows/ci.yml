@@ -9,6 +9,9 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,8 +22,17 @@ jobs:
       - run: pip install ruff
       - run: ruff check .
       - run: ruff format --check .
+      - name: Collect changed files for PR policy
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > /tmp/pr-changed-files.txt
+      - name: Validate PR body policy
+        if: github.event_name == 'pull_request'
+        run: python scripts/check_pr_policy.py --event-path "$GITHUB_EVENT_PATH" --changed-files-file /tmp/pr-changed-files.txt
 
-  screenshot-evidence:
+  screenshot-quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +41,25 @@ jobs:
           python-version: "3.12"
       - name: Validate screenshot evidence quality
         run: python scripts/check_screenshots.py .agents/evidence/pr/
+
+  pr-policy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Collect changed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > /tmp/pr-changed-files.txt
+      - name: Validate PR body policy
+        run: python scripts/check_pr_policy.py --event-path "$GITHUB_EVENT_PATH" --changed-files-file /tmp/pr-changed-files.txt
 
   test:
     runs-on: ubuntu-latest

@@ -22,6 +22,39 @@ python -m coverage json -o .coverage.json
 python scripts/check_coverage.py --python-coverage .coverage.json
 ```
 
+## `check_pr_policy.py`
+
+Validate PR body policy against the changed files in a pull request.
+
+The check enforces machine-readable maintainer rules:
+
+- Summary/Problem/Goal and Validation/Test plan/Results sections are present
+- Runtime, viewer, client, proxy, or UI behavior changes include
+  `raw.githubusercontent.com` screenshot evidence
+- PR image links use `raw.githubusercontent.com`
+- Raw traces, generated trace viewers, logs, and secret-like files are not part
+  of the PR
+- PR body does not include obvious API keys or bearer tokens
+
+### Usage
+
+```bash
+python scripts/check_pr_policy.py \
+  --body-file /tmp/pr-body.md \
+  --changed-files-file /tmp/pr-files.txt
+```
+
+In GitHub Actions, pass the event payload:
+
+```bash
+python scripts/check_pr_policy.py \
+  --event-path "$GITHUB_EVENT_PATH" \
+  --changed-files-file /tmp/pr-files.txt
+```
+
+The CI workflow runs this check both as a standalone `pr-policy` job and inside
+the existing required `lint` job.
+
 ## `translate_i18n.py`
 
 Translate missing i18n strings in `claude_tap/viewer_i18n.json` using OpenRouter.

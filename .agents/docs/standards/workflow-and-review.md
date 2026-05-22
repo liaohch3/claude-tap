@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-06
+last_reviewed: 2026-05-20
 source_of_truth: AGENTS.md
 ---
 
@@ -27,6 +27,32 @@ git branch -d feat/<name>
 3. `uv run pytest tests/ -x --timeout=60`
 4. `git diff` 并检查每一行变更。
 5. 确认只改动了相关文件。
+
+# PR 正文策略门禁
+
+`scripts/check_pr_policy.py` 是 PR 正文和 evidence 规则的统一机器检查入口。开 PR 前和 review preflight 都必须让它通过。
+
+该门禁检查：
+
+1. PR 正文包含 Summary/Problem/Goal 等摘要段落。
+2. PR 正文包含 Validation/Test plan/Results 等验证段落。
+3. 改动 runtime、viewer、client、proxy 或 UI 行为时，PR 正文包含 `raw.githubusercontent.com` 截图证据链接。
+4. PR 正文中的图片链接使用 `raw.githubusercontent.com` 绝对 URL。
+5. PR 不包含 raw trace、生成的 trace viewer、日志、secret-like 文件或明显 token。
+
+本地检查：
+
+```bash
+scripts/check_pr.sh <pr-number> --no-tests
+```
+
+CI 检查：
+
+```bash
+python scripts/check_pr_policy.py --event-path "$GITHUB_EVENT_PATH" --changed-files-file /tmp/pr-changed-files.txt
+```
+
+CI 同时在独立的 `pr-policy` job 和现有 required `lint` job 中运行该检查，避免新增 required status check 之前出现可绕过窗口。
 
 # 复利式工程实践
 

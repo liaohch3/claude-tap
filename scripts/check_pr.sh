@@ -66,6 +66,7 @@ if [ -z "$pr_number" ]; then
 fi
 
 require_cmd gh
+require_cmd python3
 if [ "$run_tests" -eq 1 ]; then
   require_cmd uv
 fi
@@ -91,6 +92,7 @@ pr_base=$(printf '%s\n' "$metadata" | sed -n '6p')
 pr_url=$(printf '%s\n' "$metadata" | sed -n '7p')
 
 pr_body="$(gh pr view "$pr_number" --repo "$repo" --json body --template '{{.body}}')"
+pr_files="$(gh pr view "$pr_number" --repo "$repo" --json files --jq '.files[].path')"
 
 if [ -z "$pr_title" ] || [ -z "$pr_state" ] || [ -z "$pr_merge_status" ]; then
   echo "error: failed to parse PR metadata from gh" >&2
@@ -173,38 +175,15 @@ else
   echo 'Local gates: skipped (--no-tests)'
 fi
 
-# Screenshot / evidence check
-has_screenshot=0
-if printf '%s' "$pr_body" | grep -qiE '!\[.*\]\(.*\.(png|jpg|jpeg|gif|svg|webp)'; then
-  has_screenshot=1
-fi
-if printf '%s' "$pr_body" | grep -qiE '\.(png|jpg|jpeg|gif|svg|webp)\)'; then
-  has_screenshot=1
-fi
-if printf '%s' "$pr_body" | grep -qiE '<img '; then
-  has_screenshot=1
-fi
-
-if [ "$has_screenshot" -eq 1 ]; then
-  echo 'Screenshots: found in PR body'
+policy_failed=0
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+printf '%s' "$pr_body" >"$tmp_dir/body.md"
+printf '%s\n' "$pr_files" >"$tmp_dir/files.txt"
+if python3 scripts/check_pr_policy.py --body-file "$tmp_dir/body.md" --changed-files-file "$tmp_dir/files.txt"; then
+  :
 else
-  cat <<'SCREENSHOT_ERR'
-Screenshots: MISSING
-
-  Every PR must include screenshots of the real running system.
-
-  Our screenshot standard (.agents/docs/standards/screenshot-standards.md):
-  - Screenshots must show the trace viewer HTML at desktop viewport (>=1280px)
-  - Must capture the exact feature/fix claimed (e.g. WEBSOCKET 101, not unrelated GET)
-  - Use ASCII-safe characters, no raw Unicode arrows that may garble
-  - Run `python3 scripts/check_screenshots.py .agents/evidence/pr/` before commit
-
-  What to do:
-  1. Run the feature, open the trace viewer HTML in a browser (>=1280px wide)
-  2. Screenshot the specific row/panel proving the fix works
-  3. Add image to .agents/evidence/pr/ and link in PR body with ![description](url)
-  4. Verify: no garbled text, correct content shown, legible at normal zoom
-SCREENSHOT_ERR
+  policy_failed=1
 fi
 
 ready=1
@@ -251,9 +230,9 @@ if [ "$gate_failed" -eq 1 ]; then
   ready=0
   append_reason 'local gates failed'
 fi
-if [ "$has_screenshot" -eq 0 ]; then
+if [ "$policy_failed" -eq 1 ]; then
   ready=0
-  append_reason 'no screenshots in PR body'
+  append_reason 'PR policy failed'
 fi
 
 if [ "$ready" -eq 1 ]; then
