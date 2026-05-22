@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Breaking change:** the live viewer now starts by default when `claude-tap` runs a client, so users can watch trace records while the agent is still running.
+- `--tap-no-open` now prevents both the live viewer and the generated HTML viewer from auto-opening in a browser.
 
+### Added
+- Add `--tap-no-live` to disable the live viewer server and restore the pre-v0.1.75 default behavior for scripts, CI, remote shells, or other non-interactive runs.
 
 
 

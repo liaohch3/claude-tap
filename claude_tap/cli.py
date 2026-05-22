@@ -495,7 +495,8 @@ async def async_main(args: argparse.Namespace):
         live_server = LiveViewerServer(trace_path, port=args.live_port, host=args.host, output_dir=output_dir)
         await live_server.start()
         print(f"🌐 Live viewer: {live_server.url}")
-        _open_browser(live_server.url)
+        if args.open_viewer:
+            _open_browser(live_server.url)
 
     writer = TraceWriter(trace_path, live_server=live_server)
 
@@ -771,12 +772,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
         epilog=(
             "claude code:\n"
-            "  claude-tap                            Basic tracing\n"
-            "  claude-tap --tap-live                 Real-time viewer in browser\n"
+            "  claude-tap                            Basic tracing with live viewer enabled by default\n"
+            "  claude-tap --tap-no-live              Disable live viewer server/browser auto-open\n"
+            "  claude-tap --tap-no-open              Keep viewers from auto-opening in a browser\n"
             "  claude-tap -- --model claude-opus-4-6  Pass flags to Claude Code\n"
             "  claude-tap -- -c                      Continue last conversation\n"
             "  claude-tap -- --dangerously-skip-permissions  Auto-accept tool calls\n"
-            "  claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6\n"
+            "  claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6\n"
             "\n"
             "codex cli:\n"
             "  # Target is auto-detected from Codex auth state when possible\n"
@@ -811,7 +813,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "\n"
             "hermes agent (multi-provider Python agent — forward proxy default):\n"
             "  # Interactive TUI — captures LLM calls directly\n"
-            "  claude-tap --tap-client hermes --tap-live\n"
+            "  claude-tap --tap-client hermes\n"
             "  # Gateway mode — captures LLM calls triggered by Slack/Telegram/etc. messages\n"
             "  #   (requires messaging platform configured in ~/.hermes/.env)\n"
             "  claude-tap --tap-client hermes -- gateway start\n"
@@ -900,14 +902,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_false",
         dest="open_viewer",
         default=True,
-        help="Don't auto-open HTML viewer after exit",
+        help="Don't auto-open live or generated HTML viewers in a browser",
     )
     viewer_group.add_argument(
         "--tap-live",
         action="store_true",
         dest="live_viewer",
         default=True,
-        help="Start real-time viewer server (auto-opens browser)",
+        help="Start real-time viewer server while the client runs (default: on)",
+    )
+    viewer_group.add_argument(
+        "--tap-no-live",
+        action="store_false",
+        dest="live_viewer",
+        help="Disable the real-time viewer server (restores pre-v0.1.75 behavior)",
     )
     viewer_group.add_argument(
         "--tap-live-port",

@@ -80,11 +80,11 @@ Upgrade: `claude-tap update`, `uv tool upgrade claude-tap`, or `pip install --up
 Run the client you want to inspect through `claude-tap`. Flags after `--` are passed to the selected client.
 
 ```bash
-# Claude Code
+# Claude Code with the live browser viewer enabled by default
 claude-tap
 
-# Claude Code with live browser viewer
-claude-tap --tap-live
+# Restore pre-v0.1.75 behavior: no live viewer server
+claude-tap --tap-no-live
 
 # Codex CLI
 claude-tap --tap-client codex
@@ -116,8 +116,8 @@ claude-tap -c    # continue last conversation
 # Skip all permission prompts (auto-accept tool calls)
 claude-tap -- --dangerously-skip-permissions
 
-# Live viewer + skip permissions + specific model
-claude-tap --tap-live -- --dangerously-skip-permissions --model claude-sonnet-4-6
+# Live viewer is on by default; pass Claude flags after --
+claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
 `claude-tap` auto-detects custom Claude Code upstreams from `ANTHROPIC_BASE_URL`
@@ -180,8 +180,8 @@ claude-tap --tap-client codex -- --model codex-mini-latest
 # Full auto-approval (skip all permission prompts)
 claude-tap --tap-client codex -- --full-auto
 
-# OAuth + full auto + live viewer
-claude-tap --tap-client codex --tap-live -- --full-auto
+# OAuth + full auto; live viewer is enabled by default
+claude-tap --tap-client codex -- --full-auto
 ```
 
 </details>
@@ -210,8 +210,8 @@ Gemini CLI uses forward proxy mode by default. Google OAuth / Code Assist traffi
 # Google OAuth / Code Assist
 claude-tap --tap-client gemini -- -p "hello"
 
-# Live viewer
-claude-tap --tap-client gemini --tap-live -- -p "hello"
+# Live viewer is enabled by default
+claude-tap --tap-client gemini -- -p "hello"
 
 # Reverse mode for compatible API-key / Vertex flows
 claude-tap --tap-client gemini --tap-proxy-mode reverse -- -p "hello"
@@ -228,8 +228,8 @@ claude-tap --tap-client gemini --tap-proxy-mode reverse -- -p "hello"
 # Forward proxy mode — captures every provider opencode talks to (default)
 claude-tap --tap-client opencode
 
-# With live viewer
-claude-tap --tap-client opencode --tap-live
+# Live viewer is enabled by default
+claude-tap --tap-client opencode
 
 # Reverse mode — only works when using Anthropic provider (single ANTHROPIC_BASE_URL)
 claude-tap --tap-client opencode --tap-proxy-mode reverse
@@ -246,8 +246,8 @@ claude-tap --tap-client opencode --tap-proxy-mode reverse
 # OpenAI Codex OAuth via Pi's openai-codex provider
 claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
 
-# With live viewer
-claude-tap --tap-client pi --tap-live -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
+# Live viewer is enabled by default
+claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
 
 # Read-only tool capture
 claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark --tools bash -p "Run pwd"
@@ -264,7 +264,7 @@ Hermes Agent is a multi-provider Python AI agent (Nous Portal, OpenRouter, NVIDI
 
 ```bash
 # Interactive TUI — the recommended way for local trace capture.
-claude-tap --tap-client hermes --tap-live
+claude-tap --tap-client hermes
 
 # Gateway mode — captures LLM calls triggered by incoming platform messages (Slack, Telegram, etc.).
 # Requires a messaging platform configured in ~/.hermes/.env.
@@ -318,8 +318,11 @@ claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
 <summary>Viewer, export, and advanced options</summary>
 
 ```bash
-# Live viewer while a client runs
-claude-tap --tap-live
+# Live viewer runs by default while a client runs
+claude-tap
+
+# Disable live viewer for scripts, CI, remote shells, or old behavior
+claude-tap --tap-no-live
 
 # Browse saved traces without launching a client
 claude-tap dashboard
@@ -334,7 +337,7 @@ claude-tap --tap-max-traces 10
 # Start only the proxy for custom setups
 claude-tap --tap-no-launch --tap-port 8080
 
-# Disable auto-open of the generated viewer after exit
+# Disable browser auto-open for live and generated viewers
 claude-tap --tap-no-open
 ```
 
@@ -347,9 +350,10 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 ```
 --tap-client CLIENT      Client to launch: claude (default), codex, gemini, kimi, opencode, pi, hermes, cursor, or qoder
 --tap-target URL         Upstream API URL (default: auto per client)
---tap-live               Start real-time viewer (auto-opens browser)
+--tap-live               Start real-time viewer while the client runs (default: on)
+--tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)
 --tap-live-port PORT     Port for live viewer server (default: auto)
---tap-no-open            Don't auto-open HTML viewer after exit (on by default)
+--tap-no-open            Don't auto-open live or generated HTML viewers in a browser
 --tap-output-dir DIR     Trace output directory (default: ./.traces)
 --tap-port PORT          Proxy port (default: auto)
 --tap-host HOST          Bind address (default: 127.0.0.1, or 0.0.0.0 in --tap-no-launch mode)
@@ -393,7 +397,7 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 3. SSE and WebSocket streams are forwarded as chunks/messages arrive with low proxy overhead
 4. Each request-response pair or WebSocket session is recorded to a dated `trace_*.jsonl`
 5. On exit, a self-contained HTML viewer is generated
-6. Live mode (optional) broadcasts updates to browser via SSE
+6. Live mode is enabled by default and broadcasts updates to the browser via SSE
 
 **Key features:** 🔒 Common auth headers auto-redacted · ⚡ Low-overhead streaming · 📦 Self-contained viewer · 🔄 Real-time live mode
 

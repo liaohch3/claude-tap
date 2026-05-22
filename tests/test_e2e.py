@@ -1180,6 +1180,8 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.client == "claude"
     assert a.target == "https://api.anthropic.com"
     assert a.no_launch is False
+    assert a.live_viewer is True
+    assert a.open_viewer is True
     print("  OK: defaults")
 
     # Codex defaults
@@ -1209,8 +1211,14 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.port == 8080
     assert a.output_dir == "/tmp/t"
     assert a.target == "http://x"
+    assert a.open_viewer is False
     assert a.claude_args == []
     print("  OK: --tap-* flags consumed")
+
+    a = parse_args(["--tap-no-live"])
+    assert a.live_viewer is False
+    assert a.claude_args == []
+    print("  OK: --tap-no-live disables live viewer")
 
     # Mix: tap flags + claude flags
     a = parse_args(["--tap-port", "9999", "-c", "--model", "sonnet"])
@@ -1234,6 +1242,48 @@ def test_parse_args(monkeypatch, tmp_path):
     print("  OK: complex claude flags forwarded")
 
     print("\n  test_parse_args PASSED")
+
+
+@pytest.mark.asyncio
+async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tmp_path):
+    """Default live viewer starts, and --tap-no-open controls browser opening."""
+    from claude_tap import async_main, parse_args
+
+    opened_urls = []
+
+    async def fake_run_client(*args, **kwargs):
+        return 0
+
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+
+    args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-update-check"])
+    code = await async_main(args)
+
+    assert code == 0
+    assert len(opened_urls) == 2
+    assert opened_urls[0].startswith("http://127.0.0.1:")
+    assert opened_urls[1].startswith("file://")
+
+
+@pytest.mark.asyncio
+async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypatch, tmp_path):
+    """--tap-no-live disables the live server and --tap-no-open prevents browser opens."""
+    from claude_tap import async_main, parse_args
+
+    opened_urls = []
+
+    async def fake_run_client(*args, **kwargs):
+        return 0
+
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+
+    args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-update-check", "--tap-no-live", "--tap-no-open"])
+    code = await async_main(args)
+
+    assert code == 0
+    assert opened_urls == []
 
 
 def test_parse_args_allow_path_validation():
