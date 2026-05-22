@@ -178,6 +178,13 @@ button { cursor: pointer; }
   font-weight: 600;
   letter-spacing: .02em;
 }
+.dashboard-load-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
 .dashboard-clock {
   margin-left: auto;
   color: var(--red);
@@ -228,6 +235,11 @@ button { cursor: pointer; }
   transition: color .15s, border-color .15s, background .15s;
 }
 .history-refresh:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
+.history-refresh.loading,
+.history-refresh:disabled {
+  cursor: progress;
+  opacity: .68;
+}
 .overview-card {
   display: grid;
   grid-template-columns: repeat(4, max-content);
@@ -402,11 +414,40 @@ button { cursor: pointer; }
   border-color: var(--blue);
   background: var(--blue-bg);
 }
+.row-action:disabled {
+  cursor: progress;
+  color: var(--text-tertiary);
+  background: var(--bg-hover);
+}
 .table-empty {
   padding: 28px 16px;
   text-align: center;
   color: var(--text-tertiary);
   font-size: 13px;
+}
+.loading-cell {
+  padding: 34px 16px;
+  color: var(--text-tertiary);
+}
+.loading-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .detail-page-head {
@@ -461,6 +502,7 @@ button { cursor: pointer; }
   background: var(--bg);
 }
 .viewer-frame-wrap {
+  position: relative;
   height: calc(100vh - 148px);
   min-height: 640px;
   border: 1px solid var(--border);
@@ -474,6 +516,14 @@ button { cursor: pointer; }
   height: 100%;
   border: 0;
   display: block;
+  background: var(--bg-card);
+}
+.viewer-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
   background: var(--bg-card);
 }
 .detail-fallback-note {
@@ -490,6 +540,11 @@ button { cursor: pointer; }
 .empty {
   display: grid; place-items: center; min-height: 360px;
   color: var(--text-tertiary); font-size: 13px;
+}
+.detail-loading {
+  display: grid;
+  place-items: center;
+  min-height: 360px;
 }
 .detail-inspector-bar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -670,6 +725,7 @@ pre {
   <section id="list-view" class="list-view">
     <div class="dashboard-title-row">
       <h1 class="dashboard-title" data-i18n="dashboard_title">Conversation Log</h1>
+      <span class="dashboard-load-status" id="dashboard-load-status" hidden></span>
       <span class="dashboard-clock" id="dashboard-clock"></span>
     </div>
 
@@ -758,9 +814,13 @@ const state = {
   search: "",
   date: "all",
   status: "all",
+  loadingSessions: false,
+  loadingSessionId: null,
+  sessionRequestId: 0,
 };
 
 const $ = selector => document.querySelector(selector);
+const MAX_INLINE_DETAIL_RECORDS = 10;
 
 const DASHBOARD_I18N = {
   en: {
@@ -800,6 +860,10 @@ const DASHBOARD_I18N = {
     all_dates: "All dates",
     all_agents: "All agents",
     no_matching_sessions: "No matching trace sessions.",
+    loading_sessions: "Loading sessions...",
+    loading_session: "Loading session detail...",
+    loading_viewer: "Loading viewer...",
+    limited_records: "Showing the first {shown} of {total} records. Open the generated HTML viewer for the full trace.",
     no_user_prompt: "No captured user prompt.",
     unknown: "unknown",
     view_details: "View session details",
@@ -870,6 +934,10 @@ const DASHBOARD_I18N = {
     all_dates: "全部日期",
     all_agents: "全部 Agent",
     no_matching_sessions: "没有匹配的 trace 会话。",
+    loading_sessions: "正在加载会话...",
+    loading_session: "正在加载会话详情...",
+    loading_viewer: "正在加载 viewer...",
+    limited_records: "正在展示前 {shown} / {total} 条记录。完整 trace 请打开生成的 HTML viewer。",
     no_user_prompt: "未捕获到用户 prompt。",
     unknown: "未知",
     view_details: "查看会话详情",
@@ -946,7 +1014,12 @@ function setLang(lang) {
   renderAgents();
   renderSessions();
   if (state.view === "detail" && state.selectedSessionId) {
-    loadSession(state.selectedSessionId).catch(console.error);
+    const selected = state.sessions.find(session => session.id === state.selectedSessionId);
+    if (selected?.html_path) {
+      renderDetail(selected, []);
+    } else {
+      loadSession(state.selectedSessionId).catch(console.error);
+    }
   }
 }
 
@@ -989,6 +1062,25 @@ function esc(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function loadingMarkup(label) {
+  return `<span class="loading-state"><span class="spinner" aria-hidden="true"></span><span>${esc(label)}</span></span>`;
+}
+
+function setDashboardLoading(loading, label = t("loading_sessions")) {
+  state.loadingSessions = loading;
+  const status = $("#dashboard-load-status");
+  if (status) {
+    status.hidden = !loading;
+    status.innerHTML = loading ? loadingMarkup(label) : "";
+  }
+  const refresh = $("#refresh");
+  if (refresh) {
+    refresh.disabled = loading;
+    refresh.classList.toggle("loading", loading);
+    refresh.setAttribute("aria-busy", loading ? "true" : "false");
+  }
 }
 
 async function fetchJSON(url) {
@@ -1050,23 +1142,42 @@ function updateTracePathBar(session = null) {
 }
 
 async function refreshSessions({preserveSelection = true} = {}) {
-  const payload = await fetchJSON("/api/sessions");
-  state.sessions = payload.sessions || [];
-  renderFilters();
-  renderAgents();
-
-  const visible = filteredSessions();
-  const stillVisible = visible.some(session => session.id === state.selectedSessionId);
-  if (!preserveSelection || !stillVisible) {
-    state.selectedSessionId = null;
-    state.view = "list";
+  const requestId = state.sessionRequestId + 1;
+  state.sessionRequestId = requestId;
+  setDashboardLoading(true);
+  if (!state.sessions.length) {
+    renderSessions();
   }
-  renderSessions();
-  if (state.view === "detail" && state.selectedSessionId) {
-    showDetailView();
-    await loadSession(state.selectedSessionId);
-  } else {
-    showListView();
+  try {
+    const payload = await fetchJSON("/api/sessions");
+    if (requestId !== state.sessionRequestId) return;
+    state.sessions = payload.sessions || [];
+    renderFilters();
+    renderAgents();
+
+    const visible = filteredSessions();
+    const stillVisible = visible.some(session => session.id === state.selectedSessionId);
+    if (!preserveSelection || !stillVisible) {
+      state.selectedSessionId = null;
+      state.view = "list";
+    }
+    renderSessions();
+    if (state.view === "detail" && state.selectedSessionId) {
+      const selected = state.sessions.find(session => session.id === state.selectedSessionId);
+      showDetailView();
+      if (selected?.html_path) {
+        renderDetail(selected, []);
+      } else {
+        await loadSession(state.selectedSessionId);
+      }
+    } else {
+      showListView();
+    }
+  } finally {
+    if (requestId === state.sessionRequestId) {
+      setDashboardLoading(false);
+      renderSessions();
+    }
   }
 }
 
@@ -1116,6 +1227,10 @@ function renderAgents() {
 function renderSessions() {
   const sessions = filteredSessions();
   renderOverview(sessions);
+  if (state.loadingSessions && !state.sessions.length) {
+    $("#session-list").innerHTML = `<tr><td class="loading-cell" colspan="8">${loadingMarkup(t("loading_sessions"))}</td></tr>`;
+    return;
+  }
   if (!sessions.length) {
     $("#session-list").innerHTML = `<tr><td class="table-empty" colspan="8">${esc(t("no_matching_sessions"))}</td></tr>`;
     return;
@@ -1140,6 +1255,7 @@ function sessionRow(session) {
   const preview = session.first_user || "";
   const firstMessage = preview || t("no_user_prompt");
   const status = statusInfo(session);
+  const isLoading = state.loadingSessionId === session.id;
   return `
     <tr class="session-row ${state.selectedSessionId === session.id ? "active" : ""}" data-session="${esc(session.id)}" tabindex="0">
       <td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
@@ -1149,7 +1265,7 @@ function sessionRow(session) {
       <td><span class="model-pill" title="${esc(session.model || t("unknown"))}">${esc(session.model || t("unknown"))}</span></td>
       <td><span class="agent-pill">${esc(session.agent || t("unknown"))}</span></td>
       <td><span class="status-pill ${status.className}">${esc(status.label)}</span></td>
-      <td><button class="row-action" type="button" aria-label="${esc(t("view_details"))}">${esc(t("details"))}</button></td>
+      <td><button class="row-action" type="button" aria-label="${esc(t("view_details"))}" ${isLoading ? "disabled" : ""}>${esc(isLoading ? t("loading_session") : t("details"))}</button></td>
     </tr>
   `;
 }
@@ -1173,10 +1289,19 @@ function statusInfo(session) {
 }
 
 async function openSession(sessionId) {
+  const session = state.sessions.find(item => item.id === sessionId);
   state.selectedSessionId = sessionId;
   state.view = "detail";
+  state.loadingSessionId = sessionId;
   renderSessions();
   showDetailView();
+  showDetailLoading(sessionId);
+  if (session?.html_path) {
+    renderDetail(session, []);
+    state.loadingSessionId = null;
+    renderSessions();
+    return;
+  }
   await loadSession(sessionId);
 }
 
@@ -1192,24 +1317,44 @@ function showDetailView() {
   $("#detail-view").classList.remove("hidden");
 }
 
+function showDetailLoading(sessionId) {
+  const session = state.sessions.find(item => item.id === sessionId);
+  $("#detail-title").textContent = session ? t("session_details", {agent: session.agent || t("session_detail")}) : t("session_detail");
+  $("#detail-subtitle").textContent = session?.rel_trace_path || session?.trace_path || "";
+  if (session) updateTracePathBar(session);
+  $("#detail").innerHTML = `<div class="detail-loading">${loadingMarkup(t("loading_session"))}</div>`;
+}
+
 async function loadSession(sessionId) {
+  state.loadingSessionId = sessionId;
   try {
-    const payload = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionId)}/records`);
+    const payload = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionId)}/records?limit=${MAX_INLINE_DETAIL_RECORDS}`);
+    if (state.selectedSessionId !== sessionId) return;
     renderDetail(payload.session, payload.records || []);
   } catch (error) {
+    if (state.selectedSessionId !== sessionId) return;
     showDetailView();
     $("#detail").innerHTML = `<div class="empty">${esc(t("unable_load_session", {error: error.message}))}</div>`;
+  } finally {
+    if (state.loadingSessionId === sessionId) {
+      state.loadingSessionId = null;
+      renderSessions();
+    }
   }
 }
 
 function renderDetail(session, records) {
   const statusClass = ["active", "error", "empty"].includes(session.status) ? session.status : "";
+  const inlineRecords = records.slice(0, MAX_INLINE_DETAIL_RECORDS);
+  const totalRecords = Number(session.record_count || records.length);
+  const hasHiddenRecords = totalRecords > inlineRecords.length;
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.rel_trace_path || session.trace_path || "";
   updateTracePathBar(session);
   if (session.html_path) {
     $("#detail").innerHTML = `
       <div class="viewer-frame-wrap">
+        <div class="viewer-loading" id="viewer-loading">${loadingMarkup(t("loading_viewer"))}</div>
         <iframe
           class="viewer-frame"
           title="Trace viewer"
@@ -1217,10 +1362,14 @@ function renderDetail(session, records) {
         ></iframe>
       </div>
     `;
+    const frame = $("#detail .viewer-frame");
+    const loading = $("#viewer-loading");
+    frame?.addEventListener("load", () => loading?.classList.add("hidden"), {once: true});
     return;
   }
   $("#detail").innerHTML = `
     <div class="detail-fallback-note">${esc(t("fallback_viewer"))}</div>
+    ${hasHiddenRecords ? `<div class="detail-fallback-note">${esc(t("limited_records", {shown: inlineRecords.length, total: totalRecords}))}</div>` : ""}
     <div class="detail-inspector-bar">
       <div class="detail-tabs">
         <button class="detail-tab ${state.activeTab === "conversation" ? "active" : ""}" data-tab="conversation">${esc(t("tab_default"))}</button>
@@ -1247,10 +1396,10 @@ function renderDetail(session, records) {
       </div>
     </div>
     <div id="conversation-tab" class="${state.activeTab === "conversation" ? "" : "hidden"}">
-      <div class="records">${records.map((record, index) => renderRecord(record, index)).join("") || emptyRecord()}</div>
+      <div class="records">${inlineRecords.map((record, index) => renderRecord(record, index)).join("") || emptyRecord()}</div>
     </div>
     <div id="raw-tab" class="${state.activeTab === "raw" ? "" : "hidden"}">
-      <div class="json-view open"><pre>${esc(JSON.stringify(records, null, 2))}</pre></div>
+      <div class="json-view open"><pre>${esc(JSON.stringify(inlineRecords, null, 2))}</pre></div>
     </div>
   `;
 
@@ -1263,6 +1412,12 @@ function renderDetail(session, records) {
   document.querySelectorAll("[data-json-toggle]").forEach(button => {
     button.addEventListener("click", () => {
       const panel = document.getElementById(button.dataset.jsonToggle);
+      const pre = panel?.querySelector("[data-json-index]");
+      if (pre && !pre.dataset.rendered) {
+        const index = Number(pre.dataset.jsonIndex);
+        pre.textContent = JSON.stringify(inlineRecords[index] || {}, null, 2);
+        pre.dataset.rendered = "true";
+      }
       panel?.classList.toggle("open");
     });
   });
@@ -1310,7 +1465,7 @@ function renderRecord(record, index) {
             <div class="content-block">${esc(responseText)}</div>
           </div>
         </div>
-        <div id="${jsonId}" class="json-view"><pre>${esc(JSON.stringify(record, null, 2))}</pre></div>
+        <div id="${jsonId}" class="json-view"><pre data-json-index="${index}"></pre></div>
       </div>
     </article>
   `;

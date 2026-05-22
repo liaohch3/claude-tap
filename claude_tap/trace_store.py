@@ -168,17 +168,23 @@ class TraceStore:
             return None
         return summary if isinstance(summary, dict) else None
 
-    def load_records(self, rel_path: str) -> list[dict[str, Any]]:
+    def load_records(self, rel_path: str, limit: int | None = None) -> list[dict[str, Any]]:
         """Return raw records for one session."""
+        params: list[object] = [rel_path]
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = " LIMIT ?"
+            params.append(max(0, limit))
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT payload_json
                 FROM trace_records
                 WHERE rel_path = ?
                 ORDER BY record_index
+                {limit_sql}
                 """,
-                (rel_path,),
+                params,
             ).fetchall()
         records: list[dict[str, Any]] = []
         for row in rows:

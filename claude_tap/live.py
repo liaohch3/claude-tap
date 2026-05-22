@@ -22,6 +22,18 @@ from claude_tap.history import delete_trace_history
 from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, VIEWER_TEMPLATE_PATH, _read_viewer_template
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MAX_SESSION_RECORD_LIMIT = 1000
+
+
+def _record_limit_from_request(request: web.Request) -> int | None:
+    value = request.query.get("limit")
+    if value is None:
+        return None
+    try:
+        limit = int(value)
+    except ValueError:
+        return None
+    return max(0, min(limit, MAX_SESSION_RECORD_LIMIT))
 
 
 class LiveViewerServer:
@@ -319,6 +331,7 @@ class LiveViewerServer:
             self.output_dir,
             request.match_info["session_id"],
             current_trace_path=self.trace_path,
+            record_limit=_record_limit_from_request(request),
         )
         if session is None:
             return web.json_response({"error": "Session not found"}, status=404)
@@ -332,6 +345,7 @@ class LiveViewerServer:
             self.output_dir,
             request.match_info["session_id"],
             current_trace_path=self.trace_path,
+            record_limit=0,
         )
         if session is None:
             return web.Response(status=404, text="Session not found")
