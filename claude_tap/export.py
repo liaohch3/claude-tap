@@ -133,7 +133,7 @@ def export_main(argv: list[str] | None = None) -> int:
             import tempfile
 
             with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as tmp:
-                tmp.write(get_trace_store().export_jsonl(args.session_id))
+                tmp.write(store.export_jsonl(args.session_id))
                 temp_jsonl = Path(tmp.name)
             try:
                 _generate_html_viewer(temp_jsonl, html_path)

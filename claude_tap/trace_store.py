@@ -46,6 +46,8 @@ def reset_trace_store() -> None:
     """Clear the process-wide TraceStore singleton (for tests)."""
     global _store
     with _store_lock:
+        if _store is not None:
+            _store.close()
         _store = None
 
 
@@ -55,6 +57,10 @@ class TraceStore:
     def __init__(self, db_path: Path):
         self.db_path = db_path.resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._schema_ready = False
+        self._schema_lock = threading.Lock()
+        self._write_lock = threading.Lock()
+        self._tls = threading.local()
 
     def create_session(
         self,
@@ -68,7 +74,8 @@ class TraceStore:
         now = started_at or datetime.now(timezone.utc)
         started_at_iso = now.isoformat()
         date_key = now.astimezone().date().isoformat()
-        with self._connect() as conn:
+        with self._write_lock:
+            conn = self._connect()
             conn.execute(
                 """
                 INSERT INTO sessions (
@@ -78,11 +85,13 @@ class TraceStore:
                 """,
                 (session_id, started_at_iso, started_at_iso, date_key, client, proxy_mode),
             )
+            conn.commit()
         return session_id
 
     def append_record(self, session_id: str, record: dict[str, Any]) -> None:
         """Append one API trace record to a session."""
-        with self._connect() as conn:
+        with self._write_lock:
+            conn = self._connect()
             next_index = self._next_record_index(conn, session_id)
             updated_at = _str_or_none(record.get("timestamp")) or datetime.now(timezone.utc).isoformat()
             conn.execute(
@@ -106,6 +115,13 @@ class TraceStore:
                 """,
                 (updated_at, session_id),
             )
+            count_row = conn.execute(
+                "SELECT record_count FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            record_count = int(count_row["record_count"]) if count_row is not None else next_index
+            self._refresh_summary_after_append(conn, session_id, record, record_count)
+            conn.commit()
 
     def append_log(
         self,
@@ -116,7 +132,8 @@ class TraceStore:
         logged_at: str | None = None,
     ) -> None:
         """Append one proxy log line to a session."""
-        with self._connect() as conn:
+        with self._write_lock:
+            conn = self._connect()
             row = conn.execute(
                 "SELECT COALESCE(MAX(line_no), 0) + 1 AS next_line FROM proxy_logs WHERE session_id = ?",
                 (session_id,),
@@ -129,10 +146,12 @@ class TraceStore:
                 """,
                 (session_id, line_no, logged_at, level, message),
             )
+            conn.commit()
 
     def finalize_session(self, session_id: str, summary: dict[str, Any] | None = None) -> None:
         """Mark a session complete and persist its summary."""
-        with self._connect() as conn:
+        with self._write_lock:
+            conn = self._connect()
             row = conn.execute(
                 "SELECT status FROM sessions WHERE id = ?",
                 (session_id,),
@@ -159,14 +178,15 @@ class TraceStore:
                     session_id,
                 ),
             )
+            conn.commit()
 
     def load_session_row(self, session_id: str) -> sqlite3.Row | None:
-        with self._connect() as conn:
-            return conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        conn = self._connect()
+        return conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
 
     def list_session_rows(self) -> list[sqlite3.Row]:
-        with self._connect() as conn:
-            return conn.execute("SELECT * FROM sessions ORDER BY updated_at DESC, started_at DESC").fetchall()
+        conn = self._connect()
+        return conn.execute("SELECT * FROM sessions ORDER BY updated_at DESC, started_at DESC").fetchall()
 
     def load_records(
         self,
@@ -184,30 +204,87 @@ class TraceStore:
         elif offset:
             limit_sql = " LIMIT -1 OFFSET ?"
             params.append(offset)
-        with self._connect() as conn:
+        conn = self._connect()
+        rows = conn.execute(
+            f"""
+            SELECT payload_json
+            FROM records
+            WHERE session_id = ?
+            ORDER BY record_index
+            {limit_sql}
+            """,
+            params,
+        ).fetchall()
+        return _rows_to_records(rows)
+
+    def load_boundary_records(self, session_id: str) -> list[dict[str, Any]]:
+        """Load the first and last records for a session without reading everything."""
+        conn = self._connect()
+        first = conn.execute(
+            """
+            SELECT payload_json
+            FROM records
+            WHERE session_id = ?
+            ORDER BY record_index
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+        last = conn.execute(
+            """
+            SELECT payload_json
+            FROM records
+            WHERE session_id = ?
+            ORDER BY record_index DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+        if first is None:
+            return []
+        if last is None or first["payload_json"] == last["payload_json"]:
+            return _rows_to_records([first])
+        return _rows_to_records([first, last])
+
+    def load_records_for_date(self, date_key: str) -> list[dict[str, Any]]:
+        """Load all records for sessions on a given date in one query."""
+        conn = self._connect()
+        if date_key == "legacy":
             rows = conn.execute(
-                f"""
-                SELECT payload_json
-                FROM records
-                WHERE session_id = ?
-                ORDER BY record_index
-                {limit_sql}
-                """,
-                params,
+                """
+                SELECT r.payload_json
+                FROM records r
+                INNER JOIN sessions s ON s.id = r.session_id
+                WHERE s.date_key = 'legacy' OR s.legacy_rel_path NOT LIKE '%/%'
+                ORDER BY s.started_at ASC, r.record_index ASC
+                """
             ).fetchall()
+        elif _DATE_RE.match(date_key):
+            rows = conn.execute(
+                """
+                SELECT r.payload_json
+                FROM records r
+                INNER JOIN sessions s ON s.id = r.session_id
+                WHERE s.date_key = ?
+                ORDER BY s.started_at ASC, r.record_index ASC
+                """,
+                (date_key,),
+            ).fetchall()
+        else:
+            raise ValueError("Invalid date format")
         return _rows_to_records(rows)
 
     def load_logs(self, session_id: str) -> list[dict[str, str]]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
+        conn = self._connect()
+        rows = conn.execute(
+            """
                 SELECT logged_at, level, message
                 FROM proxy_logs
                 WHERE session_id = ?
                 ORDER BY line_no
                 """,
-                (session_id,),
-            ).fetchall()
+            (session_id,),
+        ).fetchall()
         return [
             {
                 "logged_at": row["logged_at"] or "",
@@ -235,7 +312,8 @@ class TraceStore:
         return "\n".join(lines) + ("\n" if lines else "")
 
     def store_summary(self, session_id: str, summary: dict[str, Any]) -> None:
-        with self._connect() as conn:
+        with self._write_lock:
+            conn = self._connect()
             conn.execute(
                 """
                 UPDATE sessions
@@ -249,6 +327,7 @@ class TraceStore:
                     session_id,
                 ),
             )
+            conn.commit()
 
     def dashboard_snapshot(self) -> dict[str, tuple[str, int, str]]:
         """Return session_id -> (updated_at, record_count, status) for change detection."""
@@ -277,8 +356,8 @@ class TraceStore:
         self, date_key: str, *, protected_session_ids: set[str] | None = None
     ) -> dict[str, int]:
         protected = protected_session_ids or set()
-        deleted_sessions = 0
-        with self._connect() as conn:
+        with self._write_lock:
+            conn = self._connect()
             if date_key == "legacy":
                 rows = conn.execute(
                     "SELECT id FROM sessions WHERE date_key = 'legacy' OR legacy_rel_path NOT LIKE '%/%'"
@@ -288,21 +367,24 @@ class TraceStore:
             else:
                 raise ValueError("Invalid date format")
 
-            for row in rows:
-                session_id = row["id"]
-                if session_id in protected:
-                    continue
-                conn.execute("DELETE FROM proxy_logs WHERE session_id = ?", (session_id,))
-                conn.execute("DELETE FROM records WHERE session_id = ?", (session_id,))
-                conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-                deleted_sessions += 1
-        return {"date": date_key, "deleted_sessions": deleted_sessions, "deleted_files": 0, "skipped_files": 0}
+            to_delete = [row["id"] for row in rows if row["id"] not in protected]
+            if to_delete:
+                placeholders = ",".join("?" * len(to_delete))
+                conn.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", to_delete)
+            conn.commit()
+        return {
+            "date": date_key,
+            "deleted_sessions": len(to_delete),
+            "deleted_files": 0,
+            "skipped_files": 0,
+        }
 
     def cleanup_old_sessions(self, max_sessions: int, *, protected_session_id: str | None = None) -> int:
         if max_sessions <= 0:
             return 0
         protected = {protected_session_id} if protected_session_id else set()
-        with self._connect() as conn:
+        with self._write_lock:
+            conn = self._connect()
             rows = conn.execute(
                 """
                 SELECT id
@@ -310,20 +392,15 @@ class TraceStore:
                 ORDER BY started_at ASC
                 """
             ).fetchall()
-        if len(rows) <= max_sessions:
-            return 0
-        to_remove = rows[: len(rows) - max_sessions]
-        removed = 0
-        for row in to_remove:
-            session_id = row["id"]
-            if session_id in protected:
-                continue
-            with self._connect() as conn:
-                conn.execute("DELETE FROM proxy_logs WHERE session_id = ?", (session_id,))
-                conn.execute("DELETE FROM records WHERE session_id = ?", (session_id,))
-                conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-            removed += 1
-        return removed
+            if len(rows) <= max_sessions:
+                return 0
+            to_remove = [row["id"] for row in rows[: len(rows) - max_sessions] if row["id"] not in protected]
+            if not to_remove:
+                return 0
+            placeholders = ",".join("?" * len(to_remove))
+            conn.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", to_remove)
+            conn.commit()
+            return len(to_remove)
 
     def migrate_legacy_directory(self, output_dir: Path) -> int:
         """Import legacy JSONL/log files from a directory tree."""
@@ -377,7 +454,8 @@ class TraceStore:
                 client = str(capture.get("client") or "")
                 proxy_mode = str(capture.get("proxy_mode") or "")
 
-        with self._connect() as conn:
+        with self._write_lock:
+            conn = self._connect()
             conn.execute(
                 """
                 INSERT INTO sessions (
@@ -423,26 +501,45 @@ class TraceStore:
                     for index, line in enumerate(logs, start=1)
                 ],
             )
+            row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if row is not None:
+                from claude_tap.dashboard import build_imported_session_summary
+
+                summary = build_imported_session_summary(row, records, manifest_entry)
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET summary_json = ?, status = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
+                        summary.get("status") or "complete",
+                        session_id,
+                    ),
+                )
+            conn.commit()
         return session_id
 
     def _legacy_session_exists(self, rel_path: str) -> bool:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM sessions WHERE legacy_rel_path = ? LIMIT 1",
-                (rel_path,),
-            ).fetchone()
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT 1 FROM sessions WHERE legacy_rel_path = ? LIMIT 1",
+            (rel_path,),
+        ).fetchone()
         return row is not None
 
     def _migration_done(self, marker: str) -> bool:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT value FROM migration_state WHERE key = ?",
-                (marker,),
-            ).fetchone()
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT value FROM migration_state WHERE key = ?",
+            (marker,),
+        ).fetchone()
         return row is not None
 
     def _mark_migration_done(self, marker: str) -> None:
-        with self._connect() as conn:
+        with self._write_lock:
+            conn = self._connect()
             conn.execute(
                 """
                 INSERT INTO migration_state (key, value)
@@ -451,15 +548,73 @@ class TraceStore:
                 """,
                 (marker, datetime.now(timezone.utc).isoformat()),
             )
+            conn.commit()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _refresh_summary_after_append(
+        self,
+        conn: sqlite3.Connection,
+        session_id: str,
+        record: dict[str, Any],
+        record_count: int,
+    ) -> None:
+        from claude_tap.dashboard import merge_record_into_summary
+
+        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if row is None:
+            return
+        existing = None
+        if row["summary_json"]:
+            try:
+                existing = json.loads(row["summary_json"])
+            except json.JSONDecodeError:
+                existing = None
+        summary = merge_record_into_summary(
+            existing,
+            row=row,
+            record=record,
+            record_count=record_count,
+        )
+        conn.execute(
+            """
+            UPDATE sessions
+            SET summary_json = ?
+            WHERE id = ?
+            """,
+            (
+                json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
+                session_id,
+            ),
+        )
+
+    def _open_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
-        self._ensure_schema(conn)
         return conn
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = getattr(self._tls, "conn", None)
+        if conn is None:
+            conn = self._open_connection()
+            self._ensure_schema_once(conn)
+            self._tls.conn = conn
+        return conn
+
+    def close(self) -> None:
+        """Close the thread-local SQLite connection."""
+        conn = getattr(self._tls, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._tls.conn = None
+
+    def _ensure_schema_once(self, conn: sqlite3.Connection) -> None:
+        with self._schema_lock:
+            if self._schema_ready:
+                return
+            self._ensure_schema(conn)
+            self._schema_ready = True
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         current = conn.execute("PRAGMA user_version").fetchone()[0]

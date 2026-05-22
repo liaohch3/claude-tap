@@ -43,12 +43,22 @@ def ensure_trace_store() -> TraceStore:
 
 def list_trace_sessions(
     current_session_id: str | None = None,
+    *,
+    live_record_count: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return trace sessions sorted by most recent activity."""
     store = ensure_trace_store()
     try:
         sessions = [
-            _apply_current_session_state(_session_summary_from_row(store, row), current_session_id)
+            _apply_current_session_state(
+                _session_summary_from_row(store, row),
+                current_session_id,
+                live_record_count=(
+                    live_record_count
+                    if live_record_count is not None and current_session_id and row["id"] == current_session_id
+                    else None
+                ),
+            )
             for row in store.list_session_rows()
         ]
     except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
@@ -59,9 +69,11 @@ def list_trace_sessions(
 
 def list_trace_agents(
     current_session_id: str | None = None,
+    *,
+    live_record_count: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return agent buckets for the dashboard sidebar."""
-    sessions = list_trace_sessions(current_session_id)
+    sessions = list_trace_sessions(current_session_id, live_record_count=live_record_count)
     buckets: dict[str, dict[str, Any]] = {}
     for session in sessions:
         key = session["agent_key"]
@@ -71,26 +83,122 @@ def list_trace_agents(
     return sorted(buckets.values(), key=lambda item: (item["label"].lower(), item["key"]))
 
 
+def dashboard_trace_snapshot() -> dict[str, tuple[str, int, str]]:
+    """Return a cheap SQLite snapshot for dashboard refresh detection."""
+    store = ensure_trace_store()
+    return store.dashboard_snapshot()
+
+
 def load_trace_session(
     session_id: str,
     current_session_id: str | None = None,
     record_limit: int | None = None,
     record_offset: int = 0,
+    *,
+    live_record_count: int | None = None,
 ) -> dict[str, Any] | None:
     """Load one session summary and its records by session id."""
     store = ensure_trace_store()
     row = store.load_session_row(session_id)
     if row is None:
         return None
-    summary = _apply_current_session_state(_session_summary_from_row(store, row), current_session_id)
+    summary = _apply_current_session_state(
+        _session_summary_from_row(store, row),
+        current_session_id,
+        live_record_count=(
+            live_record_count
+            if live_record_count is not None and current_session_id and row["id"] == current_session_id
+            else None
+        ),
+    )
     records = store.load_records(session_id, limit=record_limit, offset=record_offset)
     return {"session": summary, "records": records}
 
 
-def dashboard_trace_snapshot() -> dict[str, tuple[str, int, str]]:
-    """Return a cheap SQLite snapshot for dashboard refresh detection."""
-    store = ensure_trace_store()
-    return store.dashboard_snapshot()
+def merge_record_into_summary(
+    summary: dict[str, Any] | None,
+    *,
+    row: sqlite3.Row,
+    record: dict[str, Any],
+    record_count: int,
+) -> dict[str, Any]:
+    """Update a session summary incrementally after appending one record."""
+    manifest_entry = {
+        "client": row["client"] or "",
+        "proxy_mode": row["proxy_mode"] or "",
+    }
+    if summary is None or summary.get("id") != row["id"]:
+        return _summarize_session(
+            session_id=row["id"],
+            date_key=row["date_key"] or "legacy",
+            legacy_rel_path=row["legacy_rel_path"],
+            records=[record],
+            manifest_entry=manifest_entry,
+            status="active",
+            started_at=row["started_at"] or "",
+            updated_at=row["updated_at"] or "",
+            is_current=True,
+            record_count=record_count,
+        )
+
+    summary = dict(summary)
+    usage = _record_usage(record)
+    summary["record_count"] = record_count
+    summary["turn_count"] = max(int(summary.get("turn_count") or 0), record_count)
+    summary["input_tokens"] = int(summary.get("input_tokens") or 0) + usage.get("input_tokens", 0)
+    summary["output_tokens"] = int(summary.get("output_tokens") or 0) + usage.get("output_tokens", 0)
+    summary["cache_read_tokens"] = int(summary.get("cache_read_tokens") or 0) + usage.get("cache_read_input_tokens", 0)
+    summary["cache_create_tokens"] = int(summary.get("cache_create_tokens") or 0) + usage.get(
+        "cache_creation_input_tokens", 0
+    )
+    summary["total_tokens"] = (
+        summary["input_tokens"]
+        + summary["output_tokens"]
+        + summary["cache_read_tokens"]
+        + summary["cache_create_tokens"]
+    )
+    summary["duration_ms"] = int(summary.get("duration_ms") or 0) + _duration_ms(record)
+    model = _record_model(record)
+    if model:
+        summary["model"] = model
+    timestamp = _timestamp_from_record(record)
+    if timestamp:
+        summary["updated_at"] = timestamp
+        if not summary.get("started_at"):
+            summary["started_at"] = timestamp
+    summary["last_response"] = _last_response_preview([record])
+    if not summary.get("first_user"):
+        summary["first_user"] = _first_user_preview([record])
+    if not summary.get("agent"):
+        summary["agent"] = _infer_agent([record], manifest_entry)
+        summary["agent_key"] = _agent_key(summary["agent"])
+    status_code = _response_status(record)
+    if status_code >= 400 or _record_error(record):
+        summary["status"] = "error"
+        summary["error"] = summary.get("error") or _first_error([record])
+    else:
+        summary["status"] = "active"
+    return summary
+
+
+def build_imported_session_summary(
+    row: sqlite3.Row,
+    records: list[dict[str, Any]],
+    manifest_entry: dict[str, Any],
+) -> dict[str, Any]:
+    """Build and cache a summary for a legacy import."""
+    return _summarize_session(
+        session_id=row["id"],
+        date_key=row["date_key"] or "legacy",
+        legacy_rel_path=row["legacy_rel_path"],
+        records=records,
+        manifest_entry=manifest_entry,
+        status="complete",
+        started_at=row["started_at"] or "",
+        updated_at=row["updated_at"] or "",
+        is_current=False,
+        record_count=int(row["record_count"] or len(records)),
+    )
 
 
 def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, Any]:
@@ -101,13 +209,39 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
         except json.JSONDecodeError:
             cached = None
         if isinstance(cached, dict) and cached.get("id") == row["id"]:
+            if row["status"] != "active":
+                return cached
+            cached = dict(cached)
+            db_count = int(row["record_count"] or 0)
+            cached["record_count"] = db_count
+            cached["turn_count"] = max(int(cached.get("turn_count") or 0), db_count)
+            if db_count > 0 and cached.get("status") != "error":
+                cached["status"] = "active"
             return cached
 
-    records = store.load_records(row["id"])
+    record_count = int(row["record_count"] or 0)
     manifest_entry = {
         "client": row["client"] or "",
         "proxy_mode": row["proxy_mode"] or "",
     }
+    if record_count == 0:
+        summary = _summarize_session(
+            session_id=row["id"],
+            date_key=row["date_key"] or "legacy",
+            legacy_rel_path=row["legacy_rel_path"],
+            records=[],
+            manifest_entry=manifest_entry,
+            status=row["status"] or "empty",
+            started_at=row["started_at"] or "",
+            updated_at=row["updated_at"] or "",
+            is_current=row["status"] == "active",
+            record_count=0,
+        )
+        if row["status"] != "active":
+            store.store_summary(row["id"], summary)
+        return summary
+
+    records = store.load_records(row["id"])
     summary = _summarize_session(
         session_id=row["id"],
         date_key=row["date_key"] or "legacy",
@@ -118,19 +252,30 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
         started_at=row["started_at"] or "",
         updated_at=row["updated_at"] or "",
         is_current=False,
-        record_count=int(row["record_count"] or 0),
+        record_count=record_count,
     )
     if row["status"] != "active":
         store.store_summary(row["id"], summary)
     return summary
 
 
-def _apply_current_session_state(session: dict[str, Any], current_session_id: str | None) -> dict[str, Any]:
+def _apply_current_session_state(
+    session: dict[str, Any],
+    current_session_id: str | None,
+    *,
+    live_record_count: int | None = None,
+) -> dict[str, Any]:
     session = dict(session)
     is_current = bool(current_session_id and session.get("id") == current_session_id)
     session["live"] = is_current
-    if is_current and session.get("record_count", 0) > 0 and session.get("status") != "error":
-        session["status"] = "active"
+    if is_current:
+        count = int(session.get("record_count") or 0)
+        if live_record_count is not None:
+            count = max(count, live_record_count)
+            session["record_count"] = count
+            session["turn_count"] = max(int(session.get("turn_count") or 0), count)
+        if count > 0 and session.get("status") != "error":
+            session["status"] = "active"
     return session
 
 

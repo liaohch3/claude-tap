@@ -286,38 +286,36 @@ class LiveViewerServer:
         if date_key != "legacy" and not _DATE_RE.match(date_key):
             return web.Response(status=400, text="Invalid date format")
 
-        sessions = list_trace_sessions()
-        records: list[dict] = []
-        for session in sessions:
-            if date_key == "legacy":
-                if session.get("date") != "legacy":
-                    continue
-            elif session.get("date") != date_key:
-                continue
-            payload = load_trace_session(session["id"])
-            if payload:
-                records.extend(payload["records"])
+        records = ensure_trace_store().load_records_for_date(date_key)
         return web.json_response(records)
 
     async def _handle_agents(self, request: web.Request) -> web.Response:
         """Return trace history agent buckets."""
-        return web.json_response({"agents": list_trace_agents(self.session_id)})
+        live_count = await self._current_live_record_count()
+        return web.json_response({"agents": list_trace_agents(self.session_id, live_record_count=live_count)})
 
     async def _handle_sessions(self, request: web.Request) -> web.Response:
         """Return trace history sessions."""
-        return web.json_response({"sessions": list_trace_sessions(self.session_id)})
+        live_count = await self._current_live_record_count()
+        return web.json_response({"sessions": list_trace_sessions(self.session_id, live_record_count=live_count)})
 
     async def _handle_session_records(self, request: web.Request) -> web.Response:
         """Return one session's summary and records."""
+        live_count = await self._current_live_record_count()
         session = load_trace_session(
             request.match_info["session_id"],
             current_session_id=self.session_id,
             record_limit=_record_limit_from_request(request),
             record_offset=_record_offset_from_request(request),
+            live_record_count=live_count,
         )
         if session is None:
             return web.json_response({"error": "Session not found"}, status=404)
         return web.json_response(session)
+
+    async def _current_live_record_count(self) -> int:
+        async with self._lock:
+            return len(self._records)
 
     async def _handle_export_jsonl(self, request: web.Request) -> web.Response:
         session_id = request.match_info["session_id"]
