@@ -10,29 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.75] - 2026-05-22
 
-### Changed
-- fix: add Gemini LLM paths to primary path filter in viewer (#196)
-- fix: write completed websocket traces immediately (#195)
-- 增加日志展示能力 (#189)
-- feat: add Antigravity CLI (agy) client support (#197)
-- feat: add session dashboard (#200)
-- fix: enable live viewer by default for all clients (#192)
-- ci: enforce pull request policy gate (#199)
-### Changed
-- **Breaking change:** the live viewer now starts by default when `claude-tap` runs a client, so users can watch trace records while the agent is still running.
-- `--tap-no-open` now prevents both the live viewer and the generated HTML viewer from auto-opening in a browser.
-
 ### Added
+- Add Antigravity CLI (agy) client support (#197).
+- Add the session dashboard for browsing saved trace sessions (#200).
 - Add `--tap-no-live` to disable the live viewer server and restore the pre-v0.1.75 default behavior for scripts, CI, remote shells, or other non-interactive runs.
 
-
-
-
-
-
-
-
-
+### Changed
+- **Breaking change:** the live viewer now starts by default when `claude-tap` runs a client, so users can watch trace records while the agent is still running (#192).
+- `--tap-no-open` now prevents both the live viewer and the generated HTML viewer from auto-opening in a browser (#192).
+- Add Gemini LLM paths to the primary viewer path filter (#196).
+- Write completed WebSocket traces immediately (#195).
+- Add trace log display support (#189).
+- Enforce the PR policy gate in CI (#199).
 
 ## [0.1.74] - 2026-05-17
 
