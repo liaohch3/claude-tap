@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from claude_tap.trace_store import TraceStore
 from claude_tap.usage import normalize_usage
 
 if TYPE_CHECKING:
@@ -21,6 +23,7 @@ class TraceWriter:
         path: Path,
         live_server: "LiveViewerServer | None" = None,
         metadata: dict[str, str] | None = None,
+        output_dir: Path | None = None,
     ):
         self.path = path
         self._lock = asyncio.Lock()
@@ -33,6 +36,7 @@ class TraceWriter:
         self.models_used: dict[str, int] = {}
         self._live_server = live_server
         self._metadata = metadata or {}
+        self._store = TraceStore(output_dir or path.parent)
         path.parent.mkdir(parents=True, exist_ok=True)
         # Keep file handle open for real-time append + flush
         self._file = open(path, "a", encoding="utf-8")
@@ -45,12 +49,21 @@ class TraceWriter:
                 record["capture"] = {**self._metadata, **capture}
             self._file.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
             self._file.flush()
+            self._append_to_store(record)
             self.count += 1
             self._update_stats(record)
 
         # Broadcast to live viewer if enabled
         if self._live_server:
             await self._live_server.broadcast(record)
+
+    def _append_to_store(self, record: dict) -> None:
+        try:
+            self._store.append_record(self.path, record)
+        except (OSError, sqlite3.Error, ValueError):
+            # JSONL remains the source of durability; dashboard indexing can
+            # rebuild SQLite from the file if a transient store write fails.
+            return
 
     def close(self) -> None:
         """Flush and close the JSONL file."""

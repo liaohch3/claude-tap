@@ -582,7 +582,7 @@ async def async_main(args: argparse.Namespace):
             _open_browser(live_server.url)
 
     trace_metadata = {"client": args.client, "proxy_mode": args.proxy_mode}
-    writer = TraceWriter(trace_path, live_server=live_server, metadata=trace_metadata)
+    writer = TraceWriter(trace_path, live_server=live_server, metadata=trace_metadata, output_dir=output_dir)
 
     # Proxy logs go to file, not terminal (avoids polluting Claude TUI)
     file_handler = logging.FileHandler(log_path, encoding="utf-8")

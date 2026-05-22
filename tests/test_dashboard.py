@@ -36,6 +36,7 @@ from claude_tap.dashboard import (
 )
 from claude_tap.live import LiveViewerServer
 from claude_tap.trace import TraceWriter
+from claude_tap.trace_store import DB_FILE, TraceStore
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:
@@ -117,6 +118,41 @@ def test_dashboard_lists_sessions_across_agents(tmp_path: Path) -> None:
 
     agents = list_trace_agents(tmp_path)
     assert [(agent["label"], agent["sessions"]) for agent in agents] == [("Antigravity", 1), ("Claude Code", 1)]
+
+
+def test_dashboard_indexes_sessions_in_sqlite(tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    _write_jsonl(trace_path, [_anthropic_record()])
+
+    sessions = list_trace_sessions(tmp_path)
+
+    assert (tmp_path / DB_FILE).exists()
+    assert sessions[0]["record_count"] == 1
+    assert sessions[0]["first_user"] == "Explain this repository"
+
+    _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2)])
+    sessions = list_trace_sessions(tmp_path)
+    payload = load_trace_session(tmp_path, sessions[0]["id"])
+
+    assert sessions[0]["record_count"] == 2
+    assert payload is not None
+    assert [record["turn"] for record in payload["records"]] == [1, 2]
+
+
+def test_dashboard_detail_uses_sqlite_cache_without_rereading_jsonl(monkeypatch, tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    _write_jsonl(trace_path, [_anthropic_record()])
+    session_id = list_trace_sessions(tmp_path)[0]["id"]
+
+    def fail_read_jsonl(_path: Path) -> list[dict]:
+        raise AssertionError("load_trace_session should use the SQLite cache for indexed traces")
+
+    monkeypatch.setattr("claude_tap.dashboard._read_jsonl_records", fail_read_jsonl)
+
+    payload = load_trace_session(tmp_path, session_id)
+
+    assert payload is not None
+    assert payload["records"][0]["request_id"] == "req_claude"
 
 
 def test_dashboard_first_message_uses_first_user_prompt(tmp_path: Path) -> None:
@@ -462,6 +498,8 @@ async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> N
                 assert resp.status == 200
                 html = await resp.text()
                 assert "session-list" in html
+                assert "dashboard-load-status" in html
+                assert "viewer-loading" in html
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
                 assert resp.status == 200
@@ -563,3 +601,18 @@ async def test_trace_writer_adds_capture_metadata(tmp_path: Path) -> None:
 
     records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
     assert records[-1]["capture"] == {"client": "codex", "proxy_mode": "forward"}
+
+
+@pytest.mark.asyncio
+async def test_trace_writer_mirrors_records_to_sqlite(tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    writer = TraceWriter(trace_path, output_dir=tmp_path, metadata={"client": "claude"})
+    try:
+        await writer.write(_anthropic_record())
+    finally:
+        writer.close()
+
+    records = TraceStore(tmp_path).load_records("2026-05-20/trace_080000.jsonl")
+
+    assert len(records) == 1
+    assert records[0]["capture"]["client"] == "claude"

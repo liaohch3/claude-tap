@@ -5,11 +5,13 @@ from __future__ import annotations
 import base64
 import json
 import re
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from claude_tap.trace_store import TraceStore
 from claude_tap.usage import normalize_usage
 
 DASHBOARD_TEMPLATE_PATH = Path(__file__).parent / "dashboard.html"
@@ -56,6 +58,20 @@ def rel_path_for_session_id(session_id: str) -> str | None:
 def list_trace_sessions(output_dir: Path, current_trace_path: Path | None = None) -> list[dict[str, Any]]:
     """Return trace sessions sorted by most recent activity."""
     output_dir = output_dir.resolve()
+    if not output_dir.is_dir():
+        return []
+    try:
+        manifest = _manifest_by_trace_path(output_dir)
+        store = _sync_trace_store(output_dir, manifest)
+        sessions = [_apply_current_session_state(session, current_trace_path) for session in store.list_summaries()]
+    except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
+        sessions = _list_trace_sessions_from_files(output_dir, current_trace_path=current_trace_path)
+    sessions.sort(key=lambda item: (item.get("updated_at") or "", item.get("trace_path") or ""), reverse=True)
+    return sessions
+
+
+def _list_trace_sessions_from_files(output_dir: Path, current_trace_path: Path | None = None) -> list[dict[str, Any]]:
+    """Return trace sessions by reading JSONL files directly."""
     manifest = _manifest_by_trace_path(output_dir)
     current_resolved = current_trace_path.resolve() if current_trace_path else None
 
@@ -103,16 +119,26 @@ def load_trace_session(
     output_dir = output_dir.resolve()
     rel_path = _rel_posix(trace_path, output_dir)
     manifest = _manifest_by_trace_path(output_dir)
-    records = _read_jsonl_records(trace_path)
-    current_resolved = current_trace_path.resolve() if current_trace_path else None
-    summary = _summarize_session(
-        output_dir=output_dir,
-        trace_path=trace_path,
-        rel_path=rel_path,
-        records=records,
-        manifest_entry=manifest.get(rel_path, {}),
-        is_current=current_resolved == trace_path.resolve(),
-    )
+    records: list[dict[str, Any]] = []
+    try:
+        store = _sync_trace_store(output_dir, manifest)
+        summary = store.load_summary(rel_path)
+        records = store.load_records(rel_path)
+    except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
+        summary = None
+    if summary is None:
+        records = _read_jsonl_records(trace_path)
+        current_resolved = current_trace_path.resolve() if current_trace_path else None
+        summary = _summarize_session(
+            output_dir=output_dir,
+            trace_path=trace_path,
+            rel_path=rel_path,
+            records=records,
+            manifest_entry=manifest.get(rel_path, {}),
+            is_current=current_resolved == trace_path.resolve(),
+        )
+    else:
+        summary = _apply_current_session_state(summary, current_trace_path)
     return {"session": summary, "records": records}
 
 
@@ -150,6 +176,45 @@ def _iter_trace_files(output_dir: Path) -> list[Path]:
     if not output_dir.is_dir():
         return []
     return sorted(path for path in output_dir.glob("**/trace_*.jsonl") if path.is_file())
+
+
+def _sync_trace_store(output_dir: Path, manifest: dict[str, dict[str, Any]] | None = None) -> TraceStore:
+    """Synchronize changed JSONL traces into the SQLite dashboard store."""
+    store = TraceStore(output_dir)
+    manifest = manifest if manifest is not None else _manifest_by_trace_path(output_dir)
+    known_rel_paths: set[str] = set()
+    for trace_path in _iter_trace_files(output_dir):
+        rel_path = _rel_posix(trace_path, output_dir)
+        known_rel_paths.add(rel_path)
+        if not store.session_needs_index(rel_path, trace_path):
+            continue
+        records = _read_jsonl_records(trace_path)
+        summary = _summarize_session(
+            output_dir=output_dir,
+            trace_path=trace_path,
+            rel_path=rel_path,
+            records=records,
+            manifest_entry=manifest.get(rel_path, {}),
+            is_current=False,
+        )
+        store.replace_session(rel_path=rel_path, trace_path=trace_path, records=records, summary=summary)
+    store.delete_missing(known_rel_paths)
+    return store
+
+
+def _apply_current_session_state(session: dict[str, Any], current_trace_path: Path | None) -> dict[str, Any]:
+    """Patch live state onto a stored session summary."""
+    session = dict(session)
+    is_current = False
+    if current_trace_path and session.get("trace_path"):
+        try:
+            is_current = Path(str(session["trace_path"])).resolve() == current_trace_path.resolve()
+        except OSError:
+            is_current = False
+    session["live"] = is_current
+    if is_current and session.get("record_count", 0) > 0 and session.get("status") != "error":
+        session["status"] = "active"
+    return session
 
 
 def _rel_posix(path: Path, base: Path) -> str:
