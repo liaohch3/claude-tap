@@ -901,12 +901,15 @@ const DASHBOARD_I18N = {
     no_session_selected: "No session selected.",
     select_session: "Select a session to view details.",
     jsonl: "JSONL",
-    html: "HTML",
-    not_generated: "not generated",
+    log: "Log",
+    session_id: "Session",
+    export_jsonl: "Export JSONL",
+    export_log: "Export Log",
+    copy_session_id: "Copy session id",
     unable_load_session: "Unable to load session: {error}",
     unable_load_dashboard: "Unable to load dashboard: {error}",
-    fallback_viewer: "HTML viewer is not generated yet. Showing captured records.",
-    copy_path: "Copy path",
+    fallback_viewer: "Showing captured records from SQLite.",
+    copy_path: "Copy session id",
     records: "Records",
     turns: "Turns",
     input: "Input",
@@ -977,12 +980,15 @@ const DASHBOARD_I18N = {
     no_session_selected: "未选择会话。",
     select_session: "选择一个会话查看详情。",
     jsonl: "JSONL",
-    html: "HTML",
-    not_generated: "尚未生成",
+    log: "日志",
+    session_id: "会话",
+    export_jsonl: "导出 JSONL",
+    export_log: "导出日志",
+    copy_session_id: "复制会话 ID",
     unable_load_session: "无法加载会话：{error}",
     unable_load_dashboard: "无法加载面板：{error}",
-    fallback_viewer: "HTML viewer 尚未生成，正在展示已捕获记录。",
-    copy_path: "复制路径",
+    fallback_viewer: "正在展示 SQLite 中已捕获的记录。",
+    copy_path: "复制会话 ID",
     records: "记录",
     turns: "轮次",
     input: "输入",
@@ -1043,12 +1049,7 @@ function setLang(lang) {
   renderAgents();
   renderSessions();
   if (state.view === "detail" && state.selectedSessionId) {
-    const selected = state.sessions.find(session => session.id === state.selectedSessionId);
-    if (selected?.html_path) {
-      renderDetail(selected, []);
-    } else {
-      loadSession(state.selectedSessionId).catch(console.error);
-    }
+    loadSession(state.selectedSessionId).catch(console.error);
   }
 }
 
@@ -1130,7 +1131,8 @@ function filteredSessions() {
       session.model,
       session.first_user,
       session.last_response,
-      session.rel_trace_path,
+      session.legacy_rel_path,
+      session.id,
       session.status,
     ].join(" ").toLowerCase();
     return haystack.includes(needle);
@@ -1156,11 +1158,9 @@ function renderStatusOptions() {
 function updateTracePathBar(session = null) {
   if (state.view === "detail" && session) {
     $("#trace-path-bar").innerHTML = `
-      <span class="tp-label">${esc(t("jsonl"))}</span>
-      <span class="tp-val">${esc(session.trace_path || session.rel_trace_path)}</span>
-      <span class="tp-sep"></span>
-      <span class="tp-label">${esc(t("html"))}</span>
-      <span class="tp-val">${esc(session.html_path || t("not_generated"))}</span>
+      <span class="tp-label">${esc(t("session_id"))}</span>
+      <span class="tp-val">${esc(session.id || "")}</span>
+      ${session.legacy_rel_path ? `<span class="tp-sep"></span><span class="tp-label">${esc(t("jsonl"))}</span><span class="tp-val">${esc(session.legacy_rel_path)}</span>` : ""}
     `;
     return;
   }
@@ -1192,13 +1192,8 @@ async function refreshSessions({preserveSelection = true} = {}) {
     }
     renderSessions();
     if (state.view === "detail" && state.selectedSessionId) {
-      const selected = state.sessions.find(session => session.id === state.selectedSessionId);
       showDetailView();
-      if (selected?.html_path) {
-        renderDetail(selected, []);
-      } else {
-        await loadSession(state.selectedSessionId);
-      }
+      await loadSession(state.selectedSessionId);
     } else {
       showListView();
     }
@@ -1325,12 +1320,6 @@ async function openSession(sessionId) {
   renderSessions();
   showDetailView();
   showDetailLoading(sessionId);
-  if (session?.html_path) {
-    renderDetail(session, []);
-    state.loadingSessionId = null;
-    renderSessions();
-    return;
-  }
   await loadSession(sessionId);
 }
 
@@ -1349,7 +1338,7 @@ function showDetailView() {
 function showDetailLoading(sessionId) {
   const session = state.sessions.find(item => item.id === sessionId);
   $("#detail-title").textContent = session ? t("session_details", {agent: session.agent || t("session_detail")}) : t("session_detail");
-  $("#detail-subtitle").textContent = session?.rel_trace_path || session?.trace_path || "";
+  $("#detail-subtitle").textContent = session?.legacy_rel_path || session?.id || "";
   if (session) updateTracePathBar(session);
   $("#detail").innerHTML = `<div class="detail-loading">${loadingMarkup(t("loading_session"))}</div>`;
 }
@@ -1396,26 +1385,9 @@ function renderDetail(session, records) {
   const totalRecords = Number(session.record_count || records.length);
   const hasHiddenRecords = totalRecords > records.length;
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
-  $("#detail-subtitle").textContent = session.rel_trace_path || session.trace_path || "";
+  $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
-  if (session.html_path) {
-    $("#detail").innerHTML = `
-      <div class="viewer-frame-wrap">
-        <div class="viewer-loading" id="viewer-loading">${loadingMarkup(t("loading_viewer"))}</div>
-        <iframe
-          class="viewer-frame"
-          title="Trace viewer"
-          src="/api/sessions/${encodeURIComponent(session.id)}/html"
-        ></iframe>
-      </div>
-    `;
-    const frame = $("#detail .viewer-frame");
-    const loading = $("#viewer-loading");
-    frame?.addEventListener("load", () => loading?.classList.add("hidden"), {once: true});
-    return;
-  }
   $("#detail").innerHTML = `
-    <div class="detail-fallback-note">${esc(t("fallback_viewer"))}</div>
     ${hasHiddenRecords ? `<div class="detail-fallback-note">${esc(t("limited_records", {shown: records.length, total: totalRecords}))}</div>` : ""}
     <div class="detail-inspector-bar">
       <div class="detail-tabs">
@@ -1423,14 +1395,16 @@ function renderDetail(session, records) {
         <button class="detail-tab ${state.activeTab === "raw" ? "active" : ""}" data-tab="raw">${esc(t("tab_trace"))}</button>
       </div>
       <div class="action-bar">
-        <button class="act-btn" data-copy-path="${esc(session.trace_path)}">${esc(t("copy_path"))}</button>
+        <a class="act-btn" href="/api/sessions/${encodeURIComponent(session.id)}/export/jsonl" download>${esc(t("export_jsonl"))}</a>
+        <a class="act-btn" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
+        <button class="act-btn" data-copy-path="${esc(session.id)}">${esc(t("copy_path"))}</button>
       </div>
     </div>
     <div class="session-summary">
       <div class="session-summary-head">
         <span class="session-summary-title">${esc(session.agent)}</span>
         <span class="badge ${statusClass}">${esc(session.status)}</span>
-        <span class="session-summary-path">${esc(session.rel_trace_path)}</span>
+        <span class="session-summary-path">${esc(session.legacy_rel_path || session.id)}</span>
       </div>
       <div class="token-bar">
         ${tokenItem("var(--blue)", t("records"), session.record_count)}

@@ -12,11 +12,8 @@ from claude_tap.dashboard import (
     _first_error,
     _infer_agent,
     _input_user_text,
-    _iter_trace_files,
-    _manifest_by_trace_path,
     _parts_text,
     _preview,
-    _read_jsonl_records,
     _record_host,
     _record_model,
     _record_response_text,
@@ -24,19 +21,16 @@ from claude_tap.dashboard import (
     _request_user_text,
     _response_events,
     _response_text,
-    _summarize_session,
     dashboard_trace_snapshot,
     list_trace_agents,
     list_trace_sessions,
     load_trace_session,
     read_dashboard_template,
-    rel_path_for_session_id,
-    session_id_for_rel_path,
-    trace_path_for_session_id,
 )
+from claude_tap.history import migrate_legacy_traces
 from claude_tap.live import LiveViewerServer
 from claude_tap.trace import TraceWriter
-from claude_tap.trace_store import DB_FILE, TraceStore
+from claude_tap.trace_store import get_trace_store
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:
@@ -102,13 +96,19 @@ def _antigravity_record() -> dict:
     }
 
 
-def test_dashboard_lists_sessions_across_agents(tmp_path: Path) -> None:
+def _seed_legacy(tmp_path: Path) -> None:
+    migrate_legacy_traces(tmp_path)
+
+
+def test_dashboard_lists_sessions_across_agents(trace_db, tmp_path: Path) -> None:
     claude_trace = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     agy_trace = tmp_path / "2026-05-20" / "trace_090000.jsonl"
     _write_jsonl(claude_trace, [_anthropic_record()])
     _write_jsonl(agy_trace, [_antigravity_record()])
 
-    sessions = list_trace_sessions(tmp_path)
+    _seed_legacy(tmp_path)
+
+    sessions = list_trace_sessions()
 
     assert [session["agent"] for session in sessions] == ["Antigravity", "Claude Code"]
     assert sessions[0]["first_user"] == "What model are you?"
@@ -116,58 +116,59 @@ def test_dashboard_lists_sessions_across_agents(tmp_path: Path) -> None:
     assert sessions[1]["input_tokens"] == 42
     assert sessions[1]["output_tokens"] == 9
 
-    agents = list_trace_agents(tmp_path)
+    agents = list_trace_agents()
     assert [(agent["label"], agent["sessions"]) for agent in agents] == [("Antigravity", 1), ("Claude Code", 1)]
 
 
-def test_dashboard_indexes_sessions_in_sqlite(tmp_path: Path) -> None:
+def test_dashboard_indexes_sessions_in_sqlite(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
+    _seed_legacy(tmp_path)
 
-    sessions = list_trace_sessions(tmp_path)
+    sessions = list_trace_sessions()
 
-    assert (tmp_path / DB_FILE).exists()
+    assert trace_db.exists()
     assert sessions[0]["record_count"] == 1
     assert sessions[0]["first_user"] == "Explain this repository"
 
-    _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2)])
-    sessions = list_trace_sessions(tmp_path)
-    payload = load_trace_session(tmp_path, sessions[0]["id"])
+    second_path = tmp_path / "2026-05-20" / "trace_081500.jsonl"
+    _write_jsonl(second_path, [_anthropic_record(turn=2)])
+    migrate_legacy_traces(tmp_path)
+    sessions = list_trace_sessions()
+    first_session = next(item for item in sessions if item["legacy_rel_path"] == "2026-05-20/trace_080000.jsonl")
+    payload = load_trace_session(first_session["id"])
 
-    assert sessions[0]["record_count"] == 2
+    assert len(sessions) == 2
     assert payload is not None
-    assert [record["turn"] for record in payload["records"]] == [1, 2]
+    assert payload["records"][0]["turn"] == 1
 
 
-def test_dashboard_load_session_can_page_sqlite_records(tmp_path: Path) -> None:
+def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])
-    session_id = list_trace_sessions(tmp_path)[0]["id"]
+    _seed_legacy(tmp_path)
+    session_id = list_trace_sessions()[0]["id"]
 
-    payload = load_trace_session(tmp_path, session_id, record_limit=1, record_offset=1)
+    payload = load_trace_session(session_id, record_limit=1, record_offset=1)
 
     assert payload is not None
     assert payload["session"]["record_count"] == 3
     assert [record["turn"] for record in payload["records"]] == [2]
 
 
-def test_dashboard_detail_uses_sqlite_cache_without_rereading_jsonl(monkeypatch, tmp_path: Path) -> None:
+def test_dashboard_detail_reads_from_sqlite(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
-    session_id = list_trace_sessions(tmp_path)[0]["id"]
+    _seed_legacy(tmp_path)
+    session_id = list_trace_sessions()[0]["id"]
 
-    def fail_read_jsonl(_path: Path) -> list[dict]:
-        raise AssertionError("load_trace_session should use the SQLite cache for indexed traces")
-
-    monkeypatch.setattr("claude_tap.dashboard._read_jsonl_records", fail_read_jsonl)
-
-    payload = load_trace_session(tmp_path, session_id)
+    payload = load_trace_session(session_id)
 
     assert payload is not None
     assert payload["records"][0]["request_id"] == "req_claude"
 
 
-def test_dashboard_first_message_uses_first_user_prompt(tmp_path: Path) -> None:
+def test_dashboard_first_message_uses_first_user_prompt(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_100000.jsonl"
     _write_jsonl(
         trace_path,
@@ -196,66 +197,49 @@ def test_dashboard_first_message_uses_first_user_prompt(tmp_path: Path) -> None:
         ],
     )
 
-    summary = list_trace_sessions(tmp_path)[0]
+    _seed_legacy(tmp_path)
+    summary = list_trace_sessions()[0]
 
     assert summary["first_user"] == "What is this project?"
 
 
-def test_dashboard_loads_session_by_id(tmp_path: Path) -> None:
+def test_dashboard_loads_session_by_id(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
-    session_id = list_trace_sessions(tmp_path)[0]["id"]
+    _seed_legacy(tmp_path)
+    session_id = list_trace_sessions()[0]["id"]
 
-    payload = load_trace_session(tmp_path, session_id)
+    payload = load_trace_session(session_id)
 
     assert payload is not None
-    assert payload["session"]["rel_trace_path"] == "2026-05-20/trace_080000.jsonl"
+    assert payload["session"]["legacy_rel_path"] == "2026-05-20/trace_080000.jsonl"
     assert payload["records"][0]["request_id"] == "req_claude"
 
 
-def test_dashboard_rejects_unsafe_or_missing_session_ids(tmp_path: Path) -> None:
+def test_dashboard_rejects_missing_session_ids(trace_db) -> None:
     template = read_dashboard_template()
     assert "session-list" in template
     assert "lang-select" in template
     assert "DASHBOARD_I18N" in template
     assert 'data-i18n="table_first_message"' in template
-    assert rel_path_for_session_id("not-valid-@@") is None
-    assert rel_path_for_session_id(session_id_for_rel_path("/tmp/trace.jsonl")) is None
-    assert rel_path_for_session_id(session_id_for_rel_path("../trace.jsonl")) is None
-    assert trace_path_for_session_id(tmp_path, "not-valid-@@") is None
-
-    trace_path = tmp_path / "2026-05-20" / "trace_080000.txt"
-    trace_path.parent.mkdir()
-    trace_path.write_text("{}", encoding="utf-8")
-    session_id = session_id_for_rel_path("2026-05-20/trace_080000.txt")
-    assert trace_path_for_session_id(tmp_path, session_id) is None
-    assert load_trace_session(tmp_path, "not-valid-@@") is None
+    assert "export_jsonl" in template
+    assert load_trace_session("not-a-valid-session-id") is None
 
 
-def test_dashboard_handles_empty_malformed_and_manifest_history(tmp_path: Path) -> None:
-    missing_dir = tmp_path / "missing"
-    assert dashboard_trace_snapshot(missing_dir) == {}
-    assert _iter_trace_files(missing_dir) == []
-    assert _read_jsonl_records(missing_dir / "trace_missing.jsonl") == []
-    assert _manifest_by_trace_path(tmp_path) == {}
+def test_dashboard_summarize_session_and_migration(trace_db, tmp_path: Path) -> None:
+    assert dashboard_trace_snapshot() == {}
 
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
-    trace_path.parent.mkdir()
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
     trace_path.write_text(
-        '\nnot-json\n[]\n{"request_id":"ok"}\n',
+        '\nnot-json\n[]\n{"request_id":"ok","request":{},"response":{}}\n',
         encoding="utf-8",
     )
-    assert _read_jsonl_records(trace_path) == [{"request_id": "ok"}]
-
     manifest_path = tmp_path / ".cloudtap-manifest.json"
-    manifest_path.write_text("[]", encoding="utf-8")
-    assert _manifest_by_trace_path(tmp_path) == {}
     manifest_path.write_text(
         json.dumps(
             {
                 "traces": [
-                    "bad",
-                    {"files": [1, "2026-05-20/trace_080000.log"]},
                     {
                         "client": "kimi",
                         "files": ["2026-05-20/trace_080000.jsonl"],
@@ -266,32 +250,21 @@ def test_dashboard_handles_empty_malformed_and_manifest_history(tmp_path: Path) 
         ),
         encoding="utf-8",
     )
-    manifest = _manifest_by_trace_path(tmp_path)
-    assert manifest["2026-05-20/trace_080000.jsonl"]["client"] == "kimi"
-
-    summary = _summarize_session(
-        output_dir=tmp_path,
-        trace_path=trace_path,
-        rel_path="2026-05-20/trace_080000.jsonl",
-        records=[],
-        manifest_entry=manifest["2026-05-20/trace_080000.jsonl"],
-        is_current=False,
-    )
-    assert summary["status"] == "empty"
+    _seed_legacy(tmp_path)
+    summary = list_trace_sessions()[0]
     assert summary["agent"] == "Kimi"
+    assert summary["record_count"] == 1
 
 
-def test_dashboard_parses_provider_fallbacks(tmp_path: Path) -> None:
+def test_dashboard_parses_provider_fallbacks(trace_db, tmp_path: Path) -> None:
     html_trace = tmp_path / "2026-05-20" / "trace_090000.jsonl"
-    html_trace.parent.mkdir()
+    html_trace.parent.mkdir(parents=True, exist_ok=True)
     _write_jsonl(html_trace, [_antigravity_record()])
-    html_trace.with_suffix(".html").write_text("<!doctype html>", encoding="utf-8")
-    html_trace.with_suffix(".log").write_text("log", encoding="utf-8")
+    _seed_legacy(tmp_path)
 
-    summary = list_trace_sessions(tmp_path, current_trace_path=html_trace)[0]
+    session_id = list_trace_sessions()[0]["id"]
+    summary = list_trace_sessions(current_session_id=session_id)[0]
     assert summary["status"] == "active"
-    assert summary["html_path"].endswith("trace_090000.html")
-    assert summary["log_path"].endswith("trace_090000.log")
     assert summary["model"] == "unknown"
 
     provider_cases = [
@@ -432,7 +405,7 @@ def test_dashboard_extracts_usage_models_errors_and_text() -> None:
     assert _record_response_text({"response": {}}) == ""
 
 
-def test_dashboard_preview_skips_auxiliary_auth_records(tmp_path: Path) -> None:
+def test_dashboard_preview_skips_auxiliary_auth_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_100000.jsonl"
     _write_jsonl(
         trace_path,
@@ -487,22 +460,22 @@ def test_dashboard_preview_skips_auxiliary_auth_records(tmp_path: Path) -> None:
         ],
     )
 
-    summary = list_trace_sessions(tmp_path)[0]
+    _seed_legacy(tmp_path)
+    summary = list_trace_sessions()[0]
 
     assert summary["first_user"] == "Gemini dashboard prompt"
     assert summary["last_response"] == "Gemini dashboard response."
 
 
 @pytest.mark.asyncio
-async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> None:
+async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
-    html_path = trace_path.with_suffix(".html")
-    no_html_trace_path = tmp_path / "2026-05-20" / "trace_081500.jsonl"
+    second_trace_path = tmp_path / "2026-05-20" / "trace_081500.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
-    _write_jsonl(no_html_trace_path, [_anthropic_record(turn=2), _anthropic_record(turn=3)])
-    html_path.write_text("<!doctype html><title>trace</title>", encoding="utf-8")
+    _write_jsonl(second_trace_path, [_anthropic_record(turn=2), _anthropic_record(turn=3)])
+    _seed_legacy(tmp_path)
 
-    server = LiveViewerServer(tmp_path / "dashboard.jsonl", port=0, output_dir=tmp_path, dashboard_mode=True)
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
     port = await server.start()
     try:
         async with aiohttp.ClientSession() as session:
@@ -510,13 +483,14 @@ async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> N
                 assert resp.status == 200
                 html = await resp.text()
                 assert "session-list" in html
+                assert "export_jsonl" in html
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
                 assert resp.status == 200
                 payload = await resp.json()
                 assert len(payload["sessions"]) == 2
-                session_id = next(item["id"] for item in payload["sessions"] if item["html_path"])
-                no_html_session_id = next(item["id"] for item in payload["sessions"] if not item["html_path"])
+                second_session_id = next(item["id"] for item in payload["sessions"] if item["record_count"] == 2)
+                session_id = next(item["id"] for item in payload["sessions"] if item["record_count"] == 1)
 
             async with session.get(f"http://127.0.0.1:{port}/api/agents") as resp:
                 assert resp.status == 200
@@ -529,34 +503,27 @@ async def test_dashboard_server_serves_session_api_and_html(tmp_path: Path) -> N
                 assert payload["records"][0]["request_id"] == "req_claude"
 
             async with session.get(
-                f"http://127.0.0.1:{port}/api/sessions/{no_html_session_id}/records?offset=1&limit=1"
+                f"http://127.0.0.1:{port}/api/sessions/{second_session_id}/records?offset=1&limit=1"
             ) as resp:
                 assert resp.status == 200
                 payload = await resp.json()
                 assert payload["session"]["record_count"] == 2
                 assert [record["turn"] for record in payload["records"]] == [3]
 
-            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/html") as resp:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/jsonl") as resp:
                 assert resp.status == 200
-                html = await resp.text()
-                assert "<title>trace</title>" in html
+                body = await resp.text()
+                assert "req_claude" in body
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/bad/records") as resp:
                 assert resp.status == 404
-
-            async with session.get(f"http://127.0.0.1:{port}/api/sessions/bad/html") as resp:
-                assert resp.status == 404
-
-            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{no_html_session_id}/html") as resp:
-                assert resp.status == 404
-                assert await resp.text() == "HTML viewer not generated yet"
     finally:
         await server.stop()
 
 
 @pytest.mark.asyncio
-async def test_dashboard_server_no_output_dir_and_sse_events(tmp_path: Path) -> None:
-    server = LiveViewerServer(tmp_path / "trace_current.jsonl", port=0, dashboard_mode=True)
+async def test_dashboard_server_sse_events(trace_db) -> None:
+    server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()
     try:
         timeout = aiohttp.ClientTimeout(total=3)
@@ -570,9 +537,6 @@ async def test_dashboard_server_no_output_dir_and_sse_events(tmp_path: Path) -> 
                 assert await resp.json() == {"sessions": []}
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/anything/records") as resp:
-                assert resp.status == 404
-
-            async with session.get(f"http://127.0.0.1:{port}/api/sessions/anything/html") as resp:
                 assert resp.status == 404
 
             async with session.get(f"http://127.0.0.1:{port}/dashboard/events") as resp:
@@ -590,47 +554,49 @@ async def test_dashboard_server_no_output_dir_and_sse_events(tmp_path: Path) -> 
         await server.stop()
 
 
-def test_dashboard_current_session_id_handles_output_dir_boundaries(tmp_path: Path) -> None:
-    current = tmp_path / "2026-05-20" / "trace_current.jsonl"
-    server = LiveViewerServer(current, output_dir=tmp_path)
-    assert server._current_session_id() == session_id_for_rel_path("2026-05-20/trace_current.jsonl")
+def test_live_viewer_exposes_current_session_id(trace_db) -> None:
+    session_id = get_trace_store().create_session(client="claude", proxy_mode="reverse")
+    server = LiveViewerServer(session_id=session_id)
+    assert server.session_id == session_id
 
-    assert LiveViewerServer(current)._current_session_id() is None
-    assert LiveViewerServer(tmp_path.parent / "trace_outside.jsonl", output_dir=tmp_path)._current_session_id() is None
+    assert LiveViewerServer().session_id is None
 
 
 @pytest.mark.asyncio
-async def test_trace_writer_adds_capture_metadata(tmp_path: Path) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    writer = TraceWriter(trace_path, metadata={"client": "codex", "proxy_mode": "forward"})
+async def test_trace_writer_adds_capture_metadata(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="forward")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "codex", "proxy_mode": "forward"})
     try:
         await writer.write(_anthropic_record())
     finally:
         writer.close()
 
-    record = json.loads(trace_path.read_text(encoding="utf-8"))
+    record = store.load_records(session_id)[0]
     assert record["capture"] == {"client": "claude", "proxy_mode": "reverse"}
 
-    writer = TraceWriter(trace_path, metadata={"client": "codex", "proxy_mode": "forward"})
+    session_id = store.create_session(client="codex", proxy_mode="forward")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "codex", "proxy_mode": "forward"})
     try:
         await writer.write({"request": {"body": {}}, "response": {"body": {}}})
     finally:
         writer.close()
 
-    records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    records = store.load_records(session_id)
     assert records[-1]["capture"] == {"client": "codex", "proxy_mode": "forward"}
 
 
 @pytest.mark.asyncio
-async def test_trace_writer_mirrors_records_to_sqlite(tmp_path: Path) -> None:
-    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
-    writer = TraceWriter(trace_path, output_dir=tmp_path, metadata={"client": "claude"})
+async def test_trace_writer_persists_records_to_sqlite(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "claude", "proxy_mode": "reverse"})
     try:
         await writer.write(_anthropic_record())
     finally:
         writer.close()
 
-    records = TraceStore(tmp_path).load_records("2026-05-20/trace_080000.jsonl")
+    records = store.load_records(session_id)
 
     assert len(records) == 1
     assert records[0]["capture"]["client"] == "claude"

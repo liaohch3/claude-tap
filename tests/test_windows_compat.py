@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_tap.cli import _rel_posix, _start_background_update, run_client
+from claude_tap.cli import _start_background_update, run_client
+from claude_tap.history import _rel_posix
 
 
 class _DummyProc:

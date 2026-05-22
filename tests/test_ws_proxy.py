@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -13,14 +14,24 @@ from yarl import URL
 
 from claude_tap.proxy import proxy_handler
 from claude_tap.trace import TraceWriter
+from claude_tap.trace_store import get_trace_store, reset_trace_store
 from claude_tap.ws_proxy import _build_ws_record, _get_ws_proxy_settings
 
 
 @pytest.fixture
 def trace_dir():
     d = tempfile.mkdtemp(prefix="claude_tap_ws_test_")
+    os.environ["CLOUDTAP_DB"] = str(Path(d) / "ws-test.sqlite3")
+    reset_trace_store()
     yield d
     shutil.rmtree(d, ignore_errors=True)
+    reset_trace_store()
+
+
+def _make_writer() -> tuple[object, str, TraceWriter]:
+    store = get_trace_store()
+    session_id = store.create_session()
+    return store, session_id, TraceWriter(session_id, store=store)
 
 
 async def _start_ws_upstream(handler) -> tuple[web.AppRunner, int]:
@@ -100,8 +111,7 @@ async def test_websocket_proxy_basic(trace_dir):
                 break
         return ws
 
-    trace_path = Path(trace_dir) / "trace_ws.jsonl"
-    writer = TraceWriter(trace_path)
+    store, session_id, writer = _make_writer()
 
     upstream_runner, upstream_port = await _start_ws_upstream(ws_upstream_handler)
     proxy_runner, proxy_port, proxy_session = await _start_proxy(
@@ -139,7 +149,7 @@ async def test_websocket_proxy_basic(trace_dir):
         await asyncio.sleep(0.1)
         writer.close()
 
-        records = [json.loads(line) for line in trace_path.read_text().splitlines() if line.strip()]
+        records = store.load_records(session_id)
         assert len(records) == 1
         r = records[0]
         assert r["transport"] == "websocket"
@@ -188,8 +198,7 @@ async def test_websocket_completed_response_is_written_before_socket_close(trace
                 break
         return ws
 
-    trace_path = Path(trace_dir) / "trace_ws_live.jsonl"
-    writer = TraceWriter(trace_path)
+    store, session_id, writer = _make_writer()
 
     upstream_runner, upstream_port = await _start_ws_upstream(ws_upstream_handler)
     proxy_runner, proxy_port, proxy_session = await _start_proxy(
@@ -208,7 +217,7 @@ async def test_websocket_completed_response_is_written_before_socket_close(trace
             assert json.loads(msg.data)["type"] == "response.completed"
 
             await asyncio.sleep(0.1)
-            records = [json.loads(line) for line in trace_path.read_text().splitlines() if line.strip()]
+            records = store.load_records(session_id)
             assert len(records) == 1
             assert records[0]["response"]["body"]["status"] == "completed"
             assert records[0]["request"]["body"]["model"] == "gpt-test"
@@ -219,7 +228,7 @@ async def test_websocket_completed_response_is_written_before_socket_close(trace
         await asyncio.sleep(0.1)
         writer.close()
 
-        records = [json.loads(line) for line in trace_path.read_text().splitlines() if line.strip()]
+        records = store.load_records(session_id)
         assert len(records) == 1
 
     finally:
@@ -248,8 +257,7 @@ async def test_websocket_upstream_connect_does_not_override_proxy(trace_dir):
                 break
         return ws
 
-    trace_path = Path(trace_dir) / "trace_ws_proxy_args.jsonl"
-    writer = TraceWriter(trace_path)
+    store, session_id, writer = _make_writer()
 
     upstream_runner, upstream_port = await _start_ws_upstream(ws_upstream_handler)
     proxy_runner, proxy_port, proxy_session = await _start_proxy(
@@ -293,8 +301,7 @@ async def test_websocket_upstream_connect_does_not_override_proxy(trace_dir):
 async def test_websocket_upstream_failure(trace_dir):
     """When upstream WS connect fails, return HTTP 502 and record the error."""
 
-    trace_path = Path(trace_dir) / "trace_ws_fail.jsonl"
-    writer = TraceWriter(trace_path)
+    store, session_id, writer = _make_writer()
 
     # Point proxy at a port where nothing is listening
     proxy_runner, proxy_port, proxy_session = await _start_proxy(
@@ -313,7 +320,7 @@ async def test_websocket_upstream_failure(trace_dir):
         await asyncio.sleep(0.1)
         writer.close()
 
-        records = [json.loads(line) for line in trace_path.read_text().splitlines() if line.strip()]
+        records = store.load_records(session_id)
         assert len(records) == 1
         r = records[0]
         assert r["transport"] == "websocket"
@@ -444,8 +451,7 @@ async def test_websocket_and_http_coexist(trace_dir):
                 }
             )
 
-    trace_path = Path(trace_dir) / "trace_mixed.jsonl"
-    writer = TraceWriter(trace_path)
+    store, session_id, writer = _make_writer()
 
     upstream_runner, upstream_port = await _start_ws_upstream(mixed_handler)
     proxy_runner, proxy_port, proxy_session = await _start_proxy(
@@ -475,7 +481,7 @@ async def test_websocket_and_http_coexist(trace_dir):
         await asyncio.sleep(0.1)
         writer.close()
 
-        records = [json.loads(line) for line in trace_path.read_text().splitlines() if line.strip()]
+        records = store.load_records(session_id)
         assert len(records) == 2
 
         http_rec = next(r for r in records if r.get("transport") != "websocket")

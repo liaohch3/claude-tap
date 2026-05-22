@@ -24,21 +24,18 @@ from claude_tap.cli import (
     update_main,
 )
 from claude_tap.forward_proxy import ForwardProxyServer
-from claude_tap.history import _cleanup_traces, _load_manifest, _register_trace, _save_manifest
+from claude_tap.history import cleanup_trace_sessions, delete_trace_history, migrate_legacy_traces
 from claude_tap.live import LiveViewerServer
 from claude_tap.proxy import filter_headers
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
+from claude_tap.trace_store import get_trace_store, reset_trace_store, resolve_db_path
 from claude_tap.viewer import _generate_html_viewer
 
 __all__ = [
     "__version__",
     "_build_update_command",
-    "_cleanup_traces",
     "_detect_installer",
-    "_load_manifest",
-    "_register_trace",
-    "_save_manifest",
     "_version_tuple",
     "main_entry",
     "parse_args",
@@ -57,4 +54,10 @@ __all__ = [
     "LiveViewerServer",
     "filter_headers",
     "_generate_html_viewer",
+    "cleanup_trace_sessions",
+    "delete_trace_history",
+    "migrate_legacy_traces",
+    "get_trace_store",
+    "reset_trace_store",
+    "resolve_db_path",
 ]

@@ -1,8 +1,7 @@
-"""Session-first dashboard helpers for trace history browsing."""
+"""Session-first dashboard helpers backed by the local SQLite trace store."""
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 import sqlite3
@@ -11,11 +10,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from claude_tap.trace_store import TraceStore
+from claude_tap.trace_store import TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
 
 DASHBOARD_TEMPLATE_PATH = Path(__file__).parent / "dashboard.html"
-_MANIFEST_FILE = ".cloudtap-manifest.json"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 CLIENT_LABELS = {
@@ -38,65 +36,32 @@ def read_dashboard_template() -> str:
     return DASHBOARD_TEMPLATE_PATH.read_text(encoding="utf-8")
 
 
-def session_id_for_rel_path(rel_path: str) -> str:
-    """Encode a relative trace path as a URL-safe session id."""
-    return base64.urlsafe_b64encode(rel_path.encode("utf-8")).decode("ascii").rstrip("=")
+def ensure_trace_store() -> TraceStore:
+    """Return the trace store."""
+    return get_trace_store()
 
 
-def rel_path_for_session_id(session_id: str) -> str | None:
-    """Decode a URL-safe session id back to a relative trace path."""
-    padding = "=" * (-len(session_id) % 4)
-    try:
-        value = base64.urlsafe_b64decode((session_id + padding).encode("ascii")).decode("utf-8")
-    except (ValueError, UnicodeDecodeError):
-        return None
-    if value.startswith("/") or ".." in Path(value).parts:
-        return None
-    return value
-
-
-def list_trace_sessions(output_dir: Path, current_trace_path: Path | None = None) -> list[dict[str, Any]]:
+def list_trace_sessions(
+    current_session_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Return trace sessions sorted by most recent activity."""
-    output_dir = output_dir.resolve()
-    if not output_dir.is_dir():
-        return []
+    store = ensure_trace_store()
     try:
-        manifest = _manifest_by_trace_path(output_dir)
-        store = _sync_trace_store(output_dir, manifest)
-        sessions = [_apply_current_session_state(session, current_trace_path) for session in store.list_summaries()]
+        sessions = [
+            _apply_current_session_state(_session_summary_from_row(store, row), current_session_id)
+            for row in store.list_session_rows()
+        ]
     except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
-        sessions = _list_trace_sessions_from_files(output_dir, current_trace_path=current_trace_path)
-    sessions.sort(key=lambda item: (item.get("updated_at") or "", item.get("trace_path") or ""), reverse=True)
+        return []
+    sessions.sort(key=lambda item: (item.get("updated_at") or "", item.get("id") or ""), reverse=True)
     return sessions
 
 
-def _list_trace_sessions_from_files(output_dir: Path, current_trace_path: Path | None = None) -> list[dict[str, Any]]:
-    """Return trace sessions by reading JSONL files directly."""
-    manifest = _manifest_by_trace_path(output_dir)
-    current_resolved = current_trace_path.resolve() if current_trace_path else None
-
-    sessions: list[dict[str, Any]] = []
-    for trace_path in _iter_trace_files(output_dir):
-        rel_path = _rel_posix(trace_path, output_dir)
-        records = _read_jsonl_records(trace_path)
-        sessions.append(
-            _summarize_session(
-                output_dir=output_dir,
-                trace_path=trace_path,
-                rel_path=rel_path,
-                records=records,
-                manifest_entry=manifest.get(rel_path, {}),
-                is_current=current_resolved == trace_path.resolve(),
-            )
-        )
-
-    sessions.sort(key=lambda item: (item.get("updated_at") or "", item.get("trace_path") or ""), reverse=True)
-    return sessions
-
-
-def list_trace_agents(output_dir: Path, current_trace_path: Path | None = None) -> list[dict[str, Any]]:
+def list_trace_agents(
+    current_session_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Return agent buckets for the dashboard sidebar."""
-    sessions = list_trace_sessions(output_dir, current_trace_path=current_trace_path)
+    sessions = list_trace_sessions(current_session_id)
     buckets: dict[str, dict[str, Any]] = {}
     for session in sessions:
         key = session["agent_key"]
@@ -107,193 +72,85 @@ def list_trace_agents(output_dir: Path, current_trace_path: Path | None = None) 
 
 
 def load_trace_session(
-    output_dir: Path,
     session_id: str,
-    current_trace_path: Path | None = None,
+    current_session_id: str | None = None,
     record_limit: int | None = None,
     record_offset: int = 0,
 ) -> dict[str, Any] | None:
     """Load one session summary and its records by session id."""
-    trace_path = trace_path_for_session_id(output_dir, session_id)
-    if trace_path is None:
+    store = ensure_trace_store()
+    row = store.load_session_row(session_id)
+    if row is None:
         return None
-
-    output_dir = output_dir.resolve()
-    rel_path = _rel_posix(trace_path, output_dir)
-    manifest = _manifest_by_trace_path(output_dir)
-    records: list[dict[str, Any]] = []
-    try:
-        store = _sync_trace_store(output_dir, manifest)
-        summary = store.load_summary(rel_path)
-        records = store.load_records(rel_path, limit=record_limit, offset=record_offset)
-    except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
-        summary = None
-    if summary is None:
-        all_records = _read_jsonl_records(trace_path)
-        current_resolved = current_trace_path.resolve() if current_trace_path else None
-        summary = _summarize_session(
-            output_dir=output_dir,
-            trace_path=trace_path,
-            rel_path=rel_path,
-            records=all_records,
-            manifest_entry=manifest.get(rel_path, {}),
-            is_current=current_resolved == trace_path.resolve(),
-        )
-        records = _limit_records(all_records, record_limit, record_offset)
-    else:
-        summary = _apply_current_session_state(summary, current_trace_path)
+    summary = _apply_current_session_state(_session_summary_from_row(store, row), current_session_id)
+    records = store.load_records(session_id, limit=record_limit, offset=record_offset)
     return {"session": summary, "records": records}
 
 
-def trace_path_for_session_id(output_dir: Path, session_id: str) -> Path | None:
-    """Resolve a session id to a trace path inside the output directory."""
-    rel_path = rel_path_for_session_id(session_id)
-    if rel_path is None:
-        return None
-    output_dir = output_dir.resolve()
-    trace_path = (output_dir / rel_path).resolve()
-    try:
-        trace_path.relative_to(output_dir)
-    except ValueError:
-        return None
-    if not trace_path.is_file() or trace_path.suffix != ".jsonl":
-        return None
-    return trace_path
+def dashboard_trace_snapshot() -> dict[str, tuple[str, int, str]]:
+    """Return a cheap SQLite snapshot for dashboard refresh detection."""
+    store = ensure_trace_store()
+    return store.dashboard_snapshot()
 
 
-def dashboard_trace_snapshot(output_dir: Path) -> dict[str, tuple[int, int]]:
-    """Return a cheap file snapshot for dashboard refresh detection."""
-    if not output_dir.is_dir():
-        return {}
-    snapshot: dict[str, tuple[int, int]] = {}
-    for trace_path in _iter_trace_files(output_dir.resolve()):
+def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, Any]:
+    summary_json = row["summary_json"]
+    if summary_json:
         try:
-            stat = trace_path.stat()
-        except OSError:
-            continue
-        snapshot[_rel_posix(trace_path, output_dir.resolve())] = (stat.st_mtime_ns, stat.st_size)
-    return snapshot
+            cached = json.loads(summary_json)
+        except json.JSONDecodeError:
+            cached = None
+        if isinstance(cached, dict) and cached.get("id") == row["id"]:
+            return cached
+
+    records = store.load_records(row["id"])
+    manifest_entry = {
+        "client": row["client"] or "",
+        "proxy_mode": row["proxy_mode"] or "",
+    }
+    summary = _summarize_session(
+        session_id=row["id"],
+        date_key=row["date_key"] or "legacy",
+        legacy_rel_path=row["legacy_rel_path"],
+        records=records,
+        manifest_entry=manifest_entry,
+        status=row["status"] or "complete",
+        started_at=row["started_at"] or "",
+        updated_at=row["updated_at"] or "",
+        is_current=False,
+        record_count=int(row["record_count"] or 0),
+    )
+    if row["status"] != "active":
+        store.store_summary(row["id"], summary)
+    return summary
 
 
-def _iter_trace_files(output_dir: Path) -> list[Path]:
-    if not output_dir.is_dir():
-        return []
-    return sorted(path for path in output_dir.glob("**/trace_*.jsonl") if path.is_file())
-
-
-def _sync_trace_store(output_dir: Path, manifest: dict[str, dict[str, Any]] | None = None) -> TraceStore:
-    """Synchronize changed JSONL traces into the SQLite dashboard store."""
-    store = TraceStore(output_dir)
-    manifest = manifest if manifest is not None else _manifest_by_trace_path(output_dir)
-    known_rel_paths: set[str] = set()
-    for trace_path in _iter_trace_files(output_dir):
-        rel_path = _rel_posix(trace_path, output_dir)
-        known_rel_paths.add(rel_path)
-        if not store.session_needs_index(rel_path, trace_path):
-            continue
-        records = _read_jsonl_records(trace_path)
-        summary = _summarize_session(
-            output_dir=output_dir,
-            trace_path=trace_path,
-            rel_path=rel_path,
-            records=records,
-            manifest_entry=manifest.get(rel_path, {}),
-            is_current=False,
-        )
-        store.replace_session(rel_path=rel_path, trace_path=trace_path, records=records, summary=summary)
-    store.delete_missing(known_rel_paths)
-    return store
-
-
-def _apply_current_session_state(session: dict[str, Any], current_trace_path: Path | None) -> dict[str, Any]:
-    """Patch live state onto a stored session summary."""
+def _apply_current_session_state(session: dict[str, Any], current_session_id: str | None) -> dict[str, Any]:
     session = dict(session)
-    is_current = False
-    if current_trace_path and session.get("trace_path"):
-        try:
-            is_current = Path(str(session["trace_path"])).resolve() == current_trace_path.resolve()
-        except OSError:
-            is_current = False
+    is_current = bool(current_session_id and session.get("id") == current_session_id)
     session["live"] = is_current
     if is_current and session.get("record_count", 0) > 0 and session.get("status") != "error":
         session["status"] = "active"
     return session
 
 
-def _rel_posix(path: Path, base: Path) -> str:
-    return path.relative_to(base).as_posix()
-
-
-def _read_jsonl_records(path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return records
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict):
-            records.append(record)
-    return records
-
-
-def _limit_records(
-    records: list[dict[str, Any]],
-    record_limit: int | None,
-    record_offset: int = 0,
-) -> list[dict[str, Any]]:
-    record_offset = max(0, record_offset)
-    if record_limit is None:
-        return records[record_offset:]
-    return records[record_offset : record_offset + max(0, record_limit)]
-
-
-def _manifest_by_trace_path(output_dir: Path) -> dict[str, dict[str, Any]]:
-    manifest_path = output_dir / _MANIFEST_FILE
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(manifest, dict):
-        return {}
-
-    entries: dict[str, dict[str, Any]] = {}
-    for entry in manifest.get("traces", []):
-        if not isinstance(entry, dict):
-            continue
-        for file_name in entry.get("files", []):
-            if not isinstance(file_name, str):
-                continue
-            rel = file_name.replace("\\", "/")
-            if rel.endswith(".jsonl"):
-                entries[rel] = entry
-    return entries
-
-
 def _summarize_session(
     *,
-    output_dir: Path,
-    trace_path: Path,
-    rel_path: str,
+    session_id: str,
+    date_key: str,
+    legacy_rel_path: str | None,
     records: list[dict[str, Any]],
     manifest_entry: dict[str, Any],
+    status: str,
+    started_at: str,
+    updated_at: str,
     is_current: bool,
+    record_count: int | None = None,
 ) -> dict[str, Any]:
-    stat = trace_path.stat()
-    html_path = trace_path.with_suffix(".html")
-    log_path = trace_path.with_suffix(".log")
     first_record = records[0] if records else {}
     last_record = records[-1] if records else {}
-    started_at = (
-        _timestamp_from_record(first_record) or _manifest_time(manifest_entry) or _iso_from_timestamp(stat.st_mtime)
-    )
-    updated_at = _timestamp_from_record(last_record) or _iso_from_timestamp(stat.st_mtime)
+    started_at = _timestamp_from_record(first_record) or started_at or _iso_now()
+    updated_at = _timestamp_from_record(last_record) or updated_at or started_at
     agent = _infer_agent(records, manifest_entry)
     input_tokens = output_tokens = cache_read_tokens = cache_create_tokens = 0
     models: dict[str, int] = {}
@@ -310,35 +167,38 @@ def _summarize_session(
         model = _record_model(record)
         if model:
             models[model] = models.get(model, 0) + 1
-        status = _response_status(record)
-        if status:
-            statuses.append(status)
+        status_code = _response_status(record)
+        if status_code:
+            statuses.append(status_code)
         duration_ms += _duration_ms(record)
         turn = record.get("turn")
         if isinstance(turn, int):
             turns.add(turn)
 
-    has_error = any(status >= 400 for status in statuses) or any(_record_error(record) for record in records)
-    status = "error" if has_error else "active" if is_current or (not html_path.exists() and records) else "complete"
-    if not records:
-        status = "empty"
+    has_error = any(code >= 400 for code in statuses) or any(_record_error(record) for record in records)
+    if has_error:
+        resolved_status = "error"
+    elif is_current and records:
+        resolved_status = "active"
+    elif not records:
+        resolved_status = "empty"
+    else:
+        resolved_status = status if status in {"active", "complete", "error", "empty"} else "complete"
 
     preview_records = _preview_records(records)
+    count = record_count if record_count is not None else len(records)
     return {
-        "id": session_id_for_rel_path(rel_path),
-        "date": trace_path.parent.name if _DATE_RE.match(trace_path.parent.name) else "legacy",
+        "id": session_id,
+        "date": date_key if _DATE_RE.match(date_key) else "legacy",
         "agent": agent,
         "agent_key": _agent_key(agent),
-        "status": status,
+        "status": resolved_status,
         "live": is_current,
-        "trace_path": str(trace_path),
-        "rel_trace_path": rel_path,
-        "html_path": str(html_path) if html_path.exists() else None,
-        "log_path": str(log_path) if log_path.exists() else None,
+        "legacy_rel_path": legacy_rel_path,
         "started_at": started_at,
         "updated_at": updated_at,
-        "record_count": len(records),
-        "turn_count": len(turns) if turns else len(records),
+        "record_count": count,
+        "turn_count": len(turns) if turns else count,
         "duration_ms": duration_ms,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -349,22 +209,16 @@ def _summarize_session(
         "first_user": _first_user_preview(preview_records),
         "last_response": _last_response_preview(preview_records),
         "error": _first_error(records),
-        "size_bytes": stat.st_size,
     }
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _timestamp_from_record(record: dict[str, Any]) -> str | None:
     value = record.get("timestamp")
     return value if isinstance(value, str) and value else None
-
-
-def _manifest_time(entry: dict[str, Any]) -> str | None:
-    value = entry.get("created_at")
-    return value if isinstance(value, str) and value else None
-
-
-def _iso_from_timestamp(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
 
 
 def _record_usage(record: dict[str, Any]) -> dict[str, int]:

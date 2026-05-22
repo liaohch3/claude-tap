@@ -23,6 +23,18 @@ from pathlib import Path
 import pytest
 from yarl import URL
 
+from claude_tap.trace import TraceWriter
+from tests.conftest import e2e_env, read_proxy_log, read_trace_records
+
+
+def _writer_for_dir(tmpdir: Path):
+    from claude_tap.trace_store import TraceStore
+
+    store = TraceStore(tmpdir / "forward.sqlite3")
+    session_id = store.create_session()
+    return store, session_id, TraceWriter(session_id, store=store)
+
+
 FAKE_UPSTREAM_PORT = 19199
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -238,6 +250,7 @@ def _run_test(upstream_port):
     env = os.environ.copy()
     env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
 
+    env = e2e_env(env, trace_dir)
     print(f"[test] Trace dir: {trace_dir}")
     print("[test] Running: python -m claude_tap ...")
 
@@ -272,23 +285,14 @@ def _run_test(upstream_port):
 
     # ── Assertions ──
 
-    # Trace file exists (may be in a date-based subdirectory, e.g. trace_dir/YYYY-MM-DD/)
-    trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
-    assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
-    trace_file = trace_files[0]
+    records = read_trace_records(trace_dir)
+    assert len(records) == 2, f"Expected 2 records, got {len(records)}"
 
-    # Log file exists
-    log_files = list(Path(trace_dir).glob("**/*.log"))
-    assert len(log_files) == 1, f"Expected 1 log file, got {log_files}"
-    log_content = log_files[0].read_text()
+    log_content = read_proxy_log(trace_dir)
+    assert log_content.strip(), "Expected proxy log lines in SQLite"
     print(f"[test] Proxy log:\n{log_content.rstrip()}")
 
-    # Parse JSONL records
-    with open(trace_file) as f:
-        records = [json.loads(line) for line in f if line.strip()]
-
     print(f"[test] Recorded {len(records)} API calls")
-    assert len(records) == 2, f"Expected 2 records, got {len(records)}"
 
     # ── Turn 1: non-streaming (gzip compressed upstream) ──
     r1 = records[0]
@@ -327,16 +331,8 @@ def _run_test(upstream_port):
     assert "[Turn 1]" in log_content
     assert "[Turn 2]" in log_content
     print("  ✅ Proxy log: has Turn details")
-
-    # ── HTML viewer generated ──
-    html_files = list(Path(trace_dir).glob("**/*.html"))
-    assert len(html_files) == 1, f"Expected 1 HTML file, got {html_files}"
-    html_content = html_files[0].read_text()
-    assert "EMBEDDED_TRACE_DATA" in html_content
-    assert "claude-test-model" in html_content
-    assert "Hello!" in html_content
-    assert "View:" in proc.stdout
-    print("  ✅ HTML viewer: generated with embedded data")
+    assert "Session:" in proc.stdout or "Trace session:" in proc.stdout
+    print("  ✅ SQLite session persisted")
 
     print("\n✅ E2E test PASSED")
 
@@ -419,6 +415,7 @@ def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout
     env = os.environ.copy()
     env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
 
+    env = e2e_env(env, trace_dir)
     cmd = [
         sys.executable,
         "-m",
@@ -526,13 +523,8 @@ def test_upstream_error():
             print(f"[test_upstream_error] stderr:\n{proc.stderr.rstrip()}")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
-        assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
-        trace_file = trace_files[0]
-
-        # Parse JSONL records
-        with open(trace_file) as f:
-            records = [json.loads(line) for line in f if line.strip()]
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1, f"Expected trace records in SQLite, got {records}"
 
         print(f"[test_upstream_error] Recorded {len(records)} API calls")
         assert len(records) == 1, f"Expected 1 record, got {len(records)}"
@@ -676,12 +668,8 @@ def test_malformed_sse():
         print("  OK: proxy did not crash")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
-        assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
-        trace_file = trace_files[0]
-
-        with open(trace_file) as f:
-            records = [json.loads(line) for line in f if line.strip()]
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1, f"Expected trace records in SQLite, got {records}"
 
         assert len(records) == 1, f"Expected 1 record, got {len(records)}"
         r = records[0]
@@ -808,12 +796,8 @@ def test_large_payload():
         print("  OK: proxy handled large payload without crashing")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
-        assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
-        trace_file = trace_files[0]
-
-        with open(trace_file) as f:
-            records = [json.loads(line) for line in f if line.strip()]
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1, f"Expected trace records in SQLite, got {records}"
 
         assert len(records) == 1, f"Expected 1 record, got {len(records)}"
         r = records[0]
@@ -836,10 +820,9 @@ def test_large_payload():
         assert "API calls: 1" in proc.stdout
         print("  OK: summary present")
 
-        # Verify the JSONL trace file is large (should contain the 100KB+ prompt)
-        trace_size = trace_file.stat().st_size
-        assert trace_size > 100_000, f"Trace file only {trace_size} bytes, expected >100KB"
-        print(f"  OK: trace file is {trace_size} bytes (contains full payload)")
+        payload_size = sum(len(json.dumps(record)) for record in records)
+        assert payload_size > 100_000, f"Trace payload only {payload_size} bytes, expected >100KB"
+        print(f"  OK: trace payload is {payload_size} bytes (contains full payload)")
 
         print("\n  test_large_payload PASSED")
 
@@ -971,12 +954,8 @@ def test_concurrent_requests():
         print("  OK: proxy handled concurrent requests without crashing")
 
         # Trace file exists
-        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
-        assert len(trace_files) == 1, f"Expected 1 trace file, got {trace_files}"
-        trace_file = trace_files[0]
-
-        with open(trace_file) as f:
-            records = [json.loads(line) for line in f if line.strip()]
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1, f"Expected trace records in SQLite, got {records}"
 
         print(f"[test_concurrent_requests] Recorded {len(records)} API calls")
         assert len(records) == 5, f"Expected 5 records, got {len(records)}"
@@ -1254,6 +1233,7 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
     async def fake_run_client(*args, **kwargs):
         return 0
 
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
 
@@ -1261,9 +1241,8 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
     code = await async_main(args)
 
     assert code == 0
-    assert len(opened_urls) == 2
-    assert opened_urls[0].startswith("http://127.0.0.1:")
-    assert opened_urls[1].startswith("file://")
+    assert len(opened_urls) >= 1
+    assert all(url.startswith("http://127.0.0.1:") for url in opened_urls)
 
 
 @pytest.mark.asyncio
@@ -1276,6 +1255,7 @@ async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypat
     async def fake_run_client(*args, **kwargs):
         return 0
 
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-no-live.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
 
@@ -1376,9 +1356,8 @@ def test_codex_client_reverse_proxy():
         )
 
         assert proc.returncode == 0, f"codex mode failed: stdout={proc.stdout} stderr={proc.stderr}"
-        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
-        assert len(trace_files) == 1
-        records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1
         assert len(records) == 1
         record = records[0]
         assert record["request"]["path"] == "/v1/messages"
@@ -1480,9 +1459,8 @@ def test_kimi_client_reverse_proxy():
         )
 
         assert proc.returncode == 0, f"kimi mode failed: stdout={proc.stdout} stderr={proc.stderr}"
-        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
-        assert len(trace_files) == 1
-        records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1
         assert len(records) == 1
         record = records[0]
         assert record["request"]["path"] == "/chat/completions"
@@ -1705,9 +1683,8 @@ def test_kimi_multiturn_tool_calls_reverse_proxy():
         )
 
         assert proc.returncode == 0, f"kimi multi-turn mode failed: stdout={proc.stdout} stderr={proc.stderr}"
-        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
-        assert len(trace_files) == 1
-        records = [json.loads(line) for line in trace_files[0].read_text().splitlines() if line.strip()]
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1
         assert len(records) == 10
 
         unique_tool_names = set()
@@ -2012,6 +1989,7 @@ def test_upstream_unreachable():
     env = os.environ.copy()
     env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
 
+    env = e2e_env(env, trace_dir)
     try:
         proc = subprocess.run(
             [
@@ -2042,17 +2020,12 @@ def test_upstream_unreachable():
         print("  OK: proxy did not crash")
 
         # No trace records (502 returned in-process, not from upstream)
-        trace_files = list(Path(trace_dir).glob("**/*.jsonl"))
-        if trace_files:
-            with open(trace_files[0]) as f:
-                records = [json.loads(line) for line in f if line.strip()]
-            assert len(records) == 0, f"Expected 0 records, got {len(records)}"
+        records = read_trace_records(trace_dir)
+        assert len(records) == 0, f"Expected 0 records, got {len(records)}"
         print("  OK: no trace records (upstream unreachable, 502 returned)")
 
-        # Log should contain error info
-        log_files = list(Path(trace_dir).glob("**/*.log"))
-        assert len(log_files) == 1
-        log_content = log_files[0].read_text()
+        log_content = read_proxy_log(trace_dir)
+        assert log_content.strip()
         assert "upstream error" in log_content.lower() or "connect" in log_content.lower(), (
             f"Expected upstream error in log, got: {log_content[:200]}"
         )
@@ -2134,6 +2107,7 @@ def test_version_check_with_fake_pypi():
     try:
         env = os.environ.copy()
         env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+        env = e2e_env(env, trace_dir)
         env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{FAKE_PYPI_PORT}/pypi/claude-tap/json"
 
         proc = subprocess.run(
@@ -2196,6 +2170,7 @@ def test_version_check_no_update():
     try:
         env = os.environ.copy()
         env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+        env = e2e_env(env, trace_dir)
         env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{FAKE_PYPI_NOCHECK_PORT}/pypi/claude-tap/json"
 
         proc = subprocess.run(
@@ -2232,120 +2207,75 @@ def test_version_check_no_update():
 
 
 def test_trace_cleanup():
-    """Test _cleanup_traces removes oldest traces while keeping newest."""
-    from claude_tap import _cleanup_traces, _load_manifest, _register_trace, _save_manifest
+    """Test cleanup_trace_sessions removes oldest sessions while keeping newest."""
+    from claude_tap import cleanup_trace_sessions, get_trace_store, reset_trace_store
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        output_dir = Path(tmpdir)
+        db_path = Path(tmpdir) / "cleanup.sqlite3"
+        os.environ["CLOUDTAP_DB"] = str(db_path)
+        reset_trace_store()
+        store = get_trace_store()
+        session_ids = [store.create_session(client="claude", proxy_mode="reverse") for _ in range(5)]
 
-        # Initialize empty manifest first to prevent auto-migration
-        _save_manifest(output_dir, {"_cloudtap": True, "version": "test", "traces": []})
-
-        # Create 5 trace sessions
-        for i in range(5):
-            ts = f"20260218_00000{i}"
-            files = [f"trace_{ts}.jsonl", f"trace_{ts}.log", f"trace_{ts}.html"]
-            for f in files:
-                (output_dir / f).write_text(f"data for {f}")
-            _register_trace(output_dir, ts, files)
-
-        manifest = _load_manifest(output_dir)
-        assert len(manifest["traces"]) == 5
-
-        # Cleanup to keep 3
-        removed = _cleanup_traces(output_dir, 3)
+        removed = cleanup_trace_sessions(3)
         assert removed == 2, f"Expected 2 removed, got {removed}"
-
-        # Verify oldest 2 deleted
-        assert not (output_dir / "trace_20260218_000000.jsonl").exists()
-        assert not (output_dir / "trace_20260218_000001.jsonl").exists()
-        # Newest 3 preserved
-        assert (output_dir / "trace_20260218_000002.jsonl").exists()
-        assert (output_dir / "trace_20260218_000003.jsonl").exists()
-        assert (output_dir / "trace_20260218_000004.jsonl").exists()
-
-        # Manifest updated
-        manifest = _load_manifest(output_dir)
-        assert len(manifest["traces"]) == 3
-        timestamps = [t["timestamp"] for t in manifest["traces"]]
-        assert "20260218_000000" not in timestamps
-        assert "20260218_000001" not in timestamps
+        assert len(store.list_session_rows()) == 3
+        remaining = {row["id"] for row in store.list_session_rows()}
+        assert session_ids[0] not in remaining
+        assert session_ids[1] not in remaining
+        assert session_ids[-1] in remaining
 
         print("  test_trace_cleanup PASSED")
 
 
 def test_trace_tagging_safety():
-    """Test that cleanup never deletes files not registered in the manifest."""
-    from claude_tap import _cleanup_traces, _register_trace, _save_manifest
+    """Test that cleanup only removes stored sessions."""
+    from claude_tap import cleanup_trace_sessions, get_trace_store, reset_trace_store
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        output_dir = Path(tmpdir)
+        db_path = Path(tmpdir) / "cleanup.sqlite3"
+        os.environ["CLOUDTAP_DB"] = str(db_path)
+        reset_trace_store()
+        store = get_trace_store()
+        for _ in range(5):
+            store.create_session(client="claude", proxy_mode="reverse")
 
-        # Initialize empty manifest first to prevent auto-migration
-        _save_manifest(output_dir, {"_cloudtap": True, "version": "test", "traces": []})
-
-        # Create non-CloudTap files
-        (output_dir / "important_data.jsonl").write_text("do not delete")
-        (output_dir / "my_notes.txt").write_text("also important")
-        (output_dir / "trace_manual_export.jsonl").write_text("user file")
-
-        # Register 5 CloudTap traces
-        for i in range(5):
-            ts = f"20260218_01000{i}"
-            files = [f"trace_{ts}.jsonl"]
-            (output_dir / files[0]).write_text(f"trace data {i}")
-            _register_trace(output_dir, ts, files)
-
-        # Cleanup to keep 2
-        removed = _cleanup_traces(output_dir, 2)
+        removed = cleanup_trace_sessions(2)
         assert removed == 3
-
-        # Non-CloudTap files must be untouched
-        assert (output_dir / "important_data.jsonl").exists()
-        assert (output_dir / "my_notes.txt").exists()
-        assert (output_dir / "trace_manual_export.jsonl").exists()
-        assert (output_dir / "important_data.jsonl").read_text() == "do not delete"
+        assert len(store.list_session_rows()) == 2
 
         print("  test_trace_tagging_safety PASSED")
 
 
 def test_manifest_migration():
-    """Test that existing trace files without manifest are auto-migrated."""
-    from claude_tap import _cleanup_traces, _load_manifest
+    """Test that existing trace files without SQLite rows are migrated."""
+    from claude_tap import get_trace_store, migrate_legacy_traces, reset_trace_store
 
     with tempfile.TemporaryDirectory() as tmpdir:
         output_dir = Path(tmpdir)
+        db_path = output_dir / "migrate.sqlite3"
+        os.environ["CLOUDTAP_DB"] = str(db_path)
+        reset_trace_store()
 
-        # Create old-format trace files (no manifest)
         for i in range(4):
             ts = f"20260218_02000{i}"
-            (output_dir / f"trace_{ts}.jsonl").write_text(f"old data {i}")
-            (output_dir / f"trace_{ts}.log").write_text(f"old log {i}")
+            date_dir = output_dir / "2026-02-18"
+            date_dir.mkdir(parents=True, exist_ok=True)
+            (date_dir / f"trace_{ts.split('_')[1]}.jsonl").write_text(
+                json.dumps({"request_id": ts, "request": {}, "response": {}}) + "\n"
+            )
+            (date_dir / f"trace_{ts.split('_')[1]}.log").write_text("log")
 
-        # Load manifest — should trigger migration
-        manifest = _load_manifest(output_dir)
-        assert len(manifest["traces"]) == 4, f"Expected 4 migrated traces, got {len(manifest['traces'])}"
-
-        # Verify all timestamps present
-        timestamps = sorted(t["timestamp"] for t in manifest["traces"])
-        assert timestamps == ["20260218_020000", "20260218_020001", "20260218_020002", "20260218_020003"]
-
-        # Verify companion files detected
-        for entry in manifest["traces"]:
-            assert len(entry["files"]) == 2  # .jsonl + .log
-
-        # Now cleanup should work on migrated entries
-        removed = _cleanup_traces(output_dir, 2)
-        assert removed == 2
-        assert not (output_dir / "trace_20260218_020000.jsonl").exists()
-        assert (output_dir / "trace_20260218_020003.jsonl").exists()
+        imported = migrate_legacy_traces(output_dir)
+        assert imported == 4
+        assert len(get_trace_store().list_session_rows()) == 4
 
         print("  test_manifest_migration PASSED")
 
 
 def test_e2e_with_cleanup():
-    """E2E test: pre-fill traces, run claude-tap with --tap-max-traces, verify cleanup."""
-    from claude_tap import _register_trace
+    """E2E test: pre-fill sessions, run claude-tap with --tap-max-traces, verify cleanup."""
+    from claude_tap import get_trace_store, reset_trace_store
 
     stop_upstream, upstream_port = run_fake_upstream_in_thread()
 
@@ -2355,17 +2285,17 @@ def test_e2e_with_cleanup():
     fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_SCRIPT)
 
     try:
-        # Pre-create 4 old trace sessions with very old timestamps (well before current time)
-        for i in range(4):
-            ts = f"20250101_00000{i}"
-            files = [f"trace_{ts}.jsonl", f"trace_{ts}.log"]
-            for f in files:
-                (output_dir / f).write_text(f"old data {f}")
-            _register_trace(output_dir, ts, files)
+        db_path = output_dir / "claude-tap-test.sqlite3"
+        os.environ["CLOUDTAP_DB"] = str(db_path)
+        reset_trace_store()
+        store = get_trace_store()
+        for _ in range(4):
+            store.create_session(client="claude", proxy_mode="reverse")
 
         env = os.environ.copy()
         env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
-        env["CLAUDE_TAP_PYPI_URL"] = "http://127.0.0.1:1/invalid"  # disable update check
+        env["CLAUDE_TAP_PYPI_URL"] = "http://127.0.0.1:1/invalid"
+        env = e2e_env(env, trace_dir)
 
         proc = subprocess.run(
             [
@@ -2394,16 +2324,9 @@ def test_e2e_with_cleanup():
 
         assert proc.returncode == 0
         assert "Cleaned up" in proc.stdout, f"Expected cleanup message in stdout:\n{proc.stdout}"
-
-        # Should have 3 traces remaining (newest)
-        from claude_tap import _load_manifest
-
-        manifest = _load_manifest(output_dir)
-        assert len(manifest["traces"]) == 3, f"Expected 3 traces, got {len(manifest['traces'])}"
-
-        # Oldest 2 should be gone
-        assert not (output_dir / "trace_20250101_000000.jsonl").exists()
-        assert not (output_dir / "trace_20250101_000001.jsonl").exists()
+        reset_trace_store()
+        os.environ["CLOUDTAP_DB"] = str(db_path)
+        assert len(get_trace_store().list_session_rows()) == 3
 
         print("  test_e2e_with_cleanup PASSED")
 
@@ -2463,8 +2386,12 @@ async def test_live_viewer_sse_incremental():
     from claude_tap import LiveViewerServer
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        trace_path = Path(tmpdir) / "test.jsonl"
-        server = LiveViewerServer(trace_path, port=0)
+        os.environ["CLOUDTAP_DB"] = str(Path(tmpdir) / "live.sqlite3")
+        from claude_tap.trace_store import get_trace_store, reset_trace_store
+
+        reset_trace_store()
+        session_id = get_trace_store().create_session()
+        server = LiveViewerServer(session_id=session_id, port=0)
         port = await server.start()
 
         try:
@@ -2715,11 +2642,9 @@ async def test_forward_proxy_connect():
 
     from claude_tap.certs import CertificateAuthority, ensure_ca
     from claude_tap.forward_proxy import ForwardProxyServer
-    from claude_tap.trace import TraceWriter
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
-        trace_path = tmpdir / "trace.jsonl"
         ca_dir = tmpdir / "ca"
 
         # Generate CA
@@ -2732,7 +2657,7 @@ async def test_forward_proxy_connect():
 
         # Start forward proxy (disable SSL verify for the upstream session
         # since our fake upstream uses a self-signed cert)
-        writer = TraceWriter(trace_path)
+        store, session_id, writer = _writer_for_dir(tmpdir)
         upstream_ssl_ctx = ssl.create_default_context()
         upstream_ssl_ctx.check_hostname = False
         upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -2784,7 +2709,7 @@ async def test_forward_proxy_connect():
 
             # Check trace was recorded
             writer.close()
-            trace_text = trace_path.read_text().strip()
+            trace_text = store.export_jsonl(session_id).strip()
             assert trace_text, "No trace recorded"
             records = [json.loads(line) for line in trace_text.splitlines()]
             assert len(records) == 1
@@ -2815,16 +2740,14 @@ async def test_forward_proxy_local_reverse_bridge():
 
     from claude_tap.certs import CertificateAuthority, ensure_ca
     from claude_tap.forward_proxy import ForwardProxyServer
-    from claude_tap.trace import TraceWriter
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
-        trace_path = tmpdir_path / "trace.jsonl"
         ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
         ca = CertificateAuthority(ca_cert_path, ca_key_path)
 
         upstream_port = await _start_fake_https_upstream(tmpdir_path)
-        writer = TraceWriter(trace_path)
+        store, session_id, writer = _writer_for_dir(tmpdir_path)
         upstream_ssl_ctx = ssl.create_default_context()
         upstream_ssl_ctx.check_hostname = False
         upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -2861,7 +2784,7 @@ async def test_forward_proxy_local_reverse_bridge():
 
             await asyncio.sleep(0.1)
             writer.close()
-            records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            records = [json.loads(line) for line in store.export_jsonl(session_id).splitlines()]
             assert len(records) == 1
             assert records[0]["request"]["path"] == "/v1internal:loadCodeAssist"
             assert records[0]["request"]["body"]["request"]["contents"][0]["role"] == "user"
@@ -2882,11 +2805,9 @@ async def test_forward_proxy_records_upstream_error():
 
     from claude_tap.certs import CertificateAuthority, ensure_ca
     from claude_tap.forward_proxy import ForwardProxyServer
-    from claude_tap.trace import TraceWriter
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
-        trace_path = tmpdir_path / "trace.jsonl"
         ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
         ca = CertificateAuthority(ca_cert_path, ca_key_path)
 
@@ -2895,7 +2816,7 @@ async def test_forward_proxy_records_upstream_error():
         unreachable_port = sock.getsockname()[1]
         sock.close()
 
-        writer = TraceWriter(trace_path)
+        store, session_id, writer = _writer_for_dir(tmpdir_path)
         session = aiohttp.ClientSession(auto_decompress=False)
         server = ForwardProxyServer(
             host="127.0.0.1",
@@ -2919,7 +2840,7 @@ async def test_forward_proxy_records_upstream_error():
 
             await asyncio.sleep(0.1)
             writer.close()
-            records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            records = [json.loads(line) for line in store.export_jsonl(session_id).splitlines()]
             assert len(records) == 1
             assert records[0]["turn"] == 1
             assert records[0]["request"]["path"] == "/v1internal:listExperiments"
@@ -2942,11 +2863,9 @@ async def test_forward_proxy_connect_websocket():
 
     from claude_tap.certs import CertificateAuthority, ensure_ca
     from claude_tap.forward_proxy import ForwardProxyServer
-    from claude_tap.trace import TraceWriter
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
-        trace_path = tmpdir / "trace_ws.jsonl"
         ca_dir = tmpdir / "ca"
 
         ca_cert_path, ca_key_path = ensure_ca(ca_dir)
@@ -2955,7 +2874,7 @@ async def test_forward_proxy_connect_websocket():
         upstream_port = await _start_fake_wss_upstream(tmpdir)
         print(f"  Fake WSS upstream on port {upstream_port}")
 
-        writer = TraceWriter(trace_path)
+        store, session_id, writer = _writer_for_dir(tmpdir)
         upstream_ssl_ctx = ssl.create_default_context()
         upstream_ssl_ctx.check_hostname = False
         upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -3010,7 +2929,7 @@ async def test_forward_proxy_connect_websocket():
             await asyncio.sleep(0.1)
             writer.close()
 
-            trace_text = trace_path.read_text().strip()
+            trace_text = store.export_jsonl(session_id).strip()
             assert trace_text, "No WS trace recorded"
             records = [json.loads(line) for line in trace_text.splitlines()]
             assert len(records) == 1
@@ -3037,18 +2956,16 @@ async def test_forward_proxy_connect_websocket_honors_env_proxy(monkeypatch):
 
     from claude_tap.certs import CertificateAuthority, ensure_ca
     from claude_tap.forward_proxy import ForwardProxyServer
-    from claude_tap.trace import TraceWriter
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
-        trace_path = tmpdir / "trace_ws_proxy_args.jsonl"
         ca_dir = tmpdir / "ca"
 
         ca_cert_path, ca_key_path = ensure_ca(ca_dir)
         ca = CertificateAuthority(ca_cert_path, ca_key_path)
 
         upstream_port = await _start_fake_wss_upstream(tmpdir)
-        writer = TraceWriter(trace_path)
+        store, session_id, writer = _writer_for_dir(tmpdir)
         upstream_ssl_ctx = ssl.create_default_context()
         upstream_ssl_ctx.check_hostname = False
         upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -3375,10 +3292,12 @@ async def test_live_viewer_server():
     from claude_tap import LiveViewerServer
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        trace_path = Path(tmpdir) / "test.jsonl"
+        os.environ["CLOUDTAP_DB"] = str(Path(tmpdir) / "live.sqlite3")
+        from claude_tap.trace_store import get_trace_store, reset_trace_store
 
-        # Start server
-        server = LiveViewerServer(trace_path, port=0)
+        reset_trace_store()
+        session_id = get_trace_store().create_session()
+        server = LiveViewerServer(session_id=session_id, port=0)
         port = await server.start()
         assert port > 0
         print(f"  LiveViewerServer started on port {port}")
@@ -3414,7 +3333,7 @@ async def test_live_viewer_server():
 
 
 @pytest.mark.asyncio
-async def test_dashboard_main_serves_viewer(monkeypatch):
+async def test_dashboard_main_serves_viewer(monkeypatch, tmp_path):
     """Test the dashboard command starts a standalone dashboard server."""
     import aiohttp
 
@@ -3422,24 +3341,24 @@ async def test_dashboard_main_serves_viewer(monkeypatch):
 
     opened_urls: list[str] = []
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        args = parse_dashboard_args(["--tap-output-dir", tmpdir, "--tap-live-port", "0"])
-        task = asyncio.create_task(dashboard_main(args))
+    args = parse_dashboard_args(["--tap-output-dir", str(tmp_path), "--tap-live-port", "0"])
+    task = asyncio.create_task(dashboard_main(args))
+    try:
+        for _ in range(50):
+            if opened_urls:
+                break
+            await asyncio.sleep(0.05)
+        assert opened_urls, "dashboard should open the browser"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(opened_urls[0]) as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert "session-list" in html
+    finally:
+        task.cancel()
         try:
-            for _ in range(50):
-                if opened_urls:
-                    break
-                await asyncio.sleep(0.05)
-            assert opened_urls, "dashboard should open the browser"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(opened_urls[0]) as resp:
-                    assert resp.status == 200
-                    html = await resp.text()
-                    assert "session-list" in html
-        finally:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            await task
+        except asyncio.CancelledError:
+            pass

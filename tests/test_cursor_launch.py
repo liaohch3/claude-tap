@@ -77,7 +77,7 @@ async def test_run_client_cursor_forward_sets_proxy_ca_and_no_proxy(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_import_cursor_transcripts_appends_viewer_friendly_records(tmp_path: Path) -> None:
+async def test_import_cursor_transcripts_appends_viewer_friendly_records(trace_db, tmp_path: Path) -> None:
     session_id = "session-123"
     transcript = (
         tmp_path / ".cursor" / "projects" / "project-one" / "agent-transcripts" / session_id / f"{session_id}.jsonl"
@@ -101,12 +101,16 @@ async def test_import_cursor_transcripts_appends_viewer_friendly_records(tmp_pat
     ]
     transcript.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
 
-    writer = TraceWriter(tmp_path / "trace.jsonl")
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    session_id = store.create_session(client="cursor", proxy_mode="reverse")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "cursor", "proxy_mode": "reverse"})
     imported = await import_cursor_transcripts(writer, since=0, home=tmp_path)
     writer.close()
 
     assert imported == 2
-    records = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    records = store.load_records(session_id)
     assert records[0]["transport"] == "cursor-transcript"
     assert records[0]["request"]["body"]["messages"][0]["content"] == "hello cursor"
     assert records[0]["response"]["body"]["content"][0]["text"] == "hello back"
@@ -115,7 +119,7 @@ async def test_import_cursor_transcripts_appends_viewer_friendly_records(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_import_cursor_transcripts_preserves_tool_uses(tmp_path: Path) -> None:
+async def test_import_cursor_transcripts_preserves_tool_uses(trace_db, tmp_path: Path) -> None:
     session_id = "tool-session"
     transcript = (
         tmp_path / ".cursor" / "projects" / "project-one" / "agent-transcripts" / session_id / f"{session_id}.jsonl"
@@ -146,12 +150,16 @@ async def test_import_cursor_transcripts_preserves_tool_uses(tmp_path: Path) -> 
     ]
     transcript.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
 
-    writer = TraceWriter(tmp_path / "trace.jsonl")
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    session_id = store.create_session(client="cursor", proxy_mode="reverse")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "cursor", "proxy_mode": "reverse"})
     imported = await import_cursor_transcripts(writer, since=0, home=tmp_path)
     writer.close()
 
     assert imported == 3
-    records = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    records = store.load_records(session_id)
 
     assert records[0]["request"]["path"].endswith("/turn/1/step/1")
     assert records[1]["request"]["path"].endswith("/turn/1/step/2")

@@ -1,14 +1,11 @@
-"""TraceWriter – async JSONL writer with statistics."""
+"""TraceWriter – async SQLite writer with statistics."""
 
 from __future__ import annotations
 
 import asyncio
-import json
-import sqlite3
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-from claude_tap.trace_store import TraceStore
+from claude_tap.trace_store import TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
 
 if TYPE_CHECKING:
@@ -16,19 +13,18 @@ if TYPE_CHECKING:
 
 
 class TraceWriter:
-    """Writes trace records to a JSONL file and accumulates statistics."""
+    """Writes trace records to the local SQLite store and accumulates statistics."""
 
     def __init__(
         self,
-        path: Path,
+        session_id: str,
         live_server: "LiveViewerServer | None" = None,
         metadata: dict[str, str] | None = None,
-        output_dir: Path | None = None,
+        store: TraceStore | None = None,
     ):
-        self.path = path
+        self.session_id = session_id
         self._lock = asyncio.Lock()
         self.count = 0
-        # Token statistics
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cache_read_tokens = 0
@@ -36,10 +32,8 @@ class TraceWriter:
         self.models_used: dict[str, int] = {}
         self._live_server = live_server
         self._metadata = metadata or {}
-        self._store = TraceStore(output_dir or path.parent)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Keep file handle open for real-time append + flush
-        self._file = open(path, "a", encoding="utf-8")
+        self._store = store or get_trace_store()
+        self._has_error = False
 
     async def write(self, record: dict) -> None:
         """Write a record and update statistics."""
@@ -47,32 +41,19 @@ class TraceWriter:
             if self._metadata:
                 capture = record.get("capture") if isinstance(record.get("capture"), dict) else {}
                 record["capture"] = {**self._metadata, **capture}
-            self._file.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
-            self._file.flush()
-            self._append_to_store(record)
+            self._store.append_record(self.session_id, record)
             self.count += 1
             self._update_stats(record)
 
-        # Broadcast to live viewer if enabled
         if self._live_server:
             await self._live_server.broadcast(record)
 
-    def _append_to_store(self, record: dict) -> None:
-        try:
-            self._store.append_record(self.path, record)
-        except (OSError, sqlite3.Error, ValueError):
-            # JSONL remains the source of durability; dashboard indexing can
-            # rebuild SQLite from the file if a transient store write fails.
-            return
-
     def close(self) -> None:
-        """Flush and close the JSONL file."""
-        if self._file and not self._file.closed:
-            self._file.flush()
-            self._file.close()
+        """Finalize the active session in SQLite."""
+        summary = self.get_summary()
+        self._store.finalize_session(self.session_id, summary)
 
     def _update_stats(self, record: dict) -> None:
-        """Extract token usage from record and update totals."""
         req_body = record.get("request", {}).get("body", {})
         model = req_body.get("model", "unknown") if isinstance(req_body, dict) else "unknown"
         self.models_used[model] = self.models_used.get(model, 0) + 1
@@ -83,15 +64,18 @@ class TraceWriter:
             usage = resp_body
         usage = normalize_usage(usage)
 
-        input_tokens = usage.get("input_tokens", 0)
-        output_tokens = usage.get("output_tokens", 0)
-        cache_read = usage.get("cache_read_input_tokens", 0)
-        cache_create = usage.get("cache_creation_input_tokens", 0)
+        self.total_input_tokens += usage.get("input_tokens", 0)
+        self.total_output_tokens += usage.get("output_tokens", 0)
+        self.total_cache_read_tokens += usage.get("cache_read_input_tokens", 0)
+        self.total_cache_create_tokens += usage.get("cache_creation_input_tokens", 0)
 
-        self.total_input_tokens += input_tokens
-        self.total_output_tokens += output_tokens
-        self.total_cache_read_tokens += cache_read
-        self.total_cache_create_tokens += cache_create
+        response = record.get("response")
+        if isinstance(response, dict):
+            status = response.get("status")
+            if isinstance(status, int) and status >= 400:
+                self._has_error = True
+            if isinstance(response.get("error"), str) and response["error"]:
+                self._has_error = True
 
     def get_summary(self) -> dict:
         """Return a summary of the trace statistics."""
@@ -102,4 +86,5 @@ class TraceWriter:
             "cache_read_tokens": self.total_cache_read_tokens,
             "cache_create_tokens": self.total_cache_create_tokens,
             "models_used": self.models_used,
+            "has_error": self._has_error,
         }

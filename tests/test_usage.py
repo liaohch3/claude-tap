@@ -51,8 +51,11 @@ def test_normalize_usage_preserves_explicit_anthropic_cache_read() -> None:
 
 
 @pytest.mark.asyncio
-async def test_trace_writer_counts_responses_cached_tokens(tmp_path) -> None:
-    writer = TraceWriter(tmp_path / "trace.jsonl")
+async def test_trace_writer_counts_responses_cached_tokens(trace_db) -> None:
+    from claude_tap.trace_store import get_trace_store
+
+    session_id = get_trace_store().create_session()
+    writer = TraceWriter(session_id)
     try:
         await writer.write(
             {
