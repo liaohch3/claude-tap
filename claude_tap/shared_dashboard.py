@@ -40,7 +40,7 @@ def _dashboard_lock_path() -> Path:
 def _dashboard_spawn_lock():
     path = _dashboard_lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as lock_file:
+    with open(path, "a", encoding="utf-8") as lock_file:
         if sys.platform == "win32":
             import msvcrt
 
