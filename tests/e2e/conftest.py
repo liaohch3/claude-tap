@@ -50,7 +50,7 @@ def installed_claude_tap():
 
 
 @pytest.fixture
-def claude_env(installed_claude_tap):
+def claude_env(installed_claude_tap, monkeypatch):
     """Provide env, trace_dir, and selected proxy mode for real E2E runs.
 
     Mode selection:
@@ -59,9 +59,17 @@ def claude_env(installed_claude_tap):
         otherwise forward.
     """
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_real_e2e_")
+    db_path = str(Path(trace_dir) / "test-traces.sqlite3")
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env["CLOUDTAP_DB"] = db_path
+
+    # Also set in current process so the test can load records from the same database
+    monkeypatch.setenv("CLOUDTAP_DB", db_path)
+    from claude_tap import trace_store
+
+    trace_store._store = None
     # Remove nesting detection vars
     env.pop("CLAUDECODE", None)
     env.pop("CLAUDE_CODE_SSE_PORT", None)

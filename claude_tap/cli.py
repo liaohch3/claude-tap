@@ -1115,6 +1115,8 @@ async def dashboard_main(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    migrate_legacy_traces(output_dir)
+
     host = args.host
     port = resolve_dashboard_port(args.live_port)
     if await is_dashboard_healthy(host, port):

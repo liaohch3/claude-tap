@@ -153,7 +153,7 @@ class TraceStore:
         with self._write_lock:
             conn = self._connect()
             row = conn.execute(
-                "SELECT status FROM sessions WHERE id = ?",
+                "SELECT status, summary_json FROM sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
             if row is None:
@@ -165,6 +165,21 @@ class TraceStore:
                     status = "empty"
                 elif summary.get("has_error"):
                     status = "error"
+
+            existing_summary = None
+            if row["summary_json"]:
+                try:
+                    existing_summary = json.loads(row["summary_json"])
+                except json.JSONDecodeError:
+                    pass
+
+            if isinstance(existing_summary, dict):
+                existing_summary["status"] = status
+                existing_summary["id"] = session_id
+                summary_json_str = json.dumps(existing_summary, ensure_ascii=False, separators=(",", ":"))
+            else:
+                summary_json_str = json.dumps(summary, ensure_ascii=False, separators=(",", ":")) if summary else None
+
             conn.execute(
                 """
                 UPDATE sessions
@@ -173,7 +188,7 @@ class TraceStore:
                 """,
                 (
                     status,
-                    json.dumps(summary, ensure_ascii=False, separators=(",", ":")) if summary else None,
+                    summary_json_str,
                     datetime.now(timezone.utc).isoformat(),
                     session_id,
                 ),

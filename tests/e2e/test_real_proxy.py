@@ -11,7 +11,6 @@ Prerequisites:
   - Run with: uv run --extra dev pytest tests/e2e/ --run-real-e2e -v --timeout=300
 """
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -55,16 +54,13 @@ def _run_claude_tap(
 
 
 def _read_trace_records(trace_dir: str) -> list[dict]:
-    """Read all JSONL trace records from the trace directory."""
+    """Read all trace records from the SQLite database."""
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
     records = []
-    for jsonl_file in Path(trace_dir).glob("trace_*.jsonl"):
-        text = jsonl_file.read_text().strip()
-        if text:
-            for line in text.splitlines():
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+    for row in store.list_session_rows():
+        records.extend(store.load_records(row["id"]))
     return records
 
 
@@ -172,7 +168,28 @@ class TestRealProxy:
         result = _run_claude_tap(env, trace_dir, "Reply with exactly: HTML_CHECK", proxy_mode=proxy_mode)
         assert result.returncode == 0
 
-        # claude-tap generates HTML on exit (which happens after claude subprocess finishes)
+        # Query database to get session ID
+        from claude_tap.trace_store import get_trace_store
+
+        store = get_trace_store()
+        session_rows = store.list_session_rows()
+        assert len(session_rows) >= 1
+        session_id = session_rows[0]["id"]
+
+        # Explicitly run the export command to generate the HTML viewer file
+        cmd = [
+            sys.executable,
+            "-m",
+            "claude_tap",
+            "export",
+            "--session-id",
+            session_id,
+            "-o",
+            str(Path(trace_dir) / "viewer.html"),
+        ]
+        export_result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        assert export_result.returncode == 0
+
         html_files = list(Path(trace_dir).glob("*.html"))
         assert len(html_files) >= 1, (
             f"Expected HTML viewer file in {trace_dir}, found: {list(Path(trace_dir).iterdir())}"
@@ -182,8 +199,8 @@ class TestRealProxy:
         html_content = html_files[0].read_text()
         assert "EMBEDDED_TRACE_DATA" in html_content, "HTML viewer should contain EMBEDDED_TRACE_DATA"
 
-        # Verify View: line in stdout
-        assert "View:" in result.stdout, "Expected 'View:' URL in stdout"
+        # Verify Dashboard: line in stdout
+        assert "Dashboard:" in result.stdout, "Expected 'Dashboard:' URL in stdout"
 
     @pytest.mark.timeout(180)
     def test_api_key_redaction(self, claude_env):
