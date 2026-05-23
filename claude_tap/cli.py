@@ -233,6 +233,14 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         forward_base_url_envs=("CLOUD_CODE_URL",),
         forward_base_url_allowed_path_prefixes=("/v1internal",),
     ),
+    "deepseek-tui": ClientConfig(
+        cmd="deepseek",
+        label="DeepSeek TUI",
+        install_url="https://deepseek-tui.com",
+        base_url_env="DEEPSEEK_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.deepseek.com/beta",
+    ),
 }
 
 
@@ -853,7 +861,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="claude-tap",
         description=(
             "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, "
-            "Cursor CLI, Qoder CLI, or Antigravity CLI API requests via a local proxy. All flags not listed below are "
+            "Cursor CLI, Qoder CLI, DeepSeek TUI, or Antigravity CLI API requests via a local proxy. All flags not listed below are "
             "forwarded to the selected client."
         ),
         epilog=(
@@ -911,6 +919,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "qoder cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask\n'
             "  # Authenticate first with `qodercli login` or QODER_PERSONAL_ACCESS_TOKEN / QODER_JOB_TOKEN\n"
+            "\n"
+            "deepseek tui:\n"
+            "  # Uses DEEPSEEK_BASE_URL and reverse-proxies DeepSeek API by default\n"
+            "  claude-tap --tap-client deepseek-tui\n"
+            '  claude-tap --tap-client deepseek-tui -- -p "hello"\n'
+            "  # Use a custom target (e.g. DeepSeek-compatible gateway)\n"
+            "  claude-tap --tap-client deepseek-tui --tap-target https://api.deepseek.com/v1\n"
             "\n"
             "antigravity cli (defaults to forward proxy mode):\n"
             "  # On macOS, claude-tap auto-trusts the local CA in your user login keychain without sudo\n"
@@ -972,7 +987,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex/kimi, "
+            "Default depends on the client: 'reverse' for claude/codex/kimi/deepseek-tui, "
             "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder."
         ),
     )

@@ -90,6 +90,7 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/responses",
     "/v1/chat/completions",
     "/v1/completions",
+    "/v1/fim/completions",
     "/v1/models",
     "/v1/embeddings",
     "/v1/files",
@@ -98,6 +99,7 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     "/chat/completions",
     "/completions",
     "/models",
+    "/fim/completions",
     "/embeddings",
     "/files",
     # Gemini API
