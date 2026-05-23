@@ -127,6 +127,7 @@ def test_parse_args_claude_uses_env_base_url(monkeypatch) -> None:
 
 
 def test_parse_args_claude_uses_project_settings_base_url(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     home = tmp_path / "home"
     project = tmp_path / "project"
     home_settings = home / ".claude"
