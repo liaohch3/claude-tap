@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.77] - 2026-05-24
+
+### Changed
+- fix: Make backports-zstd conditional for Python <3.14
 ## [0.1.76] - 2026-05-22
 
 ### Changed
