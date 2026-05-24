@@ -128,6 +128,8 @@ claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 in your environment or Claude settings. Use `--tap-target` only when you want to
 override that detected target.
 
+For the Claude Code VS Code extension, set `Claude Code: Claude Process Wrapper` to `claude-tap`; on Windows, use the full `claude-tap.exe` path if VS Code cannot find it.
+
 </details>
 
 <details>
