@@ -5,7 +5,15 @@ import sys
 
 import pytest
 
-from claude_tap.cli import _build_update_command, _is_editable_install, main_entry, parse_update_args, update_main
+from claude_tap.cli import (
+    _build_update_command,
+    _is_editable_install,
+    async_main,
+    main_entry,
+    parse_args,
+    parse_update_args,
+    update_main,
+)
 
 
 def test_build_update_command_uses_uv_shim(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,6 +118,93 @@ def test_is_editable_install_uses_pep610_fallback(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("importlib.metadata.distribution", fake_distribution)
 
     assert _is_editable_install() is True
+
+
+def test_is_editable_install_ignores_malformed_pep610_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    import claude_tap
+
+    monkeypatch.setattr(claude_tap, "__file__", r"C:\Python\Lib\site-packages\claude_tap\__init__.py")
+
+    def fake_distribution(_name):
+        class _D:
+            def read_text(self, _path):
+                return "{not json"
+
+        return _D()
+
+    monkeypatch.setattr("importlib.metadata.distribution", fake_distribution)
+
+    assert _is_editable_install() is False
+
+
+@pytest.mark.asyncio
+async def test_async_main_skips_background_update_for_editable_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_check_pypi_version():
+        return "99.0.0"
+
+    async def fake_run_client(*_args, **_kwargs):
+        return 0
+
+    def fail_background_update(_installer: str):
+        raise AssertionError("editable installs must not start a background update")
+
+    monkeypatch.setattr("claude_tap.cli.__version__", "1.0.0")
+    monkeypatch.setattr("claude_tap.cli._check_pypi_version", fake_check_pypi_version)
+    monkeypatch.setattr("claude_tap.cli._is_editable_install", lambda: True)
+    monkeypatch.setattr("claude_tap.cli._start_background_update", fail_background_update)
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+
+    args = parse_args(
+        [
+            "--tap-output-dir",
+            str(tmp_path),
+            "--tap-no-live",
+            "--tap-no-open",
+        ]
+    )
+
+    assert await async_main(args) == 0
+    out = capsys.readouterr().out
+    assert "Update available: 1.0.0" in out
+    assert "Editable install detected" in out
+    assert "Downloading update in background" not in out
+
+
+@pytest.mark.asyncio
+async def test_async_main_keeps_background_update_for_non_editable_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    started: list[str] = []
+
+    async def fake_check_pypi_version():
+        return "99.0.0"
+
+    async def fake_run_client(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr("claude_tap.cli.__version__", "1.0.0")
+    monkeypatch.setattr("claude_tap.cli._check_pypi_version", fake_check_pypi_version)
+    monkeypatch.setattr("claude_tap.cli._is_editable_install", lambda: False)
+    monkeypatch.setattr("claude_tap.cli._detect_installer", lambda: "pip")
+    monkeypatch.setattr("claude_tap.cli._start_background_update", started.append)
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+
+    args = parse_args(
+        [
+            "--tap-output-dir",
+            str(tmp_path),
+            "--tap-no-live",
+            "--tap-no-open",
+        ]
+    )
+
+    assert await async_main(args) == 0
+    assert started == ["pip"]
+    out = capsys.readouterr().out
+    assert "Update available: 1.0.0" in out
+    assert "Downloading update in background (pip)" in out
 
 
 def test_main_entry_routes_update_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
