@@ -48,6 +48,23 @@ def test_migrate_legacy_directory_dedupes_per_output_dir(trace_db, tmp_path: Pat
     assert [row["legacy_rel_path"] for row in sessions].count("2026-05-01/trace_same.jsonl") == 2
 
 
+def test_migrate_legacy_directory_treats_duplicate_insert_as_already_imported(
+    trace_db,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_legacy_session(tmp_path, "trace_same")
+    store = get_trace_store()
+    monkeypatch.setattr(store, "_legacy_session_exists", lambda _source, _rel_path: False)
+
+    assert store.migrate_legacy_directory(tmp_path) == 1
+    assert store.migrate_legacy_directory(tmp_path) == 0
+
+    sessions = get_trace_store().list_session_rows()
+    assert len(sessions) == 1
+    assert sessions[0]["legacy_rel_path"] == "2026-05-01/trace_same.jsonl"
+
+
 def test_migrate_legacy_directory_upgrades_v2_schema_for_source_key_dedupe(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -153,12 +170,34 @@ def test_cleanup_trace_sessions_skips_protected_and_continues(trace_db) -> None:
         )
         for index in range(5)
     ]
+    for session_id in session_ids:
+        store.finalize_session(session_id, {"api_calls": 1})
 
     removed = cleanup_trace_sessions(2, protected_session_id=session_ids[0])
 
     assert removed == 3
     remaining = {row["id"] for row in store.list_session_rows()}
     assert remaining == {session_ids[0], session_ids[-1]}
+
+
+def test_cleanup_trace_sessions_skips_active_sessions(trace_db) -> None:
+    store = get_trace_store()
+    session_ids = [
+        store.create_session(
+            client="claude",
+            proxy_mode="reverse",
+            started_at=datetime(2026, 5, 1, 12, index, tzinfo=timezone.utc),
+        )
+        for index in range(4)
+    ]
+    for session_id in (session_ids[0], session_ids[2], session_ids[3]):
+        store.finalize_session(session_id, {"api_calls": 1})
+
+    removed = cleanup_trace_sessions(2)
+
+    assert removed == 2
+    rows = {row["id"]: row["status"] for row in store.list_session_rows()}
+    assert rows == {session_ids[1]: "active", session_ids[3]: "complete"}
 
 
 @pytest.mark.asyncio

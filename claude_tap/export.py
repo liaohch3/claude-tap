@@ -71,19 +71,31 @@ def export_main(argv: list[str] | None = None) -> int:
 
     records: list[dict] = []
     html_source_path: Path | None = None
+    source_session_id = args.session_id
+    store = None
 
-    if args.session_id:
+    if source_session_id is None and args.source:
+        trace_file = Path(args.source)
+        if not trace_file.exists():
+            from claude_tap.trace_store import get_trace_store
+
+            store = get_trace_store()
+            if store.load_session_row(args.source) is not None:
+                source_session_id = args.source
+
+    if source_session_id:
         from claude_tap.trace_store import get_trace_store
 
-        store = get_trace_store()
-        if store.load_session_row(args.session_id) is None:
-            print(f"Error: session not found: {args.session_id}", file=sys.stderr)
+        if store is None:
+            store = get_trace_store()
+        if store.load_session_row(source_session_id) is None:
+            print(f"Error: session not found: {source_session_id}", file=sys.stderr)
             return 1
-        for record in store.load_records(args.session_id):
+        for record in store.load_records(source_session_id):
             normalized = _normalize_record_for_export(record)
             if normalized is not None:
                 records.append(normalized)
-        html_source_path = Path(f"session-{args.session_id[:8]}.jsonl")
+        html_source_path = Path(f"session-{source_session_id[:8]}.jsonl")
     elif args.source:
         trace_file = Path(args.source)
         if not trace_file.exists():
@@ -129,11 +141,11 @@ def export_main(argv: list[str] | None = None) -> int:
             print("Error: HTML export requires a JSONL source path", file=sys.stderr)
             return 1
         html_path = args.output or html_source_path.with_suffix(".html")
-        if args.session_id:
+        if source_session_id:
             import tempfile
 
             with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as tmp:
-                tmp.write(store.export_jsonl(args.session_id))
+                tmp.write(store.export_jsonl(source_session_id))
                 temp_jsonl = Path(tmp.name)
             try:
                 _generate_html_viewer(temp_jsonl, html_path)

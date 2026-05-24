@@ -2277,6 +2277,8 @@ def test_trace_cleanup():
         reset_trace_store()
         store = get_trace_store()
         session_ids = [store.create_session(client="claude", proxy_mode="reverse") for _ in range(5)]
+        for session_id in session_ids:
+            store.finalize_session(session_id, {"api_calls": 1})
 
         removed = cleanup_trace_sessions(3)
         assert removed == 2, f"Expected 2 removed, got {removed}"
@@ -2299,7 +2301,8 @@ def test_trace_tagging_safety():
         reset_trace_store()
         store = get_trace_store()
         for _ in range(5):
-            store.create_session(client="claude", proxy_mode="reverse")
+            session_id = store.create_session(client="claude", proxy_mode="reverse")
+            store.finalize_session(session_id, {"api_calls": 1})
 
         removed = cleanup_trace_sessions(2)
         assert removed == 3
@@ -2351,7 +2354,8 @@ def test_e2e_with_cleanup():
         reset_trace_store()
         store = get_trace_store()
         for _ in range(4):
-            store.create_session(client="claude", proxy_mode="reverse")
+            session_id = store.create_session(client="claude", proxy_mode="reverse")
+            store.finalize_session(session_id, {"api_calls": 1})
 
         env = os.environ.copy()
         env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")

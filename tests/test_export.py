@@ -170,3 +170,37 @@ def test_export_json_tolerates_null_request_body_and_stream_text_response(tmp_pa
     assert exported[1]["model"] is None
     assert exported[1]["messages"] == []
     assert f"Exported 2 turns to {json_path}" in capsys.readouterr().out
+
+
+def test_export_accepts_positional_sqlite_session_id(trace_db, tmp_path, capsys) -> None:
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-24T10:00:00+00:00",
+            "turn": 1,
+            "request": {
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "messages": [{"role": "user", "content": "hello from session"}],
+                }
+            },
+            "response": {
+                "body": {
+                    "content": [{"type": "text", "text": "stored response"}],
+                    "usage": {"input_tokens": 3, "output_tokens": 2},
+                }
+            },
+        },
+    )
+    json_path = tmp_path / "session-export.json"
+
+    assert export_main([session_id, "--format", "json", "-o", str(json_path)]) == 0
+
+    exported = json.loads(json_path.read_text(encoding="utf-8"))
+    assert exported[0]["messages"] == [{"role": "user", "content": "hello from session"}]
+    assert exported[0]["response"]["content"] == [{"type": "text", "text": "stored response"}]
+    assert f"Exported 1 turns to {json_path}" in capsys.readouterr().out

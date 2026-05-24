@@ -405,7 +405,7 @@ class TraceStore:
             conn = self._connect()
             rows = conn.execute(
                 """
-                SELECT id
+                SELECT id, status
                 FROM sessions
                 ORDER BY started_at ASC
                 """
@@ -415,7 +415,7 @@ class TraceStore:
             target_remove = len(rows) - max_sessions
             to_remove = []
             for row in rows:
-                if row["id"] in protected:
+                if row["id"] in protected or row["status"] == "active":
                     continue
                 to_remove.append(row["id"])
                 if len(to_remove) >= target_remove:
@@ -484,26 +484,36 @@ class TraceStore:
 
         with self._write_lock:
             conn = self._connect()
-            conn.execute(
-                """
-                INSERT INTO sessions (
-                    id, started_at, updated_at, date_key, client, proxy_mode,
-                    status, record_count, legacy_source_key, legacy_rel_path
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO sessions (
+                        id, started_at, updated_at, date_key, client, proxy_mode,
+                        status, record_count, legacy_source_key, legacy_rel_path
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 'complete', ?, ?, ?)
+                    """,
+                    (
+                        session_id,
+                        started_at,
+                        started_at,
+                        date_key,
+                        client,
+                        proxy_mode,
+                        len(records),
+                        legacy_source_key,
+                        rel_path,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 'complete', ?, ?, ?)
-                """,
-                (
-                    session_id,
-                    started_at,
-                    started_at,
-                    date_key,
-                    client,
-                    proxy_mode,
-                    len(records),
-                    legacy_source_key,
-                    rel_path,
-                ),
-            )
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                row = conn.execute(
+                    "SELECT 1 FROM sessions WHERE legacy_source_key = ? AND legacy_rel_path = ? LIMIT 1",
+                    (legacy_source_key, rel_path),
+                ).fetchone()
+                if row is not None:
+                    return None
+                raise
             conn.executemany(
                 """
                 INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
