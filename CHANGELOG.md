@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.79] - 2026-05-24
+
+### Changed
+- docs: document VS Code wrapper setup (#220)
 ## [0.1.78] - 2026-05-24
 
 ### Changed
