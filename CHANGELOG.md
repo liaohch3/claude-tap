@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.80] - 2026-05-24
+
+### Changed
+- fix(viewer): show message content block boundaries
 ## [0.1.79] - 2026-05-24
 
 ### Changed
