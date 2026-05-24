@@ -370,7 +370,7 @@ class TraceStore:
 
     def delete_sessions_by_date(
         self, date_key: str, *, protected_session_ids: set[str] | None = None
-    ) -> dict[str, int]:
+    ) -> dict[str, int | str]:
         protected = protected_session_ids or set()
         with self._write_lock:
             conn = self._connect()
@@ -384,6 +384,7 @@ class TraceStore:
                 raise ValueError("Invalid date format")
 
             to_delete = [row["id"] for row in rows if row["id"] not in protected]
+            skipped = [row["id"] for row in rows if row["id"] in protected]
             if to_delete:
                 placeholders = ",".join("?" * len(to_delete))
                 conn.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", to_delete)
@@ -392,7 +393,8 @@ class TraceStore:
             "date": date_key,
             "deleted_sessions": len(to_delete),
             "deleted_files": len(to_delete),
-            "skipped_files": 0,
+            "skipped_sessions": len(skipped),
+            "skipped_files": len(skipped),
         }
 
     def cleanup_old_sessions(self, max_sessions: int, *, protected_session_id: str | None = None) -> int:

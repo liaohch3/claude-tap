@@ -7,6 +7,7 @@ import json
 import re
 from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 
 from aiohttp import web
 
@@ -97,6 +98,7 @@ class LiveViewerServer:
         app.router.add_get("/api/agents", self._handle_agents)
         app.router.add_get("/api/sessions", self._handle_sessions)
         app.router.add_get("/api/sessions/{session_id}/records", self._handle_session_records)
+        app.router.add_get("/api/sessions/{session_id}/html", self._handle_session_html_compat)
         app.router.add_get("/api/sessions/{session_id}/export/jsonl", self._handle_export_jsonl)
         app.router.add_get("/api/sessions/{session_id}/export/log", self._handle_export_log)
 
@@ -317,6 +319,11 @@ class LiveViewerServer:
             return web.json_response({"error": "Session not found"}, status=404)
         return web.json_response(session)
 
+    async def _handle_session_html_compat(self, request: web.Request) -> web.Response:
+        session_id = request.match_info["session_id"]
+        dashboard_path = f"/dashboard?session_id={quote(session_id, safe='')}"
+        raise web.HTTPFound(location=dashboard_path)
+
     async def _current_live_record_count(self) -> int:
         async with self._lock:
             return len(self._records)
@@ -386,9 +393,10 @@ class LiveViewerServer:
         if date_key != "legacy" and not _DATE_RE.match(date_key):
             return web.json_response({"error": "Invalid date format"}, status=400)
         protected: set[str] = set()
+        force = request.query.get("force", "").lower() in {"1", "true", "yes"}
         if self.session_id:
             protected.add(self.session_id)
-        else:
+        elif not force:
             for row in get_trace_store().list_session_rows():
                 if (row["status"] or "") == "active":
                     protected.add(row["id"])

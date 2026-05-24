@@ -834,6 +834,7 @@ const state = {
   sessions: [],
   selectedAgent: "all",
   selectedSessionId: null,
+  pendingSessionId: new URLSearchParams(window.location.search).get("session_id") || null,
   view: "list",
   activeTab: "conversation",
   search: "",
@@ -1187,8 +1188,20 @@ async function refreshSessions({preserveSelection = true} = {}) {
     renderAgents();
 
     const visible = filteredSessions();
-    const stillVisible = visible.some(session => session.id === state.selectedSessionId);
-    if (!preserveSelection || !stillVisible) {
+    const pendingSessionId = state.pendingSessionId;
+    if (pendingSessionId && visible.some(session => session.id === pendingSessionId)) {
+      state.pendingSessionId = null;
+      state.selectedSessionId = pendingSessionId;
+      state.view = "detail";
+    } else {
+      if (pendingSessionId) state.pendingSessionId = null;
+      const stillVisible = visible.some(session => session.id === state.selectedSessionId);
+      if (!preserveSelection || !stillVisible) {
+        state.selectedSessionId = null;
+        state.view = "list";
+      }
+    }
+    if (state.view !== "detail") {
       state.selectedSessionId = null;
       state.view = "list";
     }

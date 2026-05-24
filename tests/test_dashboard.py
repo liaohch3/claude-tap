@@ -507,6 +507,13 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 assert payload["records"][0]["request_id"] == "req_claude"
 
             async with session.get(
+                f"http://127.0.0.1:{port}/api/sessions/{session_id}/html",
+                allow_redirects=False,
+            ) as resp:
+                assert resp.status == 302
+                assert resp.headers["Location"] == f"/dashboard?session_id={session_id}"
+
+            async with session.get(
                 f"http://127.0.0.1:{port}/api/sessions/{second_session_id}/records?offset=1&limit=1"
             ) as resp:
                 assert resp.status == 200
@@ -580,10 +587,10 @@ async def test_dashboard_refresh_preserves_loaded_detail_records(trace_db, tmp_p
             browser = await pw.chromium.launch(headless=True)
             try:
                 page = await browser.new_page()
-                await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
-                await page.wait_for_selector("[data-session]", timeout=5000)
-
-                await page.evaluate(f"openSession({json.dumps(session_id)})")
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard?session_id={session_id}",
+                    wait_until="domcontentloaded",
+                )
                 await page.wait_for_selector("[data-load-more]", timeout=5000)
                 assert await page.locator("#conversation-tab article.section").count() == 10
 

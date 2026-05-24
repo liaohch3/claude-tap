@@ -124,6 +124,8 @@ def test_delete_trace_history_removes_selected_date_sessions(trace_db, tmp_path:
 
     assert result["deleted_sessions"] == 1
     assert result["deleted_files"] == 1
+    assert result["skipped_sessions"] == 1
+    assert result["skipped_files"] == 1
     remaining = {row["legacy_rel_path"] for row in get_trace_store().list_session_rows()}
     assert "2026-05-01/trace_old.jsonl" not in remaining
     assert "2026-05-01/trace_active.jsonl" in remaining
@@ -185,5 +187,47 @@ async def test_live_viewer_delete_history_endpoint(trace_db, tmp_path: Path) -> 
 
             async with session.delete(f"http://127.0.0.1:{port}/api/traces/not-a-date") as resp:
                 assert resp.status == 400
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_shared_dashboard_delete_history_requires_force_for_active_sessions(
+    trace_db,
+    tmp_path: Path,
+) -> None:
+    import aiohttp
+
+    from claude_tap import LiveViewerServer
+
+    _write_legacy_session(tmp_path, "trace_delete_me", date="2026-05-01")
+    migrate_legacy_traces(tmp_path)
+    active_session = get_trace_store().create_session(
+        client="claude",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 5, 1, 12, 30, tzinfo=timezone.utc),
+    )
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(f"http://127.0.0.1:{port}/api/traces/2026-05-01") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["deleted_sessions"] == 1
+                assert payload["skipped_sessions"] == 1
+
+            remaining = {row["id"] for row in get_trace_store().list_session_rows()}
+            assert active_session in remaining
+
+            async with session.delete(f"http://127.0.0.1:{port}/api/traces/2026-05-01?force=1") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["deleted_sessions"] == 1
+                assert payload["skipped_sessions"] == 0
+
+            remaining = {row["id"] for row in get_trace_store().list_session_rows()}
+            assert active_session not in remaining
     finally:
         await server.stop()
