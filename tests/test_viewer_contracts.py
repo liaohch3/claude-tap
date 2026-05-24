@@ -224,6 +224,77 @@ def _codex_websocket_record() -> dict[str, Any]:
     }
 
 
+def _content_block_boundary_record() -> dict[str, Any]:
+    return {
+        "timestamp": "2026-05-24T07:20:00+00:00",
+        "request_id": "req_content_block_boundary_contract",
+        "turn": 99,
+        "duration_ms": 120,
+        "request": {
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": {},
+            "body": {
+                "model": "zz-content-block-boundary",
+                "system": [
+                    {"type": "text", "text": "System block one."},
+                    {"type": "text", "text": "System block two."},
+                ],
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [
+                            {"type": "input_text", "text": "Developer block one."},
+                            {"type": "input_text", "text": "Developer block two."},
+                        ],
+                    },
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "User block one."},
+                            {"type": "input_text", "text": "User block two."},
+                            {
+                                "type": "input_image",
+                                "image_url": (
+                                    "data:image/png;base64,"
+                                    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAEklEQVR4nGPQb3j7Hx9mGBkKAKVjpsHoKJzJAAAAAElFTkSuQmCC"
+                                ),
+                                "detail": "high",
+                            },
+                        ],
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "Assistant text block."},
+                            {"type": "tool_use", "name": "read_file", "input": {"path": "README.md"}},
+                        ],
+                    },
+                    {
+                        "type": "message",
+                        "role": "tool",
+                        "content": [
+                            {"type": "tool_result", "tool_use_id": "call_one", "content": "Tool result one."},
+                            {"type": "tool_result", "tool_use_id": "call_two", "content": "Tool result two."},
+                        ],
+                    },
+                ],
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {
+                "content": [{"type": "text", "text": "Content block response OK."}],
+                "usage": {"input_tokens": 42, "output_tokens": 5},
+            },
+        },
+    }
+
+
 def _chat_completions_record() -> dict[str, Any]:
     return {
         "timestamp": "2026-05-13T13:23:00+00:00",
@@ -945,6 +1016,24 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             required_detail_text=("Use shell to inspect the workspace.", "Output: /repo", "Gemini final OK."),
             min_stream_events=2,
         ),
+        ViewerContractCase(
+            name="content_block_boundaries",
+            records=(_content_block_boundary_record(),),
+            expected_sections=("System Prompt", "Messages", "Response"),
+            expected_system="System block one.\n\nSystem block two.",
+            expected_roles=("developer", "user", "assistant", "tool"),
+            expected_tools=(),
+            expected_output_types=("text",),
+            expected_usage={"input_tokens": 42, "output_tokens": 5},
+            required_detail_text=(
+                "System block one.",
+                "Developer block one.",
+                "User block two.",
+                "Assistant text block.",
+                "Tool result two.",
+                "Content block response OK.",
+            ),
+        ),
     )
 
 
@@ -1363,7 +1452,9 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
     page = chromium_browser.new_page(viewport={"width": 1440, "height": 1000})
     try:
         errors = _open_viewer_with_error_capture(page, html_path)
-        page.evaluate("entryIndex => renderDetail(entries[entryIndex])", len(records) - 1)
+        page.evaluate(
+            "requestId => renderDetail(entries.find(entry => entry.request_id === requestId))", "req_gemini_contract"
+        )
         page.evaluate(
             """() => {
               const toolsSection = Array.from(document.querySelectorAll('#detail .section'))
@@ -1406,6 +1497,25 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
 
         desktop_light = snapshot(1440, 1000, "light")
         desktop_dark = snapshot(1440, 1000, "dark")
+        page.evaluate(
+            "requestId => renderDetail(entries.find(entry => entry.request_id === requestId))",
+            "req_content_block_boundary_contract",
+        )
+        dark_content_block = page.evaluate(
+            """() => {
+              document.documentElement.setAttribute('data-theme', 'dark');
+              const block = document.querySelector('.content-block.block-framed');
+              if (!block) return null;
+              const style = getComputedStyle(block);
+              return {
+                backgroundColor: style.backgroundColor,
+                borderLeftWidth: style.borderLeftWidth,
+              };
+            }"""
+        )
+        page.evaluate(
+            "requestId => renderDetail(entries.find(entry => entry.request_id === requestId))", "req_gemini_contract"
+        )
         mobile_dark = snapshot(390, 900, "dark", mobile=True)
     finally:
         page.close()
@@ -1426,6 +1536,9 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
     assert desktop_dark["detail"]["width"] >= 1000
     assert desktop_light["bodyBg"] != desktop_dark["bodyBg"]
     assert desktop_light["userMsgBg"] != desktop_dark["userMsgBg"]
+    assert dark_content_block is not None
+    assert dark_content_block["backgroundColor"] != "rgba(0, 0, 0, 0)"
+    assert dark_content_block["borderLeftWidth"] == "1px"
 
     assert mobile_dark["sidebar"]["width"] == 0
     assert mobile_dark["detail"]["width"] == 390

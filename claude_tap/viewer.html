@@ -88,6 +88,7 @@
 [data-theme="dark"] .msg.system { border-color: #3d3000; }
 [data-theme="dark"] .msg.tool_result { border-color: #2a1f48; }
 [data-theme="dark"] .msg pre, [data-theme="dark"] .msg .pre-text { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.06); }
+[data-theme="dark"] .content-block.block-framed { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.08); }
 [data-theme="dark"] .json-view .jk { color: #bc8cff; }
 [data-theme="dark"] .json-view .js { color: #3fb950; }
 [data-theme="dark"] .json-view .jn { color: #d29922; }
@@ -506,6 +507,26 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 .content-block { margin-top: 8px; white-space: pre-wrap; word-break: break-word; }
 .content-block:first-child { margin-top: 0; }
+.content-block.block-framed {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm); padding: 9px 11px;
+  background: rgba(255,255,255,0.45);
+}
+.content-block-text { white-space: pre-wrap; word-break: break-word; }
+.system-prompt-blocks .content-block-text {
+  font-family: var(--mono); font-size: 12px; line-height: 1.6;
+}
+.content-image {
+  display: block; width: auto; height: auto;
+  min-width: min(160px, 100%); max-width: min(100%, 720px); max-height: 420px;
+  border-radius: 6px; border: 1px solid var(--border); background: var(--bg);
+}
+.content-image-placeholder {
+  display: inline-flex; align-items: center; max-width: 100%;
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--muted); background: var(--bg); font-family: var(--mono);
+  font-size: 12px; overflow-wrap: anywhere;
+}
 .tool-use-label {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 11px; font-weight: 600; color: var(--cyan);
@@ -3411,6 +3432,7 @@ function renderDetail(e) {
 
   const tools = getRequestTools(reqBody);
   const sysPrompt = extractSystem(reqBody);
+  const sysBlocks = extractSystemBlocks(reqBody);
   const respOutput = getResponseOutput(e);
   const msgs = getMessages(reqBody);
   const contextOnly = shouldRenderRequestContext(e, reqBody, msgs, respOutput);
@@ -3426,7 +3448,7 @@ function renderDetail(e) {
     const toolsSection = tools && tools.length
       ? section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'))
       : '';
-    const systemSection = sysPrompt ? section(t('section_system'), renderSystemPrompt(sysPrompt), true, sysPrompt) : '';
+    const systemSection = sysPrompt ? section(t('section_system'), renderSystemPrompt(sysBlocks, sysPrompt), true, sysPrompt) : '';
     const messagesSection = msgs && msgs.length
       ? section(contextOnly ? t('section_context') : t('section_messages'), renderMessages(msgs), true, null, msgs.length + ' ' + t('badge_messages'))
       : '';
@@ -3598,6 +3620,17 @@ function chatMessageContentToText(content) {
   return JSON.stringify(content);
 }
 
+function normalizeDisplayContentBlocks(content) {
+  if (typeof content === 'string') return content.trim() ? [{ type: 'text', text: content }] : [];
+  if (content === undefined || content === null) return [];
+  if (!Array.isArray(content)) return [{ type: 'raw', value: content }];
+  return content.map(block => {
+    if (typeof block === 'string') return { type: 'text', text: block };
+    if (!block || typeof block !== 'object') return { type: 'raw', value: block };
+    return block;
+  }).filter(block => hasDisplayContent([block]));
+}
+
 function isChatInstructionRole(role) {
   return role === 'system' || role === 'developer';
 }
@@ -3757,6 +3790,10 @@ function hasDisplayContent(content) {
   return content.some(block => {
     if (!block || typeof block !== 'object') return false;
     if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') return !!(block.text || '').trim();
+    if (block.type === 'image' || block.type === 'input_image') {
+      const source = block.source || {};
+      return !!(block.image_url || block.file_id || source.data || source.url || source.media_type || source.file_id);
+    }
     if (block.type === 'thinking') return !!(block.thinking || '').trim();
     if (block.type === 'tool_use') return true;
     if (block.type === 'tool_result') {
@@ -3786,6 +3823,28 @@ function extractSystem(body) {
   const geminiSystem = geminiSystemInstruction(body);
   if (geminiSystem) parts.push(geminiSystem);
   return parts.length ? parts.join('\n\n') : null;
+}
+
+function extractSystemBlocks(body) {
+  if (!body) return [];
+  const blocks = [];
+  if (typeof body.system === 'string' && body.system.trim()) {
+    blocks.push(...normalizeDisplayContentBlocks(body.system));
+  }
+  if (Array.isArray(body.system)) {
+    blocks.push(...normalizeDisplayContentBlocks(body.system));
+  }
+  if (typeof body.instructions === 'string' && body.instructions.trim()) {
+    blocks.push(...normalizeDisplayContentBlocks(body.instructions));
+  }
+  for (const message of chatInstructionMessages(body)) {
+    blocks.push(...normalizeDisplayContentBlocks(message.content));
+  }
+  const geminiSystem = geminiSystemInstruction(body);
+  if (geminiSystem) {
+    blocks.push(...normalizeDisplayContentBlocks(geminiSystem));
+  }
+  return blocks;
 }
 
 function parseSseDataFrames(text) {
@@ -3888,7 +3947,7 @@ function getMessages(body) {
       content: Array.isArray(item.content)
         ? item.content.map(c => {
             if (!c || typeof c !== 'object') return c;
-            if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { type: 'text', text: c.text };
+            if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { type: c.type, text: c.text };
             if (c.type === 'tool_use') return c;
             if (c.type === 'tool_result') return c;
             return c;
@@ -4090,7 +4149,11 @@ function getResponseOutput(entry) {
   }
   return null;
 }
-function renderSystemPrompt(text) { return `<div class="pre-text">${esc(text)}</div>`; }
+function renderSystemPrompt(blocks, copyText = '') {
+  const normalized = normalizeDisplayContentBlocks(blocks);
+  if (normalized.length <= 1 && copyText) return `<div class="pre-text">${esc(copyText)}</div>`;
+  return `<div class="system-prompt-blocks">${renderContent(normalized, 'system', { frameBlocks: normalized.length > 1 })}</div>`;
+}
 
 function renderResponsesContinuationNotice(info) {
   const rows = [
@@ -4110,51 +4173,83 @@ function renderMessages(msgs) {
   return msgs.map(m => {
     const role = m.role || 'unknown';
     const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : (role === 'developer' || role === 'system') ? 'system' : 'system';
-    const rendered = renderContent(m.content, role);
+    const blockCount = normalizeDisplayContentBlocks(m.content).length;
+    const rendered = renderContent(m.content, role, { frameBlocks: blockCount > 1 });
     if (!rendered.trim()) return '';
     return `<div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${rendered}</div>`;
   }).filter(Boolean).join('');
 }
 
-function renderContent(content, role) {
-  if (typeof content === 'string') return content.trim() ? `<div class="content-block">${esc(content)}</div>` : '';
-  if (!Array.isArray(content)) return content === undefined || content === null ? '' : `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
-  return content.map(block => {
-    if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') { const txt = block.text || ''; if (!txt.trim()) return ''; return `<div class="content-block">${esc(txt)}</div>`; }
+function wrapContentBlock(inner, block, index, total, options = {}) {
+  const frameBlock = !!options.frameBlocks && total > 1;
+  const cls = frameBlock ? 'content-block block-framed' : 'content-block';
+  return `<div class="${cls}">${inner}</div>`;
+}
+
+function imageBlockSrc(block) {
+  if (!block || typeof block !== 'object') return '';
+  if (typeof block.image_url === 'string' && isInlineImageUrl(block.image_url)) return block.image_url;
+  const source = block.source || {};
+  if (source.type === 'base64' && source.data) {
+    return `data:${source.media_type || 'image/png'};base64,${source.data}`;
+  }
+  if (source.type === 'url' && isInlineImageUrl(source.url)) return source.url;
+  return '';
+}
+
+function isInlineImageUrl(url) {
+  return typeof url === 'string' && /^data:image\//i.test(url);
+}
+
+function renderImageElement(src, alt = 'image') {
+  return `<img class="content-image" src="${esc(src)}" alt="${esc(alt)}" />`;
+}
+
+function renderContent(content, role, options = {}) {
+  const blocks = normalizeDisplayContentBlocks(content);
+  return blocks.map((block, index) => {
+    if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') {
+      const txt = block.text || '';
+      if (!txt.trim()) return '';
+      return wrapContentBlock(`<div class="content-block-text">${esc(txt)}</div>`, block, index, blocks.length, options);
+    }
     if (block.type === 'thinking') {
       const thinking = block.thinking || '';
       if (!thinking.trim()) return '';
-      return `<div class="content-block"><span class="thinking-label">thinking</span><div class="pre-text">${esc(thinking)}</div></div>`;
+      return wrapContentBlock(`<span class="thinking-label">thinking</span><div class="pre-text">${esc(thinking)}</div>`, block, index, blocks.length, options);
     }
-    if (block.type === 'tool_use') return `<div class="content-block"><span class="tool-use-label">${esc(block.name || 'tool_use')}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre></div>`;
+    if (block.type === 'tool_use') {
+      return wrapContentBlock(`<span class="tool-use-label">${esc(block.name || 'tool_use')}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre>`, block, index, blocks.length, options);
+    }
     if (block.type === 'tool_result') {
       const rc = block.content;
-      if (typeof rc === 'string') return `<div class="content-block"><span class="tool-use-label">result (${esc(block.tool_use_id || '')})</span><div class="pre-text">${esc(rc)}</div></div>`;
+      if (typeof rc === 'string') {
+        return wrapContentBlock(`<span class="tool-use-label">result (${esc(block.tool_use_id || '')})</span><div class="pre-text">${esc(rc)}</div>`, block, index, blocks.length, options);
+      }
       if (Array.isArray(rc)) {
         const parts = rc.map(c => {
           if (c.type === 'text') return `<div class="pre-text">${esc(c.text)}</div>`;
-          if (c.type === 'image') {
-            const s = c.source || {};
-            if (s.type === 'base64' && s.data) return `<img src="data:${esc(s.media_type || 'image/png')};base64,${s.data}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" />`;
-            if (s.type === 'url' && s.url) return `<img src="${esc(s.url)}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" />`;
+          if (c.type === 'image' || c.type === 'input_image') {
+            const src = imageBlockSrc(c);
+            if (src) return renderImageElement(src);
           }
           return `<pre>${esc(JSON.stringify(c))}</pre>`;
         }).join('');
-        return `<div class="content-block"><span class="tool-use-label">result</span>${parts}</div>`;
+        return wrapContentBlock(`<span class="tool-use-label">result</span>${parts}`, block, index, blocks.length, options);
       }
-      return `<div class="content-block"><pre>${esc(JSON.stringify(block, null, 2))}</pre></div>`;
+      return wrapContentBlock(`<pre>${esc(JSON.stringify(block, null, 2))}</pre>`, block, index, blocks.length, options);
     }
-    if (block.type === 'image') {
-      const src = block.source || {};
-      if (src.type === 'base64' && src.data) {
-        return `<div class="content-block"><img src="data:${esc(src.media_type || 'image/png')};base64,${src.data}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" /></div>`;
-      }
-      if (src.type === 'url' && src.url) {
-        return `<div class="content-block"><img src="${esc(src.url)}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" /></div>`;
-      }
-      return `<div class="content-block"><em>[image: ${esc(src.media_type || 'unknown')}]</em></div>`;
+    if (block.type === 'image' || block.type === 'input_image') {
+      const src = imageBlockSrc(block);
+      if (src) return wrapContentBlock(renderImageElement(src), block, index, blocks.length, options);
+      const source = block.source || {};
+      const fileId = block.file_id || source.file_id;
+      const hasUrl = block.image_url || source.url;
+      const label = fileId ? `image: file_id ${fileId}` : hasUrl ? 'image: url' : `image: ${source.media_type || 'unknown'}`;
+      return wrapContentBlock(`<span class="content-image-placeholder">${esc(label)}</span>`, block, index, blocks.length, options);
     }
-    return `<div class="content-block"><pre>${esc(JSON.stringify(block, null, 2))}</pre></div>`;
+    if (block.type === 'raw') return wrapContentBlock(`<pre>${esc(JSON.stringify(block.value, null, 2))}</pre>`, block, index, blocks.length, options);
+    return wrapContentBlock(`<pre>${esc(JSON.stringify(block, null, 2))}</pre>`, block, index, blocks.length, options);
   }).join('');
 }
 

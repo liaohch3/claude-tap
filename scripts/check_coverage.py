@@ -546,6 +546,8 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
             page.evaluate(
                 """() => {
                   setDetailViewMode('default');
+                  const contentBlockEntry = entries.find(entry => entry.request_id === 'req_content_block_boundary_contract');
+                  if (contentBlockEntry) renderDetail(contentBlockEntry);
                   document.querySelector('#detail')?.insertAdjacentHTML(
                     'afterbegin',
                     '<div class="continuation-banner"><div class="cb-icon"></div><div class="cb-content"><div class="cb-title"></div><div class="cb-message"></div><div class="cb-meta"><div class="cb-key">id</div><div class="cb-val">resp</div></div></div></div>'
