@@ -148,6 +148,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     completed_records_written = 0
     completed_response_keys: set[str] = set()
     completed_response_key_order: deque[str] = deque()
+    pending_write: asyncio.Task[None] | None = None
 
     def _pop_buffered_snapshot() -> tuple[int, list[str], list[str]]:
         nonlocal completed_records_written
@@ -174,6 +175,21 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
 
     async def _write_buffered_record() -> None:
         await _write_buffered_snapshot(_pop_buffered_snapshot())
+
+    def _schedule_buffered_snapshot(snapshot: tuple[int, list[str], list[str]]) -> None:
+        nonlocal pending_write
+        previous_write = pending_write
+
+        async def _write_after_previous() -> None:
+            if previous_write is not None:
+                await previous_write
+            await _write_buffered_snapshot(snapshot)
+
+        pending_write = asyncio.create_task(_write_after_previous())
+
+    async def _drain_pending_write() -> None:
+        if pending_write is not None:
+            await asyncio.shield(pending_write)
 
     def _pop_completed_snapshot(response_key: str, terminal_message: str) -> tuple[int, list[str], list[str]] | None:
         if response_key in completed_response_keys:
@@ -225,7 +241,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
                         await client_ws.send_str(msg.data)
                     finally:
                         if completed_snapshot is not None:
-                            await _write_buffered_snapshot(completed_snapshot)
+                            _schedule_buffered_snapshot(completed_snapshot)
                 elif msg.type == aiohttp.WSMsgType.BINARY:
                     await client_ws.send_bytes(msg.data)
                 elif msg.type in (
@@ -258,6 +274,8 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         await client_ws.close()
 
     duration_ms = int((time.monotonic() - t0) * 1000)
+
+    await _drain_pending_write()
 
     if client_messages or server_messages:
         await _write_buffered_record()
