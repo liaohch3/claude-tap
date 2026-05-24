@@ -152,19 +152,21 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     async def _write_buffered_record() -> None:
         nonlocal completed_records_written
         completed_records_written += 1
+        record_client_messages = client_messages.copy()
+        record_server_messages = server_messages.copy()
+        client_messages.clear()
+        server_messages.clear()
         record = _build_ws_record(
             req_id=req_id if completed_records_written == 1 else f"{req_id}_{completed_records_written}",
             turn=turn if completed_records_written == 1 else f"{turn}.{completed_records_written}",
             duration_ms=int((time.monotonic() - t0) * 1000),
             path_qs=request.path_qs,
             req_headers=request.headers,
-            client_messages=client_messages.copy(),
-            server_messages=server_messages.copy(),
+            client_messages=record_client_messages,
+            server_messages=record_server_messages,
             upstream_base_url=target,
         )
         await writer.write(record)
-        client_messages.clear()
-        server_messages.clear()
 
     async def _write_completed_record(response_key: str, terminal_message: str) -> None:
         if response_key in completed_response_keys:

@@ -231,6 +231,95 @@ async def test_websocket_completed_response_is_written_before_socket_close(trace
 
 
 @pytest.mark.asyncio
+async def test_websocket_slow_writer_does_not_clear_next_request(trace_dir):
+    """New client messages arriving during a slow trace write belong to the next record."""
+
+    class SlowFirstWrite:
+        def __init__(self, inner: TraceWriter):
+            self.inner = inner
+            self.first_write_started = asyncio.Event()
+            self.release_first_write = asyncio.Event()
+            self.write_count = 0
+
+        async def write(self, record):
+            self.write_count += 1
+            if self.write_count == 1:
+                self.first_write_started.set()
+                await self.release_first_write.wait()
+            await self.inner.write(record)
+
+        def close(self):
+            self.inner.close()
+
+    async def ws_upstream_handler(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+            data = json.loads(msg.data)
+            response_id = data["response_id"]
+            await ws.send_json(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": response_id,
+                        "model": data.get("model", "test-model"),
+                        "status": "completed",
+                        "output": [{"type": "message", "content": [{"type": "output_text", "text": response_id}]}],
+                        "usage": {"input_tokens": 3, "output_tokens": 1},
+                    },
+                }
+            )
+        return ws
+
+    trace_path = Path(trace_dir) / "trace_ws_slow_writer.jsonl"
+    writer = SlowFirstWrite(TraceWriter(trace_path))
+
+    upstream_runner, upstream_port = await _start_ws_upstream(ws_upstream_handler)
+    proxy_runner, proxy_port, proxy_session = await _start_proxy(
+        f"http://127.0.0.1:{upstream_port}",
+        writer,
+        strip_prefix="/v1",
+    )
+
+    try:
+        async with aiohttp.ClientSession() as client:
+            ws = await client.ws_connect(f"http://127.0.0.1:{proxy_port}/v1/responses")
+            await ws.send_json({"model": "gpt-test", "response_id": "resp1", "input": "first"})
+
+            msg = await asyncio.wait_for(ws.receive(), timeout=5)
+            assert msg.type == aiohttp.WSMsgType.TEXT
+            assert json.loads(msg.data)["response"]["id"] == "resp1"
+            await asyncio.wait_for(writer.first_write_started.wait(), timeout=5)
+
+            await ws.send_json({"model": "gpt-test", "response_id": "resp2", "input": "second"})
+            await asyncio.sleep(0.05)
+            writer.release_first_write.set()
+
+            msg = await asyncio.wait_for(ws.receive(), timeout=5)
+            assert msg.type == aiohttp.WSMsgType.TEXT
+            assert json.loads(msg.data)["response"]["id"] == "resp2"
+            await ws.close()
+
+        await asyncio.sleep(0.1)
+        writer.close()
+
+        records = [json.loads(line) for line in trace_path.read_text().splitlines() if line.strip()]
+        assert len(records) == 2
+        assert records[0]["request"]["body"]["response_id"] == "resp1"
+        assert records[0]["response"]["body"]["id"] == "resp1"
+        assert records[1]["request"]["body"]["response_id"] == "resp2"
+        assert records[1]["response"]["body"]["id"] == "resp2"
+
+    finally:
+        writer.release_first_write.set()
+        await proxy_session.close()
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_websocket_duplicate_completed_keeps_pending_trailing_events(trace_dir):
     """Duplicate terminal events should not discard pending non-terminal events."""
 
