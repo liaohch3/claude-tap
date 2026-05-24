@@ -121,7 +121,8 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         )
     except Exception as exc:
         duration_ms = int((time.monotonic() - t0) * 1000)
-        log.error(f"{log_prefix} upstream WS connect to {upstream_ws_url} failed: {exc}")
+        error_message = str(exc) or exc.__class__.__name__
+        log.error(f"{log_prefix} upstream WS connect to {upstream_ws_url} failed: {error_message}")
         record = _build_ws_record(
             req_id=req_id,
             turn=turn,
@@ -131,10 +132,10 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             client_messages=[],
             server_messages=[],
             upstream_base_url=target,
-            error=str(exc),
+            error=error_message,
         )
         await writer.write(record)
-        return web.Response(status=502, text=str(exc))
+        return web.Response(status=502, text=error_message)
 
     # Upstream connected — accept client WebSocket upgrade
     client_ws = web.WebSocketResponse(protocols=protocols)
@@ -295,7 +296,7 @@ def _build_ws_record(
             "body": req_body,
         },
         "response": {
-            "status": 101 if not error else 502,
+            "status": 101 if error is None else 502,
             "headers": {},
             "body": resp_body,
         },
@@ -304,7 +305,7 @@ def _build_ws_record(
         record["response"]["ws_events"] = ws_events
     if req_events:
         record["request"]["ws_events"] = req_events
-    if error:
+    if error is not None:
         record["response"]["error"] = error
     if upstream_base_url:
         record["upstream_base_url"] = upstream_base_url

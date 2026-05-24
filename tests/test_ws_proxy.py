@@ -715,6 +715,23 @@ def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
     assert record["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_FROM_WS"
 
 
+def test_build_ws_record_treats_empty_error_string_as_failure() -> None:
+    record = _build_ws_record(
+        req_id="req_fail",
+        turn=1,
+        duration_ms=25,
+        path_qs="/v1/responses",
+        req_headers={},
+        client_messages=[],
+        server_messages=[],
+        upstream_base_url="https://chatgpt.com/backend-api/codex",
+        error="",
+    )
+
+    assert record["response"]["status"] == 502
+    assert record["response"]["error"] == ""
+
+
 # ---------------------------------------------------------------------------
 # Test 4: WebSocket coexists with HTTP — mixed traffic
 # ---------------------------------------------------------------------------
