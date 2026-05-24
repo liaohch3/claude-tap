@@ -148,10 +148,11 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     completed_response_keys: set[str] = set()
     completed_response_key_order: deque[str] = deque()
 
-    async def _write_completed_record(response_key: str) -> None:
+    async def _write_completed_record(response_key: str, terminal_message: str) -> None:
         nonlocal completed_records_written
         if response_key in completed_response_keys:
-            server_messages.clear()
+            if server_messages and server_messages[-1] == terminal_message:
+                server_messages.pop()
             return
         completed_response_keys.add(response_key)
         completed_response_key_order.append(response_key)
@@ -205,7 +206,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
                     await client_ws.send_str(msg.data)
                     response_key = _response_completed_message_key(msg.data)
                     if response_key is not None:
-                        await _write_completed_record(response_key)
+                        await _write_completed_record(response_key, msg.data)
                 elif msg.type == aiohttp.WSMsgType.BINARY:
                     await client_ws.send_bytes(msg.data)
                 elif msg.type in (

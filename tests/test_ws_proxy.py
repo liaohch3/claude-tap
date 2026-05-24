@@ -231,6 +231,102 @@ async def test_websocket_completed_response_is_written_before_socket_close(trace
 
 
 @pytest.mark.asyncio
+async def test_websocket_duplicate_completed_keeps_pending_trailing_events(trace_dir):
+    """Duplicate terminal events should not discard pending non-terminal events."""
+
+    async def ws_upstream_handler(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                await ws.send_json(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_same",
+                            "status": "completed",
+                            "output": [],
+                        },
+                    }
+                )
+                await ws.send_json(
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": {
+                            "type": "message",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "LATE_TEXT"}],
+                        },
+                    }
+                )
+                await ws.send_json(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_same",
+                            "status": "completed",
+                            "output": [],
+                        },
+                    }
+                )
+                await ws.close()
+                break
+        return ws
+
+    trace_path = Path(trace_dir) / "trace_ws_duplicate_completed.jsonl"
+    writer = TraceWriter(trace_path)
+
+    upstream_runner, upstream_port = await _start_ws_upstream(ws_upstream_handler)
+    proxy_runner, proxy_port, proxy_session = await _start_proxy(
+        f"http://127.0.0.1:{upstream_port}",
+        writer,
+        strip_prefix="/v1",
+    )
+
+    try:
+        async with aiohttp.ClientSession() as client:
+            ws = await client.ws_connect(f"http://127.0.0.1:{proxy_port}/v1/responses")
+            await ws.send_json({"model": "gpt-test", "input": "hello"})
+
+            received = []
+            while True:
+                msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    received.append(json.loads(msg.data))
+                elif msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                    aiohttp.WSMsgType.CLOSED,
+                ):
+                    break
+            await ws.close()
+
+        assert [event["type"] for event in received] == [
+            "response.completed",
+            "response.output_item.done",
+            "response.completed",
+        ]
+
+        await asyncio.sleep(0.1)
+        writer.close()
+
+        records = [json.loads(line) for line in trace_path.read_text().splitlines() if line.strip()]
+        assert len(records) == 2
+        assert [event["type"] for event in records[0]["response"]["ws_events"]] == ["response.completed"]
+        assert [event["type"] for event in records[1]["response"]["ws_events"]] == [
+            "response.output_item.done",
+        ]
+        assert records[1]["response"]["body"]["output"][0]["content"][0]["text"] == "LATE_TEXT"
+
+    finally:
+        await proxy_session.close()
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_websocket_completed_segments_do_not_accumulate_in_memory(trace_dir):
     """Completed WS response segments should be released while the socket stays open."""
     allow_close = asyncio.Event()
