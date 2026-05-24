@@ -149,16 +149,20 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     completed_response_keys: set[str] = set()
     completed_response_key_order: deque[str] = deque()
 
-    def _pop_buffered_record() -> dict:
+    def _pop_buffered_snapshot() -> tuple[int, list[str], list[str]]:
         nonlocal completed_records_written
         completed_records_written += 1
         record_client_messages = client_messages.copy()
         record_server_messages = server_messages.copy()
         client_messages.clear()
         server_messages.clear()
-        return _build_ws_record(
-            req_id=req_id if completed_records_written == 1 else f"{req_id}_{completed_records_written}",
-            turn=turn if completed_records_written == 1 else f"{turn}.{completed_records_written}",
+        return completed_records_written, record_client_messages, record_server_messages
+
+    async def _write_buffered_snapshot(snapshot: tuple[int, list[str], list[str]]) -> None:
+        record_number, record_client_messages, record_server_messages = snapshot
+        record = _build_ws_record(
+            req_id=req_id if record_number == 1 else f"{req_id}_{record_number}",
+            turn=turn if record_number == 1 else f"{turn}.{record_number}",
             duration_ms=int((time.monotonic() - t0) * 1000),
             path_qs=request.path_qs,
             req_headers=request.headers,
@@ -166,24 +170,24 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             server_messages=record_server_messages,
             upstream_base_url=target,
         )
-
-    async def _write_buffered_record() -> None:
-        record = _pop_buffered_record()
         await writer.write(record)
 
-    def _pop_completed_record(response_key: str, terminal_message: str) -> dict | None:
+    async def _write_buffered_record() -> None:
+        await _write_buffered_snapshot(_pop_buffered_snapshot())
+
+    def _pop_completed_snapshot(response_key: str, terminal_message: str) -> tuple[int, list[str], list[str]] | None:
         if response_key in completed_response_keys:
             if server_messages and server_messages[-1] == terminal_message:
                 server_messages.pop()
             if client_messages or server_messages:
-                return _pop_buffered_record()
+                return _pop_buffered_snapshot()
             return None
         completed_response_keys.add(response_key)
         completed_response_key_order.append(response_key)
         if len(completed_response_key_order) > _COMPLETED_RESPONSE_KEY_CACHE_SIZE:
             expired = completed_response_key_order.popleft()
             completed_response_keys.discard(expired)
-        return _pop_buffered_record()
+        return _pop_buffered_snapshot()
 
     async def _relay_client_to_upstream():
         nonlocal client_message_count
@@ -214,14 +218,14 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
                     server_message_count += 1
                     server_messages.append(msg.data)
                     response_key = _response_completed_message_key(msg.data)
-                    completed_record = (
-                        _pop_completed_record(response_key, msg.data) if response_key is not None else None
+                    completed_snapshot = (
+                        _pop_completed_snapshot(response_key, msg.data) if response_key is not None else None
                     )
                     try:
                         await client_ws.send_str(msg.data)
                     finally:
-                        if completed_record is not None:
-                            await writer.write(completed_record)
+                        if completed_snapshot is not None:
+                            await _write_buffered_snapshot(completed_snapshot)
                 elif msg.type == aiohttp.WSMsgType.BINARY:
                     await client_ws.send_bytes(msg.data)
                 elif msg.type in (
