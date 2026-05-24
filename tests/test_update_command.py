@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from claude_tap.cli import _build_update_command, main_entry, parse_update_args, update_main
+from claude_tap.cli import _build_update_command, _is_editable_install, main_entry, parse_update_args, update_main
 
 
 def test_build_update_command_uses_uv_shim(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,6 +66,50 @@ def test_update_main_reports_missing_uv(monkeypatch: pytest.MonkeyPatch, capsys:
     err = capsys.readouterr().err
     assert "uv" in err
     assert "--installer pip" in err
+
+
+def test_is_editable_install_detects_source_tree_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    import claude_tap
+
+    monkeypatch.setattr(claude_tap, "__file__", r"D:\work\claude-tap\claude_tap\__init__.py")
+
+    assert _is_editable_install() is True
+
+
+def test_is_editable_install_returns_false_for_site_packages_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    import claude_tap
+
+    monkeypatch.setattr(claude_tap, "__file__", r"C:\Python\Lib\site-packages\claude_tap\__init__.py")
+
+    def fake_distribution(_name):
+        class _D:
+            def read_text(self, _path):
+                return None
+
+        return _D()
+
+    monkeypatch.setattr("importlib.metadata.distribution", fake_distribution)
+
+    assert _is_editable_install() is False
+
+
+def test_is_editable_install_uses_pep610_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    import claude_tap
+
+    monkeypatch.setattr(claude_tap, "__file__", r"C:\Python\Lib\site-packages\claude_tap\__init__.py")
+
+    def fake_distribution(_name):
+        class _D:
+            def read_text(self, path):
+                if path == "direct_url.json":
+                    return '{"url": "file:///src/claude-tap", "dir_info": {"editable": true}}'
+                return None
+
+        return _D()
+
+    monkeypatch.setattr("importlib.metadata.distribution", fake_distribution)
+
+    assert _is_editable_install() is True
 
 
 def test_main_entry_routes_update_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
