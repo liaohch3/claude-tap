@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from claude_tap.history import cleanup_trace_sessions, delete_trace_history, migrate_legacy_traces
-from claude_tap.trace_store import get_trace_store
+from claude_tap.trace_store import get_trace_store, reset_trace_store
 
 
 def _write_legacy_session(base: Path, stem: str, *, date: str = "2026-05-01") -> Path:
@@ -29,6 +31,84 @@ def test_migrate_legacy_directory_imports_jsonl_and_logs(trace_db, tmp_path: Pat
     assert len(sessions) == 1
     assert sessions[0]["legacy_rel_path"] == "2026-05-01/trace_old.jsonl"
     assert get_trace_store().export_log(sessions[0]["id"]).startswith("10:00:00")
+
+
+def test_migrate_legacy_directory_dedupes_per_output_dir(trace_db, tmp_path: Path) -> None:
+    project_a = tmp_path / "project-a"
+    project_b = tmp_path / "project-b"
+    _write_legacy_session(project_a, "trace_same")
+    _write_legacy_session(project_b, "trace_same")
+
+    assert migrate_legacy_traces(project_a) == 1
+    assert migrate_legacy_traces(project_a) == 0
+    assert migrate_legacy_traces(project_b) == 1
+
+    sessions = get_trace_store().list_session_rows()
+    assert len(sessions) == 2
+    assert [row["legacy_rel_path"] for row in sessions].count("2026-05-01/trace_same.jsonl") == 2
+
+
+def test_migrate_legacy_directory_upgrades_v2_schema_for_source_key_dedupe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v2.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                date_key TEXT NOT NULL,
+                client TEXT NOT NULL DEFAULT '',
+                proxy_mode TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                record_count INTEGER NOT NULL DEFAULT 0,
+                summary_json TEXT,
+                legacy_rel_path TEXT UNIQUE
+            );
+            CREATE TABLE records (
+                session_id TEXT NOT NULL,
+                record_index INTEGER NOT NULL,
+                turn INTEGER,
+                timestamp TEXT,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (session_id, record_index)
+            );
+            CREATE TABLE proxy_logs (
+                session_id TEXT NOT NULL,
+                line_no INTEGER NOT NULL,
+                logged_at TEXT,
+                level TEXT,
+                message TEXT NOT NULL,
+                PRIMARY KEY (session_id, line_no)
+            );
+            CREATE TABLE migration_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO sessions (
+                id, started_at, updated_at, date_key, client, proxy_mode,
+                status, record_count, summary_json, legacy_rel_path
+            )
+            VALUES (
+                'old-session', '2026-05-01T12:00:00+00:00', '2026-05-01T12:00:00+00:00',
+                '2026-05-01', 'claude', 'reverse', 'complete', 0, NULL, '2026-05-01/trace_same.jsonl'
+            );
+            PRAGMA user_version = 2;
+            """
+        )
+    monkeypatch.setenv("CLOUDTAP_DB", str(db_path))
+    reset_trace_store()
+    project = tmp_path / "project"
+    _write_legacy_session(project, "trace_same")
+
+    assert migrate_legacy_traces(project) == 1
+
+    sessions = get_trace_store().list_session_rows()
+    assert len(sessions) == 2
+    assert [row["legacy_rel_path"] for row in sessions].count("2026-05-01/trace_same.jsonl") == 2
 
 
 def test_delete_trace_history_removes_selected_date_sessions(trace_db, tmp_path: Path) -> None:
@@ -59,6 +139,24 @@ def test_cleanup_trace_sessions_keeps_newest(trace_db, tmp_path: Path) -> None:
 
     assert removed == 2
     assert len(get_trace_store().list_session_rows()) == 2
+
+
+def test_cleanup_trace_sessions_skips_protected_and_continues(trace_db) -> None:
+    store = get_trace_store()
+    session_ids = [
+        store.create_session(
+            client="claude",
+            proxy_mode="reverse",
+            started_at=datetime(2026, 5, 1, 12, index, tzinfo=timezone.utc),
+        )
+        for index in range(5)
+    ]
+
+    removed = cleanup_trace_sessions(2, protected_session_id=session_ids[0])
+
+    assert removed == 3
+    remaining = {row["id"] for row in store.list_session_rows()}
+    assert remaining == {session_ids[0], session_ids[-1]}
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from claude_tap.certs import (
     trust_macos_ca,
 )
 from claude_tap.cli import _ensure_ca_trust_for_forward_proxy, _trust_ca_for_current_user, async_main, trust_ca_main
+from claude_tap.trace_store import get_trace_store, reset_trace_store
 
 
 def test_parse_args_accepts_tap_trust_ca() -> None:
@@ -266,6 +267,8 @@ async def test_async_main_returns_before_starting_proxy_when_trust_ca_fails(
     ca_path = tmp_path / "ca.pem"
     key_path = tmp_path / "ca-key.pem"
     proxy_started = False
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "trust-failed.sqlite3"))
+    reset_trace_store()
 
     def fail_if_proxy_starts(*args, **kwargs):
         nonlocal proxy_started
@@ -299,3 +302,4 @@ async def test_async_main_returns_before_starting_proxy_when_trust_ca_fails(
 
     assert code == 7
     assert proxy_started is False
+    assert get_trace_store().list_session_rows() == []

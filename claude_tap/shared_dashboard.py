@@ -15,6 +15,8 @@ import aiohttp
 from claude_tap.trace_store import resolve_db_path
 
 DEFAULT_DASHBOARD_PORT = 19527
+_DASHBOARD_HEALTH_TIMEOUT = 1.5
+_DASHBOARD_SESSIONS_HEALTH_TIMEOUT = 3.0
 _DASHBOARD_LOCK_NAME = "dashboard.lock"
 
 
@@ -59,16 +61,33 @@ def _dashboard_spawn_lock():
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-async def is_dashboard_healthy(host: str, port: int) -> bool:
-    """Return True when the shared dashboard responds on /api/sessions."""
-    url = f"{dashboard_url(host, port)}/api/sessions"
-    timeout = aiohttp.ClientTimeout(total=0.75)
+async def _dashboard_get_status(url: str, *, timeout_seconds: float) -> int | None:
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
-                return resp.status == 200
+                return resp.status
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+        return None
+
+
+async def is_dashboard_healthy(host: str, port: int) -> bool:
+    """Return True when the shared dashboard responds to a cheap health check."""
+    base_url = dashboard_url(host, port)
+    status = await _dashboard_get_status(
+        f"{base_url}/dashboard/health",
+        timeout_seconds=_DASHBOARD_HEALTH_TIMEOUT,
+    )
+    if status == 200:
+        return True
+    if status not in {404, 405}:
         return False
+
+    fallback_status = await _dashboard_get_status(
+        f"{base_url}/api/sessions",
+        timeout_seconds=_DASHBOARD_SESSIONS_HEALTH_TIMEOUT,
+    )
+    return fallback_status == 200
 
 
 async def wait_for_dashboard_healthy(

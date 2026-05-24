@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from aiohttp import web
 
 from claude_tap.shared_dashboard import (
     DEFAULT_DASHBOARD_PORT,
@@ -12,8 +13,18 @@ from claude_tap.shared_dashboard import (
     _spawn_dashboard_subprocess,
     dashboard_url,
     ensure_shared_dashboard,
+    is_dashboard_healthy,
     resolve_dashboard_port,
 )
+
+
+async def _start_test_app(app: web.Application) -> tuple[web.AppRunner, int]:
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    return runner, port
 
 
 def test_resolve_dashboard_port_defaults_to_shared_port() -> None:
@@ -68,9 +79,13 @@ def test_spawn_dashboard_subprocess(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_is_dashboard_healthy_real_server(tmp_path: Path) -> None:
+async def test_is_dashboard_healthy_real_server(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import aiohttp
+
     from claude_tap.live import LiveViewerServer
-    from claude_tap.shared_dashboard import is_dashboard_healthy, wait_for_dashboard_healthy
+    from claude_tap.shared_dashboard import wait_for_dashboard_healthy
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
 
     # Before starting, it should be unhealthy
     assert await is_dashboard_healthy("127.0.0.1", 54321) is False
@@ -80,10 +95,52 @@ async def test_is_dashboard_healthy_real_server(tmp_path: Path) -> None:
     server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
     port = await server.start()
     try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
+                assert resp.status == 200
+                assert await resp.json() == {"ok": True}
         assert await is_dashboard_healthy("127.0.0.1", port) is True
         assert await wait_for_dashboard_healthy("127.0.0.1", port, timeout=1.0) is True
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_is_dashboard_healthy_prefers_lightweight_health_route() -> None:
+    sessions_seen = False
+    app = web.Application()
+
+    async def health(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True})
+
+    async def sessions(request: web.Request) -> web.Response:
+        nonlocal sessions_seen
+        sessions_seen = True
+        return web.json_response({"sessions": []})
+
+    app.router.add_get("/dashboard/health", health)
+    app.router.add_get("/api/sessions", sessions)
+    runner, port = await _start_test_app(app)
+    try:
+        assert await is_dashboard_healthy("127.0.0.1", port) is True
+        assert sessions_seen is False
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_is_dashboard_healthy_falls_back_for_legacy_dashboard() -> None:
+    app = web.Application()
+
+    async def sessions(request: web.Request) -> web.Response:
+        return web.json_response({"sessions": []})
+
+    app.router.add_get("/api/sessions", sessions)
+    runner, port = await _start_test_app(app)
+    try:
+        assert await is_dashboard_healthy("127.0.0.1", port) is True
+    finally:
+        await runner.cleanup()
 
 
 @pytest.mark.asyncio

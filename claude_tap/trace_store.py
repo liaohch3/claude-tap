@@ -9,11 +9,12 @@ import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 DB_FILENAME = "traces.sqlite3"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _store: TraceStore | None = None
@@ -409,7 +410,14 @@ class TraceStore:
             ).fetchall()
             if len(rows) <= max_sessions:
                 return 0
-            to_remove = [row["id"] for row in rows[: len(rows) - max_sessions] if row["id"] not in protected]
+            target_remove = len(rows) - max_sessions
+            to_remove = []
+            for row in rows:
+                if row["id"] in protected:
+                    continue
+                to_remove.append(row["id"])
+                if len(to_remove) >= target_remove:
+                    break
             if not to_remove:
                 return 0
             placeholders = ",".join("?" * len(to_remove))
@@ -424,15 +432,17 @@ class TraceStore:
             return 0
 
         imported = 0
+        legacy_source_key = _legacy_source_key(output_dir)
         for trace_path in sorted(output_dir.glob("**/trace_*.jsonl")):
             rel_path = trace_path.relative_to(output_dir).as_posix()
-            if self._legacy_session_exists(rel_path):
+            if self._legacy_session_exists(legacy_source_key, rel_path):
                 continue
             records = _read_jsonl_file(trace_path)
             log_path = trace_path.with_suffix(".log")
             logs = _read_log_file(log_path) if log_path.is_file() else []
             manifest_entry = _manifest_entry_for_rel_path(output_dir, rel_path)
             session_id = self._import_legacy_session(
+                legacy_source_key=legacy_source_key,
                 rel_path=rel_path,
                 trace_path=trace_path,
                 records=records,
@@ -447,6 +457,7 @@ class TraceStore:
     def _import_legacy_session(
         self,
         *,
+        legacy_source_key: str,
         rel_path: str,
         trace_path: Path,
         records: list[dict[str, Any]],
@@ -475,9 +486,9 @@ class TraceStore:
                 """
                 INSERT INTO sessions (
                     id, started_at, updated_at, date_key, client, proxy_mode,
-                    status, record_count, legacy_rel_path
+                    status, record_count, legacy_source_key, legacy_rel_path
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 'complete', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 'complete', ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -487,6 +498,7 @@ class TraceStore:
                     client,
                     proxy_mode,
                     len(records),
+                    legacy_source_key,
                     rel_path,
                 ),
             )
@@ -536,11 +548,11 @@ class TraceStore:
             conn.commit()
         return session_id
 
-    def _legacy_session_exists(self, rel_path: str) -> bool:
+    def _legacy_session_exists(self, legacy_source_key: str, rel_path: str) -> bool:
         conn = self._connect()
         row = conn.execute(
-            "SELECT 1 FROM sessions WHERE legacy_rel_path = ? LIMIT 1",
-            (rel_path,),
+            "SELECT 1 FROM sessions WHERE legacy_source_key = ? AND legacy_rel_path = ? LIMIT 1",
+            (legacy_source_key, rel_path),
         ).fetchone()
         return row is not None
 
@@ -634,14 +646,64 @@ class TraceStore:
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         current = conn.execute("PRAGMA user_version").fetchone()[0]
         if current == 0:
-            self._create_v2_schema(conn)
+            self._create_v3_schema(conn)
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            return
+        if current == 2:
+            self._migrate_v2_to_v3(conn)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         if current != SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported trace database schema version {current}; expected {SCHEMA_VERSION}.")
-        self._create_v2_schema(conn)
+        self._create_v3_schema(conn)
 
-    def _create_v2_schema(self, conn: sqlite3.Connection) -> None:
+    def _create_v3_schema(self, conn: sqlite3.Connection) -> None:
+        self._create_v3_tables(conn)
+        self._create_v3_indexes(conn)
+
+    def _migrate_v2_to_v3(self, conn: sqlite3.Connection) -> None:
+        suffix = uuid.uuid4().hex
+        sessions_v2 = f"sessions_v2_{suffix}"
+        records_v2 = f"records_v2_{suffix}"
+        proxy_logs_v2 = f"proxy_logs_v2_{suffix}"
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(f"ALTER TABLE sessions RENAME TO {sessions_v2}")
+        conn.execute(f"ALTER TABLE records RENAME TO {records_v2}")
+        conn.execute(f"ALTER TABLE proxy_logs RENAME TO {proxy_logs_v2}")
+        self._create_v3_tables(conn)
+        conn.execute(
+            f"""
+            INSERT INTO sessions (
+                id, started_at, updated_at, date_key, client, proxy_mode,
+                status, record_count, summary_json, legacy_source_key, legacy_rel_path
+            )
+            SELECT
+                id, started_at, updated_at, date_key, client, proxy_mode,
+                status, record_count, summary_json, '', legacy_rel_path
+            FROM {sessions_v2}
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
+            SELECT session_id, record_index, turn, timestamp, payload_json
+            FROM {records_v2}
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT INTO proxy_logs (session_id, line_no, logged_at, level, message)
+            SELECT session_id, line_no, logged_at, level, message
+            FROM {proxy_logs_v2}
+            """
+        )
+        conn.execute(f"DROP TABLE {proxy_logs_v2}")
+        conn.execute(f"DROP TABLE {records_v2}")
+        conn.execute(f"DROP TABLE {sessions_v2}")
+        self._create_v3_indexes(conn)
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    def _create_v3_tables(self, conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -654,7 +716,8 @@ class TraceStore:
                 status TEXT NOT NULL DEFAULT 'active',
                 record_count INTEGER NOT NULL DEFAULT 0,
                 summary_json TEXT,
-                legacy_rel_path TEXT UNIQUE
+                legacy_source_key TEXT NOT NULL DEFAULT '',
+                legacy_rel_path TEXT
             )
             """
         )
@@ -692,9 +755,18 @@ class TraceStore:
             )
             """
         )
+
+    def _create_v3_indexes(self, conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_date_key ON sessions(date_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_records_session_id ON records(session_id)")
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_legacy_source_rel_path
+            ON sessions(legacy_source_key, legacy_rel_path)
+            WHERE legacy_rel_path IS NOT NULL
+            """
+        )
 
     def _next_record_index(self, conn: sqlite3.Connection, session_id: str) -> int:
         row = conn.execute(
@@ -714,6 +786,10 @@ def _rows_to_records(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
         if isinstance(record, dict):
             records.append(record)
     return records
+
+
+def _legacy_source_key(output_dir: Path) -> str:
+    return sha256(str(output_dir.resolve()).encode("utf-8")).hexdigest()[:16]
 
 
 def _read_jsonl_file(path: Path) -> list[dict[str, Any]]:

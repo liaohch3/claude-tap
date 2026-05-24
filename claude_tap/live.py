@@ -87,6 +87,7 @@ class LiveViewerServer:
             app.router.add_get("/", self._handle_index)
         app.router.add_get("/viewer", self._handle_index)
         app.router.add_get("/dashboard", self._handle_dashboard_index)
+        app.router.add_get("/dashboard/health", self._handle_dashboard_health)
         app.router.add_get("/dashboard/events", self._handle_dashboard_sse)
         app.router.add_get("/events", self._handle_sse)
         app.router.add_get("/records", self._handle_records)
@@ -176,6 +177,9 @@ class LiveViewerServer:
         except OSError:
             return web.Response(status=404, text="dashboard.html not found")
         return web.Response(text=html, content_type="text/html")
+
+    async def _handle_dashboard_health(self, request: web.Request) -> web.Response:
+        return web.json_response({"ok": True})
 
     async def _handle_index(self, request: web.Request) -> web.Response:
         """Serve the viewer HTML with live mode enabled."""

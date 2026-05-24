@@ -565,7 +565,6 @@ async def async_main(args: argparse.Namespace):
 
     store = get_trace_store()
     trace_metadata = {"client": args.client, "proxy_mode": args.proxy_mode}
-    session_id = store.create_session(client=args.client, proxy_mode=args.proxy_mode)
 
     ca_cert_path: Path | None = None
     ca_key_path: Path | None = None
@@ -574,6 +573,8 @@ async def async_main(args: argparse.Namespace):
         trust_result = _ensure_ca_trust_for_forward_proxy(args, ca_cert_path)
         if trust_result != 0:
             return trust_result
+
+    session_id = store.create_session(client=args.client, proxy_mode=args.proxy_mode)
 
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
