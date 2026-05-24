@@ -4,6 +4,7 @@ import asyncio
 import json
 import shutil
 import tempfile
+import tracemalloc
 from pathlib import Path
 
 import aiohttp
@@ -224,6 +225,88 @@ async def test_websocket_completed_response_is_written_before_socket_close(trace
 
     finally:
         allow_close.set()
+        await proxy_session.close()
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_websocket_completed_segments_do_not_accumulate_in_memory(trace_dir):
+    """Completed WS response segments should be released while the socket stays open."""
+    allow_close = asyncio.Event()
+    response_count = 200
+    payload = "x" * 8_000
+
+    async def ws_upstream_handler(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        received = 0
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                response_id = data["response_id"]
+                await ws.send_json({"type": "response.output_text.delta", "delta": payload})
+                await ws.send_json(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": response_id,
+                            "status": "completed",
+                            "output": [],
+                        },
+                    }
+                )
+                received += 1
+                if received == response_count:
+                    await allow_close.wait()
+                    await ws.close()
+                    break
+        return ws
+
+    trace_path = Path(trace_dir) / "trace_ws_perf.jsonl"
+    writer = TraceWriter(trace_path)
+
+    upstream_runner, upstream_port = await _start_ws_upstream(ws_upstream_handler)
+    proxy_runner, proxy_port, proxy_session = await _start_proxy(
+        f"http://127.0.0.1:{upstream_port}",
+        writer,
+        strip_prefix="/v1",
+    )
+
+    try:
+        tracemalloc.start()
+        async with aiohttp.ClientSession() as client:
+            ws = await client.ws_connect(f"http://127.0.0.1:{proxy_port}/v1/responses")
+            for index in range(response_count):
+                await ws.send_json(
+                    {
+                        "type": "response.create",
+                        "response_id": f"resp_{index}",
+                        "model": "gpt-test",
+                        "input": payload,
+                    }
+                )
+                for _ in range(2):
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    assert msg.type == aiohttp.WSMsgType.TEXT
+
+            await asyncio.sleep(0.1)
+            current_bytes, peak_bytes = tracemalloc.get_traced_memory()
+            record_count = sum(1 for line in trace_path.read_text().splitlines() if line.strip())
+            assert record_count == response_count
+
+            allow_close.set()
+            await ws.close()
+        tracemalloc.stop()
+
+        writer.close()
+        assert current_bytes < 2_000_000
+        assert peak_bytes < 8_000_000
+
+    finally:
+        allow_close.set()
+        if tracemalloc.is_tracing():
+            tracemalloc.stop()
         await proxy_session.close()
         await proxy_runner.cleanup()
         await upstream_runner.cleanup()

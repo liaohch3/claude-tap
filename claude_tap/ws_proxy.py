@@ -7,6 +7,7 @@ import json
 import logging
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 
 import aiohttp
@@ -33,6 +34,7 @@ _WS_HANDSHAKE_HEADERS = frozenset(
         "sec-websocket-accept",
     }
 )
+_COMPLETED_RESPONSE_KEY_CACHE_SIZE = 1024
 
 
 def _get_ws_proxy_settings(ws_url: str) -> tuple[URL, aiohttp.BasicAuth | None] | None:
@@ -140,14 +142,22 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
 
     client_messages: list[str] = []
     server_messages: list[str] = []
+    client_message_count = 0
+    server_message_count = 0
     completed_records_written = 0
     completed_response_keys: set[str] = set()
+    completed_response_key_order: deque[str] = deque()
 
     async def _write_completed_record(response_key: str) -> None:
         nonlocal completed_records_written
         if response_key in completed_response_keys:
+            server_messages.clear()
             return
         completed_response_keys.add(response_key)
+        completed_response_key_order.append(response_key)
+        if len(completed_response_key_order) > _COMPLETED_RESPONSE_KEY_CACHE_SIZE:
+            expired = completed_response_key_order.popleft()
+            completed_response_keys.discard(expired)
         completed_records_written += 1
         snapshot_turn: int | str = turn if completed_records_written == 1 else f"{turn}.{completed_records_written}"
         record = _build_ws_record(
@@ -161,11 +171,15 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             upstream_base_url=target,
         )
         await writer.write(record)
+        client_messages.clear()
+        server_messages.clear()
 
     async def _relay_client_to_upstream():
+        nonlocal client_message_count
         try:
             async for msg in client_ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
+                    client_message_count += 1
                     client_messages.append(msg.data)
                     await upstream_ws.send_str(msg.data)
                 elif msg.type == aiohttp.WSMsgType.BINARY:
@@ -182,9 +196,11 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             pass
 
     async def _relay_upstream_to_client():
+        nonlocal server_message_count
         try:
             async for msg in upstream_ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
+                    server_message_count += 1
                     server_messages.append(msg.data)
                     await client_ws.send_str(msg.data)
                     response_key = _response_completed_message_key(msg.data)
@@ -223,10 +239,11 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
 
     duration_ms = int((time.monotonic() - t0) * 1000)
 
-    if completed_records_written == 0:
+    if client_messages or server_messages:
+        completed_records_written += 1
         record = _build_ws_record(
-            req_id=req_id,
-            turn=turn,
+            req_id=req_id if completed_records_written == 1 else f"{req_id}_{completed_records_written}",
+            turn=turn if completed_records_written == 1 else f"{turn}.{completed_records_written}",
             duration_ms=duration_ms,
             path_qs=request.path_qs,
             req_headers=request.headers,
@@ -235,11 +252,13 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             upstream_base_url=target,
         )
         await writer.write(record)
+        client_messages.clear()
+        server_messages.clear()
 
     log.info(
         f"{log_prefix} ← WS closed ({duration_ms}ms, "
-        f"{len(client_messages)} client→upstream, "
-        f"{len(server_messages)} upstream→client)"
+        f"{client_message_count} client→upstream, "
+        f"{server_message_count} upstream→client)"
     )
 
     return client_ws
