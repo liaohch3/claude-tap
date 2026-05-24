@@ -390,7 +390,7 @@ class TraceStore:
         return {
             "date": date_key,
             "deleted_sessions": len(to_delete),
-            "deleted_files": 0,
+            "deleted_files": len(to_delete),
             "skipped_files": 0,
         }
 

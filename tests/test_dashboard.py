@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
@@ -30,6 +32,7 @@ from claude_tap.dashboard import (
 from claude_tap.history import migrate_legacy_traces
 from claude_tap.live import LiveViewerServer
 from claude_tap.trace import TraceWriter
+from claude_tap.trace_log_handler import SQLiteLogHandler
 from claude_tap.trace_store import get_trace_store
 
 
@@ -473,6 +476,7 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
     second_trace_path = tmp_path / "2026-05-20" / "trace_081500.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
     _write_jsonl(second_trace_path, [_anthropic_record(turn=2), _anthropic_record(turn=3)])
+    trace_path.with_suffix(".log").write_text("10:00:00 proxy log\n", encoding="utf-8")
     _seed_legacy(tmp_path)
 
     server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
@@ -515,6 +519,13 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 body = await resp.text()
                 assert "req_claude" in body
 
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/log") as resp:
+                assert resp.status == 200
+                assert resp.content_type == "text/plain"
+                assert resp.charset == "utf-8"
+                body = await resp.text()
+                assert body == "10:00:00 proxy log\n"
+
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/bad/records") as resp:
                 assert resp.status == 404
     finally:
@@ -554,12 +565,65 @@ async def test_dashboard_server_sse_events(trace_db) -> None:
         await server.stop()
 
 
+@pytest.mark.asyncio
+async def test_dashboard_refresh_preserves_loaded_detail_records(trace_db, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    _write_jsonl(trace_path, [_anthropic_record(turn=turn) for turn in range(1, 13)])
+    _seed_legacy(tmp_path)
+    session_id = list_trace_sessions()[0]["id"]
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
+                await page.wait_for_selector("[data-session]", timeout=5000)
+
+                await page.evaluate(f"openSession({json.dumps(session_id)})")
+                await page.wait_for_selector("[data-load-more]", timeout=5000)
+                assert await page.locator("#conversation-tab article.section").count() == 10
+
+                await page.click("[data-load-more]")
+                await page.wait_for_function(
+                    "() => document.querySelectorAll('#conversation-tab article.section').length === 12",
+                    timeout=5000,
+                )
+
+                await page.evaluate("refreshSessions({preserveSelection: true})")
+                await page.wait_for_function(
+                    "() => document.querySelectorAll('#conversation-tab article.section').length === 12",
+                    timeout=5000,
+                )
+                assert await page.locator("#conversation-tab article.section").count() == 12
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
 def test_live_viewer_exposes_current_session_id(trace_db) -> None:
     session_id = get_trace_store().create_session(client="claude", proxy_mode="reverse")
     server = LiveViewerServer(session_id=session_id)
     assert server.session_id == session_id
 
     assert LiveViewerServer().session_id is None
+
+
+def test_sqlite_log_handler_exports_single_timestamp(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    handler = SQLiteLogHandler(session_id, store=store)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "proxy started", (), None)
+    record.created = datetime(2026, 5, 20, 8, 0, tzinfo=timezone.utc).timestamp()
+
+    handler.emit(record)
+
+    assert store.export_log(session_id) == "08:00:00 proxy started\n"
 
 
 @pytest.mark.asyncio

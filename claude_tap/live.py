@@ -338,8 +338,9 @@ class LiveViewerServer:
         body = store.export_log(session_id)
         filename = f"trace_{session_id[:8]}.log"
         return web.Response(
-            body=body,
-            content_type="text/plain; charset=utf-8",
+            text=body,
+            content_type="text/plain",
+            charset="utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 

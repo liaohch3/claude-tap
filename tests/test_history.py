@@ -43,6 +43,7 @@ def test_delete_trace_history_removes_selected_date_sessions(trace_db, tmp_path:
     result = delete_trace_history("2026-05-01", protected_session_ids=protected)
 
     assert result["deleted_sessions"] == 1
+    assert result["deleted_files"] == 1
     remaining = {row["legacy_rel_path"] for row in get_trace_store().list_session_rows()}
     assert "2026-05-01/trace_old.jsonl" not in remaining
     assert "2026-05-01/trace_active.jsonl" in remaining
@@ -78,6 +79,7 @@ async def test_live_viewer_delete_history_endpoint(trace_db, tmp_path: Path) -> 
                 assert resp.status == 200
                 payload = await resp.json()
                 assert payload["deleted_sessions"] == 1
+                assert payload["deleted_files"] == 1
 
             async with session.get(f"http://127.0.0.1:{port}/api/traces/2026-05-01") as resp:
                 assert resp.status == 200

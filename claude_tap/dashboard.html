@@ -842,6 +842,8 @@ const state = {
   loadingSessions: false,
   loadingSessionId: null,
   sessionRequestId: 0,
+  detailSessionId: null,
+  detailRecordsLoaded: 0,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -1193,7 +1195,7 @@ async function refreshSessions({preserveSelection = true} = {}) {
     renderSessions();
     if (state.view === "detail" && state.selectedSessionId) {
       showDetailView();
-      await loadSession(state.selectedSessionId);
+      await loadSession(state.selectedSessionId, {preserveLoaded: true});
     } else {
       showListView();
     }
@@ -1325,6 +1327,8 @@ async function openSession(sessionId) {
 
 function showListView() {
   state.view = "list";
+  state.detailSessionId = null;
+  state.detailRecordsLoaded = 0;
   $("#list-view").classList.remove("hidden");
   $("#detail-view").classList.add("hidden");
   updateTracePathBar();
@@ -1343,10 +1347,12 @@ function showDetailLoading(sessionId) {
   $("#detail").innerHTML = `<div class="detail-loading">${loadingMarkup(t("loading_session"))}</div>`;
 }
 
-async function loadSession(sessionId) {
+async function loadSession(sessionId, {preserveLoaded = false} = {}) {
   state.loadingSessionId = sessionId;
+  const loadedRecords = preserveLoaded && state.detailSessionId === sessionId ? state.detailRecordsLoaded : 0;
+  const limit = Math.max(MAX_INLINE_DETAIL_RECORDS, loadedRecords || 0);
   try {
-    const payload = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionId)}/records?offset=0&limit=${MAX_INLINE_DETAIL_RECORDS}`);
+    const payload = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionId)}/records?offset=0&limit=${limit}`);
     if (state.selectedSessionId !== sessionId) return;
     renderDetail(payload.session, payload.records || []);
   } catch (error) {
@@ -1384,6 +1390,8 @@ function renderDetail(session, records) {
   const statusClass = ["active", "error", "empty"].includes(session.status) ? session.status : "";
   const totalRecords = Number(session.record_count || records.length);
   const hasHiddenRecords = totalRecords > records.length;
+  state.detailSessionId = session.id;
+  state.detailRecordsLoaded = records.length;
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
