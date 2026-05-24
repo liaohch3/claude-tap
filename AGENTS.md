@@ -12,6 +12,23 @@ External contributors should start with [`CONTRIBUTING.md`](CONTRIBUTING.md). Th
 
 Public user-facing documentation must be bilingual. Add or update the English document and the Simplified Chinese counterpart together; use `README.md` with `README_zh.md`, and use `*.zh.md` beside English guide files under `docs/guides/`.
 
+## Review Guidelines
+
+When reviewing pull requests, prioritize findings that can cause correctness bugs, regressions, security or privacy issues, release failures, broken CI, broken packaging, or misleading evidence. Treat these as high-priority review findings.
+
+Do not block on style-only or preference-only comments unless they make the code materially harder to maintain or violate an existing repository rule.
+
+For every pull request, check:
+
+1. The implementation matches the requested scope and does not mix unrelated refactors, feature work, or generated artifacts.
+2. Tests contain meaningful assertions that would fail for realistic regressions, not only line coverage.
+3. UI, viewer, or evidence changes include real trace-backed screenshots or recordings when required by repository policy.
+4. Public documentation changes are bilingual, with matching English and Simplified Chinese updates.
+5. Workflow, release, credential, subprocess, network, filesystem, and dependency changes use least privilege and avoid leaking secrets.
+6. Commit titles, PR titles, PR bodies, and evidence links follow the repository contribution and preflight requirements.
+
+When a finding is speculative, state the assumption and the concrete evidence needed to confirm it. Prefer a small number of actionable, high-signal findings over broad commentary.
+
 ## Pre-commit Hook
 
 项目提供了 `.githooks/pre-commit` 自动在 commit 前运行 lint 检查。首次 clone 后执行：
