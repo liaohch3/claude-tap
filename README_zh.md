@@ -127,6 +127,8 @@ claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 `claude-tap` 会从环境变量或 Claude settings 中的 `ANTHROPIC_BASE_URL`
 自动识别自定义 Claude Code 上游；只有想手动覆盖时才需要传 `--tap-target`。
 
+使用 Claude Code VS Code 插件时，把 `Claude Code: Claude Process Wrapper` 设置为 `claude-tap`；如果 Windows 上 VS Code 找不到它，请填写完整的 `claude-tap.exe` 路径。
+
 </details>
 
 <details>
