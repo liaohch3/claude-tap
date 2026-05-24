@@ -1764,29 +1764,39 @@ function bodyWithoutToolResultOnlyInput(body) {
   return next;
 }
 
-function buildWebSocketResponseEntry(entry, groups, idx) {
+function buildWebSocketResponseEntry(entry, groups, idx, priorHistoryInput = []) {
   const group = groups[idx];
   const completed = completedResponseFromEvents(group.events) || {};
   const created = responseCreatedFromEvents(group.events) || {};
   const priorGroups = groups.slice(0, idx);
   const priorRequestBodies = priorGroups.map((_, priorIdx) => requestBodyForWebSocketGroup(entry, groups, priorIdx));
-  const requestSource = requestBodyForWebSocketGroup(entry, groups, idx);
+  const hasRequestEvents = Array.isArray(entry.request?.ws_events) && entry.request.ws_events.length > 0;
+  const requestSource =
+    Array.isArray(priorHistoryInput) && priorHistoryInput.length && !hasRequestEvents && entry.request?.body
+      ? entry.request.body
+      : requestBodyForWebSocketGroup(entry, groups, idx);
   const requestBody = cloneJson(requestSource || {}) || {};
   const source = Object.keys(completed).length ? completed : created;
   for (const key of ['model', 'instructions', 'tools', 'previous_response_id', 'prompt_cache_key', 'tool_choice', 'parallel_tool_calls', 'text', 'reasoning']) {
     if (source[key] !== undefined && source[key] !== null) requestBody[key] = source[key];
   }
-  requestBody.input = buildWebSocketHistoryInput(requestBody.input, priorGroups, priorRequestBodies);
+  if (Array.isArray(priorHistoryInput) && priorHistoryInput.length) {
+    const currentInput = normalizeWebSocketDerivedInput(Array.isArray(requestBody.input) ? requestBody.input : []);
+    requestBody.input = uniqueMessages([...priorHistoryInput, ...currentInput]);
+  } else {
+    requestBody.input = buildWebSocketHistoryInput(requestBody.input, priorGroups, priorRequestBodies);
+  }
   const createdAt = completed.created_at || created.created_at;
   const completedAt = completed.completed_at;
   const durationMs = createdAt && completedAt ? Math.max(0, (completedAt - createdAt) * 1000) : entry.duration_ms;
+  const splitFromSingleRecord = groups.length > 1;
   return {
     ...cloneJson(entry),
-    request_id: `${entry.request_id || 'ws'}:${idx + 1}`,
-    turn: `${entry.turn || '?'}.${idx + 1}`,
+    request_id: splitFromSingleRecord ? `${entry.request_id || 'ws'}:${idx + 1}` : entry.request_id,
+    turn: splitFromSingleRecord ? `${entry.turn || '?'}.${idx + 1}` : entry.turn,
     duration_ms: durationMs,
     timestamp: createdAt ? new Date(createdAt * 1000).toISOString() : entry.timestamp,
-    derived_from_websocket: true,
+    derived_from_websocket: splitFromSingleRecord || entry.derived_from_websocket === true,
     websocket_response_index: idx + 1,
     request: {
       ...(cloneJson(entry.request) || {}),
@@ -1802,17 +1812,35 @@ function buildWebSocketResponseEntry(entry, groups, idx) {
 
 function expandWebSocketResponseEntries(rawEntries) {
   const expanded = [];
+  const historyByResponseId = new Map();
   for (const entry of rawEntries || []) {
     if (!isCodexResponsesWebSocketEntry(entry)) {
       expanded.push(entry);
       continue;
     }
-    const groups = splitWebSocketResponseEvents(entry.response?.ws_events || []).filter(isDisplayableWebSocketResponseGroup);
-    if (groups.length <= 1) {
+    const groups = splitWebSocketResponseEvents(entry.response?.ws_events || []);
+    if (!groups.length) {
       expanded.push(entry);
       continue;
     }
-    groups.forEach((group, idx) => expanded.push(buildWebSocketResponseEntry(entry, groups, idx)));
+    const displayableGroups = groups
+      .map((group, idx) => ({ group, idx }))
+      .filter(({ group }) => isDisplayableWebSocketResponseGroup(group));
+    if (!displayableGroups.length) continue;
+    for (const { group, idx } of displayableGroups) {
+      const previousId = previousResponseIdForGroup(group);
+      const priorHistoryInput = previousId && historyByResponseId.has(previousId) ? historyByResponseId.get(previousId) : [];
+      const responseEntry = buildWebSocketResponseEntry(entry, groups, idx, priorHistoryInput);
+      expanded.push(responseEntry);
+
+      const completed = completedResponseFromEvents(group.events) || {};
+      const created = responseCreatedFromEvents(group.events) || {};
+      const responseId = completed.id || created.id || '';
+      if (responseId) {
+        const outputMessages = webSocketOutputMessages(group.events);
+        historyByResponseId.set(responseId, uniqueMessages([...(responseEntry.request?.body?.input || []), ...outputMessages]));
+      }
+    }
   }
   return expanded;
 }
