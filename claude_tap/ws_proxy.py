@@ -148,22 +148,12 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     completed_response_keys: set[str] = set()
     completed_response_key_order: deque[str] = deque()
 
-    async def _write_completed_record(response_key: str, terminal_message: str) -> None:
+    async def _write_buffered_record() -> None:
         nonlocal completed_records_written
-        if response_key in completed_response_keys:
-            if server_messages and server_messages[-1] == terminal_message:
-                server_messages.pop()
-            return
-        completed_response_keys.add(response_key)
-        completed_response_key_order.append(response_key)
-        if len(completed_response_key_order) > _COMPLETED_RESPONSE_KEY_CACHE_SIZE:
-            expired = completed_response_key_order.popleft()
-            completed_response_keys.discard(expired)
         completed_records_written += 1
-        snapshot_turn: int | str = turn if completed_records_written == 1 else f"{turn}.{completed_records_written}"
         record = _build_ws_record(
             req_id=req_id if completed_records_written == 1 else f"{req_id}_{completed_records_written}",
-            turn=snapshot_turn,
+            turn=turn if completed_records_written == 1 else f"{turn}.{completed_records_written}",
             duration_ms=int((time.monotonic() - t0) * 1000),
             path_qs=request.path_qs,
             req_headers=request.headers,
@@ -174,6 +164,20 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         await writer.write(record)
         client_messages.clear()
         server_messages.clear()
+
+    async def _write_completed_record(response_key: str, terminal_message: str) -> None:
+        if response_key in completed_response_keys:
+            if server_messages and server_messages[-1] == terminal_message:
+                server_messages.pop()
+            if client_messages or server_messages:
+                await _write_buffered_record()
+            return
+        completed_response_keys.add(response_key)
+        completed_response_key_order.append(response_key)
+        if len(completed_response_key_order) > _COMPLETED_RESPONSE_KEY_CACHE_SIZE:
+            expired = completed_response_key_order.popleft()
+            completed_response_keys.discard(expired)
+        await _write_buffered_record()
 
     async def _relay_client_to_upstream():
         nonlocal client_message_count
@@ -241,20 +245,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     duration_ms = int((time.monotonic() - t0) * 1000)
 
     if client_messages or server_messages:
-        completed_records_written += 1
-        record = _build_ws_record(
-            req_id=req_id if completed_records_written == 1 else f"{req_id}_{completed_records_written}",
-            turn=turn if completed_records_written == 1 else f"{turn}.{completed_records_written}",
-            duration_ms=duration_ms,
-            path_qs=request.path_qs,
-            req_headers=request.headers,
-            client_messages=client_messages,
-            server_messages=server_messages,
-            upstream_base_url=target,
-        )
-        await writer.write(record)
-        client_messages.clear()
-        server_messages.clear()
+        await _write_buffered_record()
 
     log.info(
         f"{log_prefix} ← WS closed ({duration_ms}ms, "
