@@ -8,7 +8,7 @@ import re
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -16,6 +16,7 @@ from typing import Any
 DB_FILENAME = "traces.sqlite3"
 SCHEMA_VERSION = 3
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+STALE_ACTIVE_SESSION_AFTER = timedelta(hours=24)
 
 _store: TraceStore | None = None
 _store_lock = threading.Lock()
@@ -405,7 +406,7 @@ class TraceStore:
             conn = self._connect()
             rows = conn.execute(
                 """
-                SELECT id, status
+                SELECT id, status, updated_at
                 FROM sessions
                 ORDER BY started_at ASC
                 """
@@ -413,9 +414,12 @@ class TraceStore:
             if len(rows) <= max_sessions:
                 return 0
             target_remove = len(rows) - max_sessions
+            now = datetime.now(timezone.utc)
             to_remove = []
             for row in rows:
-                if row["id"] in protected or row["status"] == "active":
+                if row["id"] in protected:
+                    continue
+                if row["status"] == "active" and not _is_stale_active_session(row["updated_at"], now):
                     continue
                 to_remove.append(row["id"])
                 if len(to_remove) >= target_remove:
@@ -871,6 +875,23 @@ def _parse_log_timestamp(line: str) -> str | None:
 def _parse_log_message(line: str) -> str:
     match = re.match(r"^\d{2}:\d{2}:\d{2}\s+(.*)$", line)
     return match.group(1) if match else line
+
+
+def _parse_iso_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_stale_active_session(updated_at: object, now: datetime) -> bool:
+    updated = _parse_iso_datetime(updated_at)
+    return updated is not None and updated <= now - STALE_ACTIVE_SESSION_AFTER
 
 
 def _int_or_none(value: object) -> int | None:

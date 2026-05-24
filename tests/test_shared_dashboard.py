@@ -16,6 +16,7 @@ from claude_tap.shared_dashboard import (
     is_dashboard_healthy,
     resolve_dashboard_port,
 )
+from claude_tap.trace_store import resolve_db_path
 
 
 async def _start_test_app(app: web.Application) -> tuple[web.AppRunner, int]:
@@ -98,7 +99,7 @@ async def test_is_dashboard_healthy_real_server(monkeypatch: pytest.MonkeyPatch,
         async with aiohttp.ClientSession() as session:
             async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
                 assert resp.status == 200
-                assert await resp.json() == {"ok": True}
+                assert await resp.json() == {"ok": True, "db_path": str(resolve_db_path())}
         assert await is_dashboard_healthy("127.0.0.1", port) is True
         assert await wait_for_dashboard_healthy("127.0.0.1", port, timeout=1.0) is True
     finally:
@@ -106,12 +107,16 @@ async def test_is_dashboard_healthy_real_server(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.mark.asyncio
-async def test_is_dashboard_healthy_prefers_lightweight_health_route() -> None:
+async def test_is_dashboard_healthy_prefers_lightweight_health_route(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "health.sqlite3"))
     sessions_seen = False
     app = web.Application()
 
     async def health(request: web.Request) -> web.Response:
-        return web.json_response({"ok": True})
+        return web.json_response({"ok": True, "db_path": str(resolve_db_path())})
 
     async def sessions(request: web.Request) -> web.Response:
         nonlocal sessions_seen
@@ -129,6 +134,23 @@ async def test_is_dashboard_healthy_prefers_lightweight_health_route() -> None:
 
 
 @pytest.mark.asyncio
+async def test_is_dashboard_healthy_rejects_different_database(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "current.sqlite3"))
+    app = web.Application()
+
+    async def health(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True, "db_path": str(tmp_path / "other.sqlite3")})
+
+    app.router.add_get("/dashboard/health", health)
+    runner, port = await _start_test_app(app)
+    try:
+        assert await is_dashboard_healthy("127.0.0.1", port) is False
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is True
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_is_dashboard_healthy_falls_back_for_legacy_dashboard() -> None:
     app = web.Application()
 
@@ -138,7 +160,8 @@ async def test_is_dashboard_healthy_falls_back_for_legacy_dashboard() -> None:
     app.router.add_get("/api/sessions", sessions)
     runner, port = await _start_test_app(app)
     try:
-        assert await is_dashboard_healthy("127.0.0.1", port) is True
+        assert await is_dashboard_healthy("127.0.0.1", port) is False
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is True
     finally:
         await runner.cleanup()
 
@@ -165,7 +188,7 @@ async def test_ensure_shared_dashboard_already_healthy(monkeypatch: pytest.Monke
 
     assert url == "http://127.0.0.1:19527"
     assert spawned is False
-    assert not opened
+    assert opened == ["http://127.0.0.1:19527"]
 
 
 @pytest.mark.asyncio

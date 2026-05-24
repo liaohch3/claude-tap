@@ -1261,8 +1261,8 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_async_main_reuses_existing_dashboard_without_opening_browser(monkeypatch, tmp_path):
-    """A second claude-tap run should attach to an existing dashboard without opening a browser."""
+async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatch, tmp_path):
+    """A second claude-tap run should attach to an existing dashboard and honor browser opens."""
     from claude_tap import async_main, parse_args
     from claude_tap.live import LiveViewerServer
 
@@ -1282,6 +1282,8 @@ async def test_async_main_reuses_existing_dashboard_without_opening_browser(monk
             if open_browser:
                 open_browser_fn(server.url)
             return server.url, True
+        if open_browser:
+            open_browser_fn(f"http://{host}:{port}")
         return f"http://{host}:{port}", False
 
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-shared.sqlite3"))
@@ -1297,7 +1299,7 @@ async def test_async_main_reuses_existing_dashboard_without_opening_browser(monk
         for server in spawned_servers:
             await server.stop()
 
-    assert len(opened_urls) == 1
+    assert len(opened_urls) == 2
 
 
 @pytest.mark.asyncio
@@ -3435,3 +3437,21 @@ async def test_dashboard_main_serves_viewer(monkeypatch, tmp_path):
             await task
         except asyncio.CancelledError:
             pass
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_opens_reused_dashboard(monkeypatch, tmp_path):
+    """The standalone dashboard command should honor browser opens when reusing a server."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    opened_urls: list[str] = []
+    monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+
+    args = parse_dashboard_args(["--tap-output-dir", str(tmp_path), "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 0
+    assert opened_urls == ["http://127.0.0.1:23456"]

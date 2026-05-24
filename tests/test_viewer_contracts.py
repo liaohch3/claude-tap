@@ -1322,6 +1322,21 @@ def test_viewer_empty_embedded_trace_renders_explicit_no_api_calls_state(tmp_pat
     assert state["fileInputPresent"] is True
 
 
+def test_viewer_trace_path_copy_handles_apostrophes(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "user's_trace", (_anthropic_messages_record(),))
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        copy_button = page.locator("#trace-path-bar .tp-copy").first
+        assert copy_button.get_attribute("onclick") is None
+        assert "user's_trace.jsonl" in (copy_button.get_attribute("data-copy-path") or "")
+    finally:
+        page.close()
+
+    assert errors == []
+
+
 def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, chromium_browser) -> None:
     records = tuple(record for case in _contract_cases() for record in case.records)
     html_path = _generate_case_html(tmp_path, "v8_coverage", records)

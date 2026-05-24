@@ -182,11 +182,12 @@ def test_cleanup_trace_sessions_skips_protected_and_continues(trace_db) -> None:
 
 def test_cleanup_trace_sessions_skips_active_sessions(trace_db) -> None:
     store = get_trace_store()
+    now = datetime.now(timezone.utc)
     session_ids = [
         store.create_session(
             client="claude",
             proxy_mode="reverse",
-            started_at=datetime(2026, 5, 1, 12, index, tzinfo=timezone.utc),
+            started_at=now.replace(minute=index, second=0, microsecond=0),
         )
         for index in range(4)
     ]
@@ -198,6 +199,24 @@ def test_cleanup_trace_sessions_skips_active_sessions(trace_db) -> None:
     assert removed == 2
     rows = {row["id"]: row["status"] for row in store.list_session_rows()}
     assert rows == {session_ids[1]: "active", session_ids[3]: "complete"}
+
+
+def test_cleanup_trace_sessions_removes_stale_active_sessions(trace_db) -> None:
+    store = get_trace_store()
+    session_ids = [
+        store.create_session(
+            client="claude",
+            proxy_mode="reverse",
+            started_at=datetime(2026, 5, 1, 12, index, tzinfo=timezone.utc),
+        )
+        for index in range(4)
+    ]
+
+    removed = cleanup_trace_sessions(2)
+
+    assert removed == 2
+    remaining = {row["id"] for row in store.list_session_rows()}
+    assert remaining == {session_ids[2], session_ids[3]}
 
 
 @pytest.mark.asyncio

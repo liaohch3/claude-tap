@@ -20,7 +20,7 @@ from claude_tap.dashboard import (
     read_dashboard_template,
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
-from claude_tap.trace_store import get_trace_store
+from claude_tap.trace_store import get_trace_store, resolve_db_path
 from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, VIEWER_TEMPLATE_PATH, _read_viewer_template
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -181,7 +181,7 @@ class LiveViewerServer:
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_dashboard_health(self, request: web.Request) -> web.Response:
-        return web.json_response({"ok": True})
+        return web.json_response({"ok": True, "db_path": str(resolve_db_path())})
 
     async def _handle_index(self, request: web.Request) -> web.Response:
         """Serve the viewer HTML with live mode enabled."""

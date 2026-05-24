@@ -2365,13 +2365,16 @@ function renderTracePathBar() {
   const copyIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`;
   let html = '';
   if (TRACE_JSONL_PATH) {
-    html += `<span class="tp-label">JSONL</span><span class="tp-val" title="${esc(TRACE_JSONL_PATH)}">${esc(TRACE_JSONL_PATH)}</span><button class="tp-copy" title="Copy path" onclick="copyPath('${esc(TRACE_JSONL_PATH)}',this)">${copyIcon}</button>`;
+    html += `<span class="tp-label">JSONL</span><span class="tp-val" title="${esc(TRACE_JSONL_PATH)}">${esc(TRACE_JSONL_PATH)}</span><button class="tp-copy" title="Copy path" data-copy-path="${esc(TRACE_JSONL_PATH)}">${copyIcon}</button>`;
   }
   if (TRACE_JSONL_PATH && TRACE_HTML_PATH) html += '<span class="tp-sep"></span>';
   if (TRACE_HTML_PATH) {
-    html += `<span class="tp-label">HTML</span><span class="tp-val" title="${esc(TRACE_HTML_PATH)}">${esc(TRACE_HTML_PATH)}</span><button class="tp-copy" title="Copy path" onclick="copyPath('${esc(TRACE_HTML_PATH)}',this)">${copyIcon}</button>`;
+    html += `<span class="tp-label">HTML</span><span class="tp-val" title="${esc(TRACE_HTML_PATH)}">${esc(TRACE_HTML_PATH)}</span><button class="tp-copy" title="Copy path" data-copy-path="${esc(TRACE_HTML_PATH)}">${copyIcon}</button>`;
   }
   bar.innerHTML = html;
+  bar.querySelectorAll('.tp-copy').forEach(btn => {
+    btn.addEventListener('click', () => copyPath(btn.dataset.copyPath || '', btn));
+  });
   bar.style.display = 'flex';
 }
 function copyPath(text, btn) {

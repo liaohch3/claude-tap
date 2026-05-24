@@ -1124,6 +1124,8 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         url = dashboard_url(host, port)
         print(f"🌐 claude-tap dashboard already running: {url}")
         print(f"🗄️  Trace database: {resolve_db_path()}")
+        if args.open_viewer:
+            _open_browser(url)
         return 0
 
     server = LiveViewerServer(
@@ -1138,6 +1140,8 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         if await is_dashboard_healthy(host, port):
             url = dashboard_url(host, port)
             print(f"🌐 claude-tap dashboard already running: {url}")
+            if args.open_viewer:
+                _open_browser(url)
             return 0
         raise
     print(f"🌐 claude-tap dashboard: {server.url}")

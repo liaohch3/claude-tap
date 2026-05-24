@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -71,15 +74,61 @@ async def _dashboard_get_status(url: str, *, timeout_seconds: float) -> int | No
         return None
 
 
-async def is_dashboard_healthy(host: str, port: int) -> bool:
+async def _dashboard_get_status_and_payload(
+    url: str,
+    *,
+    timeout_seconds: float,
+) -> tuple[int | None, dict | None]:
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                payload = None
+                if resp.status == 200:
+                    try:
+                        body = await resp.json(content_type=None)
+                    except (aiohttp.ClientError, json.JSONDecodeError, UnicodeDecodeError):
+                        body = None
+                    if isinstance(body, dict):
+                        payload = body
+                return resp.status, payload
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+        return None, None
+
+
+def _dashboard_health_matches_current_db(payload: dict | None) -> bool:
+    return bool(payload and payload.get("ok") is True and payload.get("db_path") == str(resolve_db_path()))
+
+
+def _sync_dashboard_healthy_for_current_db(host: str, port: int) -> bool:
+    url = f"{dashboard_url(host, port)}/dashboard/health"
+    try:
+        with urllib.request.urlopen(url, timeout=_DASHBOARD_HEALTH_TIMEOUT) as resp:
+            if resp.status != 200:
+                return False
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    return _dashboard_health_matches_current_db(payload if isinstance(payload, dict) else None)
+
+
+def _spawn_dashboard_subprocess_if_needed(host: str, port: int, output_dir: Path) -> bool:
+    with _dashboard_spawn_lock():
+        if _sync_dashboard_healthy_for_current_db(host, port):
+            return False
+        _spawn_dashboard_subprocess(host, port, output_dir)
+        return True
+
+
+async def is_dashboard_healthy(host: str, port: int, *, require_current_db: bool = True) -> bool:
     """Return True when the shared dashboard responds to a cheap health check."""
     base_url = dashboard_url(host, port)
-    status = await _dashboard_get_status(
+    status, payload = await _dashboard_get_status_and_payload(
         f"{base_url}/dashboard/health",
         timeout_seconds=_DASHBOARD_HEALTH_TIMEOUT,
     )
     if status == 200:
-        return True
+        return not require_current_db or _dashboard_health_matches_current_db(payload)
     if status not in {404, 405}:
         return False
 
@@ -87,7 +136,7 @@ async def is_dashboard_healthy(host: str, port: int) -> bool:
         f"{base_url}/api/sessions",
         timeout_seconds=_DASHBOARD_SESSIONS_HEALTH_TIMEOUT,
     )
-    return fallback_status == 200
+    return fallback_status == 200 and not require_current_db
 
 
 async def wait_for_dashboard_healthy(
@@ -142,15 +191,15 @@ async def ensure_shared_dashboard(
     """Ensure the shared dashboard is running; return (url, spawned_by_caller)."""
     url = dashboard_url(host, port)
     if await is_dashboard_healthy(host, port):
+        if open_browser:
+            open_browser_fn(url)
         return url, False
 
-    with _dashboard_spawn_lock():
-        if await is_dashboard_healthy(host, port):
-            return url, False
-        _spawn_dashboard_subprocess(host, port, output_dir)
+    spawned = await asyncio.to_thread(_spawn_dashboard_subprocess_if_needed, host, port, output_dir)
+    if spawned:
         if not await wait_for_dashboard_healthy(host, port):
             raise RuntimeError(f"Failed to start shared dashboard on {url}")
 
     if open_browser:
         open_browser_fn(url)
-    return url, True
+    return url, spawned
