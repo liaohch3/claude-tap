@@ -332,10 +332,7 @@ async def test_websocket_completed_snapshot_before_client_send_returns(trace_dir
             parsed = json.loads(data)
         except json.JSONDecodeError:
             return result
-        if (
-            parsed.get("type") == "response.completed"
-            and (parsed.get("response") or {}).get("id") == "resp1"
-        ):
+        if parsed.get("type") == "response.completed" and (parsed.get("response") or {}).get("id") == "resp1":
             first_completed_sent.set()
             await release_first_send.wait()
         return result
