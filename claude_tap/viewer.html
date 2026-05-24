@@ -393,11 +393,30 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   font-size: 12px;
   font-weight: 700;
 }
+.trace-block-title .trace-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace-block-title .trace-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
 .trace-block-title .trace-badge {
   color: var(--text-tertiary);
   font-size: 10px;
   font-weight: 500;
 }
+.trace-block-title .trace-copy-btn {
+  font-size: 11px; padding: 3px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: var(--text-tertiary); cursor: pointer; transition: all .15s;
+}
+.trace-block-title .trace-copy-btn:hover { color: var(--blue); border-color: var(--blue); }
 .trace-code {
   padding: 12px 13px;
   max-height: 360px;
@@ -903,7 +922,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 .sidebar-sort-segment {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   flex: 1;
   min-width: 0;
   padding: 2px;
@@ -1406,6 +1425,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
       <div class="sidebar-sort-segment">
         <button type="button" class="sidebar-sort-btn" data-sort-mode="model" onclick="setSidebarOrderMode('model')">Model</button>
         <button type="button" class="sidebar-sort-btn" data-sort-mode="turn" onclick="setSidebarOrderMode('turn')">Turn</button>
+        <button type="button" class="sidebar-sort-btn" data-sort-mode="session" onclick="setSidebarOrderMode('session')">Session</button>
       </div>
     </div>
     <div id="tool-filter" style="display:none;padding:4px 8px;border-bottom:1px solid var(--border);font-size:11px;max-height:120px;overflow-y:auto"></div>
@@ -1428,7 +1448,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 const $ = s => document.querySelector(s);
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
 let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
-const SIDEBAR_ORDER_MODES = ['model', 'turn'];
+const SIDEBAR_ORDER_MODES = ['model', 'turn', 'session'];
 const savedSidebarOrderMode = localStorage.getItem('claude-tap-sidebar-order');
 let sidebarOrderMode = SIDEBAR_ORDER_MODES.includes(savedSidebarOrderMode) ? savedSidebarOrderMode : 'model';
 
@@ -2594,7 +2614,7 @@ function setSidebarOrderMode(mode) {
 function updateSidebarSortControls() {
   document.querySelectorAll('.sidebar-sort-btn').forEach(btn => {
     const mode = btn.dataset.sortMode;
-    btn.textContent = mode === 'turn' ? t('sort_turn') : t('sort_model');
+    btn.textContent = mode === 'turn' ? t('sort_turn') : mode === 'session' ? t('sort_session') : t('sort_model');
     const active = mode === sidebarOrderMode;
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', active ? 'true' : 'false');
@@ -2928,6 +2948,104 @@ function modelBadge(m) {
   return { bg: 'var(--bg)', fg: 'var(--text-tertiary)' };
 }
 
+function sessionTextSnippet(text, maxLen = 56) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLen) return normalized;
+  return normalized.slice(0, Math.max(0, maxLen - 3)).trimEnd() + '...';
+}
+
+function contentTextForSession(content) {
+  if (content === undefined || content === null) return '';
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) {
+    if (typeof content === 'object') {
+      if (typeof content.text === 'string') return content.text.trim();
+      if (typeof content.output === 'string') return content.output.trim();
+      if (content.content !== undefined) return contentTextForSession(content.content);
+    }
+    return '';
+  }
+  return content.map(block => {
+    if (!block || typeof block !== 'object') return String(block || '').trim();
+    if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') return block.text || '';
+    if (block.type === 'message') return contentTextForSession(block.content);
+    if (block.type === 'thinking') return block.thinking || '';
+    if (block.type === 'tool_use' || block.type === 'function_call') return `[${block.name || block.type}]`;
+    if (block.type === 'tool_result') return contentTextForSession(block.content);
+    if (block.type === 'function_call_output') return block.output || '';
+    if (typeof block.text === 'string') return block.text;
+    if (typeof block.output === 'string') return block.output;
+    return '';
+  }).filter(Boolean).join('\n').trim();
+}
+
+function isToolResultOnlyMessage(message) {
+  const content = message?.content;
+  if (!Array.isArray(content) || content.length === 0) return false;
+  return content.every(block => block && typeof block === 'object'
+    && (block.type === 'tool_result' || block.type === 'function_call_output'));
+}
+
+function latestUserInputText(entry) {
+  const msgs = getMessages(entry?.request?.body);
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const message = msgs[i];
+    if (message?.role !== 'user' || isToolResultOnlyMessage(message)) continue;
+    const text = contentTextForSession(message.content);
+    if (text) return text;
+  }
+  return '';
+}
+
+function finalResponseText(entry) {
+  const output = getResponseOutput(entry);
+  const outputText = contentTextForSession(output?.content);
+  if (outputText) return outputText;
+  const payload = getResponsePayload(entry);
+  return contentTextForSession(payload?.output || payload?.content || payload?.message || payload);
+}
+
+function isContinuationWithoutUserInput(entry) {
+  if (previousResponseIdForDiff(entry)) return true;
+  const input = entry?.request?.body?.input;
+  return Array.isArray(input) && input.length > 0 && input.every(isResponseToolResultItem);
+}
+
+function sessionKeyForEntry(entry, currentGroup) {
+  const userText = latestUserInputText(entry);
+  if (userText) return { key: 'user:' + userText, userText };
+  if (currentGroup && isContinuationWithoutUserInput(entry)) return { key: currentGroup.key, userText: '' };
+  const rootTurn = String(entry?.turn ?? '').split('.')[0];
+  if (rootTurn) return { key: 'turn:' + rootTurn, userText: '' };
+  return { key: 'request:' + (entry?.request_id || ''), userText: '' };
+}
+
+function buildSessionGroups(items) {
+  const groups = [];
+  items.forEach(item => {
+    const current = groups[groups.length - 1] || null;
+    const info = sessionKeyForEntry(item.entry, current);
+    let group = current && current.key === info.key ? current : null;
+    if (!group) {
+      group = { key: info.key, userText: info.userText, responseText: '', items: [] };
+      groups.push(group);
+    } else if (!group.userText && info.userText) {
+      group.userText = info.userText;
+    }
+    const responseText = finalResponseText(item.entry);
+    if (responseText) group.responseText = responseText;
+    group.items.push(item);
+  });
+  return groups;
+}
+
+function sidebarItemsForMode() {
+  const items = filtered.map((entry, idx) => ({ entry, idx }));
+  if (sidebarOrderMode === 'model') return items.sort((a, b) => compareSidebarModelOrder(a.entry, b.entry));
+  if (sidebarOrderMode === 'session') return buildSessionGroups(items).flatMap(group => group.items);
+  return items;
+}
+
 /* ─── Visual order helpers ─── */
 function buildVisualOrder() {
   if (virtualMode) {
@@ -3074,8 +3192,7 @@ function renderSidebar(preserveDetail) {
   if (filtered.length > LAZY_THRESHOLD) {
     virtualMode = true;
     sb.classList.add('virtual-scroll');
-    vsFilteredItems = filtered.map((e, i) => ({ entry: e, idx: i }));
-    if (sidebarOrderMode === 'model') vsFilteredItems.sort((a, b) => compareSidebarModelOrder(a.entry, b.entry));
+    vsFilteredItems = sidebarItemsForMode();
     visualOrder = vsFilteredItems.map(item => item.idx);
     vsInitSidebar(sb, prevScrollTop, preserveDetail);
     return;
@@ -3092,6 +3209,40 @@ function renderSidebar(preserveDetail) {
       if (gap) sb.insertAdjacentHTML('beforeend', gap);
       lastTs = e.timestamp ? new Date(e.timestamp).getTime() : null;
       sb.appendChild(createSidebarItem(e, i));
+    });
+    buildVisualOrder();
+    _restoreSelection(preserveDetail);
+    if (preserveDetail) sb.scrollTop = prevScrollTop;
+    return;
+  }
+
+  if (sidebarOrderMode === 'session') {
+    const groups = buildSessionGroups(filtered.map((entry, idx) => ({ entry, idx })));
+    groups.forEach((group, groupIdx) => {
+      const firstEntry = group.items[0]?.entry;
+      const taskInfo = firstEntry ? getTaskFingerprint(firstEntry) : null;
+      const taskColor = taskInfo ? getTaskColor(taskInfo.fp) : TASK_COLORS[groupIdx % TASK_COLORS.length];
+      const groupKey = 'session:' + groupIdx + ':' + group.key;
+      const isCollapsed = collapsedGroups.has(groupKey);
+      const label = sessionTextSnippet(group.userText, 48);
+      const headerTitle = [group.userText, group.responseText].filter(Boolean).join('\n---\n');
+      const header = document.createElement('div');
+      header.className = 'sidebar-group-header';
+      if (headerTitle) header.title = headerTitle;
+      header.innerHTML = `<span class="group-dot" style="background:${taskColor.color}"></span><span class="group-name">${esc(t('sort_session'))} ${groupIdx + 1}${label ? ' - ' + esc(label) : ''}</span><span class="group-count">${group.items.length}</span><span class="group-chevron${isCollapsed ? '' : ' open'}">&#9654;</span>`;
+      const content = document.createElement('div');
+      if (isCollapsed) content.style.display = 'none';
+      group.items.forEach(({ entry: e, idx: i }) => content.appendChild(createSidebarItem(e, i)));
+      header.onclick = () => {
+        const nowCollapsed = content.style.display !== 'none';
+        content.style.display = nowCollapsed ? 'none' : '';
+        header.querySelector('.group-chevron').classList.toggle('open');
+        if (nowCollapsed) collapsedGroups.add(groupKey); else collapsedGroups.delete(groupKey);
+        buildVisualOrder();
+        updateMobileNav();
+      };
+      sb.appendChild(header);
+      sb.appendChild(content);
     });
     buildVisualOrder();
     _restoreSelection(preserveDetail);
@@ -3456,9 +3607,11 @@ function renderDetail(e) {
   }
 }
 
-function renderTraceBlock(title, content, badge = '') {
+function renderTraceBlock(title, payload, badge = '') {
   const badgeHtml = badge ? `<span class="trace-badge">${esc(badge)}</span>` : '';
-  return `<div class="trace-block"><div class="trace-block-title"><span>${esc(title)}</span>${badgeHtml}</div>${content}</div>`;
+  const copyText = tracePayloadText(payload);
+  const copyBtn = `<button class="trace-copy-btn" type="button" data-copy="${encodeCopyText(copyText)}">${t('copy')}</button>`;
+  return `<div class="trace-block"><div class="trace-block-title"><span class="trace-title">${esc(title)}</span><span class="trace-actions">${badgeHtml}${copyBtn}</span></div>${renderTracePayload(payload)}</div>`;
 }
 
 function renderTraceDetail(entry, ctx) {
@@ -3490,24 +3643,24 @@ function renderTraceDetail(entry, ctx) {
   html += '<div class="trace-grid">';
   html += renderTraceBlock(
     t('tok_input'),
-    renderTracePayload(inputPayload),
+    inputPayload,
     `${(ctx.msgs || []).length} ${t('badge_messages')}`
   );
   html += renderTraceBlock(
     t('tok_output'),
-    renderTracePayload(responsePayload),
+    responsePayload,
     `${getResponseStatus(entry)}`
   );
   if (ctx.streamEvents.length) {
     html += renderTraceBlock(
       t('section_sse'),
-      renderTracePayload(ctx.streamEvents),
+      ctx.streamEvents,
       `${ctx.streamEvents.length} ${t('badge_events')}`
     );
   }
   html += renderTraceBlock(
     t('section_metadata'),
-    renderTracePayload(metadata)
+    metadata
   );
   html += '</div>';
   return html;
@@ -3517,6 +3670,10 @@ function renderTracePayload(payload) {
   if (traceFormatMode === 'pretty') return `<div class="trace-pretty">${renderTracePrettyValue(payload)}</div>`;
   const text = traceFormatMode === 'yaml' ? toTraceYaml(payload) : JSON.stringify(payload, null, 2);
   return `<pre class="trace-code" data-format="${traceFormatMode}">${esc(text)}</pre>`;
+}
+
+function tracePayloadText(payload) {
+  return traceFormatMode === 'yaml' ? toTraceYaml(payload) : JSON.stringify(payload, null, 2);
 }
 
 function isTraceScalar(value) {
@@ -4211,11 +4368,15 @@ function renderSSEEvents(events) {
 }
 
 /* ─── Section ─── */
+function encodeCopyText(text) {
+  return btoa(unescape(encodeURIComponent(text)));
+}
+
 function section(title, body, defaultOpen = true, copyText = null, badge = null) {
   const oc = defaultOpen ? 'open' : '', ac = defaultOpen ? 'chevron open' : 'chevron';
   let extra = '';
   if (badge) extra += `<span class="badge">${esc(badge)}</span>`;
-  if (copyText !== null) extra += `<button class="copy-btn" data-copy="${btoa(unescape(encodeURIComponent(copyText)))}">${t('copy')}</button>`;
+  if (copyText !== null) extra += `<button class="copy-btn" data-copy="${encodeCopyText(copyText)}">${t('copy')}</button>`;
   return `<div class="section"><div class="section-header"><span class="${ac}">&#9654;</span><span class="title">${title}</span>${extra}</div><div class="section-body ${oc}">${body}</div></div>`;
 }
 
@@ -4229,6 +4390,13 @@ function bindSections(container) {
       }
       h.nextElementSibling.classList.toggle('open');
       h.querySelector('.chevron').classList.toggle('open');
+    });
+  });
+  container.querySelectorAll('.trace-copy-btn').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const text = decodeURIComponent(escape(atob(btn.dataset.copy)));
+      copyToClipboard(text, btn);
     });
   });
   container.querySelectorAll('.tool-block-header').forEach(h => {

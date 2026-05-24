@@ -972,17 +972,18 @@ def _sidebar_order_records() -> tuple[dict[str, Any], ...]:
         "response": {"status": 200, "headers": {}, "body": {"content": [{"type": "text", "text": "OK"}]}},
     }
     rows = [
-        ("req_order_unknown", 1, "other-model"),
-        ("req_order_sonnet", 2, "aws.claude-sonnet-4.6"),
-        ("req_order_opus", 3, "aws.claude-opus-4.6"),
+        ("req_order_unknown", 1, "other-model", "First sidebar task"),
+        ("req_order_sonnet", 2, "aws.claude-sonnet-4.6", "Second sidebar task"),
+        ("req_order_opus", 3, "aws.claude-opus-4.6", "Second sidebar task"),
     ]
     records = []
-    for request_id, turn, model in rows:
+    for request_id, turn, model, prompt in rows:
         record = json.loads(json.dumps(base))
         record["request_id"] = request_id
         record["turn"] = turn
         record["timestamp"] = f"2026-05-13T13:2{turn}:00+00:00"
         record["request"]["body"]["model"] = model
+        record["request"]["body"]["messages"] = [{"role": "user", "content": prompt}]
         records.append(record)
     return tuple(records)
 
@@ -1101,7 +1102,8 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
         trace_state = page.evaluate(
             """() => ({
               sectionCount: document.querySelectorAll('#detail .section').length,
-              blockTitles: Array.from(document.querySelectorAll('#detail .trace-block-title span:first-child')).map(el => el.textContent),
+              blockTitles: Array.from(document.querySelectorAll('#detail .trace-block-title .trace-title')).map(el => el.textContent),
+              copyButtons: Array.from(document.querySelectorAll('#detail .trace-copy-btn')).map(el => el.textContent),
               formats: Array.from(document.querySelectorAll('#detail .trace-format-btn')).map(el => ({
                 format: el.dataset.format,
                 label: el.textContent,
@@ -1110,6 +1112,19 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
               text: document.querySelector('#detail')?.innerText || '',
             })"""
         )
+        page.evaluate(
+            """() => {
+              window.__copiedTraceText = '';
+              window.copyToClipboard = (text, btn) => {
+                window.__copiedTraceText = text;
+                if (btn) btn.textContent = t('copied');
+                return Promise.resolve();
+              };
+            }"""
+        )
+        page.locator("#detail .trace-copy-btn").first.click()
+        page.wait_for_function("window.__copiedTraceText.includes('Run pwd.')")
+        copied_trace_text = page.evaluate("window.__copiedTraceText")
 
         page.locator('#detail .trace-format-btn[data-format="yaml"]').click()
         page.wait_for_selector('#detail .trace-format-btn[data-format="yaml"].active', timeout=5000)
@@ -1147,6 +1162,9 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert "Diff with Prev" in default_state["text"]
     assert trace_state["sectionCount"] == 0
     assert trace_state["blockTitles"] == ["Input", "Output", "Metadata"]
+    assert trace_state["copyButtons"] == ["Copy", "Copy", "Copy"]
+    assert '"messages"' in copied_trace_text
+    assert "Run pwd." in copied_trace_text
     assert trace_state["formats"] == [
         {"format": "json", "label": "JSON", "active": True},
         {"format": "yaml", "label": "YAML", "active": False},
@@ -1166,7 +1184,7 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert remaining_tabs == ["default", "trace"]
 
 
-def test_viewer_sidebar_order_can_switch_between_model_groups_and_turn_sequence(
+def test_viewer_sidebar_order_can_switch_between_model_turn_and_session_sequence(
     tmp_path: Path, chromium_browser
 ) -> None:
     html_path = _generate_case_html(tmp_path, "sidebar_order", _sidebar_order_records())
@@ -1201,6 +1219,21 @@ def test_viewer_sidebar_order_can_switch_between_model_groups_and_turn_sequence(
               turns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
             })"""
         )
+
+        page.locator('.sidebar-sort-btn[data-sort-mode="session"]').click()
+        page.wait_for_selector('.sidebar-sort-btn[data-sort-mode="session"].active', timeout=5000)
+        session_state = page.evaluate(
+            """() => ({
+              buttons: Array.from(document.querySelectorAll('.sidebar-sort-btn')).map(el => ({
+                mode: el.dataset.sortMode,
+                label: el.textContent,
+                active: el.classList.contains('active'),
+              })),
+              groups: Array.from(document.querySelectorAll('.sidebar-group-header .group-name')).map(el => el.textContent),
+              counts: Array.from(document.querySelectorAll('.sidebar-group-header .group-count')).map(el => el.textContent),
+              turns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+            })"""
+        )
     finally:
         page.close()
 
@@ -1209,15 +1242,25 @@ def test_viewer_sidebar_order_can_switch_between_model_groups_and_turn_sequence(
     assert model_state["buttons"] == [
         {"mode": "model", "label": "Model", "active": True},
         {"mode": "turn", "label": "Turn", "active": False},
+        {"mode": "session", "label": "Session", "active": False},
     ]
     assert model_state["groups"] == ["aws.claude-opus-4.6", "aws.claude-sonnet-4.6", "other-model"]
     assert model_state["turns"] == ["Turn 3", "Turn 2", "Turn 1"]
     assert turn_state["buttons"] == [
         {"mode": "model", "label": "Model", "active": False},
         {"mode": "turn", "label": "Turn", "active": True},
+        {"mode": "session", "label": "Session", "active": False},
     ]
     assert turn_state["groupCount"] == 0
     assert turn_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
+    assert session_state["buttons"] == [
+        {"mode": "model", "label": "Model", "active": False},
+        {"mode": "turn", "label": "Turn", "active": False},
+        {"mode": "session", "label": "Session", "active": True},
+    ]
+    assert session_state["groups"] == ["Session 1 - First sidebar task", "Session 2 - Second sidebar task"]
+    assert session_state["counts"] == ["1", "2"]
+    assert session_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
 
 
 def test_viewer_runtime_smoke_handles_degenerate_records_without_js_errors(tmp_path: Path, chromium_browser) -> None:

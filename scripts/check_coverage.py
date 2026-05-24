@@ -348,6 +348,38 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   applyFilter(true);
                   setSidebarOrderMode('turn');
                   setSidebarOrderMode('model');
+                  setSidebarOrderMode('session');
+                  const sidebarItems = sidebarItemsForMode();
+                  const sessionGroups = buildSessionGroups(sidebarItems);
+                  if (sessionGroups.length) {
+                    sessionTextSnippet(sessionGroups[0].userText || 'coverage prompt');
+                    finalResponseText(sessionGroups[0].items[0].entry);
+                  }
+                  const continuationEntry = {
+                    request_id: 'coverage_continuation',
+                    turn: '999.2',
+                    request: {
+                      body: {
+                        previous_response_id: 'resp_coverage',
+                        input: [{ type: 'function_call_output', output: 'ok' }]
+                      }
+                    },
+                    response: {
+                      body: {
+                        id: 'resp_coverage_next',
+                        previous_response_id: 'resp_coverage',
+                        output: [
+                          {
+                            type: 'message',
+                            role: 'assistant',
+                            content: [{ type: 'output_text', text: 'coverage done' }]
+                          }
+                        ]
+                      }
+                    }
+                  };
+                  isContinuationWithoutUserInput(continuationEntry);
+                  sessionKeyForEntry(continuationEntry, { key: 'coverage', userText: '', responseText: '', items: [] });
                   formatText('history_delete_done', { count: 1 });
                   updateHistoryDeleteButton();
                   setHistoryDeleteStatus('coverage', 'ok');
