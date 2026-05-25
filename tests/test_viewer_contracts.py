@@ -1279,7 +1279,16 @@ def test_viewer_session_group_hover_shows_full_truncated_user_input(tmp_path: Pa
             "headers": {},
             "body": {
                 "model": "aws.claude-sonnet-4.6",
-                "messages": [{"role": "user", "content": long_prompt}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "<system-reminder>\nskip injected context\n</system-reminder>"},
+                            {"type": "text", "text": long_prompt},
+                            {"type": "text", "text": "[Image: source: /tmp/screenshot.png]"},
+                        ],
+                    }
+                ],
             },
         },
         "response": {
@@ -1288,14 +1297,42 @@ def test_viewer_session_group_hover_shows_full_truncated_user_input(tmp_path: Pa
             "body": {"content": [{"type": "text", "text": "OK"}]},
         },
     }
-    html_path = _generate_case_html(tmp_path, "session_hover_tooltip", (record,))
+    injected_continuation = json.loads(json.dumps(record))
+    injected_continuation["request_id"] = "req_injected_context_only"
+    injected_continuation["turn"] = 2
+    injected_continuation["request"]["body"]["messages"] = [
+        {"role": "user", "content": "<system-reminder>\nThe following skills are available...\n</system-reminder>"}
+    ]
+    json_title_record = json.loads(json.dumps(record))
+    json_title_record["request_id"] = "req_json_title"
+    json_title_record["turn"] = 3
+    json_title_record["request"]["body"]["messages"] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": '{"title":"Fix login button on mobile"}'},
+                {"type": "text", "text": "<system-reminder>\nInjected context\n</system-reminder>"},
+            ],
+        }
+    ]
+    html_path = _generate_case_html(
+        tmp_path,
+        "session_hover_tooltip",
+        (record, injected_continuation, json_title_record),
+    )
 
     page = chromium_browser.new_page()
     page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'session')")
     try:
         errors = _open_viewer_with_error_capture(page, html_path)
-        header = page.locator(".sidebar-group-header")
+        header = page.locator(".sidebar-group-header").nth(0)
         assert header.locator(".group-name").inner_text().endswith("...")
+        assert "<system-reminder>" not in header.locator(".group-name").inner_text()
+        assert header.locator(".group-count").inner_text() == "2"
+        json_title_header = page.locator(".sidebar-group-header").nth(1)
+        json_title_name = json_title_header.locator(".group-name").inner_text()
+        assert "fix login button on mobile" in json_title_name.lower()
+        assert "{" not in json_title_name
 
         header.hover()
         page.wait_for_selector(".session-hover-tooltip.visible", timeout=5000)
