@@ -846,6 +846,7 @@ const state = {
   detailSessionId: null,
   detailRecordsLoaded: 0,
   detailRecordTotal: 0,
+  detailFingerprint: "",
 };
 
 const $ = selector => document.querySelector(selector);
@@ -1053,6 +1054,7 @@ function setLang(lang) {
   renderAgents();
   renderSessions();
   if (state.view === "detail" && state.selectedSessionId) {
+    state.detailFingerprint = "";
     loadSession(state.selectedSessionId).catch(console.error);
   }
 }
@@ -1209,7 +1211,10 @@ async function refreshSessions({preserveSelection = true} = {}) {
     renderSessions();
     if (state.view === "detail" && state.selectedSessionId) {
       showDetailView();
-      await loadSession(state.selectedSessionId, {preserveLoaded: true});
+      const selected = state.sessions.find(session => session.id === state.selectedSessionId);
+      if (!selected || shouldRefreshDetail(selected)) {
+        await loadSession(state.selectedSessionId, {preserveLoaded: true});
+      }
     } else {
       showListView();
     }
@@ -1336,6 +1341,7 @@ async function openSession(sessionId) {
   state.detailSessionId = null;
   state.detailRecordsLoaded = 0;
   state.detailRecordTotal = 0;
+  state.detailFingerprint = "";
   renderSessions();
   showDetailView();
   showDetailLoading(sessionId);
@@ -1347,6 +1353,7 @@ function showListView() {
   state.detailSessionId = null;
   state.detailRecordsLoaded = 0;
   state.detailRecordTotal = 0;
+  state.detailFingerprint = "";
   $("#list-view").classList.remove("hidden");
   $("#detail-view").classList.add("hidden");
   updateTracePathBar();
@@ -1368,6 +1375,26 @@ function showDetailLoading(sessionId) {
 function sessionRecordCount(session) {
   const count = Number(session?.record_count || 0);
   return Number.isFinite(count) && count > 0 ? count : 0;
+}
+
+function sessionDetailFingerprint(session) {
+  return [
+    session.id || "",
+    session.status || "",
+    session.record_count || 0,
+    session.turn_count || 0,
+    session.input_tokens || 0,
+    session.output_tokens || 0,
+    session.cache_read_tokens || 0,
+    session.cache_create_tokens || 0,
+    session.total_tokens || 0,
+    session.legacy_rel_path || "",
+  ].join("|");
+}
+
+function shouldRefreshDetail(session) {
+  if (state.detailSessionId !== session.id) return true;
+  return sessionDetailFingerprint(session) !== state.detailFingerprint;
 }
 
 function detailRecordFetchLimit(sessionId, preserveLoaded) {
@@ -1428,6 +1455,7 @@ function renderDetail(session, records) {
   state.detailSessionId = session.id;
   state.detailRecordsLoaded = records.length;
   state.detailRecordTotal = totalRecords;
+  state.detailFingerprint = sessionDetailFingerprint(session);
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
