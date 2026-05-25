@@ -1148,6 +1148,7 @@ def test_parse_args(monkeypatch, tmp_path):
 
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
     monkeypatch.chdir(tmp_path)
 
@@ -2719,6 +2720,7 @@ def test_codex_upstream_url_construction(monkeypatch, tmp_path):
     from claude_tap import parse_args
 
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
     def _build_upstream(target: str, strip_prefix: str, request_path: str) -> str:
         fwd_path = request_path

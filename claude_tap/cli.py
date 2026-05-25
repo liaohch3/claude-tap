@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
 import webbrowser
@@ -330,11 +331,25 @@ async def run_client(
         env["NO_PROXY"] = "127.0.0.1"
         if cfg.inject_settings_env and not _has_settings_arg(cmd_args):
             cmd_args = _settings_arg(reverse_env) + cmd_args
+        base_url_config_overrides: list[str] = []
         if cfg.base_url_config_key and not has_base_url_config_override:
             # Some clients ignore their base URL env in selected auth/transport modes
             # unless the same value is also supplied as a config override.
             base_url = cfg.reverse_base_url(port)
-            cmd_args = ["-c", f'{cfg.base_url_config_key}="{base_url}"'] + cmd_args
+            base_url_config_overrides.append(f'{cfg.base_url_config_key}="{base_url}"')
+        if client == "codex":
+            provider_base_url_key = _codex_selected_provider_base_url_key(cmd_args)
+            if provider_base_url_key and not _has_config_override(cmd_args, provider_base_url_key):
+                # Codex custom providers ignore the legacy openai_base_url key.
+                # Override the selected provider directly so reverse mode captures
+                # New API and other OpenAI-compatible gateways.
+                base_url = cfg.reverse_base_url(port)
+                base_url_config_overrides.append(f'{provider_base_url_key}="{base_url}"')
+        if base_url_config_overrides:
+            injected: list[str] = []
+            for override in base_url_config_overrides:
+                injected.extend(["-c", override])
+            cmd_args = injected + cmd_args
 
     for key in cfg.nesting_env_keys:
         env.pop(key, None)
@@ -517,6 +532,121 @@ def _has_config_override(args: list[str], key: str) -> bool:
                 return True
         i += 1
     return False
+
+
+def _codex_config_override_values(args: list[str]) -> list[str]:
+    values: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-c", "--config"):
+            if i + 1 < len(args):
+                values.append(args[i + 1])
+            i += 2
+            continue
+        if arg.startswith("--config="):
+            values.append(arg.split("=", 1)[1])
+        i += 1
+    return values
+
+
+def _codex_config_override_value(args: list[str] | None, key: str) -> object | None:
+    if not args:
+        return None
+    prefix = f"{key}="
+    value: object | None = None
+    for override in _codex_config_override_values(args):
+        if not override.startswith(prefix):
+            continue
+        raw = override[len(prefix) :].strip()
+        try:
+            parsed = tomllib.loads(f"value = {raw}\n")
+        except tomllib.TOMLDecodeError:
+            value = raw
+        else:
+            value = parsed.get("value")
+    return value
+
+
+def _codex_profile_arg(args: list[str] | None) -> str | None:
+    if not args:
+        return None
+    profile: str | None = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-p", "--profile"):
+            if i + 1 < len(args):
+                profile = args[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--profile="):
+            profile = arg.split("=", 1)[1]
+        i += 1
+    return profile.strip() if profile and profile.strip() else None
+
+
+def _toml_dotted_key_segment(value: str) -> str:
+    """Return a TOML dotted-key segment for a Codex config key."""
+    if value and value.isascii() and all(char.isalnum() or char in {"_", "-"} for char in value):
+        return value
+    return json.dumps(value)
+
+
+def _codex_home() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+
+def _read_codex_config() -> dict[str, object]:
+    config_path = _codex_home() / "config.toml"
+    try:
+        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _selected_codex_provider_base_url(args: list[str] | None = None) -> tuple[str, str] | None:
+    """Return the selected custom Codex provider and base URL, if configured."""
+    data = _read_codex_config()
+    provider = _codex_config_override_value(args, "model_provider")
+    profile = _codex_profile_arg(args)
+    if profile is None:
+        configured_profile = _codex_config_override_value(args, "profile")
+        if configured_profile is None:
+            configured_profile = data.get("profile")
+        if isinstance(configured_profile, str) and configured_profile.strip():
+            profile = configured_profile.strip()
+
+    profiles = data.get("profiles")
+    if profile and isinstance(profiles, dict):
+        profile_config = profiles.get(profile)
+        if isinstance(profile_config, dict) and not isinstance(provider, str):
+            provider = profile_config.get("model_provider")
+
+    if not isinstance(provider, str):
+        provider = data.get("model_provider")
+    if not isinstance(provider, str) or not provider.strip():
+        return None
+
+    providers = data.get("model_providers")
+    if not isinstance(providers, dict):
+        return None
+    provider_config = providers.get(provider)
+    if not isinstance(provider_config, dict):
+        return None
+    base_url = provider_config.get("base_url")
+    if not isinstance(base_url, str) or not base_url.strip():
+        return None
+    return provider.strip(), base_url.strip()
+
+
+def _codex_selected_provider_base_url_key(args: list[str] | None = None) -> str | None:
+    selected = _selected_codex_provider_base_url(args)
+    if selected is None:
+        return None
+    provider, _base_url = selected
+    return f"model_providers.{_toml_dotted_key_segment(provider)}.base_url"
 
 
 def _has_settings_arg(args: list[str]) -> bool:
@@ -828,14 +958,15 @@ def _reverse_proxy_trace_options(client: str, target: str) -> dict[str, object]:
     }
 
 
-def _detect_codex_target() -> str:
+def _detect_codex_target(args: list[str] | None = None) -> str:
     """Auto-detect the correct upstream target for Codex CLI.
 
     Reads ``~/.codex/auth.json`` (or ``$CODEX_HOME/auth.json``) to determine
     the auth mode.  ChatGPT OAuth users (``codex login``) need the chatgpt.com
-    backend; API-key users use api.openai.com.
+    backend; API-key users use api.openai.com unless their Codex config selects
+    a custom provider with its own base URL.
     """
-    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    codex_home = _codex_home()
     auth_file = codex_home / "auth.json"
     try:
         data = json.loads(auth_file.read_text(encoding="utf-8"))
@@ -843,6 +974,20 @@ def _detect_codex_target() -> str:
             return _CODEX_CHATGPT_TARGET
     except (OSError, json.JSONDecodeError, ValueError):
         pass
+
+    custom_provider = _selected_codex_provider_base_url(args)
+    if custom_provider is not None:
+        _provider, base_url = custom_provider
+        return base_url
+
+    env_target = os.environ.get(CLIENT_CONFIGS["codex"].base_url_env, "").strip()
+    if env_target:
+        return env_target
+
+    data = _read_codex_config()
+    openai_base_url = data.get("openai_base_url")
+    if isinstance(openai_base_url, str) and openai_base_url.strip():
+        return openai_base_url.strip()
     return CLIENT_CONFIGS["codex"].default_target
 
 
@@ -1135,8 +1280,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.host is None:
         args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
     if args.target is None:
-        detector = TARGET_DETECTORS.get(args.client)
-        args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
+        if args.client == "codex":
+            args.target = _detect_codex_target(claude_args)
+        else:
+            detector = TARGET_DETECTORS.get(args.client)
+            args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
     if args.proxy_mode is None:
         args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
     if args.trust_ca and args.proxy_mode != "forward":
