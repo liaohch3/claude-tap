@@ -561,7 +561,8 @@ def _ensure_ca_trust_for_forward_proxy(args: argparse.Namespace, ca_cert_path: P
 async def async_main(args: argparse.Namespace):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    migrate_legacy_traces(output_dir)
+    if not args.live_viewer:
+        migrate_legacy_traces(output_dir)
 
     store = get_trace_store()
     trace_metadata = {"client": args.client, "proxy_mode": args.proxy_mode}
@@ -1115,8 +1116,6 @@ async def dashboard_main(args: argparse.Namespace) -> int:
     """Run the standalone dashboard until interrupted."""
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    migrate_legacy_traces(output_dir)
 
     host = args.host
     port = resolve_dashboard_port(args.live_port)

@@ -1243,10 +1243,12 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
             open_browser_fn(server.url)
         return server.url, True
 
+    migration_calls = []
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
     monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", fake_ensure_shared_dashboard)
+    monkeypatch.setattr("claude_tap.cli.migrate_legacy_traces", migration_calls.append)
 
     args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-update-check"])
     try:
@@ -1258,6 +1260,7 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
     assert code == 0
     assert len(opened_urls) == 1
     assert all(url.startswith("http://127.0.0.1:") for url in opened_urls)
+    assert migration_calls == []
 
 
 @pytest.mark.asyncio
@@ -1308,6 +1311,7 @@ async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypat
     from claude_tap import async_main, parse_args
 
     opened_urls = []
+    migration_calls = []
 
     async def fake_run_client(*args, **kwargs):
         return 0
@@ -1317,6 +1321,7 @@ async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypat
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-no-live.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+    monkeypatch.setattr("claude_tap.cli.migrate_legacy_traces", migration_calls.append)
     monkeypatch.setattr(
         "claude_tap.cli.ensure_shared_dashboard",
         AsyncMock(side_effect=AssertionError("dashboard should stay disabled")),
@@ -1327,6 +1332,7 @@ async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypat
 
     assert code == 0
     assert opened_urls == []
+    assert migration_calls == [tmp_path]
 
 
 def test_parse_args_allow_path_validation():
@@ -3413,6 +3419,10 @@ async def test_dashboard_main_serves_viewer(monkeypatch, tmp_path):
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        "claude_tap.cli.migrate_legacy_traces",
+        lambda _output_dir: (_ for _ in ()).throw(AssertionError("dashboard_main should not pre-migrate")),
+    )
 
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))

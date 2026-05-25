@@ -229,6 +229,16 @@ def test_dashboard_rejects_missing_session_ids(trace_db) -> None:
     assert load_trace_session("not-a-valid-session-id") is None
 
 
+def test_dashboard_detail_refresh_extends_loaded_window_for_appended_records() -> None:
+    template = read_dashboard_template()
+
+    assert "detailRecordTotal: 0" in template
+    assert "function detailRecordFetchLimit(sessionId, preserveLoaded)" in template
+    assert "knownTotal > previousTotal && previousTotal <= loadedRecords" in template
+    assert "const limit = detailRecordFetchLimit(sessionId, preserveLoaded)" in template
+    assert "state.detailRecordTotal = totalRecords" in template
+
+
 def test_dashboard_summarize_session_and_migration(trace_db, tmp_path: Path) -> None:
     assert dashboard_trace_snapshot() == {}
 

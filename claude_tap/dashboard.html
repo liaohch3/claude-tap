@@ -845,6 +845,7 @@ const state = {
   sessionRequestId: 0,
   detailSessionId: null,
   detailRecordsLoaded: 0,
+  detailRecordTotal: 0,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -1332,6 +1333,9 @@ async function openSession(sessionId) {
   state.selectedSessionId = sessionId;
   state.view = "detail";
   state.loadingSessionId = sessionId;
+  state.detailSessionId = null;
+  state.detailRecordsLoaded = 0;
+  state.detailRecordTotal = 0;
   renderSessions();
   showDetailView();
   showDetailLoading(sessionId);
@@ -1342,6 +1346,7 @@ function showListView() {
   state.view = "list";
   state.detailSessionId = null;
   state.detailRecordsLoaded = 0;
+  state.detailRecordTotal = 0;
   $("#list-view").classList.remove("hidden");
   $("#detail-view").classList.add("hidden");
   updateTracePathBar();
@@ -1360,10 +1365,27 @@ function showDetailLoading(sessionId) {
   $("#detail").innerHTML = `<div class="detail-loading">${loadingMarkup(t("loading_session"))}</div>`;
 }
 
+function sessionRecordCount(session) {
+  const count = Number(session?.record_count || 0);
+  return Number.isFinite(count) && count > 0 ? count : 0;
+}
+
+function detailRecordFetchLimit(sessionId, preserveLoaded) {
+  const sameSession = preserveLoaded && state.detailSessionId === sessionId;
+  const loadedRecords = sameSession ? state.detailRecordsLoaded : 0;
+  const previousTotal = sameSession ? state.detailRecordTotal : 0;
+  const session = state.sessions.find(item => item.id === sessionId);
+  const knownTotal = sameSession ? sessionRecordCount(session) : 0;
+  let limit = Math.max(MAX_INLINE_DETAIL_RECORDS, loadedRecords || 0);
+  if (knownTotal > previousTotal && previousTotal <= loadedRecords) {
+    limit = Math.max(limit, knownTotal);
+  }
+  return limit;
+}
+
 async function loadSession(sessionId, {preserveLoaded = false} = {}) {
   state.loadingSessionId = sessionId;
-  const loadedRecords = preserveLoaded && state.detailSessionId === sessionId ? state.detailRecordsLoaded : 0;
-  const limit = Math.max(MAX_INLINE_DETAIL_RECORDS, loadedRecords || 0);
+  const limit = detailRecordFetchLimit(sessionId, preserveLoaded);
   try {
     const payload = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionId)}/records?offset=0&limit=${limit}`);
     if (state.selectedSessionId !== sessionId) return;
@@ -1405,6 +1427,7 @@ function renderDetail(session, records) {
   const hasHiddenRecords = totalRecords > records.length;
   state.detailSessionId = session.id;
   state.detailRecordsLoaded = records.length;
+  state.detailRecordTotal = totalRecords;
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
