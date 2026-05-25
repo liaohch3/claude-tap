@@ -4283,7 +4283,7 @@ function getMessages(body) {
         : item.content
     }));
     const hasDeveloperMessage = messages.some(m => m.role === 'developer' || m.role === 'system');
-    if (!hasDeveloperMessage && typeof body.instructions === 'string' && body.instructions.trim()) {
+    if (messages.length && !hasDeveloperMessage && typeof body.instructions === 'string' && body.instructions.trim()) {
       return [{ role: 'developer', content: [{ type: 'text', text: body.instructions }] }, ...messages];
     }
     return messages;

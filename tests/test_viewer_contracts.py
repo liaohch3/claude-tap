@@ -157,6 +157,14 @@ def _responses_record() -> dict[str, Any]:
     }
 
 
+def _responses_empty_input_record() -> dict[str, Any]:
+    record = _responses_record()
+    record["request_id"] = "req_responses_empty_input"
+    record["request"]["body"]["input"] = []
+    record["response"]["body"]["output"] = []
+    return record
+
+
 def _codex_websocket_record() -> dict[str, Any]:
     return {
         "timestamp": "2026-05-13T13:22:00+00:00",
@@ -1182,6 +1190,32 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert "messages" in pretty_state["text"]
     assert "req_responses_contract" in pretty_state["text"]
     assert remaining_tabs == ["default", "trace"]
+
+
+def test_viewer_does_not_synthesize_messages_for_empty_responses_input(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "responses_empty_input", (_responses_empty_input_record(),))
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").first.click()
+        page.wait_for_selector("#detail .section", timeout=5000)
+        state = page.evaluate(
+            """() => ({
+              roles: getMessages(entries[0].request.body).map(message => message.role),
+              sectionTitles: Array.from(document.querySelectorAll('#detail .section .title')).map(el => el.textContent),
+              detailText: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["roles"] == []
+    assert "System Prompt" in state["sectionTitles"]
+    assert "Tools" in state["sectionTitles"]
+    assert "Messages" not in state["sectionTitles"]
+    assert "You are Codex contract system prompt." in state["detailText"]
 
 
 def test_viewer_sidebar_order_can_switch_between_model_turn_and_session_sequence(
