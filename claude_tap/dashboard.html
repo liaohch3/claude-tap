@@ -166,6 +166,18 @@ button { cursor: pointer; }
   flex-direction: column;
   min-height: 0;
 }
+body.detail-route .path-filter,
+body.detail-route .header > .divider,
+body.detail-route .trace-path-bar,
+body.detail-route .stats .stat-group {
+  display: none;
+}
+body.detail-route .stats {
+  margin-left: auto;
+}
+body.detail-route .main {
+  padding-top: 10px;
+}
 .dashboard-title-row {
   display: flex;
   align-items: center;
@@ -456,6 +468,9 @@ button { cursor: pointer; }
   gap: 12px;
   margin-bottom: 12px;
 }
+body.detail-route .detail-page-head {
+  margin-bottom: 8px;
+}
 .back-btn {
   display: inline-flex;
   align-items: center;
@@ -582,6 +597,9 @@ button { cursor: pointer; }
   -webkit-backdrop-filter: blur(8px);
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.07);
 }
+body.detail-route .detail-inspector-bar {
+  margin-bottom: 8px;
+}
 [data-theme="dark"] .detail-inspector-bar {
   background: rgba(22, 27, 34, 0.9);
   border-color: #3a4048;
@@ -614,26 +632,6 @@ button { cursor: pointer; }
   transition: all .15s;
 }
 .act-btn:hover { background: var(--bg-hover); color: var(--blue); }
-.session-summary {
-  margin-bottom: 8px; border: 1px solid var(--border);
-  border-radius: var(--radius); overflow: hidden;
-  background: var(--bg-card); box-shadow: var(--shadow-sm);
-}
-.session-summary-head {
-  display: flex; align-items: center; gap: 8px;
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--border-light);
-}
-.session-summary-title { font-size: 13px; font-weight: 600; color: var(--text); }
-.session-summary-path {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text-tertiary); font-family: var(--mono); font-size: 11px; margin-left: auto;
-}
-.token-bar { display: flex; gap: 12px; font-size: 11px; padding: 8px 12px; flex-wrap: wrap; }
-.tok-item { display: flex; align-items: center; gap: 4px; }
-.tok-dot { width: 6px; height: 6px; border-radius: 50%; }
-.tok-label { color: var(--text-tertiary); font-size: 11px; }
-.tok-val { color: var(--text-secondary); font-weight: 600; font-family: var(--mono); font-size: 11px; }
 .badge {
   display: inline-flex; align-items: center;
   font-size: 11px; padding: 2px 8px; border-radius: 10px;
@@ -830,11 +828,13 @@ pre {
 </div>
 
 <script>
+const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
+
 const state = {
   sessions: [],
   selectedAgent: "all",
   selectedSessionId: null,
-  pendingSessionId: new URLSearchParams(window.location.search).get("session_id") || null,
+  pendingSessionId: initialSessionId(),
   view: "list",
   activeTab: "conversation",
   search: "",
@@ -852,6 +852,20 @@ const state = {
 
 const $ = selector => document.querySelector(selector);
 const MAX_INLINE_DETAIL_RECORDS = 10;
+
+function initialSessionId() {
+  const routeMatch = window.location.pathname.match(SESSION_DETAIL_ROUTE);
+  if (routeMatch) return decodeURIComponent(routeMatch[1]);
+  return new URLSearchParams(window.location.search).get("session_id") || null;
+}
+
+function sessionDetailUrl(sessionId) {
+  return `/dashboard/session/${encodeURIComponent(sessionId)}`;
+}
+
+function dashboardListUrl() {
+  return "/dashboard";
+}
 
 const DASHBOARD_I18N = {
   en: {
@@ -1176,7 +1190,7 @@ function updateTracePathBar(session = null) {
   `;
 }
 
-async function refreshSessions({preserveSelection = true} = {}) {
+async function refreshSessions({preserveSelection = true, refreshDetail = false} = {}) {
   const requestId = state.sessionRequestId + 1;
   state.sessionRequestId = requestId;
   setDashboardLoading(true);
@@ -1212,8 +1226,11 @@ async function refreshSessions({preserveSelection = true} = {}) {
     if (state.view === "detail" && state.selectedSessionId) {
       showDetailView();
       const selected = state.sessions.find(session => session.id === state.selectedSessionId);
-      if (!selected || shouldRefreshDetail(selected)) {
+      if (!selected || !state.detailSessionId || refreshDetail) {
+        if (!state.detailSessionId) showDetailLoading(state.selectedSessionId);
         await loadSession(state.selectedSessionId, {preserveLoaded: true});
+      } else {
+        updateDetailSessionSummary(selected);
       }
     } else {
       showListView();
@@ -1333,20 +1350,8 @@ function statusInfo(session) {
   return {label: "OK", className: "ok"};
 }
 
-async function openSession(sessionId) {
-  const session = state.sessions.find(item => item.id === sessionId);
-  state.selectedSessionId = sessionId;
-  state.view = "detail";
-  state.loadingSessionId = sessionId;
-  state.detailSessionId = null;
-  state.detailRecordsLoaded = 0;
-  state.detailRecordTotal = 0;
-  state.detailFingerprint = "";
-  state.detailSession = null;
-  renderSessions();
-  showDetailView();
-  showDetailLoading(sessionId);
-  await loadSession(sessionId);
+function openSession(sessionId) {
+  window.location.assign(sessionDetailUrl(sessionId));
 }
 
 function showListView() {
@@ -1356,12 +1361,14 @@ function showListView() {
   state.detailRecordTotal = 0;
   state.detailFingerprint = "";
   state.detailSession = null;
+  document.body.classList.remove("detail-route");
   $("#list-view").classList.remove("hidden");
   $("#detail-view").classList.add("hidden");
   updateTracePathBar();
 }
 
 function showDetailView() {
+  document.body.classList.add("detail-route");
   $("#list-view").classList.add("hidden");
   $("#detail-view").classList.remove("hidden");
 }
@@ -1394,9 +1401,13 @@ function sessionDetailFingerprint(session) {
   ].join("|");
 }
 
-function shouldRefreshDetail(session) {
-  if (state.detailSessionId !== session.id) return true;
-  return sessionDetailFingerprint(session) !== state.detailFingerprint;
+function updateDetailSessionSummary(session) {
+  if (!session || state.detailSessionId !== session.id) return;
+  state.detailSession = {...(state.detailSession || {}), ...session};
+  state.detailFingerprint = sessionDetailFingerprint(session);
+  $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
+  $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
+  updateTracePathBar(session);
 }
 
 function detailRecordFetchLimit(sessionId, preserveLoaded) {
@@ -1451,9 +1462,10 @@ async function loadMoreSessionRecords(session, records, button) {
 }
 
 function renderDetail(session, records) {
-  const statusClass = ["active", "error", "empty"].includes(session.status) ? session.status : "";
   const totalRecords = Number(session.record_count || records.length);
   const hasHiddenRecords = totalRecords > records.length;
+  const alternateTab = state.activeTab === "conversation" ? "raw" : "conversation";
+  const alternateLabel = alternateTab === "conversation" ? t("tab_default") : t("tab_trace");
   state.detailSessionId = session.id;
   state.detailRecordsLoaded = records.length;
   state.detailRecordTotal = totalRecords;
@@ -1463,32 +1475,14 @@ function renderDetail(session, records) {
   $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
   $("#detail").innerHTML = `
-    ${hasHiddenRecords ? `<div class="detail-fallback-note">${esc(t("limited_records", {shown: records.length, total: totalRecords}))}</div>` : ""}
     <div class="detail-inspector-bar">
       <div class="detail-tabs">
-        <button class="detail-tab ${state.activeTab === "conversation" ? "active" : ""}" data-tab="conversation">${esc(t("tab_default"))}</button>
-        <button class="detail-tab ${state.activeTab === "raw" ? "active" : ""}" data-tab="raw">${esc(t("tab_trace"))}</button>
+        <button class="detail-tab" data-tab="${alternateTab}">${esc(alternateLabel)}</button>
       </div>
       <div class="action-bar">
         <a class="act-btn" data-detail-i18n="export_jsonl" href="/api/sessions/${encodeURIComponent(session.id)}/export/jsonl" download>${esc(t("export_jsonl"))}</a>
         <a class="act-btn" data-detail-i18n="export_log" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
         <button class="act-btn" data-detail-i18n="copy_path" data-copy-path="${esc(session.id)}">${esc(t("copy_path"))}</button>
-      </div>
-    </div>
-    <div class="session-summary">
-      <div class="session-summary-head">
-        <span class="session-summary-title">${esc(session.agent)}</span>
-        <span class="badge ${statusClass}">${esc(session.status)}</span>
-        <span class="session-summary-path">${esc(session.legacy_rel_path || session.id)}</span>
-      </div>
-      <div class="token-bar">
-        ${tokenItem("var(--blue)", t("records"), session.record_count)}
-        ${tokenItem("var(--purple)", t("turns"), session.turn_count)}
-        ${tokenItem("var(--blue)", t("input"), session.input_tokens)}
-        ${tokenItem("var(--green)", t("output"), session.output_tokens)}
-        ${tokenItem("var(--cyan)", t("cache_read"), session.cache_read_tokens)}
-        ${tokenItem("var(--amber)", t("cache_write"), session.cache_create_tokens)}
-        ${tokenItem("var(--text-tertiary)", t("total"), session.total_tokens)}
       </div>
     </div>
     <div id="conversation-tab" class="${state.activeTab === "conversation" ? "" : "hidden"}">
@@ -1503,6 +1497,7 @@ function renderDetail(session, records) {
       </div>
     </div>
     <div id="raw-tab" class="${state.activeTab === "raw" ? "" : "hidden"}">
+      ${hasHiddenRecords ? `<div class="detail-fallback-note">${esc(t("limited_records", {shown: records.length, total: totalRecords}))}</div>` : ""}
       <div class="records">${records.map((record, index) => renderRecord(record, index)).join("") || emptyRecord()}</div>
       ${hasHiddenRecords ? `<div class="detail-load-more"><button class="load-more-btn" type="button" data-load-more>${esc(t("load_more_records"))}</button></div>` : ""}
     </div>
@@ -1548,16 +1543,6 @@ function updateDetailI18n(session) {
   document.querySelectorAll("[data-detail-i18n]").forEach(element => {
     element.textContent = t(element.dataset.detailI18n);
   });
-}
-
-function tokenItem(color, label, value) {
-  return `
-    <span class="tok-item">
-      <span class="tok-dot" style="background:${esc(color)}"></span>
-      <span class="tok-label">${esc(label)}</span>
-      <span class="tok-val">${fmtNumber(value)}</span>
-    </span>
-  `;
 }
 
 function renderRecord(record, index) {
@@ -1732,11 +1717,9 @@ $("#status-filter").addEventListener("change", event => {
   showListView();
 });
 
-$("#refresh").addEventListener("click", () => refreshSessions({preserveSelection: true}).catch(console.error));
+$("#refresh").addEventListener("click", () => refreshSessions({preserveSelection: true, refreshDetail: true}).catch(console.error));
 $("#back-to-list").addEventListener("click", () => {
-  state.selectedSessionId = null;
-  renderSessions();
-  showListView();
+  window.location.assign(dashboardListUrl());
 });
 $("#theme-toggle").addEventListener("click", toggleTheme);
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));

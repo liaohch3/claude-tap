@@ -229,17 +229,24 @@ def test_dashboard_rejects_missing_session_ids(trace_db) -> None:
     assert load_trace_session("not-a-valid-session-id") is None
 
 
-def test_dashboard_detail_refresh_extends_loaded_window_for_appended_records() -> None:
+def test_dashboard_detail_route_preserves_viewer_on_background_refresh() -> None:
     template = read_dashboard_template()
 
+    assert "const SESSION_DETAIL_ROUTE" in template
+    assert "pendingSessionId: initialSessionId()" in template
+    assert "function sessionDetailUrl(sessionId)" in template
+    assert "window.location.assign(sessionDetailUrl(sessionId))" in template
+    assert "window.location.assign(dashboardListUrl())" in template
+    assert 'document.body.classList.add("detail-route")' in template
     assert "detailRecordTotal: 0" in template
     assert 'detailFingerprint: ""' in template
     assert "detailSession: null" in template
     assert "function detailRecordFetchLimit(sessionId, preserveLoaded)" in template
     assert "function sessionDetailFingerprint(session)" in template
-    assert "function shouldRefreshDetail(session)" in template
+    assert "function updateDetailSessionSummary(session)" in template
     assert "function updateDetailI18n(session)" in template
-    assert "if (!selected || shouldRefreshDetail(selected))" in template
+    assert "if (!selected || !state.detailSessionId || refreshDetail)" in template
+    assert "updateDetailSessionSummary(selected)" in template
     assert "updateDetailI18n(state.detailSession)" in template
     assert "knownTotal > previousTotal && previousTotal <= loadedRecords" in template
     assert "const limit = detailRecordFetchLimit(sessionId, preserveLoaded)" in template
@@ -514,6 +521,12 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 second_session_id = next(item["id"] for item in payload["sessions"] if item["record_count"] == 2)
                 session_id = next(item["id"] for item in payload["sessions"] if item["record_count"] == 1)
 
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/session/{session_id}") as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert "SESSION_DETAIL_ROUTE" in html
+                assert "sessionDetailUrl" in html
+
             async with session.get(f"http://127.0.0.1:{port}/api/agents") as resp:
                 assert resp.status == 200
                 payload = await resp.json()
@@ -608,7 +621,7 @@ async def test_dashboard_refresh_preserves_loaded_detail_records(trace_db, tmp_p
             try:
                 page = await browser.new_page()
                 await page.goto(
-                    f"http://127.0.0.1:{port}/dashboard?session_id={session_id}",
+                    f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
                     wait_until="domcontentloaded",
                 )
                 await page.wait_for_selector(".viewer-frame", timeout=5000)
@@ -623,12 +636,14 @@ async def test_dashboard_refresh_preserves_loaded_detail_records(trace_db, tmp_p
                     timeout=5000,
                 )
 
+                await page.locator(".viewer-frame").evaluate("node => node.dataset.stableViewer = '1'")
                 await page.evaluate("refreshSessions({preserveSelection: true})")
                 await page.wait_for_function(
                     "() => document.querySelectorAll('#raw-tab article.section').length === 12",
                     timeout=5000,
                 )
                 assert await page.locator("#raw-tab article.section").count() == 12
+                assert await page.locator(".viewer-frame").get_attribute("data-stable-viewer") == "1"
             finally:
                 await browser.close()
     finally:
