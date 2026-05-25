@@ -343,6 +343,16 @@ class LiveViewerServer:
             if not html_path.exists():
                 return web.Response(status=500, text="Failed to generate session viewer")
             html = html_path.read_text(encoding="utf-8")
+            export_urls = {
+                "jsonl": f"/api/sessions/{quote(session_id)}/export/jsonl",
+                "log": f"/api/sessions/{quote(session_id)}/export/log",
+            }
+            export_js = f"const __TRACE_SESSION_EXPORTS__ = {json.dumps(export_urls, separators=(',', ':'))};\n"
+            html = html.replace(
+                VIEWER_SCRIPT_ANCHOR,
+                f"<script>\n{export_js}</script>\n{VIEWER_SCRIPT_ANCHOR}",
+                1,
+            )
         return web.Response(text=html, content_type="text/html")
 
     async def _current_live_record_count(self) -> int:

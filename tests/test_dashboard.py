@@ -530,6 +530,9 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 html = await resp.text()
                 assert "EMBEDDED_TRACE_DATA" in html
                 assert "req_claude" in html
+                assert "__TRACE_SESSION_EXPORTS__" in html
+                assert f"/api/sessions/{session_id}/export/jsonl" in html
+                assert f"/api/sessions/{session_id}/export/log" in html
                 assert "session-list" not in html
                 assert "back-to-list" not in html
 
@@ -636,6 +639,11 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert await page.locator("#back-to-list").count() == 0
                 assert await page.locator("#session-list").count() == 0
                 assert await page.locator(".sidebar-item").count() >= 10
+                export_links = page.locator("#viewer-actions .viewer-action")
+                assert await export_links.count() == 2
+                hrefs = await export_links.evaluate_all("(links) => links.map((link) => link.getAttribute('href'))")
+                assert f"/api/sessions/{session_id}/export/jsonl" in hrefs
+                assert f"/api/sessions/{session_id}/export/log" in hrefs
             finally:
                 await browser.close()
     finally:
