@@ -159,6 +159,13 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         server_messages.clear()
         return completed_records_written, record_client_messages, record_server_messages
 
+    def _pop_buffered_server_snapshot() -> tuple[int, list[str], list[str]]:
+        nonlocal completed_records_written
+        completed_records_written += 1
+        record_server_messages = server_messages.copy()
+        server_messages.clear()
+        return completed_records_written, [], record_server_messages
+
     async def _write_buffered_snapshot(snapshot: tuple[int, list[str], list[str]]) -> None:
         record_number, record_client_messages, record_server_messages = snapshot
         record = _build_ws_record(
@@ -195,8 +202,8 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         if response_key in completed_response_keys:
             if server_messages and server_messages[-1] == terminal_message:
                 server_messages.pop()
-            if client_messages or server_messages:
-                return _pop_buffered_snapshot()
+            if server_messages:
+                return _pop_buffered_server_snapshot()
             return None
         completed_response_keys.add(response_key)
         completed_response_key_order.append(response_key)

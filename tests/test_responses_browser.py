@@ -649,6 +649,93 @@ def test_viewer_reconstructs_split_codex_ws_records_across_previous_response_ids
     }
 
 
+def test_viewer_preserves_codex_ws_history_across_incremental_expansion(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const baseRequest = {
+            method: 'WEBSOCKET',
+            path: '/backend-api/codex/responses',
+            headers: {}
+          };
+          const toolTurn = {
+            request_id: 'req_incremental_1',
+            turn: 1,
+            transport: 'websocket',
+            request: {
+              ...baseRequest,
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Run pwd.' }] }],
+                tools: [{ type: 'function', name: 'exec_command' }]
+              }
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {},
+              ws_events: [
+                { type: 'response.created', response: { id: 'resp_tool', status: 'in_progress', model: 'gpt-5.5' } },
+                { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', name: 'exec_command', call_id: 'call_pwd', arguments: '{\"cmd\":\"pwd\"}' } },
+                { type: 'response.completed', response: { id: 'resp_tool', status: 'completed', model: 'gpt-5.5', output: [], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } }
+              ]
+            }
+          };
+          const finalTurn = {
+            request_id: 'req_incremental_2',
+            turn: 2,
+            transport: 'websocket',
+            request: {
+              ...baseRequest,
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                previous_response_id: 'resp_tool',
+                input: [{ type: 'function_call_output', call_id: 'call_pwd', output: '/workspace/project' }],
+                tools: [{ type: 'function', name: 'exec_command' }]
+              }
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {},
+              ws_events: [
+                { type: 'response.created', response: { id: 'resp_final', status: 'in_progress', model: 'gpt-5.5', previous_response_id: 'resp_tool' } },
+                { type: 'response.output_item.done', output_index: 0, item: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'FINAL_INCREMENTAL_OK' }] } },
+                { type: 'response.completed', response: { id: 'resp_final', status: 'completed', model: 'gpt-5.5', previous_response_id: 'resp_tool', output: [], usage: { input_tokens: 20, output_tokens: 3, total_tokens: 23 } } }
+              ]
+            }
+          };
+          const history = createWebSocketResponseHistoryStore();
+          expandWebSocketResponseEntries([toolTurn], history);
+          const expanded = expandWebSocketResponseEntries([finalTurn], history);
+          const messages = getMessages(expanded[0].request.body).map(message => {
+            const content = Array.isArray(message.content) ? message.content : [];
+            const toolUse = content.find(block => block.type === 'tool_use');
+            if (toolUse) return `${message.role}:tool_use:${toolUse.id}:${toolUse.name}`;
+            const toolResult = content.find(block => block.type === 'tool_result');
+            if (toolResult) return `${message.role}:tool_result:${toolResult.tool_use_id}:${toolResult.content}`;
+            return `${message.role}:text:${content.map(block => block.text || '').filter(Boolean).join(' ')}`;
+          });
+          return {
+            messages,
+            historySizes: [...history.values()].map(node => (
+              (node.requestInput || []).length + (node.outputMessages || []).length
+            ))
+          };
+        }"""
+    )
+
+    assert result == {
+        "messages": [
+            "user:text:Run pwd.",
+            "assistant:tool_use:call_pwd:exec_command",
+            "tool:tool_result:call_pwd:/workspace/project",
+        ],
+        "historySizes": [2, 2],
+    }
+
+
 def test_viewer_omits_empty_reasoning_blocks_for_zero_reasoning_tokens(responses_page) -> None:
     responses_page.evaluate(
         """() => {

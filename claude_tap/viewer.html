@@ -1756,6 +1756,14 @@ function requestBodyForWebSocketGroup(entry, groups, idx) {
   return idx === 0 ? bodyWithoutToolResultOnlyInput(entry.request?.body) : entry.request?.body;
 }
 
+function requestSourceForWebSocketResponseEntry(entry, groups, idx, priorHistoryInput = []) {
+  const hasRequestEvents = Array.isArray(entry.request?.ws_events) && entry.request.ws_events.length > 0;
+  if (Array.isArray(priorHistoryInput) && priorHistoryInput.length && !hasRequestEvents && entry.request?.body) {
+    return entry.request.body;
+  }
+  return requestBodyForWebSocketGroup(entry, groups, idx);
+}
+
 function bodyWithoutToolResultOnlyInput(body) {
   const next = cloneJson(body || {}) || {};
   if (Array.isArray(next.input) && next.input.every(isToolResultInputItem)) {
@@ -1770,11 +1778,7 @@ function buildWebSocketResponseEntry(entry, groups, idx, priorHistoryInput = [])
   const created = responseCreatedFromEvents(group.events) || {};
   const priorGroups = groups.slice(0, idx);
   const priorRequestBodies = priorGroups.map((_, priorIdx) => requestBodyForWebSocketGroup(entry, groups, priorIdx));
-  const hasRequestEvents = Array.isArray(entry.request?.ws_events) && entry.request.ws_events.length > 0;
-  const requestSource =
-    Array.isArray(priorHistoryInput) && priorHistoryInput.length && !hasRequestEvents && entry.request?.body
-      ? entry.request.body
-      : requestBodyForWebSocketGroup(entry, groups, idx);
+  const requestSource = requestSourceForWebSocketResponseEntry(entry, groups, idx, priorHistoryInput);
   const requestBody = cloneJson(requestSource || {}) || {};
   const source = Object.keys(completed).length ? completed : created;
   for (const key of ['model', 'instructions', 'tools', 'previous_response_id', 'prompt_cache_key', 'tool_choice', 'parallel_tool_calls', 'text', 'reasoning']) {
@@ -1810,9 +1814,39 @@ function buildWebSocketResponseEntry(entry, groups, idx, priorHistoryInput = [])
   };
 }
 
-function expandWebSocketResponseEntries(rawEntries) {
+function createWebSocketResponseHistoryStore() {
+  return new Map();
+}
+
+function webSocketHistoryInputForResponse(historyByResponseId, responseId) {
+  const chain = [];
+  const seen = new Set();
+  let cursor = responseId;
+  while (cursor && historyByResponseId.has(cursor) && !seen.has(cursor)) {
+    seen.add(cursor);
+    const node = historyByResponseId.get(cursor);
+    chain.push(node);
+    cursor = node.previousResponseId || '';
+  }
+  chain.reverse();
+  return uniqueMessages(chain.flatMap(node => [
+    ...(node.requestInput || []),
+    ...(node.outputMessages || [])
+  ]));
+}
+
+function storeWebSocketResponseHistory(historyByResponseId, responseId, previousResponseId, requestBody, outputMessages) {
+  if (!responseId) return;
+  const requestInput = normalizeWebSocketDerivedInput(Array.isArray(requestBody?.input) ? requestBody.input : []);
+  historyByResponseId.set(responseId, {
+    previousResponseId: previousResponseId || '',
+    requestInput,
+    outputMessages: outputMessages || []
+  });
+}
+
+function expandWebSocketResponseEntries(rawEntries, historyByResponseId = createWebSocketResponseHistoryStore()) {
   const expanded = [];
-  const historyByResponseId = new Map();
   for (const entry of rawEntries || []) {
     if (!isCodexResponsesWebSocketEntry(entry)) {
       expanded.push(entry);
@@ -1829,7 +1863,7 @@ function expandWebSocketResponseEntries(rawEntries) {
     if (!displayableGroups.length) continue;
     for (const { group, idx } of displayableGroups) {
       const previousId = previousResponseIdForGroup(group);
-      const priorHistoryInput = previousId && historyByResponseId.has(previousId) ? historyByResponseId.get(previousId) : [];
+      const priorHistoryInput = previousId ? webSocketHistoryInputForResponse(historyByResponseId, previousId) : [];
       const responseEntry = buildWebSocketResponseEntry(entry, groups, idx, priorHistoryInput);
       expanded.push(responseEntry);
 
@@ -1838,11 +1872,19 @@ function expandWebSocketResponseEntries(rawEntries) {
       const responseId = completed.id || created.id || '';
       if (responseId) {
         const outputMessages = webSocketOutputMessages(group.events);
-        historyByResponseId.set(responseId, uniqueMessages([...(responseEntry.request?.body?.input || []), ...outputMessages]));
+        const requestBody = requestSourceForWebSocketResponseEntry(entry, groups, idx, priorHistoryInput);
+        storeWebSocketResponseHistory(historyByResponseId, responseId, previousId, requestBody, outputMessages);
       }
     }
   }
   return expanded;
+}
+
+let liveWebSocketResponseHistoryById = createWebSocketResponseHistoryStore();
+
+function expandLiveWebSocketResponseEntries(rawEntries, reset = false) {
+  if (reset) liveWebSocketResponseHistoryById = createWebSocketResponseHistoryStore();
+  return expandWebSocketResponseEntries(rawEntries, liveWebSocketResponseHistoryById);
 }
 
 /* ─── Lazy loading infrastructure ─── */
@@ -2145,7 +2187,7 @@ function initLiveMode() {
 
       liveRecords.push(record);
       if (!viewingDate) {
-        entries.push(...expandWebSocketResponseEntries([record]));
+        entries.push(...expandLiveWebSocketResponseEntries([record]));
         updateLiveStatus('connected', entries.length);
         clearTimeout(liveRenderTimer);
         liveRenderTimer = setTimeout(() => renderApp(true), 50);
@@ -2243,7 +2285,7 @@ async function onDateChange(value) {
   if (value === 'live') {
     viewingDate = null;
     activePaths.clear();
-    entries = expandWebSocketResponseEntries(liveRecords.slice());
+    entries = expandLiveWebSocketResponseEntries(liveRecords.slice(), true);
     if (entries.length) renderApp(true);
     else renderLiveWaitingState();
     return;
@@ -2284,7 +2326,7 @@ async function deleteSelectedTraceDate() {
     await fetchDates('live');
     viewingDate = null;
     activePaths.clear();
-    entries = expandWebSocketResponseEntries(liveRecords.slice());
+    entries = expandLiveWebSocketResponseEntries(liveRecords.slice(), true);
     if (entries.length) renderApp(true);
     else renderLiveWaitingState();
   } catch (e) {
@@ -2296,7 +2338,7 @@ async function deleteSelectedTraceDate() {
 }
 
 if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
-  entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? expandWebSocketResponseEntries(EMBEDDED_TRACE_DATA) : [];
+  entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? expandLiveWebSocketResponseEntries(EMBEDDED_TRACE_DATA, true) : [];
   document.addEventListener('DOMContentLoaded', () => {
     initCommonUi();
     initLiveMode();
