@@ -21,8 +21,19 @@ def _normalize_record_for_export(record: object) -> dict | None:
     try:
         normalized = json.loads(_normalize_record_for_viewer(json.dumps(record, ensure_ascii=False)))
     except (TypeError, json.JSONDecodeError):
-        return record
-    return normalized if isinstance(normalized, dict) else record
+        normalized = record
+    if not isinstance(normalized, dict):
+        normalized = record
+    return normalized if _is_exportable_trace_record(normalized) else None
+
+
+def _is_exportable_trace_record(record: dict) -> bool:
+    """Return true for HTTP/LLM trace records, not side-channel event logs."""
+    request = record.get("request")
+    response = record.get("response")
+    return bool(isinstance(request, dict) and request) or bool(
+        isinstance(response, dict) and response
+    )
 
 
 def _request_body(record: dict) -> dict:
@@ -82,7 +93,10 @@ def export_main(argv: list[str] | None = None) -> int:
                     continue
 
     if not records:
-        print("Error: no valid records found in trace file", file=sys.stderr)
+        print(
+            "Error: no exportable HTTP/LLM trace records found in trace file",
+            file=sys.stderr,
+        )
         return 1
 
     # Sort by turn

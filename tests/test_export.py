@@ -100,6 +100,37 @@ def test_export_help_mentions_html(capsys) -> None:
     assert "for HTML" in help_text
 
 
+def test_export_rejects_jsonrpc_event_logs(tmp_path, capsys) -> None:
+    trace_path = tmp_path / "trace_gen1.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "ts": "2026-05-25T08:00:54Z",
+                        "event": "trace_started",
+                        "generation": 1,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-05-25T08:00:56Z",
+                        "event": "jsonrpc_outgoing",
+                        "generation": 1,
+                        "method": "initialized",
+                        "params": {},
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert export_main([str(trace_path), "-o", str(tmp_path / "trace.html")]) == 1
+
+    assert "no exportable HTTP/LLM trace records" in capsys.readouterr().err
+
+
 def _bedrock_frame(event: dict) -> str:
     payload = json.dumps(event).encode("utf-8")
     return json.dumps({"bytes": base64.b64encode(payload).decode("ascii")})
