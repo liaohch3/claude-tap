@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.82] - 2026-05-25
+
+### Changed
+- perf(ws): release websocket trace buffers without dropping trailing events
 ## [0.1.81] - 2026-05-25
 
 ### Changed
