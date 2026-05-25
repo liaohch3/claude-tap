@@ -562,6 +562,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 }
 .content-block { margin-top: 8px; white-space: pre-wrap; word-break: break-word; }
 .content-block:first-child { margin-top: 0; }
+.message-image {
+  display: block; max-width: min(100%, 720px); max-height: 520px;
+  border-radius: 6px; border: 1px solid var(--border); background: var(--bg-card);
+  object-fit: contain;
+}
+.image-block { white-space: normal; }
 .tool-use-label {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 11px; font-weight: 600; color: var(--cyan);
@@ -1494,6 +1500,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 <script>
 const $ = s => document.querySelector(s);
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
+let sessionImageRegistryCache = null, sessionImageRegistrySize = -1;
 let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
 const SIDEBAR_ORDER_MODES = ['model', 'turn', 'session'];
 const savedSidebarOrderMode = localStorage.getItem('claude-tap-sidebar-order');
@@ -3087,6 +3094,13 @@ function cleanUserPromptText(text) {
   return value.replace(/^\[Image #\d+\]\s*/i, '').trim();
 }
 
+function imageLookupKey(text) {
+  let value = String(text || '').trim();
+  const session = value.match(/^<session>\s*([\s\S]*?)\s*<\/session>$/i);
+  if (session) value = session[1].trim();
+  return value.replace(/^\[Image #\d+\]\s*/i, '').trim();
+}
+
 let sessionTooltipEl = null;
 function sessionTooltip() {
   if (sessionTooltipEl) return sessionTooltipEl;
@@ -4489,10 +4503,108 @@ function renderMessages(msgs) {
   }).filter(Boolean).join('');
 }
 
+function contentHasImagePlaceholder(content) {
+  if (typeof content === 'string') return /\[Image #\d+\]/i.test(content);
+  if (!Array.isArray(content)) return content && typeof content === 'object' && contentHasImagePlaceholder(content.content || content.text || content.output || '');
+  return content.some(block => {
+    if (typeof block === 'string') return contentHasImagePlaceholder(block);
+    if (!block || typeof block !== 'object') return false;
+    return contentHasImagePlaceholder(block.text || block.output || block.content || '');
+  });
+}
+
+function imageSourceFromBlock(block) {
+  if (!block || typeof block !== 'object') return null;
+  const source = block.source || {};
+  if ((block.type === 'image' || source.type === 'base64' || source.type === 'url') && source.type === 'base64' && source.data) {
+    return { src: `data:${source.media_type || 'image/png'};base64,${source.data}`, alt: source.media_type || 'image' };
+  }
+  if ((block.type === 'image' || source.type === 'url') && source.type === 'url' && source.url) {
+    return { src: source.url, alt: source.media_type || 'image' };
+  }
+  const imageUrl = block.image_url;
+  if (typeof imageUrl === 'string' && imageUrl) return { src: imageUrl, alt: block.type || 'image' };
+  if (imageUrl && typeof imageUrl === 'object' && imageUrl.url) return { src: imageUrl.url, alt: block.type || 'image' };
+  if (block.data && (block.media_type || block.mime_type)) {
+    return { src: `data:${block.media_type || block.mime_type};base64,${block.data}`, alt: block.media_type || block.mime_type || 'image' };
+  }
+  return null;
+}
+
+function imageBlocksForContent(content) {
+  const images = [];
+  const visit = value => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== 'object') return;
+    if (imageSourceFromBlock(value)) images.push(value);
+    if (value.type === 'message' || value.type === 'tool_result' || value.type === 'function_call_output') visit(value.content);
+  };
+  visit(content);
+  return images;
+}
+
+function imageSourceKey(block) {
+  const source = imageSourceFromBlock(block);
+  return source ? source.src.slice(0, 128) + ':' + source.src.length : '';
+}
+
+function buildSessionImageRegistry() {
+  if (sessionImageRegistryCache && sessionImageRegistrySize === entries.length) return sessionImageRegistryCache;
+  const registry = new Map();
+  const sourceEntries = lazyMode
+    ? expandWebSocketResponseEntries(getRawLines().map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean))
+    : entries.map(getFullEntry);
+  for (const entry of sourceEntries) {
+    const messages = getMessages(entry?.request?.body);
+    for (const message of messages) {
+      if (message?.role !== 'user') continue;
+      const images = imageBlocksForContent(message.content);
+      if (!images.length) continue;
+      const key = imageLookupKey(naturalTextForSessionContent(message.content));
+      if (!key) continue;
+      const bucket = registry.get(key) || [];
+      const seen = new Set(bucket.map(imageSourceKey));
+      for (const image of images) {
+        const imageKey = imageSourceKey(image);
+        if (!imageKey || seen.has(imageKey)) continue;
+        seen.add(imageKey);
+        bucket.push(image);
+      }
+      registry.set(key, bucket);
+    }
+  }
+  sessionImageRegistryCache = registry;
+  sessionImageRegistrySize = entries.length;
+  return registry;
+}
+
+function recoveredImagesForContent(content) {
+  if (!contentHasImagePlaceholder(content) || imageBlocksForContent(content).length) return [];
+  const key = imageLookupKey(naturalTextForSessionContent(content));
+  if (!key) return [];
+  return buildSessionImageRegistry().get(key) || [];
+}
+
+function renderImageBlock(block) {
+  const source = imageSourceFromBlock(block);
+  if (!source) return '';
+  return `<div class="content-block image-block"><img class="message-image" src="${esc(source.src)}" alt="${esc(source.alt)}" loading="lazy" /></div>`;
+}
+
 function renderContent(content, role) {
-  if (typeof content === 'string') return content.trim() ? `<div class="content-block">${esc(content)}</div>` : '';
+  if (typeof content === 'string') {
+    const textHtml = content.trim() ? `<div class="content-block">${esc(content)}</div>` : '';
+    const recovered = role === 'user' ? recoveredImagesForContent(content).map(renderImageBlock).join('') : '';
+    return textHtml + recovered;
+  }
   if (!Array.isArray(content)) return content === undefined || content === null ? '' : `<pre>${esc(JSON.stringify(content, null, 2))}</pre>`;
-  return content.map(block => {
+  const renderedBlocks = content.map(block => {
+    if (typeof block === 'string') return block.trim() ? `<div class="content-block">${esc(block)}</div>` : '';
+    if (!block || typeof block !== 'object') return '';
     if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') { const txt = block.text || ''; if (!txt.trim()) return ''; return `<div class="content-block">${esc(txt)}</div>`; }
     if (block.type === 'thinking') {
       const thinking = block.thinking || '';
@@ -4506,29 +4618,20 @@ function renderContent(content, role) {
       if (Array.isArray(rc)) {
         const parts = rc.map(c => {
           if (c.type === 'text') return `<div class="pre-text">${esc(c.text)}</div>`;
-          if (c.type === 'image') {
-            const s = c.source || {};
-            if (s.type === 'base64' && s.data) return `<img src="data:${esc(s.media_type || 'image/png')};base64,${s.data}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" />`;
-            if (s.type === 'url' && s.url) return `<img src="${esc(s.url)}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" />`;
-          }
+          if (imageSourceFromBlock(c)) return renderImageBlock(c);
           return `<pre>${esc(JSON.stringify(c))}</pre>`;
         }).join('');
         return `<div class="content-block"><span class="tool-use-label">result</span>${parts}</div>`;
       }
       return `<div class="content-block"><pre>${esc(JSON.stringify(block, null, 2))}</pre></div>`;
     }
-    if (block.type === 'image') {
-      const src = block.source || {};
-      if (src.type === 'base64' && src.data) {
-        return `<div class="content-block"><img src="data:${esc(src.media_type || 'image/png')};base64,${src.data}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" /></div>`;
-      }
-      if (src.type === 'url' && src.url) {
-        return `<div class="content-block"><img src="${esc(src.url)}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);" /></div>`;
-      }
-      return `<div class="content-block"><em>[image: ${esc(src.media_type || 'unknown')}]</em></div>`;
+    if (imageSourceFromBlock(block)) {
+      return renderImageBlock(block) || `<div class="content-block"><em>[image: ${esc(block.source?.media_type || 'unknown')}]</em></div>`;
     }
     return `<div class="content-block"><pre>${esc(JSON.stringify(block, null, 2))}</pre></div>`;
   }).join('');
+  const recovered = role === 'user' ? recoveredImagesForContent(content).map(renderImageBlock).join('') : '';
+  return renderedBlocks + recovered;
 }
 
 function renderTools(tools) {

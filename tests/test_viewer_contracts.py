@@ -1344,6 +1344,69 @@ def test_viewer_session_group_hover_shows_full_truncated_user_input(tmp_path: Pa
     assert tooltip_text == long_prompt
 
 
+def test_viewer_recovers_session_title_image_placeholders(tmp_path: Path, chromium_browser) -> None:
+    prompt = "My local TNTCloud nodes all time out, but the same account works on another computer."
+    image_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    title_record = {
+        "timestamp": "2026-05-13T13:21:00+00:00",
+        "request_id": "req_title_image_placeholder",
+        "turn": 1,
+        "duration_ms": 100,
+        "request": {
+            "method": "POST",
+            "path": "/v1/messages",
+            "headers": {},
+            "body": {
+                "model": "aws.claude-sonnet-4.6",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": f"<session>\n[Image #1] {prompt}\n</session>"}],
+                    }
+                ],
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {"content": [{"type": "text", "text": '{"title":"TNTCloud timeout"}'}]},
+        },
+    }
+    actual_record = json.loads(json.dumps(title_record))
+    actual_record["request_id"] = "req_actual_image"
+    actual_record["turn"] = 2
+    actual_record["request"]["body"]["messages"] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"[Image #1] {prompt}"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image_data}},
+            ],
+        }
+    ]
+
+    html_path = _generate_case_html(tmp_path, "image-placeholder-recovery", (title_record, actual_record))
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").nth(0).click()
+        page.wait_for_selector("#detail .msg.user img.message-image", timeout=5000)
+        result = page.evaluate(
+            """() => ({
+              imageCount: document.querySelectorAll('#detail .msg.user img.message-image').length,
+              imageSrc: document.querySelector('#detail .msg.user img.message-image')?.getAttribute('src') || '',
+              text: document.querySelector('#detail .msg.user')?.textContent || ''
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert result["imageCount"] == 1
+    assert result["imageSrc"].startswith("data:image/png;base64,")
+    assert "[Image #1]" in result["text"]
+
+
 def test_viewer_runtime_smoke_handles_degenerate_records_without_js_errors(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "runtime_smoke", _runtime_smoke_records())
 
