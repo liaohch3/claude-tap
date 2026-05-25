@@ -1461,14 +1461,25 @@ function renderDetail(session, records) {
       </div>
     </div>
     <div id="conversation-tab" class="${state.activeTab === "conversation" ? "" : "hidden"}">
+      <div class="viewer-frame-wrap">
+        <div class="viewer-loading" data-viewer-loading>${loadingMarkup(t("loading_viewer"))}</div>
+        <iframe
+          class="viewer-frame"
+          data-viewer-frame
+          src="/api/sessions/${encodeURIComponent(session.id)}/html"
+          title="${esc(t("session_details", {agent: session.agent || t("session_detail")}))}"
+        ></iframe>
+      </div>
+    </div>
+    <div id="raw-tab" class="${state.activeTab === "raw" ? "" : "hidden"}">
       <div class="records">${records.map((record, index) => renderRecord(record, index)).join("") || emptyRecord()}</div>
       ${hasHiddenRecords ? `<div class="detail-load-more"><button class="load-more-btn" type="button" data-load-more>${esc(t("load_more_records"))}</button></div>` : ""}
     </div>
-    <div id="raw-tab" class="${state.activeTab === "raw" ? "" : "hidden"}">
-      <div class="json-view open"><pre>${esc(JSON.stringify(records, null, 2))}</pre></div>
-      ${hasHiddenRecords ? `<div class="detail-load-more"><button class="load-more-btn" type="button" data-load-more>${esc(t("load_more_records"))}</button></div>` : ""}
-    </div>
   `;
+
+  document.querySelector("[data-viewer-frame]")?.addEventListener("load", event => {
+    event.currentTarget?.parentElement?.querySelector("[data-viewer-loading]")?.remove();
+  });
 
   document.querySelectorAll("[data-tab]").forEach(button => {
     button.addEventListener("click", () => {

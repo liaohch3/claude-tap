@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import tempfile
 from datetime import date
 from pathlib import Path
-from urllib.parse import quote
 
 from aiohttp import web
 
@@ -21,7 +21,7 @@ from claude_tap.dashboard import (
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
 from claude_tap.trace_store import get_trace_store, resolve_db_path
-from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, VIEWER_TEMPLATE_PATH, _read_viewer_template
+from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, VIEWER_TEMPLATE_PATH, _generate_html_viewer, _read_viewer_template
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MAX_SESSION_RECORD_LIMIT = 1000
@@ -321,8 +321,19 @@ class LiveViewerServer:
 
     async def _handle_session_html_compat(self, request: web.Request) -> web.Response:
         session_id = request.match_info["session_id"]
-        dashboard_path = f"/dashboard?session_id={quote(session_id, safe='')}"
-        raise web.HTTPFound(location=dashboard_path)
+        store = ensure_trace_store()
+        if store.load_session_row(session_id) is None:
+            return web.Response(status=404, text="Session not found")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            trace_path = tmp_path / f"session-{session_id[:8]}.jsonl"
+            html_path = tmp_path / f"session-{session_id[:8]}.html"
+            trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
+            _generate_html_viewer(trace_path, html_path)
+            if not html_path.exists():
+                return web.Response(status=500, text="Failed to generate session viewer")
+            html = html_path.read_text(encoding="utf-8")
+        return web.Response(text=html, content_type="text/html")
 
     async def _current_live_record_count(self) -> int:
         async with self._lock:

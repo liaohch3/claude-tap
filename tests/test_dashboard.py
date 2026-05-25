@@ -520,8 +520,10 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 f"http://127.0.0.1:{port}/api/sessions/{session_id}/html",
                 allow_redirects=False,
             ) as resp:
-                assert resp.status == 302
-                assert resp.headers["Location"] == f"/dashboard?session_id={session_id}"
+                assert resp.status == 200
+                html = await resp.text()
+                assert "EMBEDDED_TRACE_DATA" in html
+                assert "req_claude" in html
 
             async with session.get(
                 f"http://127.0.0.1:{port}/api/sessions/{second_session_id}/records?offset=1&limit=1"
@@ -601,21 +603,24 @@ async def test_dashboard_refresh_preserves_loaded_detail_records(trace_db, tmp_p
                     f"http://127.0.0.1:{port}/dashboard?session_id={session_id}",
                     wait_until="domcontentloaded",
                 )
+                await page.wait_for_selector(".viewer-frame", timeout=5000)
+                assert "/api/sessions/" in await page.locator(".viewer-frame").get_attribute("src")
+                await page.click("[data-tab='raw']")
                 await page.wait_for_selector("[data-load-more]", timeout=5000)
-                assert await page.locator("#conversation-tab article.section").count() == 10
+                assert await page.locator("#raw-tab article.section").count() == 10
 
                 await page.click("[data-load-more]")
                 await page.wait_for_function(
-                    "() => document.querySelectorAll('#conversation-tab article.section').length === 12",
+                    "() => document.querySelectorAll('#raw-tab article.section').length === 12",
                     timeout=5000,
                 )
 
                 await page.evaluate("refreshSessions({preserveSelection: true})")
                 await page.wait_for_function(
-                    "() => document.querySelectorAll('#conversation-tab article.section').length === 12",
+                    "() => document.querySelectorAll('#raw-tab article.section').length === 12",
                     timeout=5000,
                 )
-                assert await page.locator("#conversation-tab article.section").count() == 12
+                assert await page.locator("#raw-tab article.section").count() == 12
             finally:
                 await browser.close()
     finally:
