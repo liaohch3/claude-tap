@@ -229,15 +229,12 @@ def test_dashboard_rejects_missing_session_ids(trace_db) -> None:
     assert load_trace_session("not-a-valid-session-id") is None
 
 
-def test_dashboard_detail_route_preserves_viewer_on_background_refresh() -> None:
+def test_dashboard_detail_navigation_uses_standalone_viewer_route() -> None:
     template = read_dashboard_template()
 
-    assert "const SESSION_DETAIL_ROUTE" in template
-    assert "pendingSessionId: initialSessionId()" in template
     assert "function sessionDetailUrl(sessionId)" in template
     assert "window.location.assign(sessionDetailUrl(sessionId))" in template
-    assert "window.location.assign(dashboardListUrl())" in template
-    assert 'document.body.classList.add("detail-route")' in template
+    assert "/dashboard/session/" in template
     assert "detailRecordTotal: 0" in template
     assert 'detailFingerprint: ""' in template
     assert "detailSession: null" in template
@@ -521,11 +518,20 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 second_session_id = next(item["id"] for item in payload["sessions"] if item["record_count"] == 2)
                 session_id = next(item["id"] for item in payload["sessions"] if item["record_count"] == 1)
 
+            async with session.get(
+                f"http://127.0.0.1:{port}/dashboard?session_id={session_id}",
+                allow_redirects=False,
+            ) as resp:
+                assert resp.status == 302
+                assert resp.headers["Location"] == f"/dashboard/session/{session_id}"
+
             async with session.get(f"http://127.0.0.1:{port}/dashboard/session/{session_id}") as resp:
                 assert resp.status == 200
                 html = await resp.text()
-                assert "SESSION_DETAIL_ROUTE" in html
-                assert "sessionDetailUrl" in html
+                assert "EMBEDDED_TRACE_DATA" in html
+                assert "req_claude" in html
+                assert "session-list" not in html
+                assert "back-to-list" not in html
 
             async with session.get(f"http://127.0.0.1:{port}/api/agents") as resp:
                 assert resp.status == 200
@@ -606,7 +612,7 @@ async def test_dashboard_server_sse_events(trace_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dashboard_refresh_preserves_loaded_detail_records(trace_db, tmp_path: Path) -> None:
+async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_path: Path) -> None:
     playwright = pytest.importorskip("playwright.async_api")
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(turn=turn) for turn in range(1, 13)])
@@ -624,26 +630,12 @@ async def test_dashboard_refresh_preserves_loaded_detail_records(trace_db, tmp_p
                     f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
                     wait_until="domcontentloaded",
                 )
-                await page.wait_for_selector(".viewer-frame", timeout=5000)
-                assert "/api/sessions/" in await page.locator(".viewer-frame").get_attribute("src")
-                await page.click("[data-tab='raw']")
-                await page.wait_for_selector("[data-load-more]", timeout=5000)
-                assert await page.locator("#raw-tab article.section").count() == 10
-
-                await page.click("[data-load-more]")
-                await page.wait_for_function(
-                    "() => document.querySelectorAll('#raw-tab article.section').length === 12",
-                    timeout=5000,
-                )
-
-                await page.locator(".viewer-frame").evaluate("node => node.dataset.stableViewer = '1'")
-                await page.evaluate("refreshSessions({preserveSelection: true})")
-                await page.wait_for_function(
-                    "() => document.querySelectorAll('#raw-tab article.section').length === 12",
-                    timeout=5000,
-                )
-                assert await page.locator("#raw-tab article.section").count() == 12
-                assert await page.locator(".viewer-frame").get_attribute("data-stable-viewer") == "1"
+                await page.wait_for_selector(".sidebar-item", timeout=5000)
+                assert await page.locator(".header").count() == 1
+                assert await page.locator(".viewer-frame").count() == 0
+                assert await page.locator("#back-to-list").count() == 0
+                assert await page.locator("#session-list").count() == 0
+                assert await page.locator(".sidebar-item").count() >= 10
             finally:
                 await browser.close()
     finally:

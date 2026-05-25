@@ -8,6 +8,7 @@ import re
 import tempfile
 from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 
 from aiohttp import web
 
@@ -88,7 +89,7 @@ class LiveViewerServer:
             app.router.add_get("/", self._handle_index)
         app.router.add_get("/viewer", self._handle_index)
         app.router.add_get("/dashboard", self._handle_dashboard_index)
-        app.router.add_get("/dashboard/session/{session_id}", self._handle_dashboard_index)
+        app.router.add_get("/dashboard/session/{session_id}", self._handle_dashboard_session_detail)
         app.router.add_get("/dashboard/health", self._handle_dashboard_health)
         app.router.add_get("/dashboard/events", self._handle_dashboard_sse)
         app.router.add_get("/events", self._handle_sse)
@@ -175,11 +176,17 @@ class LiveViewerServer:
 
     async def _handle_dashboard_index(self, request: web.Request) -> web.Response:
         """Serve the session-first dashboard."""
+        if session_id := request.query.get("session_id"):
+            raise web.HTTPFound(location=f"/dashboard/session/{quote(session_id, safe='')}")
         try:
             html = read_dashboard_template()
         except OSError:
             return web.Response(status=404, text="dashboard.html not found")
         return web.Response(text=html, content_type="text/html")
+
+    async def _handle_dashboard_session_detail(self, request: web.Request) -> web.Response:
+        """Serve a dashboard session as the standalone trace viewer page."""
+        return await self._session_html_response(request.match_info["session_id"])
 
     async def _handle_dashboard_health(self, request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "db_path": str(resolve_db_path())})
@@ -321,7 +328,9 @@ class LiveViewerServer:
         return web.json_response(session)
 
     async def _handle_session_html_compat(self, request: web.Request) -> web.Response:
-        session_id = request.match_info["session_id"]
+        return await self._session_html_response(request.match_info["session_id"])
+
+    async def _session_html_response(self, session_id: str) -> web.Response:
         store = ensure_trace_store()
         if store.load_session_row(session_id) is None:
             return web.Response(status=404, text="Session not found")
