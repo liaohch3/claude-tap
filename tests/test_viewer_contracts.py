@@ -1263,6 +1263,50 @@ def test_viewer_sidebar_order_can_switch_between_model_turn_and_session_sequence
     assert session_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
 
 
+def test_viewer_session_group_hover_shows_full_truncated_user_input(tmp_path: Path, chromium_browser) -> None:
+    long_prompt = (
+        "Investigate why the dashboard session group title is truncated, then preserve this full original "
+        "user input in a hover tooltip so maintainers can read the complete request without opening the turn."
+    )
+    record = {
+        "request_id": "req_long_session_prompt",
+        "turn": 1,
+        "timestamp": "2026-05-13T13:21:00+00:00",
+        "duration_ms": 100,
+        "request": {
+            "method": "POST",
+            "path": "/v1/messages",
+            "headers": {},
+            "body": {
+                "model": "aws.claude-sonnet-4.6",
+                "messages": [{"role": "user", "content": long_prompt}],
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {"content": [{"type": "text", "text": "OK"}]},
+        },
+    }
+    html_path = _generate_case_html(tmp_path, "session_hover_tooltip", (record,))
+
+    page = chromium_browser.new_page()
+    page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'session')")
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        header = page.locator(".sidebar-group-header")
+        assert header.locator(".group-name").inner_text().endswith("...")
+
+        header.hover()
+        page.wait_for_selector(".session-hover-tooltip.visible", timeout=5000)
+        tooltip_text = page.locator(".session-hover-tooltip.visible").inner_text()
+    finally:
+        page.close()
+
+    assert errors == []
+    assert tooltip_text == long_prompt
+
+
 def test_viewer_runtime_smoke_handles_degenerate_records_without_js_errors(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "runtime_smoke", _runtime_smoke_records())
 

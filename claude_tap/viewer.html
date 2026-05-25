@@ -214,7 +214,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .sidebar-group-header .group-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
-.sidebar-group-header .group-name { flex: 1; }
+.sidebar-group-header .group-name { flex: 1; min-width: 0; }
 .sidebar-group-header .group-count {
   font-size: 10px; font-weight: 500; color: var(--text-tertiary);
   background: var(--bg-hover); padding: 1px 6px; border-radius: 8px;
@@ -223,6 +223,28 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   font-size: 10px; color: var(--text-tertiary); transition: transform .15s;
 }
 .sidebar-group-header .group-chevron.open { transform: rotate(90deg); }
+.session-hover-tooltip {
+  position: fixed;
+  z-index: 80;
+  display: none;
+  max-height: min(360px, calc(100vh - 24px));
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.55;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.session-hover-tooltip.visible { display: block; }
 
 .sidebar-item {
   padding: 10px 16px; cursor: pointer; transition: background .1s;
@@ -2958,6 +2980,60 @@ function sessionTextSnippet(text, maxLen = 56) {
   return normalized.slice(0, Math.max(0, maxLen - 3)).trimEnd() + '...';
 }
 
+let sessionTooltipEl = null;
+function sessionTooltip() {
+  if (sessionTooltipEl) return sessionTooltipEl;
+  sessionTooltipEl = document.createElement('div');
+  sessionTooltipEl.id = 'session-full-input-tooltip';
+  sessionTooltipEl.className = 'session-hover-tooltip';
+  document.body.appendChild(sessionTooltipEl);
+  return sessionTooltipEl;
+}
+
+function positionSessionTooltip(trigger, tooltip) {
+  const rect = trigger.getBoundingClientRect();
+  let left = rect.right + 10;
+  let maxWidth = Math.min(520, window.innerWidth - left - 12);
+  if (maxWidth < 240) {
+    left = 12;
+    maxWidth = Math.max(180, window.innerWidth - 24);
+  }
+  tooltip.style.width = maxWidth + 'px';
+  tooltip.style.left = left + 'px';
+  tooltip.style.top = '0px';
+  const desiredTop = rect.top;
+  const height = tooltip.offsetHeight || 0;
+  const top = Math.max(12, Math.min(desiredTop, window.innerHeight - height - 12));
+  tooltip.style.top = top + 'px';
+}
+
+function showSessionTooltip(trigger) {
+  const fullText = trigger?.dataset?.fullUserInput || '';
+  if (!fullText) return;
+  const tooltip = sessionTooltip();
+  tooltip.textContent = fullText;
+  tooltip.classList.add('visible');
+  trigger.setAttribute('aria-describedby', tooltip.id);
+  positionSessionTooltip(trigger, tooltip);
+}
+
+function hideSessionTooltip(trigger) {
+  if (!sessionTooltipEl) return;
+  sessionTooltipEl.classList.remove('visible');
+  if (trigger) trigger.removeAttribute('aria-describedby');
+}
+
+function bindSessionInputTooltip(header, fullText, snippet) {
+  const original = String(fullText || '').trim();
+  if (!original || !snippet.endsWith('...')) return;
+  header.dataset.fullUserInput = original;
+  header.tabIndex = 0;
+  header.addEventListener('mouseenter', () => showSessionTooltip(header));
+  header.addEventListener('focus', () => showSessionTooltip(header));
+  header.addEventListener('mouseleave', () => hideSessionTooltip(header));
+  header.addEventListener('blur', () => hideSessionTooltip(header));
+}
+
 function contentTextForSession(content) {
   if (content === undefined || content === null) return '';
   if (typeof content === 'string') return content.trim();
@@ -3229,15 +3305,15 @@ function renderSidebar(preserveDetail) {
       const groupKey = 'session:' + groupIdx + ':' + group.key;
       const isCollapsed = collapsedGroups.has(groupKey);
       const label = sessionTextSnippet(group.userText, 48);
-      const headerTitle = [group.userText, group.responseText].filter(Boolean).join('\n---\n');
       const header = document.createElement('div');
       header.className = 'sidebar-group-header';
-      if (headerTitle) header.title = headerTitle;
       header.innerHTML = `<span class="group-dot" style="background:${taskColor.color}"></span><span class="group-name">${esc(t('sort_session'))} ${groupIdx + 1}${label ? ' - ' + esc(label) : ''}</span><span class="group-count">${group.items.length}</span><span class="group-chevron${isCollapsed ? '' : ' open'}">&#9654;</span>`;
+      bindSessionInputTooltip(header, group.userText, label);
       const content = document.createElement('div');
       if (isCollapsed) content.style.display = 'none';
       group.items.forEach(({ entry: e, idx: i }) => content.appendChild(createSidebarItem(e, i)));
       header.onclick = () => {
+        hideSessionTooltip(header);
         const nowCollapsed = content.style.display !== 'none';
         content.style.display = nowCollapsed ? 'none' : '';
         header.querySelector('.group-chevron').classList.toggle('open');
