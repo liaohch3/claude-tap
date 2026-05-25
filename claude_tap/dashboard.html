@@ -847,6 +847,7 @@ const state = {
   detailRecordsLoaded: 0,
   detailRecordTotal: 0,
   detailFingerprint: "",
+  detailSession: null,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -1043,7 +1044,7 @@ function applyI18n() {
   });
   $("#live-label").textContent = t("live_watching");
   renderStatusOptions();
-  updateTracePathBar();
+  updateTracePathBar(state.view === "detail" ? state.detailSession : null);
 }
 
 function setLang(lang) {
@@ -1053,9 +1054,8 @@ function setLang(lang) {
   renderFilters();
   renderAgents();
   renderSessions();
-  if (state.view === "detail" && state.selectedSessionId) {
-    state.detailFingerprint = "";
-    loadSession(state.selectedSessionId).catch(console.error);
+  if (state.view === "detail" && state.detailSession) {
+    updateDetailI18n(state.detailSession);
   }
 }
 
@@ -1342,6 +1342,7 @@ async function openSession(sessionId) {
   state.detailRecordsLoaded = 0;
   state.detailRecordTotal = 0;
   state.detailFingerprint = "";
+  state.detailSession = null;
   renderSessions();
   showDetailView();
   showDetailLoading(sessionId);
@@ -1354,6 +1355,7 @@ function showListView() {
   state.detailRecordsLoaded = 0;
   state.detailRecordTotal = 0;
   state.detailFingerprint = "";
+  state.detailSession = null;
   $("#list-view").classList.remove("hidden");
   $("#detail-view").classList.add("hidden");
   updateTracePathBar();
@@ -1456,6 +1458,7 @@ function renderDetail(session, records) {
   state.detailRecordsLoaded = records.length;
   state.detailRecordTotal = totalRecords;
   state.detailFingerprint = sessionDetailFingerprint(session);
+  state.detailSession = session;
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
@@ -1467,9 +1470,9 @@ function renderDetail(session, records) {
         <button class="detail-tab ${state.activeTab === "raw" ? "active" : ""}" data-tab="raw">${esc(t("tab_trace"))}</button>
       </div>
       <div class="action-bar">
-        <a class="act-btn" href="/api/sessions/${encodeURIComponent(session.id)}/export/jsonl" download>${esc(t("export_jsonl"))}</a>
-        <a class="act-btn" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
-        <button class="act-btn" data-copy-path="${esc(session.id)}">${esc(t("copy_path"))}</button>
+        <a class="act-btn" data-detail-i18n="export_jsonl" href="/api/sessions/${encodeURIComponent(session.id)}/export/jsonl" download>${esc(t("export_jsonl"))}</a>
+        <a class="act-btn" data-detail-i18n="export_log" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
+        <button class="act-btn" data-detail-i18n="copy_path" data-copy-path="${esc(session.id)}">${esc(t("copy_path"))}</button>
       </div>
     </div>
     <div class="session-summary">
@@ -1532,6 +1535,18 @@ function renderDetail(session, records) {
   });
   document.querySelectorAll("[data-copy-path]").forEach(button => {
     button.addEventListener("click", () => navigator.clipboard?.writeText(button.dataset.copyPath || ""));
+  });
+}
+
+function updateDetailI18n(session) {
+  $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
+  $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
+  updateTracePathBar(session);
+  document.querySelectorAll("[data-tab]").forEach(button => {
+    button.textContent = button.dataset.tab === "conversation" ? t("tab_default") : t("tab_trace");
+  });
+  document.querySelectorAll("[data-detail-i18n]").forEach(element => {
+    element.textContent = t(element.dataset.detailI18n);
   });
 }
 

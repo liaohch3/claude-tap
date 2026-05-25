@@ -234,10 +234,13 @@ def test_dashboard_detail_refresh_extends_loaded_window_for_appended_records() -
 
     assert "detailRecordTotal: 0" in template
     assert 'detailFingerprint: ""' in template
+    assert "detailSession: null" in template
     assert "function detailRecordFetchLimit(sessionId, preserveLoaded)" in template
     assert "function sessionDetailFingerprint(session)" in template
     assert "function shouldRefreshDetail(session)" in template
+    assert "function updateDetailI18n(session)" in template
     assert "if (!selected || shouldRefreshDetail(selected))" in template
+    assert "updateDetailI18n(state.detailSession)" in template
     assert "knownTotal > previousTotal && previousTotal <= loadedRecords" in template
     assert "const limit = detailRecordFetchLimit(sessionId, preserveLoaded)" in template
     assert "state.detailRecordTotal = totalRecords" in template
