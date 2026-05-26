@@ -1587,7 +1587,9 @@ function hasOutputItemEvent(events) {
 function isDisplayableWebSocketResponseGroup(group) {
   const completed = completedResponseFromEvents(group.events);
   if (!completed) return false;
-  return !(completed.generate === false && !hasOutputItemEvent(group.events) && (completed.usage?.output_tokens || 0) === 0);
+  const created = responseCreatedFromEvents(group.events);
+  const isGenerateFalse = completed.generate === false || created?.generate === false;
+  return !(isGenerateFalse && !hasOutputItemEvent(group.events) && (completed.usage?.output_tokens || 0) === 0);
 }
 
 function responseCreatedFromEvents(events) {
@@ -4414,13 +4416,20 @@ function getMessages(body) {
           })
         : item.content
     }));
-    const hasDeveloperMessage = messages.some(m => m.role === 'developer' || m.role === 'system');
-    if (messages.length && !hasDeveloperMessage && typeof body.instructions === 'string' && body.instructions.trim()) {
+    if (shouldPrependResponsesInstructions(body, messages)) {
       return [{ role: 'developer', content: [{ type: 'text', text: body.instructions }] }, ...messages];
     }
     return messages;
   }
   return [];
+}
+
+function shouldPrependResponsesInstructions(body, messages) {
+  if (!Array.isArray(body?.input) || body.input.length === 0) return false;
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  if (messages.some(m => m.role === 'developer' || m.role === 'system')) return false;
+  if (!messages.some(m => m.role === 'user')) return false;
+  return typeof body.instructions === 'string' && body.instructions.trim();
 }
 
 function shouldRenderRequestContext(entry, body, msgs, respOutput) {

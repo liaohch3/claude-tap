@@ -649,6 +649,138 @@ def test_viewer_reconstructs_split_codex_ws_records_across_previous_response_ids
     }
 
 
+def test_viewer_skips_codex_prefetch_when_generate_false_only_on_created(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const record = {
+            request_id: 'req_prefetch_created_flag',
+            turn: 1,
+            transport: 'websocket',
+            request: {
+              method: 'WEBSOCKET',
+              path: '/backend-api/codex/responses',
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                instructions: 'You are Codex.',
+                input: []
+              },
+              ws_events: [
+                {
+                  type: 'response.create',
+                  model: 'gpt-5.5',
+                  instructions: 'You are Codex.',
+                  input: [],
+                  generate: false
+                },
+                {
+                  type: 'response.create',
+                  model: 'gpt-5.5',
+                  instructions: 'You are Codex.',
+                  previous_response_id: 'resp_prefetch',
+                  input: [
+                    { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Real prompt.' }] }
+                  ]
+                }
+              ]
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {},
+              ws_events: [
+                {
+                  type: 'response.created',
+                  response: {
+                    id: 'resp_prefetch',
+                    status: 'in_progress',
+                    model: 'gpt-5.5',
+                    instructions: 'You are Codex.',
+                    generate: false
+                  }
+                },
+                {
+                  type: 'response.completed',
+                  response: {
+                    id: 'resp_prefetch',
+                    status: 'completed',
+                    model: 'gpt-5.5',
+                    instructions: 'You are Codex.',
+                    output: [],
+                    usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 }
+                  }
+                },
+                {
+                  type: 'response.created',
+                  response: {
+                    id: 'resp_real',
+                    status: 'in_progress',
+                    model: 'gpt-5.5',
+                    instructions: 'You are Codex.',
+                    previous_response_id: 'resp_prefetch'
+                  }
+                },
+                {
+                  type: 'response.output_item.done',
+                  output_index: 0,
+                  item: {
+                    id: 'msg_real',
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'Real response.' }]
+                  }
+                },
+                {
+                  type: 'response.completed',
+                  response: {
+                    id: 'resp_real',
+                    status: 'completed',
+                    model: 'gpt-5.5',
+                    instructions: 'You are Codex.',
+                    previous_response_id: 'resp_prefetch',
+                    output: [],
+                    usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 }
+                  }
+                }
+              ]
+            }
+          };
+          const expanded = expandWebSocketResponseEntries([record]);
+          renderDetail(expanded[0]);
+          return {
+            entryCount: expanded.length,
+            responseIds: expanded.map(entry => entry.response.body.id),
+            roles: expanded.map(entry => getMessages(entry.request.body).map(message => message.role)),
+            detailText: document.querySelector('#detail')?.innerText || ''
+          };
+        }"""
+    )
+
+    assert result["entryCount"] == 1
+    assert result["responseIds"] == ["resp_real"]
+    assert result["roles"] == [["developer", "user"]]
+    assert "Real prompt." in result["detailText"]
+    assert "Real response." in result["detailText"]
+
+
+def test_viewer_does_not_synthesize_instructions_without_user_input(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const body = {
+            type: 'response.create',
+            model: 'gpt-5.5',
+            instructions: 'You are Codex.',
+            input: [
+              { type: 'function_call_output', call_id: 'call_pwd', output: '/workspace/project' }
+            ]
+          };
+          return getMessages(body).map(message => message.role);
+        }"""
+    )
+
+    assert result == ["tool"]
+
+
 def test_viewer_preserves_codex_ws_history_across_incremental_expansion(responses_page) -> None:
     result = responses_page.evaluate(
         """() => {
