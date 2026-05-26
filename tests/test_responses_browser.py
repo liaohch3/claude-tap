@@ -132,7 +132,7 @@ def test_viewer_renders_codex_responses_messages_usage_and_response(responses_pa
 
     detail_text = responses_page.locator("#detail").inner_text()
 
-    assert "Messages" in detail_text
+    assert "Input" in detail_text
     assert "USER" in detail_text
     assert "Hello" in detail_text
     assert "Response" in detail_text
