@@ -7,6 +7,7 @@ import json
 import logging
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 
 import aiohttp
@@ -33,6 +34,7 @@ _WS_HANDSHAKE_HEADERS = frozenset(
         "sec-websocket-accept",
     }
 )
+_COMPLETED_RESPONSE_KEY_CACHE_SIZE = 1024
 
 
 def _get_ws_proxy_settings(ws_url: str) -> tuple[URL, aiohttp.BasicAuth | None] | None:
@@ -119,7 +121,8 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         )
     except Exception as exc:
         duration_ms = int((time.monotonic() - t0) * 1000)
-        log.error(f"{log_prefix} upstream WS connect to {upstream_ws_url} failed: {exc}")
+        error_message = str(exc) or exc.__class__.__name__
+        log.error(f"{log_prefix} upstream WS connect to {upstream_ws_url} failed: {error_message}")
         record = _build_ws_record(
             req_id=req_id,
             turn=turn,
@@ -129,10 +132,10 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             client_messages=[],
             server_messages=[],
             upstream_base_url=target,
-            error=str(exc),
+            error=error_message,
         )
         await writer.write(record)
-        return web.Response(status=502, text=str(exc))
+        return web.Response(status=502, text=error_message)
 
     # Upstream connected — accept client WebSocket upgrade
     client_ws = web.WebSocketResponse(protocols=protocols)
@@ -140,32 +143,81 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
 
     client_messages: list[str] = []
     server_messages: list[str] = []
+    client_message_count = 0
+    server_message_count = 0
     completed_records_written = 0
     completed_response_keys: set[str] = set()
+    completed_response_key_order: deque[str] = deque()
+    pending_write: asyncio.Task[None] | None = None
 
-    async def _write_completed_record(response_key: str) -> None:
+    def _pop_buffered_snapshot() -> tuple[int, list[str], list[str]]:
         nonlocal completed_records_written
-        if response_key in completed_response_keys:
-            return
-        completed_response_keys.add(response_key)
         completed_records_written += 1
-        snapshot_turn: int | str = turn if completed_records_written == 1 else f"{turn}.{completed_records_written}"
+        record_client_messages = client_messages.copy()
+        record_server_messages = server_messages.copy()
+        client_messages.clear()
+        server_messages.clear()
+        return completed_records_written, record_client_messages, record_server_messages
+
+    def _pop_buffered_server_snapshot() -> tuple[int, list[str], list[str]]:
+        nonlocal completed_records_written
+        completed_records_written += 1
+        record_server_messages = server_messages.copy()
+        server_messages.clear()
+        return completed_records_written, [], record_server_messages
+
+    async def _write_buffered_snapshot(snapshot: tuple[int, list[str], list[str]]) -> None:
+        record_number, record_client_messages, record_server_messages = snapshot
         record = _build_ws_record(
-            req_id=req_id if completed_records_written == 1 else f"{req_id}_{completed_records_written}",
-            turn=snapshot_turn,
+            req_id=req_id if record_number == 1 else f"{req_id}_{record_number}",
+            turn=turn if record_number == 1 else f"{turn}.{record_number}",
             duration_ms=int((time.monotonic() - t0) * 1000),
             path_qs=request.path_qs,
             req_headers=request.headers,
-            client_messages=client_messages.copy(),
-            server_messages=server_messages.copy(),
+            client_messages=record_client_messages,
+            server_messages=record_server_messages,
             upstream_base_url=target,
         )
         await writer.write(record)
 
+    async def _write_buffered_record() -> None:
+        await _write_buffered_snapshot(_pop_buffered_snapshot())
+
+    def _schedule_buffered_snapshot(snapshot: tuple[int, list[str], list[str]]) -> None:
+        nonlocal pending_write
+        previous_write = pending_write
+
+        async def _write_after_previous() -> None:
+            if previous_write is not None:
+                await previous_write
+            await _write_buffered_snapshot(snapshot)
+
+        pending_write = asyncio.create_task(_write_after_previous())
+
+    async def _drain_pending_write() -> None:
+        if pending_write is not None:
+            await asyncio.shield(pending_write)
+
+    def _pop_completed_snapshot(response_key: str, terminal_message: str) -> tuple[int, list[str], list[str]] | None:
+        if response_key in completed_response_keys:
+            if server_messages and server_messages[-1] == terminal_message:
+                server_messages.pop()
+            if server_messages:
+                return _pop_buffered_server_snapshot()
+            return None
+        completed_response_keys.add(response_key)
+        completed_response_key_order.append(response_key)
+        if len(completed_response_key_order) > _COMPLETED_RESPONSE_KEY_CACHE_SIZE:
+            expired = completed_response_key_order.popleft()
+            completed_response_keys.discard(expired)
+        return _pop_buffered_snapshot()
+
     async def _relay_client_to_upstream():
+        nonlocal client_message_count
         try:
             async for msg in client_ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
+                    client_message_count += 1
                     client_messages.append(msg.data)
                     await upstream_ws.send_str(msg.data)
                 elif msg.type == aiohttp.WSMsgType.BINARY:
@@ -182,14 +234,21 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             pass
 
     async def _relay_upstream_to_client():
+        nonlocal server_message_count
         try:
             async for msg in upstream_ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
+                    server_message_count += 1
                     server_messages.append(msg.data)
-                    await client_ws.send_str(msg.data)
                     response_key = _response_completed_message_key(msg.data)
-                    if response_key is not None:
-                        await _write_completed_record(response_key)
+                    completed_snapshot = (
+                        _pop_completed_snapshot(response_key, msg.data) if response_key is not None else None
+                    )
+                    try:
+                        await client_ws.send_str(msg.data)
+                    finally:
+                        if completed_snapshot is not None:
+                            _schedule_buffered_snapshot(completed_snapshot)
                 elif msg.type == aiohttp.WSMsgType.BINARY:
                     await client_ws.send_bytes(msg.data)
                 elif msg.type in (
@@ -223,23 +282,15 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
 
     duration_ms = int((time.monotonic() - t0) * 1000)
 
-    if completed_records_written == 0:
-        record = _build_ws_record(
-            req_id=req_id,
-            turn=turn,
-            duration_ms=duration_ms,
-            path_qs=request.path_qs,
-            req_headers=request.headers,
-            client_messages=client_messages,
-            server_messages=server_messages,
-            upstream_base_url=target,
-        )
-        await writer.write(record)
+    await _drain_pending_write()
+
+    if client_messages or server_messages:
+        await _write_buffered_record()
 
     log.info(
         f"{log_prefix} ← WS closed ({duration_ms}ms, "
-        f"{len(client_messages)} client→upstream, "
-        f"{len(server_messages)} upstream→client)"
+        f"{client_message_count} client→upstream, "
+        f"{server_message_count} upstream→client)"
     )
 
     return client_ws
@@ -284,7 +335,7 @@ def _build_ws_record(
             "body": req_body,
         },
         "response": {
-            "status": 101 if not error else 502,
+            "status": 101 if error is None else 502,
             "headers": {},
             "body": resp_body,
         },
@@ -293,7 +344,7 @@ def _build_ws_record(
         record["response"]["ws_events"] = ws_events
     if req_events:
         record["request"]["ws_events"] = req_events
-    if error:
+    if error is not None:
         record["response"]["error"] = error
     if upstream_base_url:
         record["upstream_base_url"] = upstream_base_url

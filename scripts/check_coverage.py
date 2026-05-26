@@ -393,6 +393,30 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   if (entries.length > 1) compareSidebarModelOrder(entries[0], entries[1]);
                 }"""
             )
+            page.evaluate(
+                """async () => {
+                  const liveStatus = document.querySelector('#live-status') || document.createElement('div');
+                  liveStatus.id = 'live-status';
+                  if (!liveStatus.isConnected) document.body.appendChild(liveStatus);
+                  const wsRecord = EMBEDDED_TRACE_DATA.find(record => record.transport === 'websocket');
+                  if (wsRecord) {
+                    expandLiveWebSocketResponseEntries([wsRecord], true);
+                    liveRecords = [wsRecord];
+                    await onDateChange('live');
+                    const OriginalEventSource = window.EventSource;
+                    window.EventSource = class {
+                      constructor(url) { this.url = url; }
+                      close() {}
+                    };
+                    try {
+                      initLiveMode();
+                      liveEventSource.onmessage({ data: JSON.stringify(wsRecord) });
+                    } finally {
+                      window.EventSource = OriginalEventSource;
+                    }
+                  }
+                }"""
+            )
             for index in range(page.evaluate("filtered.length")):
                 page.evaluate("entryIndex => { detailViewMode = 'default'; selectEntry(entryIndex); }", index)
                 page.wait_for_selector("#detail .section", timeout=5000)
@@ -578,6 +602,8 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
             page.evaluate(
                 """() => {
                   setDetailViewMode('default');
+                  const contentBlockEntry = entries.find(entry => entry.request_id === 'req_content_block_boundary_contract');
+                  if (contentBlockEntry) renderDetail(contentBlockEntry);
                   document.querySelector('#detail')?.insertAdjacentHTML(
                     'afterbegin',
                     '<div class="continuation-banner"><div class="cb-icon"></div><div class="cb-content"><div class="cb-title"></div><div class="cb-message"></div><div class="cb-meta"><div class="cb-key">id</div><div class="cb-val">resp</div></div></div></div>'

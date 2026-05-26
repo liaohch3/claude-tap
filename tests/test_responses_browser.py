@@ -317,7 +317,7 @@ def test_viewer_expands_codex_websocket_session_into_response_entries(codex_ws_m
         "derived": 2,
         "sidebar": 2,
         "banners": 0,
-        "turns": ["14.1", "14.2"],
+        "turns": ["14.2", "14.3"],
         "previousIds": ["resp_prefetch", "resp_tool"],
         "responseIds": ["resp_tool", "resp_final"],
         "hasPrompt": [True, True],
@@ -534,6 +534,208 @@ def test_viewer_interleaves_codex_ws_tool_results_with_prior_outputs(responses_p
     ]
 
 
+def test_viewer_reconstructs_split_codex_ws_records_across_previous_response_ids(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const baseRequest = {
+            method: 'WEBSOCKET',
+            path: '/backend-api/codex/responses',
+            headers: {}
+          };
+          const prefetch = {
+            request_id: 'req_split',
+            turn: 1,
+            transport: 'websocket',
+            request: {
+              ...baseRequest,
+              body: { type: 'response.create', model: 'gpt-5.5', input: [], generate: false },
+              ws_events: [{ type: 'response.create', model: 'gpt-5.5', input: [], generate: false }]
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {},
+              ws_events: [
+                { type: 'response.created', response: { id: 'resp_prefetch', status: 'in_progress', model: 'gpt-5.5', generate: false } },
+                { type: 'response.completed', response: { id: 'resp_prefetch', status: 'completed', model: 'gpt-5.5', generate: false, output: [], usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } } }
+              ]
+            }
+          };
+          const toolTurn = {
+            request_id: 'req_split_2',
+            turn: '1.2',
+            transport: 'websocket',
+            request: {
+              ...baseRequest,
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                previous_response_id: 'resp_prefetch',
+                input: [
+                  { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Rules.' }] },
+                  { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Run pwd.' }] }
+                ],
+                tools: [{ type: 'function', name: 'exec_command' }]
+              },
+              ws_events: []
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {},
+              ws_events: [
+                { type: 'response.created', response: { id: 'resp_tool', status: 'in_progress', model: 'gpt-5.5', previous_response_id: 'resp_prefetch' } },
+                { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', name: 'exec_command', call_id: 'call_pwd', arguments: '{\"cmd\":\"pwd\"}' } },
+                { type: 'response.completed', response: { id: 'resp_tool', status: 'completed', model: 'gpt-5.5', previous_response_id: 'resp_prefetch', output: [], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } }
+              ]
+            }
+          };
+          const finalTurn = {
+            request_id: 'req_split_3',
+            turn: '1.3',
+            transport: 'websocket',
+            request: {
+              ...baseRequest,
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                previous_response_id: 'resp_tool',
+                input: [{ type: 'function_call_output', call_id: 'call_pwd', output: '/workspace/project' }],
+                tools: [{ type: 'function', name: 'exec_command' }]
+              },
+              ws_events: []
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {},
+              ws_events: [
+                { type: 'response.created', response: { id: 'resp_final', status: 'in_progress', model: 'gpt-5.5', previous_response_id: 'resp_tool' } },
+                { type: 'response.output_item.done', output_index: 0, item: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'FINAL_SPLIT_OK' }] } },
+                { type: 'response.completed', response: { id: 'resp_final', status: 'completed', model: 'gpt-5.5', previous_response_id: 'resp_tool', output: [], usage: { input_tokens: 20, output_tokens: 3, total_tokens: 23 } } }
+              ]
+            }
+          };
+          const expanded = expandWebSocketResponseEntries([prefetch, toolTurn, finalTurn]);
+          return {
+            turns: expanded.map(entry => entry.turn),
+            responseIds: expanded.map(entry => entry.response.body.id),
+            messages: expanded.map(entry => getMessages(entry.request.body).map(message => {
+              const content = Array.isArray(message.content) ? message.content : [];
+              const toolUse = content.find(block => block.type === 'tool_use');
+              if (toolUse) return `${message.role}:tool_use:${toolUse.id}:${toolUse.name}`;
+              const toolResult = content.find(block => block.type === 'tool_result');
+              if (toolResult) return `${message.role}:tool_result:${toolResult.tool_use_id}:${toolResult.content}`;
+              return `${message.role}:text:${content.map(block => block.text || '').filter(Boolean).join(' ')}`;
+            })),
+            output: expanded.map(entry => (getResponseOutput(entry)?.content || []).map(block => block.text || block.name || block.type))
+          };
+        }"""
+    )
+
+    assert result == {
+        "turns": ["1.2", "1.3"],
+        "responseIds": ["resp_tool", "resp_final"],
+        "messages": [
+            ["developer:text:Rules.", "user:text:Run pwd."],
+            [
+                "developer:text:Rules.",
+                "user:text:Run pwd.",
+                "assistant:tool_use:call_pwd:exec_command",
+                "tool:tool_result:call_pwd:/workspace/project",
+            ],
+        ],
+        "output": [["exec_command"], ["FINAL_SPLIT_OK"]],
+    }
+
+
+def test_viewer_preserves_codex_ws_history_across_incremental_expansion(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const baseRequest = {
+            method: 'WEBSOCKET',
+            path: '/backend-api/codex/responses',
+            headers: {}
+          };
+          const toolTurn = {
+            request_id: 'req_incremental_1',
+            turn: 1,
+            transport: 'websocket',
+            request: {
+              ...baseRequest,
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Run pwd.' }] }],
+                tools: [{ type: 'function', name: 'exec_command' }]
+              }
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {},
+              ws_events: [
+                { type: 'response.created', response: { id: 'resp_tool', status: 'in_progress', model: 'gpt-5.5' } },
+                { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', name: 'exec_command', call_id: 'call_pwd', arguments: '{\"cmd\":\"pwd\"}' } },
+                { type: 'response.completed', response: { id: 'resp_tool', status: 'completed', model: 'gpt-5.5', output: [], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } }
+              ]
+            }
+          };
+          const finalTurn = {
+            request_id: 'req_incremental_2',
+            turn: 2,
+            transport: 'websocket',
+            request: {
+              ...baseRequest,
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                previous_response_id: 'resp_tool',
+                input: [{ type: 'function_call_output', call_id: 'call_pwd', output: '/workspace/project' }],
+                tools: [{ type: 'function', name: 'exec_command' }]
+              }
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {},
+              ws_events: [
+                { type: 'response.created', response: { id: 'resp_final', status: 'in_progress', model: 'gpt-5.5', previous_response_id: 'resp_tool' } },
+                { type: 'response.output_item.done', output_index: 0, item: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'FINAL_INCREMENTAL_OK' }] } },
+                { type: 'response.completed', response: { id: 'resp_final', status: 'completed', model: 'gpt-5.5', previous_response_id: 'resp_tool', output: [], usage: { input_tokens: 20, output_tokens: 3, total_tokens: 23 } } }
+              ]
+            }
+          };
+          const history = createWebSocketResponseHistoryStore();
+          expandWebSocketResponseEntries([toolTurn], history);
+          const expanded = expandWebSocketResponseEntries([finalTurn], history);
+          const messages = getMessages(expanded[0].request.body).map(message => {
+            const content = Array.isArray(message.content) ? message.content : [];
+            const toolUse = content.find(block => block.type === 'tool_use');
+            if (toolUse) return `${message.role}:tool_use:${toolUse.id}:${toolUse.name}`;
+            const toolResult = content.find(block => block.type === 'tool_result');
+            if (toolResult) return `${message.role}:tool_result:${toolResult.tool_use_id}:${toolResult.content}`;
+            return `${message.role}:text:${content.map(block => block.text || '').filter(Boolean).join(' ')}`;
+          });
+          return {
+            messages,
+            historySizes: [...history.values()].map(node => (
+              (node.requestInput || []).length + (node.outputMessages || []).length
+            ))
+          };
+        }"""
+    )
+
+    assert result == {
+        "messages": [
+            "user:text:Run pwd.",
+            "assistant:tool_use:call_pwd:exec_command",
+            "tool:tool_result:call_pwd:/workspace/project",
+        ],
+        "historySizes": [2, 2],
+    }
+
+
 def test_viewer_omits_empty_reasoning_blocks_for_zero_reasoning_tokens(responses_page) -> None:
     responses_page.evaluate(
         """() => {
@@ -608,6 +810,298 @@ def test_viewer_normalizes_generic_responses_tool_call_items(responses_page) -> 
     assert result["roles"] == ["user", "assistant", "tool"]
     assert "web_search" in result["renderedMessages"]
     assert "computer_screenshot" in result["renderedMessages"]
+
+
+def test_viewer_marks_codex_message_content_blocks(responses_page) -> None:
+    responses_page.evaluate(
+        """() => {
+          const record = {
+            request_id: 'req_codex_multiblock',
+            turn: 12,
+            transport: 'websocket',
+            request: {
+              method: 'WEBSOCKET',
+              path: '/backend-api/codex/responses',
+              headers: {},
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                input: [
+                  {
+                    type: 'message',
+                    role: 'developer',
+                    content: [
+                      { type: 'input_text', text: 'Developer policy block.' },
+                      { type: 'input_text', text: 'Repository instruction block.' },
+                      { type: 'input_text', text: 'Runtime permission block.' }
+                    ]
+                  },
+                  {
+                    type: 'message',
+                    role: 'user',
+                    content: [
+                      { type: 'input_text', text: 'User task block.' },
+                      { type: 'input_text', text: 'Attached context block.' }
+                    ]
+                  }
+                ],
+                stream: true
+              }
+            },
+            response: {
+              status: 200,
+              headers: {},
+              body: {
+                output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Done.' }] }],
+                usage: { input_tokens: 10, output_tokens: 2 }
+              }
+            }
+          };
+          renderDetail(record);
+        }"""
+    )
+
+    detail_text = responses_page.locator("#detail").inner_text()
+    assert responses_page.locator(".content-block-meta").count() == 0
+    assert responses_page.locator(".msg.system .content-block.block-framed").count() == 3
+    assert responses_page.locator(".msg.user .content-block.block-framed").count() == 2
+    assert (
+        responses_page.locator(".msg.system .content-block.block-framed").first.evaluate(
+            "el => getComputedStyle(el).borderLeftWidth"
+        )
+        == "1px"
+    )
+    assert "#1/3" not in detail_text
+    assert "input_text" not in detail_text
+    assert "Repository instruction block." in detail_text
+
+
+def test_viewer_marks_claude_system_and_message_content_blocks(responses_page) -> None:
+    responses_page.evaluate(
+        """() => {
+          const record = {
+            request_id: 'req_claude_multiblock',
+            turn: 3,
+            request: {
+              method: 'POST',
+              path: '/v1/messages',
+              headers: {},
+              body: {
+                model: 'claude-opus-4-6',
+                system: [
+                  { type: 'text', text: 'Claude Code system block one.' },
+                  { type: 'text', text: 'Claude Code system block two.' }
+                ],
+                messages: [
+                  {
+                    role: 'user',
+                    content: [
+                      { type: 'text', text: 'Read the first file.' },
+                      { type: 'text', text: 'Then summarize the diff.' }
+                    ]
+                  }
+                ]
+              }
+            },
+            response: {
+              status: 200,
+              headers: {},
+              body: {
+                content: [{ type: 'text', text: 'Claude response.' }],
+                usage: { input_tokens: 12, output_tokens: 3 }
+              }
+            }
+          };
+          renderDetail(record);
+        }"""
+    )
+
+    detail_text = responses_page.locator("#detail").inner_text()
+    assert responses_page.locator(".content-block-meta").count() == 0
+    assert responses_page.locator(".system-prompt-blocks .content-block.block-framed").count() == 2
+    assert responses_page.locator(".msg.user .content-block.block-framed").count() == 2
+    assert (
+        responses_page.locator(".system-prompt-blocks .content-block.block-framed").first.evaluate(
+            "el => getComputedStyle(el).borderLeftWidth"
+        )
+        == "1px"
+    )
+    assert "#1/2" not in detail_text
+    assert "system · text" not in detail_text
+    system_copy_text = responses_page.evaluate(
+        """() => {
+          const section = Array.from(document.querySelectorAll('#detail .section'))
+            .find(el => el.querySelector('.title')?.textContent === t('section_system'));
+          const encoded = section?.querySelector('.copy-btn')?.dataset.copy || '';
+          return decodeURIComponent(escape(atob(encoded)));
+        }"""
+    )
+    assert system_copy_text == "Claude Code system block one.\n\nClaude Code system block two."
+    assert "Claude Code system block two." in responses_page.locator("#detail").inner_text()
+
+
+def test_viewer_renders_image_content_blocks(responses_page) -> None:
+    responses_page.evaluate(
+        """() => {
+          const record = {
+            request_id: 'req_image_blocks',
+            turn: 14,
+            request: {
+              method: 'POST',
+              path: '/v1/responses',
+              headers: {},
+              body: {
+                model: 'gpt-5.5',
+                input: [
+                  {
+                    type: 'message',
+                    role: 'user',
+                    content: [
+                      { type: 'input_text', text: 'Please inspect this tiny image.' },
+                      {
+                        type: 'input_image',
+                        image_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAEklEQVR4nGPQb3j7Hx9mGBkKAKVjpsHoKJzJAAAAAElFTkSuQmCC',
+                        detail: 'high'
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            response: {
+              status: 200,
+              headers: {},
+              body: {
+                content: [{ type: 'text', text: 'Image block response OK.' }],
+                usage: { input_tokens: 15, output_tokens: 4 }
+              }
+            }
+          };
+          renderDetail(record);
+        }"""
+    )
+
+    assert responses_page.locator(".msg.user .content-block.block-framed").count() == 2
+    image = responses_page.locator(".msg.user .content-block.block-framed img")
+    assert image.count() == 1
+    assert "content-image" in image.first.get_attribute("class")
+    assert image.first.get_attribute("src").startswith("data:image/png;base64,")
+    assert image.first.get_attribute("alt") == "image"
+    image_state = image.first.evaluate(
+        """img => {
+          const rect = img.getBoundingClientRect();
+          return {
+            complete: img.complete,
+            naturalWidth: img.naturalWidth,
+            width: rect.width,
+            height: rect.height,
+            minWidth: getComputedStyle(img).minWidth,
+          };
+        }"""
+    )
+    assert image_state["complete"] is True
+    assert image_state["naturalWidth"] == 8
+    assert image_state["width"] >= 100
+    assert image_state["height"] >= 100
+    assert image_state["minWidth"] == "min(160px, 100%)"
+
+
+def test_viewer_preserves_file_id_image_content_blocks(responses_page) -> None:
+    responses_page.evaluate(
+        """() => {
+          const record = {
+            request_id: 'req_file_id_image_blocks',
+            turn: 15,
+            request: {
+              method: 'POST',
+              path: '/v1/responses',
+              headers: {},
+              body: {
+                model: 'gpt-5.5',
+                input: [
+                  {
+                    type: 'message',
+                    role: 'user',
+                    content: [
+                      { type: 'input_text', text: 'Please inspect this uploaded image.' },
+                      {
+                        type: 'input_image',
+                        file_id: 'file-test-image-123',
+                        detail: 'high'
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            response: {
+              status: 200,
+              headers: {},
+              body: {
+                content: [{ type: 'text', text: 'Uploaded image block response OK.' }],
+                usage: { input_tokens: 15, output_tokens: 4 }
+              }
+            }
+          };
+          renderDetail(record);
+        }"""
+    )
+
+    assert responses_page.locator(".msg.user .content-block.block-framed").count() == 2
+    placeholder = responses_page.locator(".msg.user .content-image-placeholder")
+    assert placeholder.count() == 1
+    assert placeholder.inner_text() == "image: file_id file-test-image-123"
+    assert responses_page.locator(".msg.user img.content-image").count() == 0
+    assert "Please inspect this uploaded image." in responses_page.locator("#detail").inner_text()
+
+
+def test_viewer_does_not_auto_load_remote_image_urls(responses_page) -> None:
+    responses_page.evaluate(
+        """() => {
+          const record = {
+            request_id: 'req_remote_image_blocks',
+            turn: 16,
+            request: {
+              method: 'POST',
+              path: '/v1/responses',
+              headers: {},
+              body: {
+                model: 'gpt-5.5',
+                input: [
+                  {
+                    type: 'message',
+                    role: 'user',
+                    content: [
+                      { type: 'input_text', text: 'Please inspect this remote image reference.' },
+                      {
+                        type: 'input_image',
+                        image_url: 'https://internal.example.test/private.png',
+                        detail: 'high'
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            response: {
+              status: 200,
+              headers: {},
+              body: {
+                content: [{ type: 'text', text: 'Remote image reference response OK.' }],
+                usage: { input_tokens: 15, output_tokens: 4 }
+              }
+            }
+          };
+          renderDetail(record);
+        }"""
+    )
+
+    assert responses_page.locator(".msg.user .content-block.block-framed").count() == 2
+    placeholder = responses_page.locator(".msg.user .content-image-placeholder")
+    assert placeholder.count() == 1
+    assert placeholder.inner_text() == "image: url"
+    assert responses_page.locator(".msg.user img.content-image").count() == 0
+    assert responses_page.locator('.msg.user img[src*="internal.example.test"]').count() == 0
 
 
 def test_viewer_renders_codex_tool_search_call_and_output(responses_page) -> None:

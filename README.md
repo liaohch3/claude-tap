@@ -11,7 +11,7 @@
 
 `claude-tap` is a local proxy and trace viewer for AI coding agents. Run your CLI through it, then inspect the real API traffic: system prompts, conversation history, tool schemas, tool calls, streaming responses, token usage, and request diffs.
 
-It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), and [Antigravity CLI](https://antigravity.google/product/antigravity-cli).
+It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
 
 <p align="center">
   <img src="docs/demo.gif" alt="claude-tap demo showing a real Codex trace" width="100%">
@@ -45,7 +45,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 - 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
 - 📦 **Share one portable artifact**: each run writes a JSONL trace and a self-contained HTML viewer for review or archiving.
 - 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
-- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, Cursor CLI, and Qoder CLI.
+- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
 
 ## Supported Clients
 
@@ -61,6 +61,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 | [Cursor CLI](https://cursor.com/cli) | Cursor Agent sessions plus readable local transcript import |
 | [Qoder CLI](https://qoder.com/cli) | Qoder Agent sessions through forward proxy mode |
 | [Antigravity CLI](https://antigravity.google/product/antigravity-cli) | Antigravity Agent sessions through forward proxy mode |
+| [CodeBuddy CLI](https://www.codebuddy.ai) | Tencent CodeBuddy SaaS or internal Copilot endpoint |
 
 ## Install
 
@@ -107,6 +108,9 @@ claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
 
 # Antigravity CLI
 claude-tap --tap-client agy
+
+# CodeBuddy CLI
+claude-tap --tap-client codebuddy
 ```
 
 <details>
@@ -337,6 +341,24 @@ claude-tap trust-ca
 </details>
 
 <details>
+<summary>CodeBuddy CLI examples</summary>
+
+CodeBuddy uses reverse proxy mode by default. claude-tap auto-detects the upstream from CodeBuddy's own login cache (`~/.codebuddy/local_storage/`), so iOA / WeChat / Google-Github / Enterprise-Domain login modes all work without any extra flag. When the cache is missing (e.g. before first login), it falls back to `https://copilot.tencent.com/v2`.
+
+```bash
+# Auto-detected endpoint (works for all four login modes once logged in)
+claude-tap --tap-client codebuddy
+
+# Explicit override (e.g. external SaaS or staging)
+claude-tap --tap-client codebuddy --tap-target https://www.codebuddy.ai/v2
+
+# Or via environment variable
+CODEBUDDY_BASE_URL=https://www.codebuddy.ai/v2 claude-tap --tap-client codebuddy -- -p "Reply OK"
+```
+
+</details>
+
+<details>
 <summary>Viewer, export, and advanced options</summary>
 
 ```bash
@@ -370,7 +392,7 @@ In proxy-only mode, start your client in another terminal and point its base URL
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default), agy, codex, gemini, kimi, opencode, pi, hermes, cursor, or qoder
+--tap-client CLIENT      Client to launch: claude (default), agy, codex, gemini, kimi, opencode, pi, hermes, cursor, qoder, or codebuddy
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer while the client runs (default: on)
 --tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)
@@ -383,7 +405,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi, forward for agy/gemini/opencode/pi/hermes/cursor/qoder)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/codebuddy, forward for agy/gemini/opencode/pi/hermes/cursor/qoder)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 
