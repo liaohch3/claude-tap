@@ -4422,7 +4422,7 @@ function shouldRenderRequestContext(entry, body, msgs, respOutput) {
   const method = entry?.request?.method || '';
   if (!entry.derived_from_websocket && entry.transport !== 'websocket' && method !== 'WEBSOCKET') return false;
   const path = getPath(entry);
-  if (!path.includes('/codex/responses')) return false;
+  if (!path.includes('/codex/responses') && !path.includes('/v1/responses')) return false;
   if (!Array.isArray(body.input) || body.input.length === 0) return false;
   return true;
 }

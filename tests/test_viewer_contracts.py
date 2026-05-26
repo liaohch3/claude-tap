@@ -303,6 +303,13 @@ def _content_block_boundary_record() -> dict[str, Any]:
     }
 
 
+def _codex_reverse_websocket_record() -> dict[str, Any]:
+    record = _codex_websocket_record()
+    record["request_id"] = "req_codex_reverse_ws_contract"
+    record["request"]["path"] = "/v1/responses"
+    return record
+
+
 def _chat_completions_record() -> dict[str, Any]:
     return {
         "timestamp": "2026-05-13T13:23:00+00:00",
@@ -934,6 +941,18 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
         ViewerContractCase(
             name="codex_websocket",
             records=(_codex_websocket_record(),),
+            expected_sections=("Tools", "System Prompt", "Request Context", "Response", "SSE Events"),
+            expected_system="You are Codex WebSocket contract system prompt.",
+            expected_roles=("developer", "user"),
+            expected_tools=("exec_command",),
+            expected_output_types=("tool_use", "text"),
+            expected_usage={"input_tokens": 140, "output_tokens": 8},
+            required_detail_text=("Continue after a tool call.", "exec_command", "WebSocket final OK."),
+            min_stream_events=3,
+        ),
+        ViewerContractCase(
+            name="codex_reverse_websocket",
+            records=(_codex_reverse_websocket_record(),),
             expected_sections=("Tools", "System Prompt", "Request Context", "Response", "SSE Events"),
             expected_system="You are Codex WebSocket contract system prompt.",
             expected_roles=("developer", "user"),
