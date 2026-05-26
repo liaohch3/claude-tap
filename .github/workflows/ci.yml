@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -38,13 +42,33 @@ jobs:
 
   screenshot-quality:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Collect screenshot-related changes
+        id: screenshot_changes
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > /tmp/pr-changed-files.txt
+          if grep -Eq '^(\.agents/evidence/pr/|scripts/check_screenshots\.(py|sh))' /tmp/pr-changed-files.txt; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Validate screenshot evidence quality
+        if: github.event_name != 'pull_request' || steps.screenshot_changes.outputs.should_run == 'true'
         run: python scripts/check_screenshots.py .agents/evidence/pr/
+      - name: Skip unchanged screenshot evidence
+        if: github.event_name == 'pull_request' && steps.screenshot_changes.outputs.should_run != 'true'
+        run: echo "No screenshot evidence or screenshot checker changes in this PR; skipping full screenshot scan."
 
   pr-policy:
     runs-on: ubuntu-latest
