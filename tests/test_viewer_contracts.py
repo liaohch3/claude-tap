@@ -1400,8 +1400,12 @@ def test_viewer_sidebar_order_can_switch_between_model_turn_and_session_sequence
         {"mode": "turn", "label": "Turn", "active": False},
         {"mode": "session", "label": "Session", "active": True},
     ]
-    assert session_state["groups"] == ["Session 1 - First sidebar task", "Session 2 - Second sidebar task"]
-    assert session_state["counts"] == ["1", "2"]
+    assert session_state["groups"] == [
+        "Session 1 - First sidebar task",
+        "Session 2 - Second sidebar task",
+        "Session 3 - Second sidebar task",
+    ]
+    assert session_state["counts"] == ["1", "1", "1"]
     assert session_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
 
 
@@ -1637,9 +1641,13 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
         "geminiMessages",
         "geminiResponseOutput",
         "renderTools",
+        "renderImageBlock",
+        "sessionTurnDiscriminator",
+        "showSessionTooltip",
     }
 
     page = chromium_browser.new_page()
+    page.add_init_script("window.__TRACE_SESSION_EXPORTS__ = {jsonl: 'coverage.jsonl', log: 'coverage.log'};")
     try:
         session = page.context.new_cdp_session(page)
         session.send("Profiler.enable")
@@ -1670,6 +1678,40 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
                 }""",
                 index,
             )
+
+        page.evaluate(
+            """() => {
+              const imageBlock = {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+                }
+              };
+              imageLookupKey('<session>[Image #1] coverage prompt</session>');
+              isInlineImageUrl('data:image/png;base64,abc');
+              imageSourceFromBlock(imageBlock);
+              imageBlocksForContent([{ type: 'text', text: '[Image #1] coverage prompt' }, imageBlock]);
+              imageSourceKey(imageBlock);
+              buildSessionImageRegistry();
+              naturalTextFromPromptPayload({ prompt: 'coverage prompt' });
+              if (entries.length) {
+                sessionTurnDiscriminator(entries[0]);
+                sessionKeyForEntry(entries[0], null);
+              }
+              renderImageElement('data:image/png;base64,abc', 'coverage image');
+              renderImageElementForBlock(imageBlock);
+              document.body.insertAdjacentHTML('beforeend', renderImageBlock(imageBlock, 0, 1, { frameBlocks: true }));
+              renderViewerActions();
+              const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
+              if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
+              tooltipTrigger.dataset.fullUserInput = 'coverage tooltip prompt';
+              sessionTooltip();
+              showSessionTooltip(tooltipTrigger);
+              hideSessionTooltip(tooltipTrigger);
+            }"""
+        )
 
         coverage = session.send("Profiler.takePreciseCoverage")
         session.send("Profiler.stopPreciseCoverage")

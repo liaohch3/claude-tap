@@ -148,6 +148,14 @@ class TraceStore:
                 """,
                 (session_id, line_no, logged_at, level, message),
             )
+            conn.execute(
+                """
+                UPDATE sessions
+                SET updated_at = ?
+                WHERE id = ?
+                """,
+                (datetime.now(timezone.utc).isoformat(), session_id),
+            )
             conn.commit()
 
     def finalize_session(self, session_id: str, summary: dict[str, Any] | None = None) -> None:
@@ -175,9 +183,11 @@ class TraceStore:
                 except json.JSONDecodeError:
                     pass
 
+            updated_at = datetime.now(timezone.utc).isoformat()
             if isinstance(existing_summary, dict):
                 existing_summary["status"] = status
                 existing_summary["id"] = session_id
+                existing_summary["updated_at"] = updated_at
                 summary_json_str = json.dumps(existing_summary, ensure_ascii=False, separators=(",", ":"))
             else:
                 summary_json_str = json.dumps(summary, ensure_ascii=False, separators=(",", ":")) if summary else None
@@ -191,7 +201,7 @@ class TraceStore:
                 (
                     status,
                     summary_json_str,
-                    datetime.now(timezone.utc).isoformat(),
+                    updated_at,
                     session_id,
                 ),
             )
@@ -203,7 +213,14 @@ class TraceStore:
 
     def list_session_rows(self) -> list[sqlite3.Row]:
         conn = self._connect()
-        return conn.execute("SELECT * FROM sessions ORDER BY updated_at DESC, started_at DESC").fetchall()
+        return conn.execute(
+            """
+            SELECT * FROM sessions
+            ORDER BY COALESCE(julianday(updated_at), 0) DESC,
+                     COALESCE(julianday(started_at), 0) DESC,
+                     id DESC
+            """
+        ).fetchall()
 
     def load_records(
         self,
@@ -406,9 +423,11 @@ class TraceStore:
             conn = self._connect()
             rows = conn.execute(
                 """
-                SELECT id, status, updated_at
+                SELECT id, status, updated_at, started_at
                 FROM sessions
-                ORDER BY started_at ASC
+                ORDER BY COALESCE(julianday(started_at), 0) ASC,
+                         started_at ASC,
+                         id ASC
                 """
             ).fetchall()
             if len(rows) <= max_sessions:
@@ -439,6 +458,7 @@ class TraceStore:
 
         imported = 0
         legacy_source_key = _legacy_source_key(output_dir)
+        manifest_entries = _manifest_entries_by_rel_path(output_dir)
         for trace_path in sorted(output_dir.glob("**/trace_*.jsonl")):
             rel_path = trace_path.relative_to(output_dir).as_posix()
             if self._legacy_session_exists(legacy_source_key, rel_path):
@@ -446,7 +466,7 @@ class TraceStore:
             records = _read_jsonl_file(trace_path)
             log_path = trace_path.with_suffix(".log")
             logs = _read_log_file(log_path) if log_path.is_file() else []
-            manifest_entry = _manifest_entry_for_rel_path(output_dir, rel_path)
+            manifest_entry = manifest_entries.get(rel_path, {})
             session_id = self._import_legacy_session(
                 legacy_source_key=legacy_source_key,
                 rel_path=rel_path,
@@ -667,7 +687,6 @@ class TraceStore:
             return
         if current == 2:
             self._migrate_v2_to_v3(conn)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         if current != SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported trace database schema version {current}; expected {SCHEMA_VERSION}.")
@@ -682,42 +701,52 @@ class TraceStore:
         sessions_v2 = f"sessions_v2_{suffix}"
         records_v2 = f"records_v2_{suffix}"
         proxy_logs_v2 = f"proxy_logs_v2_{suffix}"
+        if conn.in_transaction:
+            conn.commit()
         conn.execute("PRAGMA foreign_keys = OFF")
-        conn.execute(f"ALTER TABLE sessions RENAME TO {sessions_v2}")
-        conn.execute(f"ALTER TABLE records RENAME TO {records_v2}")
-        conn.execute(f"ALTER TABLE proxy_logs RENAME TO {proxy_logs_v2}")
-        self._create_v3_tables(conn)
-        conn.execute(
-            f"""
-            INSERT INTO sessions (
-                id, started_at, updated_at, date_key, client, proxy_mode,
-                status, record_count, summary_json, legacy_source_key, legacy_rel_path
+        try:
+            conn.execute("BEGIN")
+            conn.execute(f"ALTER TABLE sessions RENAME TO {sessions_v2}")
+            conn.execute(f"ALTER TABLE records RENAME TO {records_v2}")
+            conn.execute(f"ALTER TABLE proxy_logs RENAME TO {proxy_logs_v2}")
+            self._create_v3_tables(conn)
+            conn.execute(
+                f"""
+                INSERT INTO sessions (
+                    id, started_at, updated_at, date_key, client, proxy_mode,
+                    status, record_count, summary_json, legacy_source_key, legacy_rel_path
+                )
+                SELECT
+                    id, started_at, updated_at, date_key, client, proxy_mode,
+                    status, record_count, summary_json, '', legacy_rel_path
+                FROM {sessions_v2}
+                """
             )
-            SELECT
-                id, started_at, updated_at, date_key, client, proxy_mode,
-                status, record_count, summary_json, '', legacy_rel_path
-            FROM {sessions_v2}
-            """
-        )
-        conn.execute(
-            f"""
-            INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
-            SELECT session_id, record_index, turn, timestamp, payload_json
-            FROM {records_v2}
-            """
-        )
-        conn.execute(
-            f"""
-            INSERT INTO proxy_logs (session_id, line_no, logged_at, level, message)
-            SELECT session_id, line_no, logged_at, level, message
-            FROM {proxy_logs_v2}
-            """
-        )
-        conn.execute(f"DROP TABLE {proxy_logs_v2}")
-        conn.execute(f"DROP TABLE {records_v2}")
-        conn.execute(f"DROP TABLE {sessions_v2}")
-        self._create_v3_indexes(conn)
-        conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute(
+                f"""
+                INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
+                SELECT session_id, record_index, turn, timestamp, payload_json
+                FROM {records_v2}
+                """
+            )
+            conn.execute(
+                f"""
+                INSERT INTO proxy_logs (session_id, line_no, logged_at, level, message)
+                SELECT session_id, line_no, logged_at, level, message
+                FROM {proxy_logs_v2}
+                """
+            )
+            conn.execute(f"DROP TABLE {proxy_logs_v2}")
+            conn.execute(f"DROP TABLE {records_v2}")
+            conn.execute(f"DROP TABLE {sessions_v2}")
+            self._create_v3_indexes(conn)
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
 
     def _create_v3_tables(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -834,7 +863,7 @@ def _read_log_file(path: Path) -> list[str]:
         return []
 
 
-def _manifest_entry_for_rel_path(output_dir: Path, rel_path: str) -> dict[str, Any]:
+def _manifest_entries_by_rel_path(output_dir: Path) -> dict[str, dict[str, Any]]:
     manifest_path = output_dir / ".cloudtap-manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -842,13 +871,18 @@ def _manifest_entry_for_rel_path(output_dir: Path, rel_path: str) -> dict[str, A
         return {}
     if not isinstance(manifest, dict):
         return {}
+    entries: dict[str, dict[str, Any]] = {}
     for entry in manifest.get("traces", []):
         if not isinstance(entry, dict):
             continue
         for file_name in entry.get("files", []):
-            if isinstance(file_name, str) and file_name.replace("\\", "/") == rel_path:
-                return entry
-    return {}
+            if isinstance(file_name, str):
+                entries[file_name.replace("\\", "/")] = entry
+    return entries
+
+
+def _manifest_entry_for_rel_path(output_dir: Path, rel_path: str) -> dict[str, Any]:
+    return _manifest_entries_by_rel_path(output_dir).get(rel_path, {})
 
 
 def _legacy_started_at(

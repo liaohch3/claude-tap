@@ -25,7 +25,6 @@ from claude_tap.trace_store import get_trace_store, resolve_db_path
 from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, VIEWER_TEMPLATE_PATH, _generate_html_viewer, _read_viewer_template
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-MAX_SESSION_RECORD_LIMIT = 1000
 
 
 def _record_limit_from_request(request: web.Request) -> int | None:
@@ -36,7 +35,7 @@ def _record_limit_from_request(request: web.Request) -> int | None:
         limit = int(value)
     except ValueError:
         return None
-    return max(0, min(limit, MAX_SESSION_RECORD_LIMIT))
+    return max(0, limit)
 
 
 def _record_offset_from_request(request: web.Request) -> int:

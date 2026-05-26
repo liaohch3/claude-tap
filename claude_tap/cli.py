@@ -33,6 +33,7 @@ from claude_tap.shared_dashboard import (
     dashboard_url,
     ensure_shared_dashboard,
     is_dashboard_healthy,
+    is_legacy_dashboard_healthy,
     resolve_dashboard_port,
 )
 from claude_tap.trace import TraceWriter
@@ -59,6 +60,10 @@ except Exception:
 def _open_browser(url: str) -> None:
     """Open URL in browser without blocking. Silently ignores failures in headless environments."""
     threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
+
+
+async def _is_dashboard_reusable(host: str, port: int) -> bool:
+    return await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port)
 
 
 @dataclass(frozen=True)
@@ -594,7 +599,7 @@ async def async_main(args: argparse.Namespace):
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
     if args.live_viewer:
-        dashboard_host = "127.0.0.1"
+        dashboard_host = args.host
         dashboard_port = resolve_dashboard_port(args.live_port)
         try:
             dashboard_url_value, spawned = await ensure_shared_dashboard(
@@ -635,66 +640,65 @@ async def async_main(args: argparse.Namespace):
     # Reverse proxy mode: aiohttp web app (current behavior)
     forward_server: ForwardProxyServer | None = None
     runner: web.AppRunner | None = None
-
-    if args.proxy_mode == "forward":
-        assert ca_cert_path is not None
-        assert ca_key_path is not None
-        ca = CertificateAuthority(ca_cert_path, ca_key_path)
-        forward_server = ForwardProxyServer(
-            host=args.host,
-            port=args.port,
-            ca=ca,
-            writer=writer,
-            session=session,
-            local_reverse_target=args.target,
-            local_reverse_allowed_path_prefixes=CLIENT_CONFIGS[args.client].forward_base_url_allowed_path_prefixes,
-        )
-        actual_port = await forward_server.start()
-        print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
-        print(f"   CA cert: {ca_cert_path}")
-    else:
-        app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
-        app["trace_ctx"] = {
-            "target_url": args.target,
-            "writer": writer,
-            "session": session,
-            "turn_counter": 0,
-            "extra_allowed_path_prefixes": tuple(args.extra_allowed_paths),
-            **_reverse_proxy_trace_options(args.client, args.target),
-        }
-        app.router.add_route("*", "/{path_info:.*}", proxy_handler)
-
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, args.host, args.port)
-        await site.start()
-
-        # Resolve actual port (site._server is a private API; fall back to args.port)
-        try:
-            actual_port = site._server.sockets[0].getsockname()[1]
-        except (AttributeError, IndexError, OSError):
-            actual_port = args.port
-        print(f"🔍 claude-tap v{__version__} listening on http://{args.host}:{actual_port}")
-
-    print(f"📁 Trace session: {session_id}")
-    print(f"🗄️  Trace database: {resolve_db_path()}")
-
-    # Background update check
-    if not args.no_update_check:
-        try:
-            latest = await _check_pypi_version()
-            if latest and _version_tuple(latest) > _version_tuple(__version__):
-                print(f"⬆️  Update available: {__version__} → {latest}")
-                if not args.no_auto_update:
-                    installer = _detect_installer()
-                    _start_background_update(installer)
-                    print(f"   Downloading update in background ({installer})...")
-        except Exception:
-            pass
-
     exit_code = 0
     client_started_at = time.time()
     try:
+        if args.proxy_mode == "forward":
+            assert ca_cert_path is not None
+            assert ca_key_path is not None
+            ca = CertificateAuthority(ca_cert_path, ca_key_path)
+            forward_server = ForwardProxyServer(
+                host=args.host,
+                port=args.port,
+                ca=ca,
+                writer=writer,
+                session=session,
+                local_reverse_target=args.target,
+                local_reverse_allowed_path_prefixes=CLIENT_CONFIGS[args.client].forward_base_url_allowed_path_prefixes,
+            )
+            actual_port = await forward_server.start()
+            print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
+            print(f"   CA cert: {ca_cert_path}")
+        else:
+            app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
+            app["trace_ctx"] = {
+                "target_url": args.target,
+                "writer": writer,
+                "session": session,
+                "turn_counter": 0,
+                "extra_allowed_path_prefixes": tuple(args.extra_allowed_paths),
+                **_reverse_proxy_trace_options(args.client, args.target),
+            }
+            app.router.add_route("*", "/{path_info:.*}", proxy_handler)
+
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, args.host, args.port)
+            await site.start()
+
+            # Resolve actual port (site._server is a private API; fall back to args.port)
+            try:
+                actual_port = site._server.sockets[0].getsockname()[1]
+            except (AttributeError, IndexError, OSError):
+                actual_port = args.port
+            print(f"🔍 claude-tap v{__version__} listening on http://{args.host}:{actual_port}")
+
+        print(f"📁 Trace session: {session_id}")
+        print(f"🗄️  Trace database: {resolve_db_path()}")
+
+        # Background update check
+        if not args.no_update_check:
+            try:
+                latest = await _check_pypi_version()
+                if latest and _version_tuple(latest) > _version_tuple(__version__):
+                    print(f"⬆️  Update available: {__version__} → {latest}")
+                    if not args.no_auto_update:
+                        installer = _detect_installer()
+                        _start_background_update(installer)
+                        print(f"   Downloading update in background ({installer})...")
+            except Exception:
+                pass
+
         if not args.no_launch:
             client_started_at = time.time()
             try:
@@ -1194,7 +1198,8 @@ async def dashboard_main(args: argparse.Namespace) -> int:
 
     host = args.host
     port = resolve_dashboard_port(args.live_port)
-    if await is_dashboard_healthy(host, port):
+    if await _is_dashboard_reusable(host, port):
+        migrate_legacy_traces(output_dir)
         url = dashboard_url(host, port)
         print(f"🌐 claude-tap dashboard already running: {url}")
         print(f"🗄️  Trace database: {resolve_db_path()}")
@@ -1211,7 +1216,8 @@ async def dashboard_main(args: argparse.Namespace) -> int:
     try:
         await server.start()
     except OSError:
-        if await is_dashboard_healthy(host, port):
+        if await _is_dashboard_reusable(host, port):
+            migrate_legacy_traces(output_dir)
             url = dashboard_url(host, port)
             print(f"🌐 claude-tap dashboard already running: {url}")
             if args.open_viewer:

@@ -28,13 +28,19 @@ def resolve_dashboard_port(explicit: int | None = None) -> int:
     if explicit is not None and explicit > 0:
         return explicit
     override = os.environ.get("CLOUDTAP_DASHBOARD_PORT", "").strip()
-    if override.isdigit():
+    if override.isdigit() and int(override) > 0:
         return int(override)
     return DEFAULT_DASHBOARD_PORT
 
 
 def dashboard_url(host: str, port: int) -> str:
-    return f"http://{host}:{port}"
+    normalized_host = host.strip()
+    if ":" in normalized_host and not normalized_host.startswith("["):
+        normalized_host = f"[{normalized_host}]"
+    return f"http://{normalized_host}:{port}"
+
+
+_LOCAL_DASHBOARD_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def _dashboard_lock_path() -> Path:
@@ -103,7 +109,7 @@ def _dashboard_health_matches_current_db(payload: dict | None) -> bool:
 def _sync_dashboard_healthy_for_current_db(host: str, port: int) -> bool:
     url = f"{dashboard_url(host, port)}/dashboard/health"
     try:
-        with urllib.request.urlopen(url, timeout=_DASHBOARD_HEALTH_TIMEOUT) as resp:
+        with _LOCAL_DASHBOARD_OPENER.open(url, timeout=_DASHBOARD_HEALTH_TIMEOUT) as resp:
             if resp.status != 200:
                 return False
             payload = json.loads(resp.read().decode("utf-8"))
@@ -137,6 +143,22 @@ async def is_dashboard_healthy(host: str, port: int, *, require_current_db: bool
         timeout_seconds=_DASHBOARD_SESSIONS_HEALTH_TIMEOUT,
     )
     return fallback_status == 200 and not require_current_db
+
+
+async def is_legacy_dashboard_healthy(host: str, port: int) -> bool:
+    """Return True for pre-health-route dashboards that still serve sessions."""
+    base_url = dashboard_url(host, port)
+    status, _ = await _dashboard_get_status_and_payload(
+        f"{base_url}/dashboard/health",
+        timeout_seconds=_DASHBOARD_HEALTH_TIMEOUT,
+    )
+    if status not in {404, 405}:
+        return False
+    fallback_status = await _dashboard_get_status(
+        f"{base_url}/api/sessions",
+        timeout_seconds=_DASHBOARD_SESSIONS_HEALTH_TIMEOUT,
+    )
+    return fallback_status == 200
 
 
 async def wait_for_dashboard_healthy(
@@ -190,7 +212,10 @@ async def ensure_shared_dashboard(
 ) -> tuple[str, bool]:
     """Ensure the shared dashboard is running; return (url, spawned_by_caller)."""
     url = dashboard_url(host, port)
-    if await is_dashboard_healthy(host, port):
+    if await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port):
+        from claude_tap.history import migrate_legacy_traces
+
+        migrate_legacy_traces(output_dir)
         if open_browser:
             open_browser_fn(url)
         return url, False

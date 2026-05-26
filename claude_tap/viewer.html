@@ -3331,11 +3331,17 @@ function isContinuationWithoutUserInput(entry) {
 
 function sessionKeyForEntry(entry, currentGroup) {
   const userText = latestUserInputText(entry);
-  if (userText) return { key: 'user:' + userText, userText };
+  if (userText) return { key: 'user:' + sessionTurnDiscriminator(entry) + ':' + userText, userText };
   if (currentGroup) return { key: currentGroup.key, userText: '' };
   const rootTurn = String(entry?.turn ?? '').split('.')[0];
   if (rootTurn) return { key: 'turn:' + rootTurn, userText: '' };
   return { key: 'request:' + (entry?.request_id || ''), userText: '' };
+}
+
+function sessionTurnDiscriminator(entry) {
+  const rootTurn = String(entry?.turn ?? '').split('.')[0];
+  if (rootTurn) return 'turn:' + rootTurn;
+  return 'request:' + (entry?.request_id || '');
 }
 
 function buildSessionGroups(items) {
@@ -4646,8 +4652,10 @@ function contentHasImagePlaceholder(content) {
 
 function wrapContentBlock(inner, block, index, total, options = {}) {
   const frameBlock = !!options.frameBlocks && total > 1;
-  const cls = frameBlock ? 'content-block block-framed' : 'content-block';
-  return `<div class="${cls}">${inner}</div>`;
+  const classes = ['content-block'];
+  if (frameBlock) classes.push('block-framed');
+  if (options.extraClass) classes.push(...String(options.extraClass).split(/\s+/).filter(Boolean));
+  return `<div class="${classes.join(' ')}">${inner}</div>`;
 }
 
 function isInlineImageUrl(url) {
@@ -4750,7 +4758,7 @@ function renderImageElementForBlock(block) {
 
 function renderImageBlock(block, index = 0, total = 1, options = {}) {
   const inner = renderImageElementForBlock(block);
-  return inner ? wrapContentBlock(inner, block, index, total, options) : '';
+  return inner ? wrapContentBlock(inner, block, index, total, { ...options, extraClass: 'image-block' }) : '';
 }
 
 function renderContent(content, role, options = {}) {

@@ -335,6 +335,7 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
+            page.add_init_script("window.__TRACE_SESSION_EXPORTS__ = {jsonl: 'coverage.jsonl', log: 'coverage.log'};")
             session = page.context.new_cdp_session(page)
             session.send("Profiler.enable")
             session.send("Profiler.startPreciseCoverage", {"callCount": True, "detailed": True})
@@ -380,6 +381,35 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   };
                   isContinuationWithoutUserInput(continuationEntry);
                   sessionKeyForEntry(continuationEntry, { key: 'coverage', userText: '', responseText: '', items: [] });
+                  if (entries.length) {
+                    sessionTurnDiscriminator(entries[0]);
+                    sessionKeyForEntry(entries[0], null);
+                  }
+                  const imageBlock = {
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: 'image/png',
+                      data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+                    }
+                  };
+                  imageLookupKey('<session>[Image #1] coverage prompt</session>');
+                  isInlineImageUrl('data:image/png;base64,abc');
+                  imageSourceFromBlock(imageBlock);
+                  imageBlocksForContent([{ type: 'text', text: '[Image #1] coverage prompt' }, imageBlock]);
+                  imageSourceKey(imageBlock);
+                  buildSessionImageRegistry();
+                  naturalTextFromPromptPayload({ prompt: 'coverage prompt' });
+                  renderImageElement('data:image/png;base64,abc', 'coverage image');
+                  renderImageElementForBlock(imageBlock);
+                  document.body.insertAdjacentHTML('beforeend', renderImageBlock(imageBlock, 0, 1, { frameBlocks: true }));
+                  renderViewerActions();
+                  const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
+                  if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
+                  tooltipTrigger.dataset.fullUserInput = 'coverage tooltip prompt';
+                  sessionTooltip();
+                  showSessionTooltip(tooltipTrigger);
+                  hideSessionTooltip(tooltipTrigger);
                   formatText('history_delete_done', { count: 1 });
                   updateHistoryDeleteButton();
                   setHistoryDeleteStatus('coverage', 'ok');
@@ -534,6 +564,7 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            page.add_init_script("window.__TRACE_SESSION_EXPORTS__ = {jsonl: 'coverage.jsonl', log: 'coverage.log'};")
             page.goto(html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".sidebar-item", timeout=5000)
             page.evaluate(
@@ -544,6 +575,25 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
                   applyFilter(true);
                 }"""
             )
+            page.evaluate(
+                """() => {
+                  renderViewerActions();
+                  const imageBlock = {
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: 'image/png',
+                      data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+                    }
+                  };
+                  document.body.insertAdjacentHTML('beforeend', renderImageBlock(imageBlock, 0, 1, { frameBlocks: true }));
+                  const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
+                  if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
+                  tooltipTrigger.dataset.fullUserInput = 'coverage tooltip prompt';
+                  showSessionTooltip(tooltipTrigger);
+                }"""
+            )
+            merge(page.evaluate(collect_css_script))
             page.evaluate("setSidebarOrderMode('turn')")
             merge(page.evaluate(collect_css_script))
             page.evaluate("setSidebarOrderMode('model')")

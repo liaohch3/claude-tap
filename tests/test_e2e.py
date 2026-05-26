@@ -1306,6 +1306,68 @@ async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_async_main_live_viewer_respects_tap_host(monkeypatch, tmp_path):
+    """Shared dashboard startup should honor the configured tap host."""
+    from claude_tap import async_main, parse_args
+
+    dashboard_calls: list[dict[str, object]] = []
+
+    async def fake_run_client(*args, **kwargs):
+        return 0
+
+    async def fake_ensure_shared_dashboard(*, host, port, output_dir, open_browser, open_browser_fn):
+        dashboard_calls.append({"host": host, "port": port, "output_dir": output_dir, "open_browser": open_browser})
+        return f"http://{host}:{port}", False
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-host.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", fake_ensure_shared_dashboard)
+
+    args = parse_args(
+        [
+            "--tap-output-dir",
+            str(tmp_path),
+            "--tap-host",
+            "0.0.0.0",
+            "--tap-no-open",
+            "--tap-no-update-check",
+        ]
+    )
+
+    assert await async_main(args) == 0
+    assert dashboard_calls and dashboard_calls[0]["host"] == "0.0.0.0"
+
+
+@pytest.mark.asyncio
+async def test_async_main_finalizes_session_when_proxy_startup_fails(monkeypatch, tmp_path):
+    """Startup bind failures should not leave active SQLite sessions behind."""
+    from claude_tap import async_main, get_trace_store, parse_args
+
+    async def fail_start(self):
+        raise OSError("bind failed")
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "startup-failure.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.web.TCPSite.start", fail_start)
+
+    args = parse_args(
+        [
+            "--tap-output-dir",
+            str(tmp_path),
+            "--tap-no-live",
+            "--tap-no-update-check",
+            "--tap-no-launch",
+        ]
+    )
+
+    with pytest.raises(OSError, match="bind failed"):
+        await async_main(args)
+
+    rows = get_trace_store().list_session_rows()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "empty"
+
+
+@pytest.mark.asyncio
 async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypatch, tmp_path):
     """--tap-no-live disables the live server and --tap-no-open prevents browser opens."""
     from claude_tap import async_main, parse_args
@@ -3457,11 +3519,14 @@ async def test_dashboard_main_opens_reused_dashboard(monkeypatch, tmp_path):
     from claude_tap import dashboard_main, parse_dashboard_args
 
     opened_urls: list[str] = []
+    migration_calls: list[Path] = []
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+    monkeypatch.setattr("claude_tap.cli.migrate_legacy_traces", migration_calls.append)
 
     args = parse_dashboard_args(["--tap-output-dir", str(tmp_path), "--tap-live-port", "23456"])
 
     assert await dashboard_main(args) == 0
     assert opened_urls == ["http://127.0.0.1:23456"]
+    assert migration_calls == [tmp_path]

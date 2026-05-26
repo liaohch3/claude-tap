@@ -63,7 +63,7 @@ def list_trace_sessions(
         ]
     except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
         return []
-    sessions.sort(key=lambda item: (item.get("updated_at") or "", item.get("id") or ""), reverse=True)
+    sessions.sort(key=lambda item: (_timestamp_sort_value(item.get("updated_at")), item.get("id") or ""), reverse=True)
     return sessions
 
 
@@ -213,6 +213,7 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
                 return cached
             cached = dict(cached)
             db_count = int(row["record_count"] or 0)
+            cached["updated_at"] = row["updated_at"] or cached.get("updated_at") or ""
             cached["record_count"] = db_count
             cached["turn_count"] = max(int(cached.get("turn_count") or 0), db_count)
             if db_count > 0 and cached.get("status") != "error":
@@ -359,6 +360,18 @@ def _summarize_session(
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _timestamp_sort_value(value: object) -> float:
+    if not isinstance(value, str) or not value:
+        return 0.0
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).timestamp()
 
 
 def _timestamp_from_record(record: dict[str, Any]) -> str | None:

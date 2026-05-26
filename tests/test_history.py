@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from claude_tap.history import cleanup_trace_sessions, delete_trace_history, migrate_legacy_traces
-from claude_tap.trace_store import get_trace_store, reset_trace_store
+from claude_tap.trace_store import TraceStore, get_trace_store, reset_trace_store
 
 
 def _write_legacy_session(base: Path, stem: str, *, date: str = "2026-05-01") -> Path:
@@ -20,6 +20,59 @@ def _write_legacy_session(base: Path, stem: str, *, date: str = "2026-05-01") ->
     )
     (date_dir / f"{stem}.log").write_text("10:00:00 proxy log", encoding="utf-8")
     return jsonl
+
+
+def _write_v2_database(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                date_key TEXT NOT NULL,
+                client TEXT NOT NULL DEFAULT '',
+                proxy_mode TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                record_count INTEGER NOT NULL DEFAULT 0,
+                summary_json TEXT,
+                legacy_rel_path TEXT UNIQUE
+            );
+            CREATE TABLE records (
+                session_id TEXT NOT NULL,
+                record_index INTEGER NOT NULL,
+                turn INTEGER,
+                timestamp TEXT,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (session_id, record_index)
+            );
+            CREATE TABLE proxy_logs (
+                session_id TEXT NOT NULL,
+                line_no INTEGER NOT NULL,
+                logged_at TEXT,
+                level TEXT,
+                message TEXT NOT NULL,
+                PRIMARY KEY (session_id, line_no)
+            );
+            CREATE TABLE migration_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO sessions (
+                id, started_at, updated_at, date_key, client, proxy_mode,
+                status, record_count, summary_json, legacy_rel_path
+            )
+            VALUES (
+                'old-session', '2026-05-01T12:00:00+00:00', '2026-05-01T12:00:00+00:00',
+                '2026-05-01', 'claude', 'reverse', 'complete', 1, NULL, '2026-05-01/trace_same.jsonl'
+            );
+            INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
+            VALUES ('old-session', 1, 1, '2026-05-01T12:00:00+00:00', '{"turn":1}');
+            INSERT INTO proxy_logs (session_id, line_no, logged_at, level, message)
+            VALUES ('old-session', 1, '12:00:00', 'INFO', 'legacy log');
+            PRAGMA user_version = 2;
+            """
+        )
 
 
 def test_migrate_legacy_directory_imports_jsonl_and_logs(trace_db, tmp_path: Path) -> None:
@@ -70,52 +123,7 @@ def test_migrate_legacy_directory_upgrades_v2_schema_for_source_key_dedupe(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "v2.sqlite3"
-    with sqlite3.connect(db_path) as conn:
-        conn.executescript(
-            """
-            CREATE TABLE sessions (
-                id TEXT PRIMARY KEY,
-                started_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                date_key TEXT NOT NULL,
-                client TEXT NOT NULL DEFAULT '',
-                proxy_mode TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'active',
-                record_count INTEGER NOT NULL DEFAULT 0,
-                summary_json TEXT,
-                legacy_rel_path TEXT UNIQUE
-            );
-            CREATE TABLE records (
-                session_id TEXT NOT NULL,
-                record_index INTEGER NOT NULL,
-                turn INTEGER,
-                timestamp TEXT,
-                payload_json TEXT NOT NULL,
-                PRIMARY KEY (session_id, record_index)
-            );
-            CREATE TABLE proxy_logs (
-                session_id TEXT NOT NULL,
-                line_no INTEGER NOT NULL,
-                logged_at TEXT,
-                level TEXT,
-                message TEXT NOT NULL,
-                PRIMARY KEY (session_id, line_no)
-            );
-            CREATE TABLE migration_state (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            INSERT INTO sessions (
-                id, started_at, updated_at, date_key, client, proxy_mode,
-                status, record_count, summary_json, legacy_rel_path
-            )
-            VALUES (
-                'old-session', '2026-05-01T12:00:00+00:00', '2026-05-01T12:00:00+00:00',
-                '2026-05-01', 'claude', 'reverse', 'complete', 0, NULL, '2026-05-01/trace_same.jsonl'
-            );
-            PRAGMA user_version = 2;
-            """
-        )
+    _write_v2_database(db_path)
     monkeypatch.setenv("CLOUDTAP_DB", str(db_path))
     reset_trace_store()
     project = tmp_path / "project"
@@ -126,6 +134,125 @@ def test_migrate_legacy_directory_upgrades_v2_schema_for_source_key_dedupe(
     sessions = get_trace_store().list_session_rows()
     assert len(sessions) == 2
     assert [row["legacy_rel_path"] for row in sessions].count("2026-05-01/trace_same.jsonl") == 2
+    conn = get_trace_store()._connect()
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    conn.execute("DELETE FROM sessions WHERE id = 'old-session'")
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM records WHERE session_id = 'old-session'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM proxy_logs WHERE session_id = 'old-session'").fetchone()[0] == 0
+
+
+def test_v2_schema_migration_rolls_back_on_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "v2-failure.sqlite3"
+    _write_v2_database(db_path)
+    store = TraceStore(db_path)
+
+    def fail_indexes(_conn: sqlite3.Connection) -> None:
+        raise RuntimeError("index failure")
+
+    monkeypatch.setattr(store, "_create_v3_indexes", fail_indexes)
+
+    with pytest.raises(RuntimeError, match="index failure"):
+        store.list_session_rows()
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert {"sessions", "records", "proxy_logs"} <= tables
+        assert not any(name.startswith("sessions_v2_") for name in tables)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+        assert "legacy_source_key" not in columns
+
+
+def test_migrate_legacy_directory_reads_manifest_once(
+    trace_db,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_legacy_session(tmp_path, "trace_one")
+    _write_legacy_session(tmp_path, "trace_two")
+    (tmp_path / ".cloudtap-manifest.json").write_text(
+        json.dumps(
+            {
+                "traces": [
+                    {"files": ["2026-05-01/trace_one.jsonl"], "client": "claude"},
+                    {"files": ["2026-05-01/trace_two.jsonl"], "client": "codex"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_read_text = Path.read_text
+    manifest_reads: list[Path] = []
+
+    def counted_read_text(path: Path, *args: object, **kwargs: object) -> str:
+        if path.name == ".cloudtap-manifest.json":
+            manifest_reads.append(path)
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted_read_text)
+
+    assert migrate_legacy_traces(tmp_path) == 2
+    assert len(manifest_reads) == 1
+
+
+def test_append_log_refreshes_active_session_heartbeat(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    conn = store._connect()
+    conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (stale, session_id))
+    conn.commit()
+
+    store.append_log(session_id, "proxy still alive", logged_at="12:00:00")
+
+    row = store.load_session_row(session_id)
+    assert row is not None
+    assert row["updated_at"] > stale
+
+
+def test_finalize_session_refreshes_cached_summary_timestamp(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    old_timestamp = "2026-05-01T12:00:00+00:00"
+    store.store_summary(session_id, {"id": session_id, "status": "active", "updated_at": old_timestamp})
+
+    store.finalize_session(session_id, {"api_calls": 0})
+
+    row = store.load_session_row(session_id)
+    assert row is not None
+    summary = json.loads(row["summary_json"])
+    assert summary["updated_at"] == row["updated_at"]
+    assert summary["updated_at"] != old_timestamp
+
+
+def test_session_rows_sort_by_normalized_updated_at(trace_db) -> None:
+    store = get_trace_store()
+    older = store.create_session(started_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc))
+    newer = store.create_session(started_at=datetime(2026, 5, 1, 11, 0, tzinfo=timezone.utc))
+    conn = store._connect()
+    conn.execute("UPDATE sessions SET updated_at = '2026-05-01T10:00:00+09:00' WHERE id = ?", (older,))
+    conn.execute("UPDATE sessions SET updated_at = '2026-05-01T02:30:00+00:00' WHERE id = ?", (newer,))
+    conn.commit()
+
+    assert [row["id"] for row in store.list_session_rows()][:2] == [newer, older]
+
+
+def test_cleanup_trace_sessions_prunes_by_normalized_started_at(trace_db) -> None:
+    store = get_trace_store()
+    oldest = store.create_session(started_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc))
+    middle = store.create_session(started_at=datetime(2026, 5, 1, 11, 0, tzinfo=timezone.utc))
+    newest = store.create_session(started_at=datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc))
+    for session_id in (oldest, middle, newest):
+        store.finalize_session(session_id, {"api_calls": 1})
+    conn = store._connect()
+    conn.execute("UPDATE sessions SET started_at = '2026-05-01T10:00:00+09:00' WHERE id = ?", (oldest,))
+    conn.execute("UPDATE sessions SET started_at = '2026-05-01T02:30:00+00:00' WHERE id = ?", (middle,))
+    conn.execute("UPDATE sessions SET started_at = '2026-05-01T03:00:00+00:00' WHERE id = ?", (newest,))
+    conn.commit()
+
+    assert cleanup_trace_sessions(2) == 1
+    assert {row["id"] for row in store.list_session_rows()} == {middle, newest}
 
 
 def test_delete_trace_history_removes_selected_date_sessions(trace_db, tmp_path: Path) -> None:

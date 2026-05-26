@@ -6,6 +6,7 @@ from pathlib import Path
 
 import aiohttp
 import pytest
+from aiohttp.test_utils import make_mocked_request
 
 from claude_tap.dashboard import (
     _clean_user_prompt_text,
@@ -30,7 +31,7 @@ from claude_tap.dashboard import (
     read_dashboard_template,
 )
 from claude_tap.history import migrate_legacy_traces
-from claude_tap.live import LiveViewerServer
+from claude_tap.live import LiveViewerServer, _record_limit_from_request
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
 from claude_tap.trace_store import get_trace_store
@@ -42,6 +43,24 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
         "\n".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) for record in records) + "\n",
         encoding="utf-8",
     )
+
+
+def test_record_limit_from_request_preserves_large_loaded_windows() -> None:
+    request = make_mocked_request("GET", "/api/sessions/example/records?limit=1500")
+
+    assert _record_limit_from_request(request) == 1500
+
+
+def test_dashboard_lists_sessions_by_normalized_updated_at(trace_db) -> None:
+    store = get_trace_store()
+    older = store.create_session(started_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc))
+    newer = store.create_session(started_at=datetime(2026, 5, 1, 11, 0, tzinfo=timezone.utc))
+    conn = store._connect()
+    conn.execute("UPDATE sessions SET updated_at = '2026-05-01T10:00:00+09:00' WHERE id = ?", (older,))
+    conn.execute("UPDATE sessions SET updated_at = '2026-05-01T02:30:00+00:00' WHERE id = ?", (newer,))
+    conn.commit()
+
+    assert [session["id"] for session in list_trace_sessions()][:2] == [newer, older]
 
 
 def _anthropic_record(turn: int = 1) -> dict:
