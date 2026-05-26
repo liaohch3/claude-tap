@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.84] - 2026-05-26
+
+### Changed
+- feat: add sqlite trace history index (#210)
 ## [0.1.83] - 2026-05-26
 
 ### Changed
