@@ -673,7 +673,9 @@ async def async_main(args: argparse.Namespace):
             latest = await _check_pypi_version()
             if latest and _version_tuple(latest) > _version_tuple(__version__):
                 print(f"⬆️  Update available: {__version__} → {latest}")
-                if not args.no_auto_update:
+                if _is_editable_install():
+                    print("   Editable install detected — skipping auto-update.")
+                elif not args.no_auto_update:
                     installer = _detect_installer()
                     _start_background_update(installer)
                     print(f"   Downloading update in background ({installer})...")
@@ -1255,6 +1257,33 @@ def _detect_installer() -> str:
     if "uv" in exe.lower() or shutil.which("uv"):
         return "uv"
     return "pip"
+
+
+def _is_editable_install() -> bool:
+    # Skip auto-update for editable installs: on Windows, pip's upgrade renames
+    # the running install's dist-info to ~laude_tap-*.dist-info and can't
+    # restore it because the live process holds file locks.
+    # Path check is the primary signal — it still works when the dist-info has
+    # already been corrupted by a previous bad upgrade.
+    try:
+        import claude_tap
+
+        pkg_path = (claude_tap.__file__ or "").lower().replace("\\", "/")
+        if pkg_path and "/site-packages/" not in pkg_path:
+            return True
+    except Exception:
+        pass
+    # PEP 610 fallback for non-standard layouts where the package happens to
+    # sit under site-packages but was still installed editable.
+    try:
+        from importlib.metadata import distribution
+
+        raw = distribution("claude-tap").read_text("direct_url.json")
+        if raw and json.loads(raw).get("dir_info", {}).get("editable"):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _start_background_update(installer: str) -> subprocess.Popen | None:
