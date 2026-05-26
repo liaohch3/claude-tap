@@ -235,6 +235,32 @@ async def test_ensure_shared_dashboard_already_healthy(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_ensure_shared_dashboard_migrates_after_lock_time_reuse(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    async def mock_false(h: str, p: int) -> bool:
+        return False
+
+    migrated: list[Path] = []
+    monkeypatch.setattr("claude_tap.shared_dashboard.is_dashboard_healthy", mock_false)
+    monkeypatch.setattr("claude_tap.shared_dashboard.is_legacy_dashboard_healthy", mock_false)
+    monkeypatch.setattr("claude_tap.shared_dashboard._spawn_dashboard_subprocess_if_needed", lambda h, p, d: False)
+    monkeypatch.setattr("claude_tap.shared_dashboard._migrate_legacy_traces", migrated.append)
+
+    url, spawned = await ensure_shared_dashboard(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        open_browser=False,
+        open_browser_fn=lambda url: None,
+    )
+
+    assert url == "http://127.0.0.1:19527"
+    assert spawned is False
+    assert migrated == [tmp_path]
+
+
+@pytest.mark.asyncio
 async def test_ensure_shared_dashboard_spawns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "test.sqlite3"))
 

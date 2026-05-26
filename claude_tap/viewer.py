@@ -682,7 +682,13 @@ def _extract_metadata(record_json: str) -> dict | None:
     }
 
 
-def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
+def _generate_html_viewer(
+    trace_path: Path,
+    html_path: Path,
+    *,
+    display_trace_path: str | Path | None = None,
+    display_html_path: str | Path | None = None,
+) -> None:
     """Read viewer.html template, embed JSONL data, write self-contained HTML."""
     if not VIEWER_TEMPLATE_PATH.exists():
         return
@@ -704,8 +710,10 @@ def _generate_html_viewer(trace_path: Path, html_path: Path) -> None:
     # escape for /, so the parsed JSON value is unchanged.
     records = [rec.replace("</", "<\\/") for rec in records]
 
-    jsonl_path_js = json.dumps(str(trace_path.absolute()))
-    html_path_js = json.dumps(str(html_path.absolute()))
+    trace_path_label = str(display_trace_path) if display_trace_path is not None else str(trace_path.absolute())
+    html_path_label = str(display_html_path) if display_html_path is not None else str(html_path.absolute())
+    jsonl_path_js = json.dumps(trace_path_label)
+    html_path_js = json.dumps(html_path_label)
     version_js = json.dumps(CLAUDE_TAP_VERSION)
 
     use_lazy = len(records) > LAZY_THRESHOLD

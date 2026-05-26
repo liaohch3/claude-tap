@@ -126,6 +126,12 @@ def _spawn_dashboard_subprocess_if_needed(host: str, port: int, output_dir: Path
         return True
 
 
+def _migrate_legacy_traces(output_dir: Path) -> None:
+    from claude_tap.history import migrate_legacy_traces
+
+    migrate_legacy_traces(output_dir)
+
+
 async def is_dashboard_healthy(host: str, port: int, *, require_current_db: bool = True) -> bool:
     """Return True when the shared dashboard responds to a cheap health check."""
     base_url = dashboard_url(host, port)
@@ -213,9 +219,7 @@ async def ensure_shared_dashboard(
     """Ensure the shared dashboard is running; return (url, spawned_by_caller)."""
     url = dashboard_url(host, port)
     if await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port):
-        from claude_tap.history import migrate_legacy_traces
-
-        migrate_legacy_traces(output_dir)
+        _migrate_legacy_traces(output_dir)
         if open_browser:
             open_browser_fn(url)
         return url, False
@@ -224,6 +228,8 @@ async def ensure_shared_dashboard(
     if spawned:
         if not await wait_for_dashboard_healthy(host, port):
             raise RuntimeError(f"Failed to start shared dashboard on {url}")
+    else:
+        _migrate_legacy_traces(output_dir)
 
     if open_browser:
         open_browser_fn(url)

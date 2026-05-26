@@ -549,6 +549,10 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 html = await resp.text()
                 assert "EMBEDDED_TRACE_DATA" in html
                 assert "req_claude" in html
+                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/jsonl";' in html
+                assert f'const __TRACE_HTML_PATH__ = "/dashboard/session/{session_id}";' in html
+                assert f"session-{session_id[:8]}.jsonl" not in html
+                assert f"session-{session_id[:8]}.html" not in html
                 assert "__TRACE_SESSION_EXPORTS__" in html
                 assert f"/api/sessions/{session_id}/export/jsonl" in html
                 assert f"/api/sessions/{session_id}/export/log" in html
@@ -573,6 +577,10 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 html = await resp.text()
                 assert "EMBEDDED_TRACE_DATA" in html
                 assert "req_claude" in html
+                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/jsonl";' in html
+                assert f'const __TRACE_HTML_PATH__ = "/dashboard/session/{session_id}";' in html
+                assert f"session-{session_id[:8]}.jsonl" not in html
+                assert f"session-{session_id[:8]}.html" not in html
 
             async with session.get(
                 f"http://127.0.0.1:{port}/api/sessions/{second_session_id}/records?offset=1&limit=1"

@@ -338,14 +338,19 @@ class LiveViewerServer:
             trace_path = tmp_path / f"session-{session_id[:8]}.jsonl"
             html_path = tmp_path / f"session-{session_id[:8]}.html"
             trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
-            _generate_html_viewer(trace_path, html_path)
-            if not html_path.exists():
-                return web.Response(status=500, text="Failed to generate session viewer")
-            html = html_path.read_text(encoding="utf-8")
             export_urls = {
                 "jsonl": f"/api/sessions/{quote(session_id)}/export/jsonl",
                 "log": f"/api/sessions/{quote(session_id)}/export/log",
             }
+            _generate_html_viewer(
+                trace_path,
+                html_path,
+                display_trace_path=export_urls["jsonl"],
+                display_html_path=f"/dashboard/session/{quote(session_id)}",
+            )
+            if not html_path.exists():
+                return web.Response(status=500, text="Failed to generate session viewer")
+            html = html_path.read_text(encoding="utf-8")
             export_js = f"const __TRACE_SESSION_EXPORTS__ = {json.dumps(export_urls, separators=(',', ':'))};\n"
             html = html.replace(
                 VIEWER_SCRIPT_ANCHOR,
