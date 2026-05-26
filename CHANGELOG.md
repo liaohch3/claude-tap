@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.83] - 2026-05-26
+
+### Changed
+- ci: improve workflow caching and merge latency
 ## [0.1.82] - 2026-05-25
 
 ### Changed
