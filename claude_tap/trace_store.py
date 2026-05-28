@@ -415,6 +415,37 @@ class TraceStore:
             "skipped_files": len(skipped),
         }
 
+    def delete_session(self, session_id: str) -> dict[str, int | str]:
+        """Delete one trace session and its dependent records/logs."""
+        with self._write_lock:
+            conn = self._connect()
+            row = conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if row is None:
+                return {
+                    "session_id": session_id,
+                    "deleted_sessions": 0,
+                    "deleted_records": 0,
+                    "deleted_logs": 0,
+                }
+            record_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM records WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            log_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM proxy_logs WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            deleted_records = int(record_row["count"] or 0) if record_row is not None else 0
+            deleted_logs = int(log_row["count"] or 0) if log_row is not None else 0
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.commit()
+        return {
+            "session_id": session_id,
+            "deleted_sessions": 1,
+            "deleted_records": deleted_records,
+            "deleted_logs": deleted_logs,
+        }
+
     def cleanup_old_sessions(self, max_sessions: int, *, protected_session_id: str | None = None) -> int:
         if max_sessions <= 0:
             return 0

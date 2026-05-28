@@ -299,7 +299,7 @@ body.detail-route .main {
 .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .session-table {
   width: 100%;
-  min-width: 1040px;
+  min-width: 1120px;
   border-collapse: collapse;
 }
 .session-table th {
@@ -426,11 +426,25 @@ body.detail-route .main {
   border-color: var(--blue);
   background: var(--blue-bg);
 }
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.row-action.danger {
+  color: var(--red);
+}
+.row-action.danger:hover {
+  border-color: var(--red);
+  background: var(--red-bg);
+}
 .row-action:disabled {
-  cursor: progress;
+  cursor: not-allowed;
   color: var(--text-tertiary);
   background: var(--bg-hover);
 }
+.row-action[aria-busy="true"] { cursor: progress; }
 .table-empty {
   padding: 28px 16px;
   text-align: center;
@@ -702,6 +716,94 @@ pre {
   overflow-wrap: anywhere;
 }
 .hidden { display: none !important; }
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, .38);
+  backdrop-filter: blur(4px);
+}
+.confirm-dialog {
+  width: min(440px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-lg);
+  padding: 20px;
+}
+.confirm-title {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 700;
+}
+.confirm-body {
+  display: grid;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.confirm-session {
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.confirm-session-title {
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.confirm-session-meta {
+  margin-top: 4px;
+  color: var(--text-tertiary);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.confirm-warning {
+  color: var(--red);
+}
+.confirm-error {
+  color: var(--red);
+  font-weight: 600;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.confirm-btn {
+  min-height: 30px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.confirm-btn:hover { background: var(--bg-hover); color: var(--text); }
+.confirm-btn.danger {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+  background: var(--red-bg);
+  color: var(--red);
+}
+.confirm-btn.danger:hover {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red-bg) 75%, var(--red));
+}
+.confirm-btn:disabled {
+  cursor: progress;
+  opacity: .65;
+}
 
 @media (max-width: 900px) {
   body { overflow: auto; height: auto; min-height: 100vh; }
@@ -804,7 +906,7 @@ pre {
               <th data-i18n="table_model">Model</th>
               <th data-i18n="table_agent">Agent</th>
               <th data-i18n="table_status">Status</th>
-              <th data-i18n="table_detail">Detail</th>
+              <th data-i18n="table_actions">Actions</th>
             </tr>
           </thead>
           <tbody id="session-list"></tbody>
@@ -827,6 +929,25 @@ pre {
   </section>
 </div>
 
+<div id="delete-session-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="delete-session-title" aria-describedby="delete-session-message">
+  <div class="confirm-dialog">
+    <h2 id="delete-session-title" class="confirm-title" data-i18n="delete_session_title">Delete session?</h2>
+    <div class="confirm-body">
+      <p id="delete-session-message" data-i18n="delete_session_message">This removes the captured records and logs for this trace session.</p>
+      <div class="confirm-session">
+        <div id="delete-session-summary" class="confirm-session-title"></div>
+        <div id="delete-session-meta" class="confirm-session-meta"></div>
+      </div>
+      <div class="confirm-warning" data-i18n="delete_session_warning">This action cannot be undone.</div>
+      <div id="delete-session-error" class="confirm-error" hidden></div>
+    </div>
+    <div class="confirm-actions">
+      <button id="delete-session-cancel" class="confirm-btn" type="button" data-i18n="cancel">Cancel</button>
+      <button id="delete-session-confirm" class="confirm-btn danger" type="button" data-i18n="confirm_delete">Delete</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
 
@@ -843,6 +964,8 @@ const state = {
   loadingSessions: false,
   loadingSessionId: null,
   sessionRequestId: 0,
+  pendingDeleteSessionId: null,
+  deletingSessionId: null,
   detailSessionId: null,
   detailRecordsLoaded: 0,
   detailRecordTotal: 0,
@@ -902,6 +1025,7 @@ const DASHBOARD_I18N = {
     table_agent: "Agent",
     table_status: "Status",
     table_detail: "Detail",
+    table_actions: "Actions",
     all_dates: "All dates",
     all_agents: "All agents",
     no_matching_sessions: "No matching trace sessions.",
@@ -915,6 +1039,15 @@ const DASHBOARD_I18N = {
     unknown: "unknown",
     view_details: "View session details",
     details: "Details",
+    delete_session: "Delete",
+    delete_session_title: "Delete session?",
+    delete_session_message: "This removes the captured records and logs for this trace session.",
+    delete_session_warning: "This action cannot be undone.",
+    delete_live_session_title: "Live session cannot be deleted",
+    cancel: "Cancel",
+    confirm_delete: "Delete",
+    deleting_session: "Deleting...",
+    unable_delete_session: "Unable to delete session: {error}",
     back_to_sessions: "Back to sessions",
     session_detail: "Session detail",
     session_details: "{agent} details",
@@ -981,6 +1114,7 @@ const DASHBOARD_I18N = {
     table_agent: "Agent",
     table_status: "状态",
     table_detail: "详情",
+    table_actions: "操作",
     all_dates: "全部日期",
     all_agents: "全部 Agent",
     no_matching_sessions: "没有匹配的 trace 会话。",
@@ -994,6 +1128,15 @@ const DASHBOARD_I18N = {
     unknown: "未知",
     view_details: "查看会话详情",
     details: "详情",
+    delete_session: "删除",
+    delete_session_title: "删除这个会话？",
+    delete_session_message: "这会删除该 trace 会话已捕获的记录和日志。",
+    delete_session_warning: "此操作不可撤销。",
+    delete_live_session_title: "实时会话不能删除",
+    cancel: "取消",
+    confirm_delete: "删除",
+    deleting_session: "正在删除...",
+    unable_delete_session: "无法删除会话：{error}",
     back_to_sessions: "返回会话列表",
     session_detail: "会话详情",
     session_details: "{agent} 详情",
@@ -1071,6 +1214,9 @@ function setLang(lang) {
   if (state.view === "detail" && state.detailSession) {
     updateDetailI18n(state.detailSession);
   }
+  if (state.pendingDeleteSessionId) {
+    renderDeleteSessionDialog();
+  }
 }
 
 function fmtNumber(value) {
@@ -1133,9 +1279,18 @@ function setDashboardLoading(loading, label = t("loading_sessions")) {
   }
 }
 
-async function fetchJSON(url) {
-  const response = await fetch(url, {cache: "no-store"});
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+async function fetchJSON(url, options = {}) {
+  const response = await fetch(url, {cache: "no-store", ...options});
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) message = payload.error;
+    } catch (_) {
+      // Keep the HTTP status fallback when the error body is not JSON.
+    }
+    throw new Error(message);
+  }
   return await response.json();
 }
 
@@ -1301,6 +1456,7 @@ function renderSessions() {
   $("#session-list").innerHTML = sessions.map(session => sessionRow(session)).join("");
   document.querySelectorAll("[data-session]").forEach(row => {
     row.addEventListener("click", event => {
+      if (event.target.closest("button, a")) return;
       event.preventDefault();
       openSession(row.dataset.session);
     });
@@ -1311,6 +1467,20 @@ function renderSessions() {
       }
     });
   });
+  document.querySelectorAll("[data-open-session]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      openSession(button.dataset.openSession);
+    });
+  });
+  document.querySelectorAll("[data-delete-session]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      showDeleteSessionDialog(button.dataset.deleteSession);
+    });
+  });
 }
 
 function sessionRow(session) {
@@ -1318,6 +1488,9 @@ function sessionRow(session) {
   const firstMessage = preview || t("no_user_prompt");
   const status = statusInfo(session);
   const isLoading = state.loadingSessionId === session.id;
+  const isDeleting = state.deletingSessionId === session.id;
+  const deleteDisabled = session.live || isDeleting;
+  const deleteTitle = session.live ? t("delete_live_session_title") : t("delete_session");
   return `
     <tr class="session-row ${state.selectedSessionId === session.id ? "active" : ""}" data-session="${esc(session.id)}" tabindex="0">
       <td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
@@ -1327,7 +1500,12 @@ function sessionRow(session) {
       <td><span class="model-pill" title="${esc(session.model || t("unknown"))}">${esc(session.model || t("unknown"))}</span></td>
       <td><span class="agent-pill">${esc(session.agent || t("unknown"))}</span></td>
       <td><span class="status-pill ${status.className}">${esc(status.label)}</span></td>
-      <td><button class="row-action" type="button" aria-label="${esc(t("view_details"))}" ${isLoading ? "disabled" : ""}>${esc(isLoading ? t("loading_session") : t("details"))}</button></td>
+      <td>
+        <div class="row-actions">
+          <button class="row-action" type="button" data-open-session="${esc(session.id)}" aria-label="${esc(t("view_details"))}" aria-busy="${isLoading ? "true" : "false"}" ${isLoading ? "disabled" : ""}>${esc(isLoading ? t("loading_session") : t("details"))}</button>
+          <button class="row-action danger" type="button" data-delete-session="${esc(session.id)}" aria-label="${esc(deleteTitle)}" title="${esc(deleteTitle)}" aria-busy="${isDeleting ? "true" : "false"}" ${deleteDisabled ? "disabled" : ""}>${esc(isDeleting ? t("deleting_session") : t("delete_session"))}</button>
+        </div>
+      </td>
     </tr>
   `;
 }
@@ -1348,6 +1526,81 @@ function statusInfo(session) {
   if (session.status === "empty") return {label: t("status_empty_short"), className: "empty-status"};
   if (session.live || session.status === "active") return {label: "LIVE", className: "live"};
   return {label: "OK", className: "ok"};
+}
+
+function deleteSessionMeta(session) {
+  return [
+    session.agent || t("unknown"),
+    fmtTableTime(session.started_at || session.updated_at),
+    `${fmtNumber(session.record_count)} ${t("records")}`,
+  ].filter(Boolean).join(" · ");
+}
+
+function renderDeleteSessionDialog() {
+  const session = state.sessions.find(item => item.id === state.pendingDeleteSessionId);
+  if (!session) return;
+  const firstMessage = session.first_user || t("no_user_prompt");
+  $("#delete-session-summary").textContent = firstMessage;
+  $("#delete-session-summary").setAttribute("title", firstMessage);
+  $("#delete-session-meta").textContent = deleteSessionMeta(session);
+  const isDeleting = state.deletingSessionId === session.id;
+  $("#delete-session-confirm").disabled = isDeleting;
+  $("#delete-session-confirm").textContent = isDeleting ? t("deleting_session") : t("confirm_delete");
+  $("#delete-session-cancel").disabled = isDeleting;
+}
+
+function showDeleteSessionDialog(sessionId) {
+  const session = state.sessions.find(item => item.id === sessionId);
+  if (!session || session.live) return;
+  state.pendingDeleteSessionId = sessionId;
+  const error = $("#delete-session-error");
+  error.hidden = true;
+  error.textContent = "";
+  renderDeleteSessionDialog();
+  const modal = $("#delete-session-modal");
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+  $("#delete-session-cancel").focus();
+}
+
+function hideDeleteSessionDialog({force = false} = {}) {
+  if (state.deletingSessionId && !force) return;
+  state.pendingDeleteSessionId = null;
+  const modal = $("#delete-session-modal");
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+}
+
+async function confirmDeleteSession() {
+  const sessionId = state.pendingDeleteSessionId;
+  if (!sessionId || state.deletingSessionId) return;
+  state.deletingSessionId = sessionId;
+  renderDeleteSessionDialog();
+  renderSessions();
+  try {
+    await fetchJSON(`/api/sessions/${encodeURIComponent(sessionId)}`, {method: "DELETE"});
+    state.sessions = state.sessions.filter(session => session.id !== sessionId);
+    if (state.selectedSessionId === sessionId) {
+      state.selectedSessionId = null;
+      state.view = "list";
+      showListView();
+    }
+    hideDeleteSessionDialog({force: true});
+    renderFilters();
+    renderAgents();
+    renderSessions();
+    await refreshSessions({preserveSelection: true});
+  } catch (error) {
+    const errorBox = $("#delete-session-error");
+    errorBox.textContent = t("unable_delete_session", {error: error.message});
+    errorBox.hidden = false;
+  } finally {
+    if (state.deletingSessionId === sessionId) {
+      state.deletingSessionId = null;
+      if (state.pendingDeleteSessionId) renderDeleteSessionDialog();
+      renderSessions();
+    }
+  }
 }
 
 function openSession(sessionId) {
@@ -1720,6 +1973,16 @@ $("#status-filter").addEventListener("change", event => {
 $("#refresh").addEventListener("click", () => refreshSessions({preserveSelection: true, refreshDetail: true}).catch(console.error));
 $("#back-to-list").addEventListener("click", () => {
   window.location.assign(dashboardListUrl());
+});
+$("#delete-session-cancel").addEventListener("click", () => hideDeleteSessionDialog());
+$("#delete-session-confirm").addEventListener("click", () => confirmDeleteSession().catch(console.error));
+$("#delete-session-modal").addEventListener("click", event => {
+  if (event.target === event.currentTarget) hideDeleteSessionDialog();
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !$("#delete-session-modal").classList.contains("hidden")) {
+    hideDeleteSessionDialog();
+  }
 });
 $("#theme-toggle").addEventListener("click", toggleTheme);
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));

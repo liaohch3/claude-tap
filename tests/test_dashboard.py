@@ -270,6 +270,16 @@ def test_dashboard_detail_navigation_uses_standalone_viewer_route() -> None:
     assert "state.detailFingerprint = sessionDetailFingerprint(session)" in template
 
 
+def test_dashboard_template_exposes_session_delete_controls() -> None:
+    template = read_dashboard_template()
+
+    assert 'data-i18n="table_actions"' in template
+    assert "delete-session-modal" in template
+    assert "data-delete-session" in template
+    assert "function confirmDeleteSession()" in template
+    assert 'method: "DELETE"' in template
+
+
 def test_dashboard_summarize_session_and_migration(trace_db, tmp_path: Path) -> None:
     assert dashboard_trace_snapshot() == {}
 
@@ -602,6 +612,20 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 body = await resp.text()
                 assert body == "10:00:00 proxy log\n"
 
+            async with session.delete(f"http://127.0.0.1:{port}/api/sessions/{second_session_id}") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["deleted_sessions"] == 1
+                assert payload["deleted_records"] == 2
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{second_session_id}/records") as resp:
+                assert resp.status == 404
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert [item["id"] for item in payload["sessions"]] == [session_id]
+
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/bad/records") as resp:
                 assert resp.status == 404
     finally:
@@ -673,6 +697,24 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert f"/api/sessions/{session_id}/export/log" in hrefs
             finally:
                 await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_delete_current_live_session_is_protected(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+
+    server = LiveViewerServer(port=0, session_id=session_id, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(f"http://127.0.0.1:{port}/api/sessions/{session_id}") as resp:
+                assert resp.status == 409
+                payload = await resp.json()
+                assert payload["error"] == "Live session cannot be deleted"
+        assert store.load_session_row(session_id) is not None
     finally:
         await server.stop()
 

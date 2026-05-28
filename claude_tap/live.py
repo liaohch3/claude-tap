@@ -98,6 +98,7 @@ class LiveViewerServer:
         app.router.add_delete("/api/traces/{date}", self._handle_delete_traces_by_date)
         app.router.add_get("/api/agents", self._handle_agents)
         app.router.add_get("/api/sessions", self._handle_sessions)
+        app.router.add_delete("/api/sessions/{session_id}", self._handle_delete_session)
         app.router.add_get("/api/sessions/{session_id}/records", self._handle_session_records)
         app.router.add_get("/api/sessions/{session_id}/html", self._handle_session_html_compat)
         app.router.add_get("/api/sessions/{session_id}/export/jsonl", self._handle_export_jsonl)
@@ -389,6 +390,19 @@ class LiveViewerServer:
             charset="utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+    async def _handle_delete_session(self, request: web.Request) -> web.Response:
+        """Delete one stored trace session."""
+        session_id = request.match_info["session_id"]
+        store = ensure_trace_store()
+        row = store.load_session_row(session_id)
+        if row is None:
+            return web.json_response({"error": "Session not found"}, status=404)
+        if self.session_id and session_id == self.session_id:
+            return web.json_response({"error": "Live session cannot be deleted"}, status=409)
+        result = store.delete_session(session_id)
+        await self._broadcast_dashboard_event({"type": "refresh"})
+        return web.json_response(result)
 
     async def _watch_dashboard_store(self) -> None:
         """Poll SQLite and notify dashboard clients when history changes."""
