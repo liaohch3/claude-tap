@@ -400,7 +400,7 @@ claude-tap --tap-no-open
 --tap-host HOST          绑定地址（默认: 127.0.0.1，--tap-no-launch 模式下为 0.0.0.0）
 --tap-no-launch          仅启动代理，不启动客户端
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
---tap-store-stream-events 把原始 SSE/WebSocket event 数组写入 trace 存储，并在查看器/导出结果中展示（默认关闭）
+--tap-store-stream-events 捕获时把原始 SSE/WebSocket event 数组写入 trace 存储，以便查看器/导出结果展示（默认关闭）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
 --tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi/codebuddy 用 reverse，agy/gemini/opencode/pi/hermes/cursor/qoder 用 forward）
@@ -438,7 +438,7 @@ claude-tap --tap-no-open
 1. `claude-tap` 启动反向代理或 forward proxy，并启动所选客户端
 2. 支持 base URL 的客户端会指向反向代理；不支持 base URL 的客户端会通过 proxy/CA 环境变量接入
 3. SSE 和 WebSocket 流会在收到 chunk/message 时实时转发，代理开销很低
-4. 每个请求-响应对或 WebSocket 会话记录到本地 trace 存储；原始 SSE/WebSocket event 数组默认不写入，需要时可用 `--tap-store-stream-events` 恢复
+4. 每个请求-响应对或 WebSocket 会话记录到本地 trace 存储；原始 SSE/WebSocket event 数组默认不写入，如果后续需要在查看器/导出结果中展示，必须在捕获时开启 `--tap-store-stream-events`
 5. 退出时生成自包含的 HTML 查看器
 6. 实时模式默认开启，并通过 SSE 向浏览器广播更新
 
