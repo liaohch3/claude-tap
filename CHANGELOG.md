@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.1.85] - 2026-05-28
+
+### Changed
+- fix(codex): capture custom provider base URLs (#228)
 ### Fixed
 - Capture Codex custom OpenAI-compatible providers by overriding the selected provider base URL, not only `openai_base_url`.
 
