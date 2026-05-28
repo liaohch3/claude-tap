@@ -400,6 +400,8 @@ class LiveViewerServer:
             return web.json_response({"error": "Session not found"}, status=404)
         if self.session_id and session_id == self.session_id:
             return web.json_response({"error": "Live session cannot be deleted"}, status=409)
+        if (row["status"] or "") == "active":
+            return web.json_response({"error": "Active session cannot be deleted"}, status=409)
         result = store.delete_session(session_id)
         await self._broadcast_dashboard_event({"type": "refresh"})
         return web.json_response(result)

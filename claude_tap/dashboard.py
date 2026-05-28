@@ -209,9 +209,10 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
         except json.JSONDecodeError:
             cached = None
         if isinstance(cached, dict) and cached.get("id") == row["id"]:
+            cached = dict(cached)
+            cached["active"] = row["status"] == "active"
             if row["status"] != "active":
                 return cached
-            cached = dict(cached)
             db_count = int(row["record_count"] or 0)
             cached["updated_at"] = row["updated_at"] or cached.get("updated_at") or ""
             cached["record_count"] = db_count
@@ -238,6 +239,7 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
             is_current=row["status"] == "active",
             record_count=0,
         )
+        summary["active"] = row["status"] == "active"
         if row["status"] != "active":
             store.store_summary(row["id"], summary)
         return summary
@@ -255,6 +257,7 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
         is_current=False,
         record_count=record_count,
     )
+    summary["active"] = row["status"] == "active"
     if row["status"] != "active":
         store.store_summary(row["id"], summary)
     return summary
@@ -269,6 +272,7 @@ def _apply_current_session_state(
     session = dict(session)
     is_current = bool(current_session_id and session.get("id") == current_session_id)
     session["live"] = is_current
+    session["active"] = bool(session.get("active")) or is_current
     if is_current:
         count = int(session.get("record_count") or 0)
         if live_record_count is not None:
@@ -339,6 +343,7 @@ def _summarize_session(
         "agent": agent,
         "agent_key": _agent_key(agent),
         "status": resolved_status,
+        "active": is_current or status == "active",
         "live": is_current,
         "legacy_rel_path": legacy_rel_path,
         "started_at": started_at,

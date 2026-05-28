@@ -1044,6 +1044,7 @@ const DASHBOARD_I18N = {
     delete_session_message: "This removes the captured records and logs for this trace session.",
     delete_session_warning: "This action cannot be undone.",
     delete_live_session_title: "Live session cannot be deleted",
+    delete_active_session_title: "Active trace is still being written",
     cancel: "Cancel",
     confirm_delete: "Delete",
     deleting_session: "Deleting...",
@@ -1133,6 +1134,7 @@ const DASHBOARD_I18N = {
     delete_session_message: "这会删除该 trace 会话已捕获的记录和日志。",
     delete_session_warning: "此操作不可撤销。",
     delete_live_session_title: "实时会话不能删除",
+    delete_active_session_title: "这个 trace 仍在写入",
     cancel: "取消",
     confirm_delete: "删除",
     deleting_session: "正在删除...",
@@ -1489,8 +1491,11 @@ function sessionRow(session) {
   const status = statusInfo(session);
   const isLoading = state.loadingSessionId === session.id;
   const isDeleting = state.deletingSessionId === session.id;
-  const deleteDisabled = session.live || isDeleting;
-  const deleteTitle = session.live ? t("delete_live_session_title") : t("delete_session");
+  const isActive = session.live || session.active || session.status === "active";
+  const deleteDisabled = isActive || isDeleting;
+  const deleteTitle = isActive
+    ? (session.live ? t("delete_live_session_title") : t("delete_active_session_title"))
+    : t("delete_session");
   return `
     <tr class="session-row ${state.selectedSessionId === session.id ? "active" : ""}" data-session="${esc(session.id)}" tabindex="0">
       <td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
@@ -1551,7 +1556,7 @@ function renderDeleteSessionDialog() {
 
 function showDeleteSessionDialog(sessionId) {
   const session = state.sessions.find(item => item.id === sessionId);
-  if (!session || session.live) return;
+  if (!session || session.live || session.active || session.status === "active") return;
   state.pendingDeleteSessionId = sessionId;
   const error = $("#delete-session-error");
   error.hidden = true;
