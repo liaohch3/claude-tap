@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+
+## [0.1.87] - 2026-05-29
+
+### Changed
+- feat(viewer): support iframe embed query options (#246)
 ## [0.1.86] - 2026-05-28
 
 ### Changed
