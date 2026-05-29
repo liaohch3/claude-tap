@@ -1649,7 +1649,10 @@ def test_viewer_iframe_embed_query_hides_chrome_and_keeps_trace_loaded(tmp_path:
               pathDisplay: getComputedStyle(document.querySelector('#trace-path-bar')).display,
               themeToggleDisplay: getComputedStyle(document.querySelector('#theme-toggle')).display,
               langSelectDisplay: getComputedStyle(document.querySelector('#lang-select')).display,
+              searchBarDisplay: getComputedStyle(document.querySelector('#search-bar')).display,
               sidebarSortDisplay: getComputedStyle(document.querySelector('#sidebar-sort')).display,
+              detailTabsDisplay: getComputedStyle(document.querySelector('.detail-inspector-bar')).display,
+              actionBarDisplay: getComputedStyle(document.querySelector('.action-bar')).display,
               sidebarWidth: Math.round(document.querySelector('#sidebar-wrap').getBoundingClientRect().width),
               theme: document.documentElement.dataset.theme || 'light',
               sidebarItemCount: document.querySelectorAll('.sidebar-item').length,
@@ -1666,7 +1669,10 @@ def test_viewer_iframe_embed_query_hides_chrome_and_keeps_trace_loaded(tmp_path:
     assert state["pathDisplay"] == "none"
     assert state["themeToggleDisplay"] == "none"
     assert state["langSelectDisplay"] == "none"
+    assert state["searchBarDisplay"] == "none"
     assert state["sidebarSortDisplay"] == "none"
+    assert state["detailTabsDisplay"] == "none"
+    assert state["actionBarDisplay"] == "none"
     assert state["sidebarWidth"] <= 280
     assert state["theme"] == "light"
     assert state["sidebarItemCount"] == 1
