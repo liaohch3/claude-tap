@@ -52,7 +52,10 @@ def _start_background_update(installer: str) -> subprocess.Popen | None:
         cmd = _build_update_command(installer)
         if cmd is None:
             return None
-        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        kwargs: dict[str, object] = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs)
     except Exception:
         return None
 
@@ -104,7 +107,10 @@ def update_main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        result = subprocess.run(cmd, check=False)
+        kwargs = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run(cmd, check=False, **kwargs)
     except OSError as exc:
         print(f"Error: failed to run update command: {exc}", file=sys.stderr)
         return 1

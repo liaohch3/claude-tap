@@ -718,7 +718,6 @@ async def dashboard_main(args: argparse.Namespace) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
 def parse_trust_ca_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse arguments for the trust-ca subcommand."""
     parser = argparse.ArgumentParser(
