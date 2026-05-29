@@ -220,8 +220,6 @@ async def ensure_shared_dashboard(
     url = dashboard_url(host, port)
     if await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port):
         _migrate_legacy_traces(output_dir)
-        if open_browser:
-            open_browser_fn(url)
         return url, False
 
     spawned = await asyncio.to_thread(_spawn_dashboard_subprocess_if_needed, host, port, output_dir)
@@ -231,6 +229,6 @@ async def ensure_shared_dashboard(
     else:
         _migrate_legacy_traces(output_dir)
 
-    if open_browser:
+    if open_browser and spawned:
         open_browser_fn(url)
     return url, spawned

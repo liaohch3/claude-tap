@@ -390,6 +390,8 @@ claude-tap --tap-no-open
 
 In proxy-only mode, start your client in another terminal and point its base URL or proxy settings at the local proxy. Use the [client support matrix](docs/support-matrix.md) for exact wiring.
 
+When used as VSCode Claude Code's `claudeProcessWrapper`, claude-tap honors the Claude binary path passed by the extension.
+
 ### CLI Options
 
 All flags are forwarded to the selected client, except these `--tap-*` ones:

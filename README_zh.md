@@ -387,6 +387,8 @@ claude-tap --tap-no-open
 
 纯代理模式下，可以在另一个终端启动客户端，并把它的 base URL 或代理配置指向本地代理。具体接法见 [客户端支持矩阵](docs/support-matrix.md)。
 
+作为 VSCode Claude Code 的 `claudeProcessWrapper` 使用时，claude-tap 会识别扩展传入的 Claude binary 路径并用它启动 Claude。
+
 ### CLI 选项
 
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：

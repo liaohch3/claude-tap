@@ -86,6 +86,35 @@ async def test_run_client_passes_resolved_path_for_cmd_shim(monkeypatch) -> None
     assert cmd[3:] == ("--version",), "original args must follow --settings payload"
 
 
+@pytest.mark.asyncio
+async def test_run_client_uses_wrapper_provided_claude_binary(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    wrapped_claude = tmp_path / "claude"
+    wrapped_claude.write_text("#!/bin/sh\n", encoding="utf-8")
+    _strip_sigtstp(monkeypatch)
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: None)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(
+        43123,
+        ["--output-format", "stream-json"],
+        client="claude",
+        proxy_mode="reverse",
+        client_cmd=str(wrapped_claude),
+    )
+    assert code == 0
+    cmd = captured["cmd"]
+    assert cmd[0] == str(wrapped_claude)
+    assert cmd[1] == "--settings"
+    assert cmd[3:] == ("--output-format", "stream-json")
+
+
 def test_module_import_reconfigures_stdout_to_utf8() -> None:
     import claude_tap.cli  # noqa: F401
 

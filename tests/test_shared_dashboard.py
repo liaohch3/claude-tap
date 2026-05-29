@@ -207,7 +207,9 @@ async def test_is_dashboard_healthy_falls_back_for_legacy_dashboard() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_shared_dashboard_already_healthy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_ensure_shared_dashboard_already_healthy_does_not_reopen_browser(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     async def mock_true(h: str, p: int) -> bool:
         return True
 
@@ -230,7 +232,7 @@ async def test_ensure_shared_dashboard_already_healthy(monkeypatch: pytest.Monke
 
     assert url == "http://127.0.0.1:19527"
     assert spawned is False
-    assert opened == ["http://127.0.0.1:19527"]
+    assert opened == []
     assert migrated == [tmp_path]
 
 
@@ -247,16 +249,19 @@ async def test_ensure_shared_dashboard_migrates_after_lock_time_reuse(
     monkeypatch.setattr("claude_tap.shared_dashboard._spawn_dashboard_subprocess_if_needed", lambda h, p, d: False)
     monkeypatch.setattr("claude_tap.shared_dashboard._migrate_legacy_traces", migrated.append)
 
+    opened: list[str] = []
+
     url, spawned = await ensure_shared_dashboard(
         host="127.0.0.1",
         port=19527,
         output_dir=tmp_path,
-        open_browser=False,
-        open_browser_fn=lambda url: None,
+        open_browser=True,
+        open_browser_fn=opened.append,
     )
 
     assert url == "http://127.0.0.1:19527"
     assert spawned is False
+    assert opened == []
     assert migrated == [tmp_path]
 
 
