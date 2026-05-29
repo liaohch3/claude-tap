@@ -374,6 +374,9 @@ claude-tap dashboard
 # Regenerate a self-contained HTML viewer from JSONL
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
+# Embed the exported viewer in an iframe with reduced chrome
+# trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light
+
 # Store traces in another directory, or keep fewer sessions
 claude-tap --tap-output-dir ./my-traces
 claude-tap --tap-max-traces 10
@@ -425,6 +428,7 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 - **Tool inspector** — expandable cards with tool name, description, and parameter schema
 - **Search** — full-text search across messages, tools, prompts, and responses
 - **Dark mode** — toggle light/dark themes (respects system preference)
+- **Iframe embed mode** — add query parameters such as `embed=1`, `hideHeader=1`, `hidePath=1`, `hideHistory=1`, `hideControls=1`, `density=compact`, and `theme=light|dark`
 - **Keyboard navigation** — `j`/`k` or arrow keys
 - **Copy helpers** — one-click copy of request JSON or cURL command
 - **i18n** — English, 简体中文, 日本語, 한국어, Français, العربية, Deutsch, Русский

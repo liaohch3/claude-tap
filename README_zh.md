@@ -371,6 +371,9 @@ claude-tap dashboard
 # 从已有 JSONL trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
+# 在 iframe 中嵌入导出的查看器，并减少外层 chrome
+# trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light
+
 # 自定义 trace 输出目录，或限制保留数量
 claude-tap --tap-output-dir ./my-traces
 claude-tap --tap-max-traces 10
@@ -422,6 +425,7 @@ claude-tap --tap-no-open
 - **工具检查器** — 可展开的卡片，显示工具名称、描述和参数 schema
 - **全文搜索** — 搜索消息、工具、prompt 和响应
 - **暗色模式** — 切换亮色/暗色主题（跟随系统偏好）
+- **iframe 嵌入模式** — 添加 `embed=1`、`hideHeader=1`、`hidePath=1`、`hideHistory=1`、`hideControls=1`、`density=compact`、`theme=light|dark` 等 query 参数
 - **键盘导航** — `j`/`k` 或方向键
 - **复制助手** — 一键复制请求 JSON 或 cURL 命令
 - **多语言** — English, 简体中文, 日本語, 한국어, Français, العربية, Deutsch, Русский

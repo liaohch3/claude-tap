@@ -46,6 +46,20 @@ def test_export_html_inferred_from_output_suffix(tmp_path, capsys) -> None:
     assert f"Exported 1 turns to {html_path}" in capsys.readouterr().out
 
 
+def test_export_html_includes_iframe_embed_query_support(tmp_path, capsys) -> None:
+    trace_path = _write_trace(tmp_path)
+    html_path = tmp_path / "trace.html"
+
+    assert export_main([str(trace_path), "-o", str(html_path)]) == 0
+
+    html = html_path.read_text(encoding="utf-8")
+    assert "parseEmbedQueryOptions" in html
+    assert "embed-hide-header" in html
+    assert "hideControls" in html
+    assert "density') === 'compact'" in html
+    assert f"Exported 1 turns to {html_path}" in capsys.readouterr().out
+
+
 def test_export_html_format_defaults_to_trace_html_path(tmp_path, capsys) -> None:
     trace_path = _write_trace(tmp_path)
     html_path = trace_path.with_suffix(".html")

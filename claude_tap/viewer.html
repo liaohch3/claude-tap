@@ -1419,6 +1419,51 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   .sidebar-item { min-height: 44px; padding: 12px 16px; }
   .sidebar-group-header { min-height: 44px; }
 }
+body.embed-mode {
+  overflow: hidden !important;
+  background: var(--bg-card);
+}
+body.embed-mode .main {
+  height: 100vh;
+  min-height: 0;
+  background: var(--bg-card);
+}
+body.embed-mode.embed-hide-header .header {
+  display: none !important;
+}
+body.embed-mode.embed-hide-path .trace-path-bar {
+  display: none !important;
+}
+body.embed-mode.embed-hide-history #date-picker,
+body.embed-mode.embed-hide-history #history-delete-status {
+  display: none !important;
+}
+body.embed-mode.embed-hide-controls .viewer-actions,
+body.embed-mode.embed-hide-controls .theme-toggle,
+body.embed-mode.embed-hide-controls .lang-select,
+body.embed-mode.embed-hide-controls .sidebar-sort,
+body.embed-mode.embed-hide-controls #tool-filter {
+  display: none !important;
+}
+body.embed-mode.embed-compact #sidebar-wrap {
+  width: 280px;
+  min-width: 240px;
+  max-width: 34vw;
+}
+body.embed-mode.embed-compact .search-bar {
+  padding: 6px 8px;
+}
+body.embed-mode.embed-compact .sidebar-item {
+  padding: 8px 12px;
+}
+body.embed-mode.embed-compact .detail {
+  padding: 12px 14px;
+}
+body.embed-mode.embed-compact .msg,
+body.embed-mode.embed-compact .section,
+body.embed-mode.embed-compact .content-block.block-framed {
+  border-radius: 8px;
+}
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 </style>
 </head>
@@ -1517,12 +1562,39 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 <script>
 const $ = s => document.querySelector(s);
+const EMBED_QUERY_OPTIONS = parseEmbedQueryOptions();
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
 let sessionImageRegistryCache = null, sessionImageRegistrySize = -1;
 let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
 const SIDEBAR_ORDER_MODES = ['model', 'turn', 'session'];
-const savedSidebarOrderMode = localStorage.getItem('claude-tap-sidebar-order');
+function safeLocalStorageGet(key) {
+  try { return window.localStorage.getItem(key); } catch(e) { return null; }
+}
+function safeLocalStorageSet(key, value) {
+  try { window.localStorage.setItem(key, value); } catch(e) {}
+}
+const savedSidebarOrderMode = safeLocalStorageGet('claude-tap-sidebar-order');
 let sidebarOrderMode = SIDEBAR_ORDER_MODES.includes(savedSidebarOrderMode) ? savedSidebarOrderMode : 'model';
+
+function readBooleanQuery(params, key) {
+  const value = params.get(key);
+  return value === '1' || value === 'true' || value === '';
+}
+
+function parseEmbedQueryOptions() {
+  const params = new URLSearchParams(window.location.search || '');
+  const enabled = readBooleanQuery(params, 'embed') || readBooleanQuery(params, 'iframe');
+  const theme = params.get('theme') === 'dark' ? 'dark' : params.get('theme') === 'light' ? 'light' : null;
+  return {
+    enabled,
+    hideHeader: enabled && readBooleanQuery(params, 'hideHeader'),
+    hidePath: enabled && readBooleanQuery(params, 'hidePath'),
+    hideHistory: enabled && readBooleanQuery(params, 'hideHistory'),
+    hideControls: enabled && readBooleanQuery(params, 'hideControls'),
+    compact: enabled && params.get('density') === 'compact',
+    theme,
+  };
+}
 
 function cloneJson(value) {
   if (value === undefined || value === null) return value;
@@ -2117,7 +2189,7 @@ function detectLang() {
   const match = supported.find(s => s.startsWith(prefix));
   return match || 'en';
 }
-let currentLang = localStorage.getItem('claude-tap-lang') || detectLang();
+let currentLang = safeLocalStorageGet('claude-tap-lang') || detectLang();
 function t(key) {
   const en = I18N.en || {};
   return (I18N[currentLang] || en)[key] || en[key] || key;
@@ -2129,7 +2201,7 @@ function formatText(key, values = {}) {
 }
 function setLang(lang) {
   currentLang = lang;
-  localStorage.setItem('claude-tap-lang', lang);
+  safeLocalStorageSet('claude-tap-lang', lang);
   document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
   document.documentElement.lang = lang;
   $('#lang-select').value = lang;
@@ -2197,15 +2269,15 @@ function renderViewerActions() {
 
 /* ─── Theme ─── */
 function initTheme() {
-  const saved = localStorage.getItem('claude-tap-theme');
+  const saved = safeLocalStorageGet('claude-tap-theme');
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const theme = saved || (prefersDark ? 'dark' : 'light');
+  const theme = EMBED_QUERY_OPTIONS.theme || saved || (prefersDark ? 'dark' : 'light');
   applyTheme(theme);
 }
 function toggleTheme() {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   applyTheme(next);
-  localStorage.setItem('claude-tap-theme', next);
+  safeLocalStorageSet('claude-tap-theme', next);
 }
 function applyTheme(theme) {
   if (theme === 'dark') {
@@ -2218,6 +2290,17 @@ function applyTheme(theme) {
 }
 
 /* ─── Init ─── */
+function initEmbedMode() {
+  if (!EMBED_QUERY_OPTIONS.enabled) return;
+  document.documentElement.dataset.embedMode = 'true';
+  document.body.classList.add('embed-mode');
+  if (EMBED_QUERY_OPTIONS.hideHeader) document.body.classList.add('embed-hide-header');
+  if (EMBED_QUERY_OPTIONS.hidePath) document.body.classList.add('embed-hide-path');
+  if (EMBED_QUERY_OPTIONS.hideHistory) document.body.classList.add('embed-hide-history');
+  if (EMBED_QUERY_OPTIONS.hideControls) document.body.classList.add('embed-hide-controls');
+  if (EMBED_QUERY_OPTIONS.compact) document.body.classList.add('embed-compact');
+}
+
 function initLang() {
   document.documentElement.dir = currentLang === 'ar' ? 'rtl' : 'ltr';
   document.documentElement.lang = currentLang;
@@ -2226,6 +2309,7 @@ function initLang() {
 }
 
 function initCommonUi() {
+  initEmbedMode();
   initTheme();
   initLang();
   initGlobalSearch();
@@ -2769,7 +2853,7 @@ function setSidebarOrderMode(mode) {
   if (!SIDEBAR_ORDER_MODES.includes(mode)) return;
   if (sidebarOrderMode === mode) return;
   sidebarOrderMode = mode;
-  localStorage.setItem('claude-tap-sidebar-order', mode);
+  safeLocalStorageSet('claude-tap-sidebar-order', mode);
   updateSidebarSortControls();
   renderSidebar(true);
   updatePositionIndicator();

@@ -667,6 +667,21 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
             page.evaluate("mobileShowDetail()")
             merge(page.evaluate(collect_css_script))
             page.set_viewport_size({"width": 1440, "height": 900})
+            page.goto(
+                (
+                    f"{html_path.resolve().as_uri()}?embed=1&hideHeader=1&hidePath=1"
+                    "&hideHistory=1&hideControls=1&density=compact&theme=light"
+                ),
+                timeout=10000,
+            )
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+            page.evaluate(
+                """() => {
+                  const contentBlockEntry = entries.find(entry => entry.request_id === 'req_content_block_boundary_contract');
+                  if (contentBlockEntry) renderDetail(contentBlockEntry);
+                }"""
+            )
+            merge(page.evaluate(collect_css_script))
             page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".empty-trace-state", timeout=5000)
             merge(page.evaluate(collect_css_script))
