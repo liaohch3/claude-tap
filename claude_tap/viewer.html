@@ -1733,6 +1733,35 @@ function webSocketOutputMessages(events) {
   return messages;
 }
 
+function responseBodyOutputMessages(output) {
+  const messages = [];
+  if (!Array.isArray(output)) return messages;
+  for (const item of output) {
+    if (!item || typeof item !== 'object') continue;
+    if (isResponseCallItem(item)) {
+      messages.push({
+        type: 'message',
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: item.call_id || item.id || '',
+          name: responseCallToolName(item),
+          input: responseCallInput(item)
+        }]
+      });
+      continue;
+    }
+    if (item.type === 'message') {
+      messages.push({
+        type: 'message',
+        role: item.role || 'assistant',
+        content: Array.isArray(item.content) ? item.content : []
+      });
+    }
+  }
+  return messages;
+}
+
 function isToolResultInputItem(item) {
   if (!item || typeof item !== 'object') return false;
   if (isResponseToolResultItem(item)) return true;
@@ -1939,6 +1968,50 @@ function storeWebSocketResponseHistory(historyByResponseId, responseId, previous
   });
 }
 
+function isDisplayableResponsesEntry(entry) {
+  const body = entry?.request?.body || {};
+  const payload = getResponsePayload(entry) || {};
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  const isGenerateFalse = body.generate === false || payload.generate === false;
+  return !(isGenerateFalse && output.length === 0 && (payload.usage?.output_tokens || 0) === 0);
+}
+
+function stitchDirectResponsesEntry(entry, historyByResponseId) {
+  const body = entry?.request?.body;
+  const payload = getResponsePayload(entry) || {};
+  if (!body || typeof body !== 'object') return entry;
+  if (!isDisplayableResponsesEntry(entry)) return null;
+  const previousId = body.previous_response_id || payload.previous_response_id || '';
+  let nextEntry = entry;
+  let requestBody = body;
+  if (previousId) {
+    const priorHistoryInput = webSocketHistoryInputForResponse(historyByResponseId, previousId);
+    if (Array.isArray(priorHistoryInput) && priorHistoryInput.length) {
+      requestBody = cloneJson(body) || {};
+      const currentInput = normalizeWebSocketDerivedInput(Array.isArray(requestBody.input) ? requestBody.input : []);
+      requestBody.input = uniqueMessages([...priorHistoryInput, ...currentInput]);
+      nextEntry = {
+        ...cloneJson(entry),
+        request: {
+          ...(cloneJson(entry.request) || {}),
+          body: requestBody,
+        },
+      };
+    }
+  }
+  const responseId = payload.id || '';
+  if (responseId) {
+    storeWebSocketResponseHistory(
+      historyByResponseId,
+      responseId,
+      previousId,
+      requestBody,
+      responseBodyOutputMessages(payload.output),
+    );
+  }
+  return nextEntry;
+}
+
 function expandWebSocketResponseEntries(rawEntries, historyByResponseId = createWebSocketResponseHistoryStore()) {
   const expanded = [];
   for (const entry of rawEntries || []) {
@@ -1948,7 +2021,8 @@ function expandWebSocketResponseEntries(rawEntries, historyByResponseId = create
     }
     const groups = splitWebSocketResponseEvents(entry.response?.ws_events || []);
     if (!groups.length) {
-      expanded.push(entry);
+      const stitchedEntry = stitchDirectResponsesEntry(entry, historyByResponseId);
+      if (stitchedEntry) expanded.push(stitchedEntry);
       continue;
     }
     const displayableGroups = groups
@@ -4499,7 +4573,7 @@ function normalizeResponseOutput(output) {
         else content.push(c);
       }
     } else if (isResponseCallItem(item)) {
-      content.push({ type: 'tool_use', name: responseCallToolName(item), input: responseCallInput(item) });
+      content.push({ type: 'tool_use', id: item.call_id || item.id || '', name: responseCallToolName(item), input: responseCallInput(item) });
     } else if (item.type === 'reasoning') {
       if (!item.summary) continue;
       const summaryText = Array.isArray(item.summary) ? item.summary.map(s => s?.text || '').join('\n') : (item.summary.text || JSON.stringify(item.summary));
@@ -4784,7 +4858,8 @@ function renderContent(content, role, options = {}) {
       return wrapContentBlock(`<span class="thinking-label">thinking</span><div class="pre-text">${esc(thinking)}</div>`, block, index, blocks.length, options);
     }
     if (block.type === 'tool_use') {
-      return wrapContentBlock(`<span class="tool-use-label">${esc(block.name || 'tool_use')}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre>`, block, index, blocks.length, options);
+      const label = block.id ? `${block.name || 'tool_use'} (${block.id})` : (block.name || 'tool_use');
+      return wrapContentBlock(`<span class="tool-use-label">${esc(label)}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre>`, block, index, blocks.length, options);
     }
     if (block.type === 'tool_result') {
       const rc = block.content;

@@ -763,6 +763,191 @@ def test_viewer_skips_codex_prefetch_when_generate_false_only_on_created(respons
     assert "Real response." in result["detailText"]
 
 
+def test_viewer_filters_direct_codex_generate_false_prefetch(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const prefetch = {
+            request_id: 'req_direct_prefetch',
+            turn: 1,
+            transport: 'websocket',
+            request: {
+              method: 'WEBSOCKET',
+              path: '/v1/responses',
+              body: { type: 'response.create', model: 'gpt-5.5', input: [], generate: false },
+              ws_events: []
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {
+                id: 'resp_direct_prefetch',
+                status: 'completed',
+                model: 'gpt-5.5',
+                generate: false,
+                output: [],
+                usage: { input_tokens: 10, output_tokens: 0, total_tokens: 10 }
+              },
+              ws_events: []
+            }
+          };
+          const realTurn = {
+            request_id: 'req_direct_real',
+            turn: 2,
+            transport: 'websocket',
+            request: {
+              method: 'WEBSOCKET',
+              path: '/v1/responses',
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                previous_response_id: 'resp_direct_prefetch',
+                input: [
+                  { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Real prompt.' }] }
+                ]
+              },
+              ws_events: []
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {
+                id: 'resp_direct_real',
+                status: 'completed',
+                model: 'gpt-5.5',
+                previous_response_id: 'resp_direct_prefetch',
+                output: [
+                  { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Real answer.' }] }
+                ],
+                usage: { input_tokens: 12, output_tokens: 2, total_tokens: 14 }
+              },
+              ws_events: []
+            }
+          };
+          const expanded = expandWebSocketResponseEntries([prefetch, realTurn]);
+          return {
+            turns: expanded.map(entry => entry.turn),
+            roles: getMessages(expanded[0].request.body).map(message => message.role)
+          };
+        }"""
+    )
+
+    assert result == {"turns": [2], "roles": ["user"]}
+
+
+def test_viewer_stitches_direct_codex_response_records_across_previous_response_ids(
+    responses_page,
+) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const baseRequest = {
+            method: 'WEBSOCKET',
+            path: '/v1/responses',
+            headers: {}
+          };
+          const toolTurn = {
+            request_id: 'req_direct_tool',
+            turn: 2,
+            transport: 'websocket',
+            request: {
+              ...baseRequest,
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                input: [
+                  { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Run pwd.' }] }
+                ],
+                tools: [{ type: 'function', name: 'exec_command' }]
+              },
+              ws_events: []
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {
+                id: 'resp_direct_tool',
+                status: 'completed',
+                model: 'gpt-5.5',
+                output: [
+                  {
+                    type: 'function_call',
+                    name: 'exec_command',
+                    call_id: 'call_direct_pwd',
+                    arguments: '{\"cmd\":\"pwd\"}'
+                  }
+                ],
+                usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 }
+              },
+              ws_events: []
+            }
+          };
+          const finalTurn = {
+            request_id: 'req_direct_final',
+            turn: '2.2',
+            transport: 'websocket',
+            request: {
+              ...baseRequest,
+              body: {
+                type: 'response.create',
+                model: 'gpt-5.5',
+                previous_response_id: 'resp_direct_tool',
+                input: [
+                  { type: 'function_call_output', call_id: 'call_direct_pwd', output: '/workspace/project' }
+                ],
+                tools: [{ type: 'function', name: 'exec_command' }]
+              },
+              ws_events: []
+            },
+            response: {
+              status: 101,
+              headers: {},
+              body: {
+                id: 'resp_direct_final',
+                status: 'completed',
+                model: 'gpt-5.5',
+                previous_response_id: 'resp_direct_tool',
+                output: [
+                  {
+                    type: 'function_call',
+                    name: 'exec_command',
+                    call_id: 'call_direct_ls',
+                    arguments: '{\"cmd\":\"ls -la\"}'
+                  }
+                ],
+                usage: { input_tokens: 20, output_tokens: 4, total_tokens: 24 }
+              },
+              ws_events: []
+            }
+          };
+          const expanded = expandWebSocketResponseEntries([toolTurn, finalTurn]);
+          return {
+            turns: expanded.map(entry => entry.turn),
+            messages: getMessages(expanded[1].request.body).map(message => {
+              const content = Array.isArray(message.content) ? message.content : [];
+              const toolUse = content.find(block => block.type === 'tool_use');
+              if (toolUse) return `${message.role}:tool_use:${toolUse.id}:${toolUse.name}`;
+              const toolResult = content.find(block => block.type === 'tool_result');
+              if (toolResult) return `${message.role}:tool_result:${toolResult.tool_use_id}:${toolResult.content}`;
+              return `${message.role}:text:${content.map(block => block.text || '').filter(Boolean).join(' ')}`;
+            }),
+            output: (getResponseOutput(expanded[1])?.content || []).map(block => {
+              if (block.type === 'tool_use') return `${block.type}:${block.id}:${block.name}`;
+              return block.text || block.type;
+            })
+          };
+        }"""
+    )
+
+    assert result == {
+        "turns": [2, "2.2"],
+        "messages": [
+            "user:text:Run pwd.",
+            "assistant:tool_use:call_direct_pwd:exec_command",
+            "tool:tool_result:call_direct_pwd:/workspace/project",
+        ],
+        "output": ["tool_use:call_direct_ls:exec_command"],
+    }
+
+
 def test_viewer_does_not_synthesize_instructions_without_user_input(responses_page) -> None:
     result = responses_page.evaluate(
         """() => {
