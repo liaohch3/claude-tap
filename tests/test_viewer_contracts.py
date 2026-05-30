@@ -1535,7 +1535,7 @@ def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Pa
     assert "python - <<'PY'\nprint(\"hello\")\nPY" in decoded_text
     assert copied_raw_text == raw_text
     assert copied_decoded_text == decoded_text
-    assert toggle_text_before == "↵"
+    assert toggle_text_before == "\u21b5"
     assert toggle_text_expanded == "Raw"
     assert restored_text == raw_text
     assert input_view_count == expanded_view_count == 1
