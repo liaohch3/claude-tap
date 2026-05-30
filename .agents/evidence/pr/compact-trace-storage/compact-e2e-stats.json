@@ -1,5 +1,5 @@
 {
-  "base": "/tmp/claude-tap-compact-e2e-20260530-044817",
+  "base": "<tmp>/claude-tap-compact-e2e-20260530-044817",
   "session_id": "fd0e8549-4e44-41bc-8ba1-570c97ba1b9d",
   "db_bytes": 552960,
   "wal_bytes": 0,

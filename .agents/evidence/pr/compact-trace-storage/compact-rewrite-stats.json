@@ -1,6 +1,6 @@
 {
-  "source_jsonl": "/tmp/claude-tap-storage-baseline-20260530-035427/codex-tmux-5turn-storage-baseline.jsonl",
-  "rewrite_base": "/tmp/claude-tap-compact-rewrite-final-ahzir_s4",
+  "source_jsonl": "<tmp>/claude-tap-storage-baseline-20260530-035427/codex-tmux-5turn-storage-baseline.jsonl",
+  "rewrite_base": "<tmp>/claude-tap-compact-rewrite-final-ahzir_s4",
   "session_id": "21cd91af-62ad-4eb4-9df4-d2ca2a7f76a3",
   "records": 26,
   "source_jsonl_bytes": 2506380,

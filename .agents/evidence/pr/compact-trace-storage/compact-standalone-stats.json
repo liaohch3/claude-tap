@@ -1,7 +1,7 @@
 {
-  "source_jsonl": "/tmp/claude-tap-storage-baseline-20260530-035427/codex-tmux-5turn-storage-baseline.jsonl",
-  "compact_bundle": ".agents/evidence/pr/compact-trace-storage/codex-compact-standalone.ctap.json",
-  "compact_html": ".agents/evidence/pr/compact-trace-storage/codex-compact-standalone.html",
+  "source_jsonl": "<tmp>/claude-tap-storage-baseline-20260530-035427/codex-tmux-5turn-storage-baseline.jsonl",
+  "compact_bundle": "not committed; generated locally for validation",
+  "compact_html": "not committed; generated locally for validation",
   "records": 26,
   "source_jsonl_bytes": 2506380,
   "source_jsonl_gzip_bytes": 802997,
