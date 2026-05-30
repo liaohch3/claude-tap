@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Skip persisted trace records for package registry metadata and archive downloads in forward proxy mode while still forwarding responses to clients.
+
 
 
 

@@ -2797,6 +2797,95 @@ def test_codex_upstream_url_construction(monkeypatch, tmp_path):
 ## ---------------------------------------------------------------------------
 
 
+def test_forward_proxy_trace_skip_rules_are_narrow():
+    from claude_tap.forward_proxy import _should_skip_trace_record
+
+    json_headers = {"Content-Type": "application/json"}
+    binary_headers = {"Content-Type": "application/octet-stream"}
+    npm_headers = {"User-Agent": "npm/10.8.2 node/v22.0.0 linux x64 workspaces/false"}
+
+    assert _should_skip_trace_record("https://registry.npmjs.org:443/effect", "/effect", json_headers)
+    assert _should_skip_trace_record(
+        "https://registry.npmjs.org:443/@opencode-ai%2fsdk",
+        "/@opencode-ai%2fsdk",
+        json_headers,
+    )
+    assert _should_skip_trace_record(
+        "https://cdn.example.test:443/effect/-/effect-4.0.0-beta.59.tgz",
+        "/effect/-/effect-4.0.0-beta.59.tgz",
+        binary_headers,
+    )
+    assert _should_skip_trace_record(
+        "https://npm.mycorp.internal:443/private-pkg",
+        "/private-pkg",
+        json_headers,
+        npm_headers,
+        "GET",
+    )
+
+    assert not _should_skip_trace_record("https://api.anthropic.com:443/v1/messages", "/v1/messages", json_headers)
+    assert not _should_skip_trace_record(
+        "https://chatgpt.com:443/backend-api/codex/responses",
+        "/backend-api/codex/responses",
+        json_headers,
+    )
+    assert not _should_skip_trace_record(
+        "https://npm.mycorp.internal:443/private-pkg",
+        "/private-pkg",
+        json_headers,
+    )
+    assert not _should_skip_trace_record(
+        "https://api.anthropic.com:443/v1/messages",
+        "/v1/messages",
+        json_headers,
+        npm_headers,
+        "POST",
+    )
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_unrecorded_response_closes_upstream_on_client_disconnect():
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    class FakeContent:
+        async def iter_chunked(self, size):
+            assert size == 65536
+            yield b"package-bytes"
+
+    class FakeResponse:
+        status = 200
+        reason = "OK"
+        headers = {"Content-Type": "application/json"}
+        content = FakeContent()
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class DisconnectingWriter:
+        def __init__(self) -> None:
+            self.drain_calls = 0
+            self.writes: list[bytes] = []
+
+        def write(self, data: bytes) -> None:
+            self.writes.append(data)
+
+        async def drain(self) -> None:
+            self.drain_calls += 1
+            if self.drain_calls > 1:
+                raise ConnectionError("client disconnected")
+
+    upstream_resp = FakeResponse()
+    writer = DisconnectingWriter()
+
+    with pytest.raises(ConnectionError, match="client disconnected"):
+        await ForwardProxyServer._relay_unrecorded_response(object(), upstream_resp, writer)
+
+    assert upstream_resp.closed is True
+
+
 @pytest.mark.asyncio
 async def test_forward_proxy_connect():
     """Test the forward proxy CONNECT/TLS flow with a fake HTTPS upstream."""
@@ -2893,6 +2982,113 @@ async def test_forward_proxy_connect():
             await session.close()
 
     print("  test_forward_proxy_connect PASSED")
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_skips_package_noise_but_keeps_long_model_payloads(monkeypatch):
+    """Real localhost proxy test for long npm noise and long model responses."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port, upstream_runner = await _start_fake_long_payload_https_upstream(tmpdir_path)
+        store, session_id, writer = _writer_for_dir(tmpdir_path)
+
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False)
+        original_request = session.request
+
+        async def _rewrite_to_localhost(method, url, **kwargs):
+            rewritten = URL(str(url)).with_host("127.0.0.1").with_port(upstream_port)
+            return await original_request(method=method, url=rewritten, **kwargs)
+
+        monkeypatch.setattr(session, "request", _rewrite_to_localhost)
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+        )
+        proxy_port = await server.start()
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+
+            async with aiohttp.ClientSession(connector=connector, auto_decompress=False) as client:
+                async with client.get(
+                    f"https://registry.npmjs.org:{upstream_port}/effect",
+                    proxy=proxy_url,
+                ) as resp:
+                    assert resp.status == 200
+                    metadata = await resp.json()
+                    assert len(metadata["versions"]) >= 100
+
+                async with client.get(
+                    f"https://cdn.example.test:{upstream_port}/effect/-/effect-4.0.0-beta.59.tgz",
+                    proxy=proxy_url,
+                ) as resp:
+                    assert resp.status == 200
+                    assert len(await resp.read()) == 1024 * 1024
+
+                async with client.post(
+                    f"https://api.anthropic.test:{upstream_port}/v1/messages",
+                    proxy=proxy_url,
+                    json={
+                        "model": "claude-3-5-sonnet-test",
+                        "max_tokens": 200000,
+                        "messages": [{"role": "user", "content": "write a very long answer"}],
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    anthropic_body = await resp.json()
+                    assert len(anthropic_body["content"][0]["text"]) > 200000
+
+                async with client.post(
+                    f"https://api.openai.test:{upstream_port}/v1/chat/completions",
+                    proxy=proxy_url,
+                    json={
+                        "model": "gpt-5-test",
+                        "messages": [{"role": "user", "content": "write a very long answer"}],
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    openai_body = await resp.json()
+                    assert len(openai_body["choices"][0]["message"]["content"]) > 200000
+
+            await asyncio.sleep(0.1)
+            writer.close()
+            records = [json.loads(line) for line in store.export_jsonl(session_id).splitlines()]
+
+            paths = [record["request"]["path"] for record in records]
+            assert paths == ["/v1/messages", "/v1/chat/completions"]
+            assert all("effect" not in path for path in paths)
+
+            anthropic_record = records[0]
+            openai_record = records[1]
+            assert anthropic_record["request"]["body"]["model"] == "claude-3-5-sonnet-test"
+            assert len(anthropic_record["response"]["body"]["content"][0]["text"]) > 200000
+            assert openai_record["request"]["body"]["model"] == "gpt-5-test"
+            assert len(openai_record["response"]["body"]["choices"][0]["message"]["content"]) > 200000
+        finally:
+            await server.stop()
+            await session.close()
+            await upstream_runner.cleanup()
 
 
 @pytest.mark.asyncio
@@ -3305,6 +3501,121 @@ async def _start_fake_https_upstream(tmpdir: Path) -> int:
     server = await asyncio.start_server(handle_client, "127.0.0.1", 0, ssl=ssl_ctx)
     port = server.sockets[0].getsockname()[1]
     return port
+
+
+async def _start_fake_long_payload_https_upstream(tmpdir: Path):
+    """Start a fake HTTPS upstream with package noise and long model payloads."""
+    import datetime
+    import ssl as ssl_module
+
+    from aiohttp import web
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName("127.0.0.1"),
+                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                ]
+            ),
+            critical=False,
+        )
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+
+    cert_path = tmpdir / "long-upstream.pem"
+    key_path = tmpdir / "long-upstream-key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+    ssl_ctx = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_SERVER)
+    ssl_ctx.load_cert_chain(str(cert_path), str(key_path))
+
+    async def long_payload_handler(request):
+        if request.path == "/effect":
+            package_padding = "npm-metadata-padding-" * 1000
+            versions = {
+                f"4.0.0-beta.{index}": {
+                    "name": "effect",
+                    "dist": {"tarball": f"https://registry.npmjs.org/effect/-/effect-{index}.tgz"},
+                    "readme": package_padding,
+                }
+                for index in range(120)
+            }
+            return web.json_response({"name": "effect", "versions": versions})
+
+        if request.path.endswith(".tgz"):
+            return web.Response(body=b"x" * 1024 * 1024, content_type="application/octet-stream")
+
+        if request.path == "/v1/messages":
+            req_body = await request.json()
+            long_text = "anthropic-long-response " * 10000
+            return web.json_response(
+                {
+                    "id": "msg_long_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": long_text}],
+                    "model": req_body["model"],
+                    "usage": {
+                        "input_tokens": 120000,
+                        "output_tokens": 50000,
+                        "cache_read_input_tokens": 90000,
+                    },
+                    "stop_reason": "end_turn",
+                }
+            )
+
+        if request.path == "/v1/chat/completions":
+            req_body = await request.json()
+            long_text = "openai-long-response " * 11000
+            return web.json_response(
+                {
+                    "id": "chatcmpl_long_1",
+                    "object": "chat.completion",
+                    "model": req_body["model"],
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": long_text}}],
+                    "usage": {
+                        "prompt_tokens": 130000,
+                        "completion_tokens": 55000,
+                        "prompt_tokens_details": {"cached_tokens": 95000},
+                    },
+                }
+            )
+
+        return web.Response(status=404, text="not found")
+
+    app = web.Application()
+    app.router.add_route("*", "/{tail:.*}", long_payload_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=ssl_ctx)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    return port, runner
 
 
 async def _start_fake_wss_upstream(tmpdir: Path) -> int:
