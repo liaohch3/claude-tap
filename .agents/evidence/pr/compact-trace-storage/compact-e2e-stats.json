@@ -1,0 +1,35 @@
+{
+  "base": "/tmp/claude-tap-compact-e2e-20260530-044817",
+  "session_id": "fd0e8549-4e44-41bc-8ba1-570c97ba1b9d",
+  "db_bytes": 552960,
+  "wal_bytes": 0,
+  "shm_bytes": 32768,
+  "record_payload_bytes": 384374,
+  "blob_count": 5,
+  "blob_payload_bytes": 84590,
+  "stored_payload_plus_blobs": 468964,
+  "materialized_jsonl_bytes": 2248100,
+  "materialized_gzip_bytes": 702140,
+  "records": 27,
+  "compact_rows": 26,
+  "paths": {
+    "/v1/models?client_version=0.135.0": 1,
+    "/v1/responses": 26
+  },
+  "models": {
+    "gpt-5.5": 26
+  },
+  "function_calls": 20,
+  "output_messages": 5,
+  "workspace_bytes": 368,
+  "workspace_files": {
+    "data.csv": 24,
+    "final.txt": 16,
+    "metrics.json": 122,
+    "notes.md": 118,
+    "project.toml": 74,
+    "round3.txt": 14
+  },
+  "stored_payload_savings_percent": 79.14,
+  "db_file_savings_percent_vs_materialized_jsonl": 75.4
+}

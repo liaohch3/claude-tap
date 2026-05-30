@@ -924,6 +924,7 @@ const DASHBOARD_I18N = {
     log: "Log",
     session_id: "Session",
     export_jsonl: "Export JSONL",
+    export_compact: "Export Compact",
     export_log: "Export Log",
     copy_session_id: "Copy session id",
     unable_load_session: "Unable to load session: {error}",
@@ -1003,6 +1004,7 @@ const DASHBOARD_I18N = {
     log: "日志",
     session_id: "会话",
     export_jsonl: "导出 JSONL",
+    export_compact: "导出压缩文件",
     export_log: "导出日志",
     copy_session_id: "复制会话 ID",
     unable_load_session: "无法加载会话：{error}",
@@ -1481,6 +1483,7 @@ function renderDetail(session, records) {
       </div>
       <div class="action-bar">
         <a class="act-btn" data-detail-i18n="export_jsonl" href="/api/sessions/${encodeURIComponent(session.id)}/export/jsonl" download>${esc(t("export_jsonl"))}</a>
+        <a class="act-btn" data-detail-i18n="export_compact" href="/api/sessions/${encodeURIComponent(session.id)}/export/compact" download>${esc(t("export_compact"))}</a>
         <a class="act-btn" data-detail-i18n="export_log" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
         <button class="act-btn" data-detail-i18n="copy_path" data-copy-path="${esc(session.id)}">${esc(t("copy_path"))}</button>
       </div>

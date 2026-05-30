@@ -7,8 +7,13 @@ import json
 import sys
 from pathlib import Path
 
+from claude_tap.compact_trace import build_compact_trace_bundle, dump_compact_trace, is_compact_trace_bundle
 from claude_tap.usage import normalize_usage
-from claude_tap.viewer import _generate_html_viewer, _normalize_record_for_viewer
+from claude_tap.viewer import (
+    _generate_html_viewer_from_compact_bundle,
+    _generate_html_viewer_from_records,
+    _normalize_record_for_viewer,
+)
 
 
 def _as_dict(value: object) -> dict:
@@ -23,6 +28,15 @@ def _normalize_record_for_export(record: object) -> dict | None:
     except (TypeError, json.JSONDecodeError):
         return record
     return normalized if isinstance(normalized, dict) else record
+
+
+def _normalize_records_for_export(records: list[dict]) -> list[dict]:
+    normalized_records: list[dict] = []
+    for record in records:
+        normalized = _normalize_record_for_export(record)
+        if normalized is not None:
+            normalized_records.append(normalized)
+    return normalized_records
 
 
 def _request_body(record: dict) -> dict:
@@ -42,11 +56,40 @@ def _turn_sort_key(record: dict) -> int:
     return turn if isinstance(turn, int) else 0
 
 
+def _compact_output_suffix(path: Path) -> bool:
+    name = path.name.lower()
+    return name.endswith(".ctap") or name.endswith(".ctap.json") or name.endswith(".compact.json")
+
+
+def _load_records_from_text(text: str) -> tuple[list[dict], dict | None]:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if is_compact_trace_bundle(parsed):
+        from claude_tap.compact_trace import materialize_compact_trace_bundle
+
+        return materialize_compact_trace_bundle(parsed), parsed
+
+    records: list[dict] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records, None
+
+
 def export_main(argv: list[str] | None = None) -> int:
     """Entry point for the export subcommand."""
     parser = argparse.ArgumentParser(
         prog="claude-tap export",
-        description="Export a trace JSONL file to Markdown, JSON, or HTML.",
+        description="Export a trace file or SQLite session to Markdown, JSON, HTML, or compact trace.",
     )
     parser.add_argument("source", type=str, nargs="?", help="Path to a .jsonl trace file or a SQLite session id")
     parser.add_argument(
@@ -62,7 +105,7 @@ def export_main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--format",
-        choices=["markdown", "json", "html"],
+        choices=["markdown", "json", "html", "compact"],
         default=None,
         help="Output format (default: inferred from -o extension, or markdown)",
     )
@@ -73,6 +116,7 @@ def export_main(argv: list[str] | None = None) -> int:
     html_source_path: Path | None = None
     source_session_id = args.session_id
     store = None
+    compact_bundle: dict | None = None
 
     if source_session_id is None and args.source:
         trace_file = Path(args.source)
@@ -101,26 +145,10 @@ def export_main(argv: list[str] | None = None) -> int:
         if not trace_file.exists():
             print(f"Error: trace file not found: {trace_file}", file=sys.stderr)
             return 1
-        with open(trace_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        record = _normalize_record_for_export(json.loads(line))
-                        if record is not None:
-                            records.append(record)
-                    except json.JSONDecodeError:
-                        continue
+        records, compact_bundle = _load_records_from_text(trace_file.read_text(encoding="utf-8"))
         html_source_path = trace_file
     else:
         parser.error("provide a .jsonl trace file path or --session-id")
-
-    if not records:
-        print("Error: no valid records found in trace file", file=sys.stderr)
-        return 1
-
-    # Sort by turn
-    records.sort(key=_turn_sort_key)
 
     # Determine format
     fmt = args.format
@@ -131,38 +159,64 @@ def export_main(argv: list[str] | None = None) -> int:
                 fmt = "json"
             elif suffix in {".html", ".htm"}:
                 fmt = "html"
+            elif _compact_output_suffix(args.output):
+                fmt = "compact"
             else:
                 fmt = "markdown"
         else:
             fmt = "markdown"
+
+    if not records:
+        print("Error: no valid records found in trace file", file=sys.stderr)
+        return 1
+
+    if fmt != "compact":
+        records.sort(key=_turn_sort_key)
 
     if fmt == "html":
         if html_source_path is None:
             print("Error: HTML export requires a JSONL source path", file=sys.stderr)
             return 1
         html_path = args.output or html_source_path.with_suffix(".html")
-        if source_session_id:
-            import tempfile
-
-            with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as tmp:
-                tmp.write(store.export_jsonl(source_session_id))
-                temp_jsonl = Path(tmp.name)
-            try:
-                _generate_html_viewer(temp_jsonl, html_path)
-            finally:
-                temp_jsonl.unlink(missing_ok=True)
+        if compact_bundle is not None:
+            _generate_html_viewer_from_compact_bundle(
+                compact_bundle,
+                html_path,
+                display_trace_path=html_source_path.absolute(),
+                display_html_path=html_path.absolute(),
+            )
+        elif source_session_id:
+            _generate_html_viewer_from_compact_bundle(
+                build_compact_trace_bundle(records),
+                html_path,
+                display_trace_path=f"session:{source_session_id}",
+                display_html_path=html_path.absolute(),
+            )
         else:
-            _generate_html_viewer(html_source_path, html_path)
+            _generate_html_viewer_from_records(
+                [
+                    _normalize_record_for_viewer(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+                    for record in records
+                ],
+                html_path,
+                display_trace_path=html_source_path.absolute(),
+                display_html_path=html_path.absolute(),
+            )
         if not html_path.exists():
             print("Error: failed to generate HTML viewer", file=sys.stderr)
             return 1
         print(f"Exported {len(records)} turns to {html_path}")
         return 0
 
-    if fmt == "json":
-        output = _export_json(records)
+    if fmt == "compact":
+        if source_session_id and store is not None:
+            output = store.export_compact(source_session_id)
+        else:
+            output = dump_compact_trace(records)
+    elif fmt == "json":
+        output = _export_json(_normalize_records_for_export(records))
     else:
-        output = _export_markdown(records)
+        output = _export_markdown(_normalize_records_for_export(records))
 
     if args.output:
         args.output.write_text(output, encoding="utf-8")

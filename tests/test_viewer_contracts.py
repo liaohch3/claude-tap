@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from claude_tap.viewer import _generate_html_viewer
+from claude_tap.compact_trace import build_compact_trace_bundle
+from claude_tap.viewer import _generate_html_viewer, _generate_html_viewer_from_compact_bundle, _read_viewer_template
 
 pw_missing = False
 try:
@@ -1267,6 +1268,39 @@ def _generate_case_html(tmp_path: Path, name: str, records: tuple[dict[str, Any]
     return html_path
 
 
+def _compact_contract_records() -> tuple[dict[str, Any], ...]:
+    records = []
+    for turn in (1, 2):
+        record = json.loads(json.dumps(_responses_record()))
+        record["request_id"] = f"req_compact_contract_{turn}"
+        record["turn"] = turn
+        record["request"]["body"]["instructions"] = "Shared compact system prompt. " * 120
+        record["request"]["body"]["tools"] = [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "description": "Large repeated tool schema. " * 120,
+                "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}},
+            }
+        ]
+        record["request"]["body"]["input"] = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": f"Compact bundle turn {turn}."}],
+            }
+        ]
+        record["response"]["body"]["output"] = [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": f"Compact response {turn}."}],
+            }
+        ]
+        records.append(record)
+    return tuple(records)
+
+
 def _open_viewer_with_error_capture(page: Page, html_path: Path) -> list[str]:
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
@@ -1501,7 +1535,7 @@ def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Pa
     assert "python - <<'PY'\nprint(\"hello\")\nPY" in decoded_text
     assert copied_raw_text == raw_text
     assert copied_decoded_text == decoded_text
-    assert toggle_text_before == "\u21b5"
+    assert toggle_text_before == "↵"
     assert toggle_text_expanded == "Raw"
     assert restored_text == raw_text
     assert input_view_count == expanded_view_count == 1
@@ -1510,6 +1544,69 @@ def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Pa
     assert decoded_copy_button_count == 0
     assert full_json_buttons == 0
     assert full_json_copy_buttons == 0
+
+
+def test_viewer_renders_embedded_and_dropped_compact_trace_bundle(tmp_path: Path, chromium_browser) -> None:
+    records = _compact_contract_records()
+    bundle = build_compact_trace_bundle(list(records))
+    html_path = tmp_path / "compact.html"
+    bundle_path = tmp_path / "compact.ctap.json"
+    blank_html_path = tmp_path / "blank.html"
+
+    _generate_html_viewer_from_compact_bundle(
+        bundle,
+        html_path,
+        display_trace_path=bundle_path,
+        display_html_path=html_path,
+    )
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    blank_html_path.write_text(_read_viewer_template(), encoding="utf-8")
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").nth(1).click()
+        page.wait_for_selector("#detail .section", timeout=5000)
+        embedded_state = page.evaluate(
+            """() => ({
+              entryCount: entries.length,
+              hasBlobRef: JSON.stringify(EMBEDDED_TRACE_COMPACT_DATA).includes('__claude_tap_blob_ref__'),
+              detailText: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert embedded_state["entryCount"] == 2
+    assert embedded_state["hasBlobRef"] is True
+    assert "Compact bundle turn 2." in embedded_state["detailText"]
+    assert "Compact response 2." in embedded_state["detailText"]
+
+    drop_page = chromium_browser.new_page()
+    drop_errors: list[str] = []
+    drop_page.on("pageerror", lambda exc: drop_errors.append(f"pageerror: {exc}"))
+    drop_page.on(
+        "console", lambda msg: drop_errors.append(f"console.error: {msg.text}") if msg.type == "error" else None
+    )
+    try:
+        drop_page.goto(blank_html_path.resolve().as_uri(), timeout=10000)
+        drop_page.set_input_files("#file-input", str(bundle_path))
+        drop_page.wait_for_selector(".sidebar-item", timeout=5000)
+        dropped_state = drop_page.evaluate(
+            """() => ({
+              entryCount: entries.length,
+              sidebarText: document.querySelector('#sidebar')?.innerText || '',
+              detailText: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+    finally:
+        drop_page.close()
+
+    assert drop_errors == []
+    assert dropped_state["entryCount"] == 2
+    assert "Compact bundle turn 1." in dropped_state["detailText"]
+    assert "gpt-5.4" in dropped_state["sidebarText"]
 
 
 def test_viewer_does_not_synthesize_messages_for_empty_responses_input(tmp_path: Path, chromium_browser) -> None:

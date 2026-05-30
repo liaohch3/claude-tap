@@ -305,7 +305,7 @@ def _is_function_covered(function: dict[str, Any]) -> bool:
     return any(item.get("count", 0) > 0 for item in function.get("ranges", []))
 
 
-def _load_viewer_contract_helpers() -> tuple[Any, Any]:
+def _load_viewer_contract_helpers() -> tuple[Any, Any, Any]:
     contracts_path = REPO_ROOT / "tests" / "test_viewer_contracts.py"
     spec = importlib.util.spec_from_file_location("viewer_contracts_for_coverage", contracts_path)
     if spec is None or spec.loader is None:
@@ -313,7 +313,7 @@ def _load_viewer_contract_helpers() -> tuple[Any, Any]:
     contracts = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = contracts
     spec.loader.exec_module(contracts)
-    return contracts._contract_cases, contracts._generate_case_html
+    return contracts._contract_cases, contracts._generate_case_html, contracts._compact_contract_records
 
 
 def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
@@ -322,7 +322,7 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
     except ImportError as exc:  # pragma: no cover - exercised in dependency-free environments
         raise RuntimeError("Playwright is required for viewer JS coverage") from exc
 
-    _contract_cases, _generate_case_html = _load_viewer_contract_helpers()
+    _contract_cases, _generate_case_html, _compact_contract_records = _load_viewer_contract_helpers()
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -332,6 +332,22 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
             tuple(record for case in _contract_cases() for record in case.records),
         )
         empty_html_path = _generate_case_html(tmp_path, "empty_coverage", ())
+        compact_html_path = tmp_path / "compact_coverage.html"
+        compact_bundle_path = tmp_path / "compact_coverage.ctap.json"
+        from claude_tap.compact_trace import build_compact_trace_bundle
+        from claude_tap.viewer import _generate_html_viewer_from_compact_bundle
+
+        compact_bundle = build_compact_trace_bundle(list(_compact_contract_records()))
+        _generate_html_viewer_from_compact_bundle(
+            compact_bundle,
+            compact_html_path,
+            display_trace_path=compact_bundle_path,
+            display_html_path=compact_html_path,
+        )
+        compact_bundle_path.write_text(
+            json.dumps(compact_bundle, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
@@ -504,6 +520,27 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     }""",
                     index,
                 )
+            page.goto(compact_html_path.resolve().as_uri(), timeout=10000)
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+            page.evaluate(
+                """(bundleText) => {
+                  const parsed = JSON.parse(bundleText);
+                  const compactRecords = materializeCompactTraceBundle(parsed);
+                  parseTraceText(bundleText);
+                  entries = expandWebSocketResponseEntries(compactRecords);
+                  applyFilter(true);
+                  selectEntry(0);
+                  const blobRef = parsed.records[0].record.request.body.instructions;
+                  isCompactBlobRef(blobRef);
+                  materializeCompactValue(blobRef, parsed.blobs, new Map());
+                  materializeCompactRecord(parsed.records[0], parsed.blobs, new Map());
+                }""",
+                compact_bundle_path.read_text(encoding="utf-8"),
+            )
+            page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
+            page.wait_for_selector(".empty-trace-state", timeout=5000)
+            page.set_input_files("#file-input", str(compact_bundle_path))
+            page.wait_for_selector(".sidebar-item", timeout=5000)
             page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".empty-trace-state", timeout=5000)
             coverage = session.send("Profiler.takePreciseCoverage")
@@ -513,15 +550,16 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
 
     main_functions = _viewer_script_functions(_main_viewer_script(coverage, "v8_coverage.html"))
     empty_functions = _viewer_script_functions(_main_viewer_script(coverage, "empty_coverage.html"))
-    empty_covered_names = {
+    compact_functions = _viewer_script_functions(_main_viewer_script(coverage, "compact_coverage.html"))
+    auxiliary_covered_names = {
         function.get("functionName", "")
-        for function in empty_functions
+        for function in [*empty_functions, *compact_functions]
         if function.get("functionName") and _is_function_covered(function)
     }
     covered_functions = [
         function
         for function in main_functions
-        if _is_function_covered(function) or function.get("functionName", "") in empty_covered_names
+        if _is_function_covered(function) or function.get("functionName", "") in auxiliary_covered_names
     ]
     covered_names = {function.get("functionName", "") for function in covered_functions if function.get("functionName")}
     percent = len(covered_functions) / len(main_functions) * 100 if main_functions else 100.0
@@ -534,7 +572,7 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
     except ImportError as exc:  # pragma: no cover - exercised in dependency-free environments
         raise RuntimeError("Playwright is required for viewer CSS coverage") from exc
 
-    _contract_cases, _generate_case_html = _load_viewer_contract_helpers()
+    _contract_cases, _generate_case_html, _ = _load_viewer_contract_helpers()
     collect_css_script = r"""() => {
       const skipped = [];
       const used = new Set();
