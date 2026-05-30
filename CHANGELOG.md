@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.88] - 2026-05-30
+
+### Changed
+- Fix viewer global search navigation (#239)
 ## [0.1.87] - 2026-05-29
 
 ### Changed
