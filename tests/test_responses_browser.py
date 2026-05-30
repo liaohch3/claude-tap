@@ -216,6 +216,28 @@ def test_viewer_maps_responses_cached_tokens_to_cache_read(responses_page) -> No
     assert result["cache_read_input_tokens"] == 11648
 
 
+def test_viewer_prefers_openai_tokens_over_zero_aliases(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => getUsage({
+          response: {
+            body: {
+              usage: {
+                prompt_tokens: 743,
+                completion_tokens: 95,
+                total_tokens: 838,
+                input_tokens: 0,
+                output_tokens: 0
+              }
+            }
+          }
+        })"""
+    )
+
+    assert result["input_tokens"] == 743
+    assert result["output_tokens"] == 95
+    assert result["total_tokens"] == 838
+
+
 def test_viewer_renders_chat_completions_system_and_history_tool_calls(chat_completions_history_page) -> None:
     chat_completions_history_page.locator(".sidebar-item").first.click()
     chat_completions_history_page.wait_for_selector("#detail .section", timeout=5000)

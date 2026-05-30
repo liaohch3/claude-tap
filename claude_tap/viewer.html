@@ -4703,16 +4703,16 @@ function shouldRenderRequestContext(entry, body, msgs, respOutput) {
 function normalizeUsage(usage) {
   if (!usage || typeof usage !== 'object') return null;
   const normalized = { ...usage };
-  if (normalized.input_tokens === undefined && usage.prompt_tokens !== undefined) {
+  if ((normalized.input_tokens === undefined || normalized.input_tokens === null || normalized.input_tokens === 0) && usage.prompt_tokens) {
     normalized.input_tokens = usage.prompt_tokens;
   }
-  if (normalized.input_tokens === undefined && usage.promptTokenCount !== undefined) {
+  if ((normalized.input_tokens === undefined || normalized.input_tokens === null || normalized.input_tokens === 0) && usage.promptTokenCount) {
     normalized.input_tokens = usage.promptTokenCount;
   }
-  if (normalized.output_tokens === undefined && usage.completion_tokens !== undefined) {
+  if ((normalized.output_tokens === undefined || normalized.output_tokens === null || normalized.output_tokens === 0) && usage.completion_tokens) {
     normalized.output_tokens = usage.completion_tokens;
   }
-  if (normalized.output_tokens === undefined && usage.candidatesTokenCount !== undefined) {
+  if ((normalized.output_tokens === undefined || normalized.output_tokens === null || normalized.output_tokens === 0) && usage.candidatesTokenCount) {
     normalized.output_tokens = usage.candidatesTokenCount;
   }
   if (normalized.cache_read_input_tokens === undefined) {
