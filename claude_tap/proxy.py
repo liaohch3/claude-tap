@@ -74,6 +74,9 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     # Gemini API (Gemini CLI reverse mode)
     "/v1beta/models",
     "/v1alpha/models",
+    "/v1/projects",
+    "/v1beta1/projects",
+    "/v1alpha1/projects",
     # OpenAI Responses API (after strip_path_prefix removes /v1)
     "/responses",
     "/chat/completions",
