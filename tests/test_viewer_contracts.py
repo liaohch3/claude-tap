@@ -357,7 +357,35 @@ def _chat_completions_record() -> dict[str, Any]:
             "status": 200,
             "headers": {},
             "body": {
-                "content": [{"type": "text", "text": "Chat final OK."}],
+                "id": "chatcmpl-contract",
+                "object": "chat.completion",
+                "model": "kimi-k2-turbo-preview",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning_content": "Need to inspect metadata before answering.",
+                            "tool_calls": [
+                                {
+                                    "id": "call_response_read",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "inspect_metadata",
+                                        "arguments": '{"path":"pyproject.toml"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    },
+                    {
+                        "index": 1,
+                        "message": {"role": "assistant", "content": "Chat final OK."},
+                        "finish_reason": "stop",
+                    },
+                ],
                 "usage": {"prompt_tokens": 150, "completion_tokens": 10, "cached_tokens": 70},
             },
         },
@@ -969,9 +997,15 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             expected_system="Kimi contract system prompt.",
             expected_roles=("user", "assistant", "tool"),
             expected_tools=("read_file",),
-            expected_output_types=("text",),
+            expected_output_types=("thinking", "tool_use", "text"),
             expected_usage={"input_tokens": 150, "output_tokens": 10, "cache_read_input_tokens": 70},
-            required_detail_text=("Read the project metadata.", "read_file", "Chat final OK."),
+            required_detail_text=(
+                "Read the project metadata.",
+                "read_file",
+                "Need to inspect metadata before answering.",
+                "inspect_metadata",
+                "Chat final OK.",
+            ),
         ),
         ViewerContractCase(
             name="opencode_chat_completions",
