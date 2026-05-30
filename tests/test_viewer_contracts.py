@@ -357,7 +357,16 @@ def _chat_completions_record() -> dict[str, Any]:
             "status": 200,
             "headers": {},
             "body": {
-                "content": [{"type": "text", "text": "Chat final OK."}],
+                "id": "chatcmpl-contract",
+                "object": "chat.completion",
+                "model": "kimi-k2-turbo-preview",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Chat final OK."},
+                        "finish_reason": "stop",
+                    }
+                ],
                 "usage": {"prompt_tokens": 150, "completion_tokens": 10, "cached_tokens": 70},
             },
         },

@@ -4693,6 +4693,26 @@ function normalizeResponseOutput(output) {
   return content.length > 0 ? { content } : null;
 }
 
+function normalizeChatCompletionsChoiceOutput(body) {
+  if (!Array.isArray(body?.choices) || body.choices.length === 0) return null;
+  const content = [];
+  for (const choice of body.choices) {
+    const message = choice?.message || choice?.delta;
+    if (!message || typeof message !== 'object') continue;
+    if (typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) {
+      appendMergeableResponseBlock(content, { type: 'thinking', thinking: message.reasoning_content });
+    }
+    if (typeof message.thinking === 'string' && message.thinking.trim()) {
+      appendMergeableResponseBlock(content, { type: 'thinking', thinking: message.thinking });
+    }
+    const normalized = normalizeChatMessageForDisplay({ role: 'assistant', ...message });
+    for (const block of normalizeDisplayContentBlocks(normalized.content)) {
+      appendMergeableResponseBlock(content, block);
+    }
+  }
+  return content.length > 0 ? { content } : null;
+}
+
 function appendMergeableResponseBlock(content, block) {
   if (!block || typeof block !== 'object') return;
   const prev = content.length ? content[content.length - 1] : null;
@@ -4789,6 +4809,8 @@ function getResponseOutput(entry) {
   if (geminiOutput) return geminiOutput;
   const body = getResponsePayload(entry);
   if (body?.content) return body;
+  const fromChoices = normalizeChatCompletionsChoiceOutput(body);
+  if (fromChoices) return fromChoices;
   const fromBody = normalizeResponseOutput(body?.output);
   if (fromBody) return fromBody;
   const events = getResponseEvents(entry);
