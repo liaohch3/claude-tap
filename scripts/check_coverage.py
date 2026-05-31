@@ -404,6 +404,13 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   renderImageElementForBlock(imageBlock);
                   document.body.insertAdjacentHTML('beforeend', renderImageBlock(imageBlock, 0, 1, { frameBlocks: true }));
                   renderViewerActions();
+                  valueHasReadableEscapes({ cmd: 'printf "coverage\\\\n"' });
+                  decodeEscapedTextForView('line1\\\\nline2\\\\t\\\\u4e00');
+                  document.body.insertAdjacentHTML(
+                    'beforeend',
+                    renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
+                  );
+                  document.querySelector('.tool-input-toggle')?.click();
                   const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
                   if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
                   tooltipTrigger.dataset.fullUserInput = 'coverage tooltip prompt';
@@ -607,6 +614,11 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
                   if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
                   tooltipTrigger.dataset.fullUserInput = 'coverage tooltip prompt';
                   showSessionTooltip(tooltipTrigger);
+                  document.body.insertAdjacentHTML(
+                    'beforeend',
+                    renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
+                  );
+                  document.querySelector('.tool-input-view')?.classList.add('expanded');
                 }"""
             )
             merge(page.evaluate(collect_css_script))

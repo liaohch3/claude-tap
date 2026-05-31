@@ -660,6 +660,50 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .json-view .jb { color: #dc2626; }
 .json-view .jnull { color: var(--text-tertiary); }
 .json-view .json-punct { color: var(--text-tertiary); }
+.tool-input-readable {
+  display: block;
+  max-width: 100%;
+  position: relative;
+}
+.tool-input-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  display: inline-flex;
+  gap: 4px;
+  margin: 0;
+}
+.tool-input-btn {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 7px;
+  font-family: var(--sans);
+  font-size: 10px;
+  line-height: 20px;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+.tool-input-btn:hover {
+  color: var(--blue);
+  border-color: var(--blue);
+  background: var(--blue-bg);
+}
+.tool-input-view {
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-right: 56px;
+}
+.tool-input-view.expanded {
+  border-color: color-mix(in srgb, var(--blue) 35%, var(--border));
+  background: var(--blue-bg);
+}
 
 /* JSON tree */
 .jt-line { min-height: 1.55em; }
@@ -5065,7 +5109,7 @@ function renderContent(content, role, options = {}) {
     }
     if (block.type === 'tool_use') {
       const label = block.id ? `${block.name || 'tool_use'} (${block.id})` : (block.name || 'tool_use');
-      return wrapContentBlock(`<span class="tool-use-label">${esc(label)}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre>`, block, index, blocks.length, options);
+      return wrapContentBlock(`<span class="tool-use-label">${esc(label)}</span>${renderToolInput(block.input)}`, block, index, blocks.length, options);
     }
     if (block.type === 'tool_result') {
       const rc = block.content;
@@ -5101,6 +5145,46 @@ function renderContent(content, role, options = {}) {
     ? recoveredImagesForContent(content).map((block, index, images) => renderImageBlock(block, index, images.length)).join('')
     : '';
   return renderedBlocks + recovered;
+}
+
+function valueHasReadableEscapes(value) {
+  if (typeof value === 'string') {
+    return value.includes('\n')
+      || value.includes('\r')
+      || value.includes('\t')
+      || /\\(?:r\\n|n|r|t|"|u[0-9a-fA-F]{4})/.test(value);
+  }
+  if (Array.isArray(value)) return value.some(valueHasReadableEscapes);
+  if (value && typeof value === 'object') return Object.values(value).some(valueHasReadableEscapes);
+  return false;
+}
+
+function decodeEscapedTextForView(value) {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"')
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => {
+      try { return String.fromCharCode(parseInt(hex, 16)); }
+      catch { return `\\u${hex}`; }
+    })
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+}
+
+function renderToolInput(input) {
+  const raw = JSON.stringify(input, null, 2) || '';
+  if (!valueHasReadableEscapes(input)) return `<pre>${esc(raw)}</pre>`;
+  const decoded = decodeEscapedTextForView(raw);
+  return `<div class="tool-input-readable">`
+    + `<span class="tool-input-actions">`
+    + `<button type="button" class="tool-input-btn tool-input-toggle" aria-expanded="false" title="${esc(t('string_expand_escapes'))}" aria-label="${esc(t('string_expand_escapes'))}">↵</button>`
+    + `</span>`
+    + `<pre class="tool-input-view" data-raw="${encodeCopyText(raw)}" data-decoded="${encodeCopyText(decoded)}">${esc(raw)}</pre>`
+    + `</div>`;
 }
 
 function renderTools(tools) {
@@ -5191,6 +5275,21 @@ function bindSections(container) {
     h.addEventListener('click', () => {
       h.nextElementSibling.classList.toggle('open');
       h.querySelector('.tb-arrow').classList.toggle('open');
+    });
+  });
+  container.querySelectorAll('.tool-input-toggle').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const wrapper = btn.closest('.tool-input-readable');
+      const view = wrapper?.querySelector('.tool-input-view');
+      if (!view) return;
+      const expanded = view.classList.toggle('expanded');
+      const dataKey = expanded ? 'decoded' : 'raw';
+      view.textContent = decodeURIComponent(escape(atob(view.dataset[dataKey] || '')));
+      btn.textContent = expanded ? t('string_show_raw') : '↵';
+      btn.title = expanded ? t('string_show_raw') : t('string_expand_escapes');
+      btn.setAttribute('aria-label', expanded ? t('string_show_raw') : t('string_expand_escapes'));
+      btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     });
   });
 }

@@ -1334,6 +1334,51 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert remaining_tabs == ["default", "trace"]
 
 
+def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Path, chromium_browser) -> None:
+    record = json.loads(json.dumps(_responses_record()))
+    decoded_command = "python - <<'PY'\nprint(\"hello\")\nPY"
+    record["response"]["body"]["output"][0]["arguments"] = json.dumps(
+        {"cmd": decoded_command, "yield_time_ms": 1000},
+        ensure_ascii=False,
+    )
+    html_path = _generate_case_html(tmp_path, "tool_call_param_escapes", (record,))
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").first.click()
+        page.wait_for_selector("#detail .section", timeout=5000)
+        page.wait_for_selector("#detail .tool-input-toggle", timeout=5000)
+
+        input_view = page.locator("#detail .tool-input-view").first
+        raw_text = input_view.inner_text()
+        input_view_count = page.locator("#detail .tool-input-view").count()
+        toggle_text_before = page.locator("#detail .tool-input-toggle").first.inner_text()
+        page.locator("#detail .tool-input-toggle").first.click()
+        page.wait_for_selector("#detail .tool-input-view.expanded", timeout=5000)
+        decoded_text = input_view.inner_text()
+        toggle_text_expanded = page.locator("#detail .tool-input-toggle").first.inner_text()
+        expanded_view_count = page.locator("#detail .tool-input-view").count()
+        decoded_box_count = page.locator("#detail .tool-input-decoded").count()
+        copy_button_count = page.locator("#detail .tool-input-copy-decoded").count()
+        page.locator("#detail .tool-input-toggle").first.click()
+        restored_text = input_view.inner_text()
+        full_json_buttons = page.locator("#detail .json-view .tool-input-toggle").count()
+    finally:
+        page.close()
+
+    assert errors == []
+    assert "\\nprint" in raw_text
+    assert "python - <<'PY'\nprint(\"hello\")\nPY" in decoded_text
+    assert toggle_text_before == "\u21b5"
+    assert toggle_text_expanded == "Raw"
+    assert restored_text == raw_text
+    assert input_view_count == expanded_view_count == 1
+    assert decoded_box_count == 0
+    assert copy_button_count == 0
+    assert full_json_buttons == 0
+
+
 def test_viewer_does_not_synthesize_messages_for_empty_responses_input(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "responses_empty_input", (_responses_empty_input_record(),))
 
@@ -1825,6 +1870,13 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
               renderImageElementForBlock(imageBlock);
               document.body.insertAdjacentHTML('beforeend', renderImageBlock(imageBlock, 0, 1, { frameBlocks: true }));
               renderViewerActions();
+              valueHasReadableEscapes({ cmd: 'printf "coverage\\\\n"' });
+              decodeEscapedTextForView('line1\\\\nline2\\\\t\\\\u4e00');
+              document.body.insertAdjacentHTML(
+                'beforeend',
+                renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
+              );
+              document.querySelector('.tool-input-toggle')?.click();
               const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
               if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
               tooltipTrigger.dataset.fullUserInput = 'coverage tooltip prompt';
