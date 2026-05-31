@@ -278,6 +278,8 @@ def test_dashboard_template_exposes_session_delete_controls() -> None:
     assert "data-delete-session" in template
     assert "delete_active_session_title" in template
     assert "session.active" in template
+    assert "function isSessionRowActionTarget(target)" in template
+    assert "event.target !== row" in template
     assert "function confirmDeleteSession()" in template
     assert 'method: "DELETE"' in template
 
@@ -697,6 +699,43 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 hrefs = await export_links.evaluate_all("(links) => links.map((link) => link.getAttribute('href'))")
                 assert f"/api/sessions/{session_id}/export/jsonl" in hrefs
                 assert f"/api/sessions/{session_id}/export/log" in hrefs
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_delete_button_keyboard_focuses_confirmation_dialog(trace_db) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(session_id, _anthropic_record())
+    store.finalize_session(session_id, {"api_calls": 1})
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
+                delete_button = page.locator(f'[data-delete-session="{session_id}"]')
+                await delete_button.wait_for(state="visible", timeout=5000)
+
+                for key in ("Enter", "Space"):
+                    await delete_button.focus()
+                    await page.keyboard.press(key)
+                    await page.wait_for_selector("#delete-session-modal:not(.hidden)", timeout=5000)
+                    assert page.url == f"http://127.0.0.1:{port}/dashboard"
+                    assert await page.evaluate("document.activeElement && document.activeElement.id") == (
+                        "delete-session-cancel"
+                    )
+
+                    await page.keyboard.press("Enter")
+                    await page.wait_for_selector("#delete-session-modal.hidden", state="attached", timeout=5000)
+                    assert await page.locator(f'[data-session="{session_id}"]').count() == 1
             finally:
                 await browser.close()
     finally:

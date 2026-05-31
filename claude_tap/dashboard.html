@@ -975,6 +975,7 @@ const state = {
 
 const $ = selector => document.querySelector(selector);
 const MAX_INLINE_DETAIL_RECORDS = 10;
+let deleteSessionReturnFocusEl = null;
 
 function initialSessionId() {
   const routeMatch = window.location.pathname.match(SESSION_DETAIL_ROUTE);
@@ -1458,11 +1459,12 @@ function renderSessions() {
   $("#session-list").innerHTML = sessions.map(session => sessionRow(session)).join("");
   document.querySelectorAll("[data-session]").forEach(row => {
     row.addEventListener("click", event => {
-      if (event.target.closest("button, a")) return;
+      if (isSessionRowActionTarget(event.target)) return;
       event.preventDefault();
       openSession(row.dataset.session);
     });
     row.addEventListener("keydown", event => {
+      if (event.target !== row || isSessionRowActionTarget(event.target)) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         openSession(row.dataset.session);
@@ -1477,12 +1479,19 @@ function renderSessions() {
     });
   });
   document.querySelectorAll("[data-delete-session]").forEach(button => {
+    button.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+    });
     button.addEventListener("click", event => {
       event.preventDefault();
       event.stopPropagation();
       showDeleteSessionDialog(button.dataset.deleteSession);
     });
   });
+}
+
+function isSessionRowActionTarget(target) {
+  return target instanceof Element && Boolean(target.closest("button, a, input, select, textarea"));
 }
 
 function sessionRow(session) {
@@ -1558,6 +1567,7 @@ function showDeleteSessionDialog(sessionId) {
   const session = state.sessions.find(item => item.id === sessionId);
   if (!session || session.live || session.active || session.status === "active") return;
   state.pendingDeleteSessionId = sessionId;
+  deleteSessionReturnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const error = $("#delete-session-error");
   error.hidden = true;
   error.textContent = "";
@@ -1574,6 +1584,8 @@ function hideDeleteSessionDialog({force = false} = {}) {
   const modal = $("#delete-session-modal");
   modal.classList.add("hidden");
   modal.setAttribute("aria-hidden", "true");
+  if (deleteSessionReturnFocusEl?.isConnected) deleteSessionReturnFocusEl.focus();
+  deleteSessionReturnFocusEl = null;
 }
 
 async function confirmDeleteSession() {
