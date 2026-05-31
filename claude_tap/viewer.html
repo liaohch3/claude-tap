@@ -4157,6 +4157,7 @@ function vsScrollToIdx(idx) {
 function selectEntry(idx, opts) {
   if (idx < 0 || idx >= filtered.length) return;
   const force = !opts || opts.force !== false;
+  const previousDetailRequestId = currentDetailRequestId;
   activeIdx = idx;
   if (virtualMode) {
     vsRenderVisible();
@@ -4182,6 +4183,14 @@ function selectEntry(idx, opts) {
   updatePositionIndicator();
   mobileShowDetail();
   updateMobileNav();
+  if (
+    globalSearchState.open
+    && globalSearchState.query
+    && globalSearchState.scope === 'current'
+    && currentDetailRequestId !== previousDetailRequestId
+  ) {
+    recalcGlobalSearchMatches();
+  }
 }
 
 /* ─── Detail ─── */

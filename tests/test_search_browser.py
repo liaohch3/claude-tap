@@ -463,6 +463,34 @@ def test_global_search_defaults_to_current_entry(tmp_path):
             browser.close()
 
 
+def test_current_scope_search_recomputes_after_turn_change(tmp_path):
+    trace_path = tmp_path / "current_scope_turn_change_trace.jsonl"
+    html_path = tmp_path / "current_scope_turn_change_viewer.html"
+    _write_current_scope_trace(trace_path)
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 760})
+            page.goto(f"file://{html_path}")
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+
+            _dispatch_find_shortcut(page, meta=False, ctrl=True)
+            page.fill("#global-search-input", "current-scope-needle")
+            page.wait_for_function("() => globalSearchState.matchCounts[0]?.requestId === 'req_current_scope_0'")
+
+            page.locator(".sidebar-item").nth(1).click()
+            page.wait_for_function("() => globalSearchState.matchCounts[0]?.requestId === 'req_current_scope_1'")
+            selected_turn = page.inner_text(".sidebar-item.active .si-turn")
+
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(100)
+            assert page.inner_text(".sidebar-item.active .si-turn") == selected_turn
+        finally:
+            browser.close()
+
+
 def test_same_entry_search_navigation_does_not_rerender_detail(tmp_path):
     trace_path = tmp_path / "same_entry_trace.jsonl"
     html_path = tmp_path / "same_entry_viewer.html"
