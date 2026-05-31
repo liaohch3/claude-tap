@@ -41,6 +41,21 @@ def test_chat_completions_stream_events_are_captured() -> None:
     assert snap["content"] == [{"type": "text", "text": "OK"}]
 
 
+def test_reassembler_can_reconstruct_without_storing_events() -> None:
+    r = SSEReassembler(store_events=False)
+    r.feed_bytes(
+        b'data: {"id":"c1","choices":[{"delta":{"role":"assistant"}}]}\n\n'
+        b'data: {"id":"c1","choices":[{"delta":{"content":"OK"}}]}\n\n'
+        b'data: {"id":"c1","choices":[{"finish_reason":"stop","delta":{}}]}\n\n'
+    )
+
+    assert r.events == []
+    snap = r.reconstruct()
+    assert snap is not None
+    assert snap["choices"][0]["message"]["content"] == "OK"
+    assert snap["content"] == [{"type": "text", "text": "OK"}]
+
+
 def test_chat_completions_usage_dual_naming() -> None:
     """Final chunk's `usage` must be exposed under both Anthropic and OpenAI
     keys so token displays that only know one schema still work."""

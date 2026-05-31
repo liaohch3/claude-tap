@@ -41,9 +41,9 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 
 ## Why use it
 
-- 👀 **See the exact context**: inspect prompts, messages, tool definitions, tool calls, tool results, streaming chunks, and token usage.
+- 👀 **See the exact context**: inspect prompts, messages, tool definitions, tool calls, tool results, reconstructed streaming responses, and token usage.
 - 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
-- 📦 **Share one portable artifact**: each run writes a JSONL trace and a self-contained HTML viewer for review or archiving.
+- 📦 **Share one portable artifact**: each run writes a local trace session that can be exported to a self-contained HTML viewer for review or archiving.
 - 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
 - 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
 
@@ -374,6 +374,9 @@ claude-tap dashboard
 # Regenerate a self-contained HTML viewer from JSONL
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
+# Embed the exported viewer in an iframe with reduced chrome
+# trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light
+
 # Store traces in another directory, or keep fewer sessions
 claude-tap --tap-output-dir ./my-traces
 claude-tap --tap-max-traces 10
@@ -403,6 +406,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-host HOST          Bind address (default: 127.0.0.1, or 0.0.0.0 in --tap-no-launch mode)
 --tap-no-launch          Only start the proxy, don't launch client
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
+--tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
 --tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/codebuddy, forward for agy/gemini/opencode/pi/hermes/cursor/qoder)
@@ -424,6 +428,7 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 - **Tool inspector** — expandable cards with tool name, description, and parameter schema
 - **Search** — full-text search across messages, tools, prompts, and responses
 - **Dark mode** — toggle light/dark themes (respects system preference)
+- **Iframe embed mode** — add query parameters such as `embed=1`, `hideHeader=1`, `hidePath=1`, `hideHistory=1`, `hideControls=1`, `density=compact`, and `theme=light|dark`
 - **Keyboard navigation** — `j`/`k` or arrow keys
 - **Copy helpers** — one-click copy of request JSON or cURL command
 - **i18n** — English, 简体中文, 日本語, 한국어, Français, العربية, Deutsch, Русский
@@ -440,7 +445,7 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 1. `claude-tap` starts a reverse or forward proxy and spawns the selected client
 2. Base URL clients are pointed at the reverse proxy; clients without base URL support use proxy/CA environment variables
 3. SSE and WebSocket streams are forwarded as chunks/messages arrive with low proxy overhead
-4. Each request-response pair or WebSocket session is recorded to a dated `trace_*.jsonl`
+4. Each request-response pair or WebSocket session is recorded to local trace storage; raw SSE/WebSocket event arrays are omitted by default and must be captured with `--tap-store-stream-events` if you need them later in viewer/export output
 5. On exit, a self-contained HTML viewer is generated
 6. Live mode is enabled by default and broadcasts updates to the browser via SSE
 

@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-20
+last_reviewed: 2026-05-29
 source_of_truth: AGENTS.md
 ---
 
@@ -38,7 +38,8 @@ git branch -d feat/<name>
 2. PR 正文包含 Validation/Test plan/Results 等验证段落。
 3. 改动 runtime、viewer、client、proxy 或 UI 行为时，PR 正文包含 `raw.githubusercontent.com` 截图证据链接。
 4. PR 正文中的图片链接使用 `raw.githubusercontent.com` 绝对 URL。
-5. PR 不包含 raw trace、生成的 trace viewer、日志、secret-like 文件或明显 token。
+5. Runtime 行为截图必须链接到 `.agents/evidence/pr/` 下提交的 trace/viewer/dashboard/session/browser 证据图，并在 PR 正文说明真实 trace/viewer 来源。
+6. PR 不包含 raw trace、生成的 trace viewer、日志、secret-like 文件或明显 token。
 
 本地检查：
 

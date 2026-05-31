@@ -44,6 +44,8 @@ EOF
 
 ## Evidence
 ![trace](https://raw.githubusercontent.com/octo/demo/feature/checker/.agents/evidence/pr/trace.png)
+
+Trace viewer screenshot exported from `.traces/trace_120000.jsonl`.
 EOF
       exit 0
       ;;

@@ -357,7 +357,35 @@ def _chat_completions_record() -> dict[str, Any]:
             "status": 200,
             "headers": {},
             "body": {
-                "content": [{"type": "text", "text": "Chat final OK."}],
+                "id": "chatcmpl-contract",
+                "object": "chat.completion",
+                "model": "kimi-k2-turbo-preview",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning_content": "Need to inspect metadata before answering.",
+                            "tool_calls": [
+                                {
+                                    "id": "call_response_read",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "inspect_metadata",
+                                        "arguments": '{"path":"pyproject.toml"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    },
+                    {
+                        "index": 1,
+                        "message": {"role": "assistant", "content": "Chat final OK."},
+                        "finish_reason": "stop",
+                    },
+                ],
                 "usage": {"prompt_tokens": 150, "completion_tokens": 10, "cached_tokens": 70},
             },
         },
@@ -969,9 +997,15 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             expected_system="Kimi contract system prompt.",
             expected_roles=("user", "assistant", "tool"),
             expected_tools=("read_file",),
-            expected_output_types=("text",),
+            expected_output_types=("thinking", "tool_use", "text"),
             expected_usage={"input_tokens": 150, "output_tokens": 10, "cache_read_input_tokens": 70},
-            required_detail_text=("Read the project metadata.", "read_file", "Chat final OK."),
+            required_detail_text=(
+                "Read the project metadata.",
+                "read_file",
+                "Need to inspect metadata before answering.",
+                "inspect_metadata",
+                "Chat final OK.",
+            ),
         ),
         ViewerContractCase(
             name="opencode_chat_completions",
@@ -1772,6 +1806,93 @@ def test_viewer_trace_path_copy_handles_apostrophes(tmp_path: Path, chromium_bro
         page.close()
 
     assert errors == []
+
+
+def test_viewer_iframe_embed_query_hides_chrome_and_keeps_trace_loaded(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "embed_trace", (_anthropic_messages_record(),))
+    query = "embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light"
+
+    page = chromium_browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+    page.on("console", lambda msg: errors.append(f"console.error: {msg.text}") if msg.type == "error" else None)
+    try:
+        page.goto(
+            f"{html_path.resolve().as_uri()}?{query}",
+            timeout=10000,
+        )
+        page.wait_for_selector(".sidebar-item", timeout=5000)
+        state = page.evaluate(
+            """() => ({
+              embedMode: document.documentElement.dataset.embedMode || '',
+              bodyClasses: Array.from(document.body.classList),
+              headerDisplay: getComputedStyle(document.querySelector('.header')).display,
+              pathDisplay: getComputedStyle(document.querySelector('#trace-path-bar')).display,
+              themeToggleDisplay: getComputedStyle(document.querySelector('#theme-toggle')).display,
+              langSelectDisplay: getComputedStyle(document.querySelector('#lang-select')).display,
+              searchBarDisplay: getComputedStyle(document.querySelector('#search-bar')).display,
+              sidebarSortDisplay: getComputedStyle(document.querySelector('#sidebar-sort')).display,
+              detailTabsDisplay: getComputedStyle(document.querySelector('.detail-inspector-bar')).display,
+              actionBarDisplay: getComputedStyle(document.querySelector('.action-bar')).display,
+              sidebarWidth: Math.round(document.querySelector('#sidebar-wrap').getBoundingClientRect().width),
+              theme: document.documentElement.dataset.theme || 'light',
+              sidebarItemCount: document.querySelectorAll('.sidebar-item').length,
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["embedMode"] == "true"
+    assert "embed-mode" in state["bodyClasses"]
+    assert "embed-compact" in state["bodyClasses"]
+    assert state["headerDisplay"] == "none"
+    assert state["pathDisplay"] == "none"
+    assert state["themeToggleDisplay"] == "none"
+    assert state["langSelectDisplay"] == "none"
+    assert state["searchBarDisplay"] == "none"
+    assert state["sidebarSortDisplay"] == "none"
+    assert state["detailTabsDisplay"] == "none"
+    assert state["actionBarDisplay"] == "none"
+    assert state["sidebarWidth"] <= 280
+    assert state["theme"] == "light"
+    assert state["sidebarItemCount"] == 1
+
+    sandbox_page = chromium_browser.new_page()
+    sandbox_errors: list[str] = []
+    sandbox_page.on("pageerror", lambda exc: sandbox_errors.append(f"pageerror: {exc}"))
+    sandbox_page.on(
+        "console",
+        lambda msg: sandbox_errors.append(f"console.error: {msg.text}") if msg.type == "error" else None,
+    )
+    harness_path = tmp_path / "embed_harness.html"
+    harness_path.write_text(
+        f'<iframe sandbox="allow-scripts" src="{html_path.resolve().as_uri()}?{query}" '
+        'style="width:1200px;height:800px"></iframe>',
+        encoding="utf-8",
+    )
+    try:
+        sandbox_page.goto(harness_path.resolve().as_uri(), timeout=10000)
+        frame = sandbox_page.frame_locator("iframe")
+        frame.locator(".sidebar-item").first.wait_for(state="attached", timeout=5000)
+        sandbox_state = frame.locator("body").evaluate(
+            """() => ({
+              embedMode: document.documentElement.dataset.embedMode || '',
+              headerDisplay: getComputedStyle(document.querySelector('.header')).display,
+              pathDisplay: getComputedStyle(document.querySelector('#trace-path-bar')).display,
+              sidebarItemCount: document.querySelectorAll('.sidebar-item').length,
+              dropZoneDisplay: getComputedStyle(document.querySelector('#drop-zone')).display,
+            })"""
+        )
+    finally:
+        sandbox_page.close()
+
+    assert sandbox_errors == []
+    assert sandbox_state["embedMode"] == "true"
+    assert sandbox_state["headerDisplay"] == "none"
+    assert sandbox_state["pathDisplay"] == "none"
+    assert sandbox_state["sidebarItemCount"] == 1
+    assert sandbox_state["dropZoneDisplay"] == "none"
 
 
 def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, chromium_browser) -> None:

@@ -10,6 +10,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 IMAGE_EXT_RE = re.compile(r"\.(?:png|jpe?g|gif|svg|webp)(?:[?#][^\s)]*)?$", re.IGNORECASE)
 MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", re.IGNORECASE)
@@ -34,6 +35,28 @@ VALIDATION_HEADINGS = {
 EVIDENCE_REQUIRED_PATHS = (
     "claude_tap/",
     "docs/support-matrix.md",
+)
+EVIDENCE_SCREENSHOT_ROOT = ".agents/evidence/pr/"
+EVIDENCE_SCREENSHOT_KEYWORDS = (
+    "browser",
+    "dashboard",
+    "e2e",
+    "session",
+    "trace",
+    "viewer",
+)
+REAL_EVIDENCE_MARKERS = (
+    ".traces/",
+    "--run-real-e2e",
+    "claude-tap --tap-client",
+    "dashboard",
+    "jsonl",
+    "real e2e",
+    "real trace",
+    "run_real_e2e",
+    "trace viewer",
+    "uv run claude-tap",
+    "viewer html",
 )
 
 SECRET_PATTERNS = (
@@ -75,6 +98,31 @@ def _image_urls(body: str) -> list[str]:
 
 def _raw_image_urls(urls: list[str]) -> list[str]:
     return [url for url in urls if "://raw.githubusercontent.com/" in url and IMAGE_EXT_RE.search(url)]
+
+
+def _raw_image_paths(urls: list[str]) -> list[str]:
+    paths: list[str] = []
+    for url in urls:
+        parsed = urlparse(url)
+        if parsed.netloc != "raw.githubusercontent.com":
+            continue
+        parts = [unquote(part) for part in parsed.path.split("/") if part]
+        if ".agents" in parts:
+            paths.append("/".join(parts[parts.index(".agents") :]))
+        elif len(parts) >= 4:
+            paths.append("/".join(parts[3:]))
+    return paths
+
+
+def _body_without_image_references(body: str) -> str:
+    stripped = MARKDOWN_IMAGE_RE.sub("", body)
+    stripped = HTML_IMAGE_RE.sub("", stripped)
+    return PLAIN_IMAGE_URL_RE.sub("", stripped)
+
+
+def _has_real_evidence_source(body: str) -> bool:
+    lower = _body_without_image_references(body).lower()
+    return any(marker in lower for marker in REAL_EVIDENCE_MARKERS)
 
 
 def _evidence_required_paths(changed_files: list[str]) -> list[str]:
@@ -137,6 +185,20 @@ def validate_policy(body: str, changed_files: list[str]) -> PolicyResult:
             "PR changes runtime/viewer/client behavior but has no raw.githubusercontent.com screenshot evidence"
         )
         warnings.append("Evidence-triggering files: " + ", ".join(evidence_paths[:8]))
+    elif evidence_paths:
+        raw_paths = _raw_image_paths(raw_urls)
+        evidence_image_paths = [path for path in raw_paths if path.startswith(EVIDENCE_SCREENSHOT_ROOT)]
+        if not evidence_image_paths:
+            failures.append("PR runtime screenshot evidence must link to committed .agents/evidence/pr/ images")
+        elif not any(
+            any(keyword in Path(path).name.lower() for keyword in EVIDENCE_SCREENSHOT_KEYWORDS)
+            for path in evidence_image_paths
+        ):
+            failures.append(
+                "PR runtime screenshot evidence must be trace/viewer/dashboard evidence, not test-output art"
+            )
+        if not _has_real_evidence_source(body):
+            failures.append("PR runtime evidence must document the real trace/viewer source used for screenshots")
 
     dangerous = _dangerous_files(changed_files)
     if dangerous:

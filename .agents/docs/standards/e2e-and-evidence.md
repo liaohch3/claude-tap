@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-06
+last_reviewed: 2026-05-29
 source_of_truth: AGENTS.md
 ---
 
@@ -48,6 +48,8 @@ scripts/run_real_e2e_tmux.sh
 - 当移动端行为受影响时，提供移动端截图。
 - 使用来自 `.traces/trace_*.jsonl` 或真实运行输出的真实 trace 产物。
 - 对于与 E2E 相关的 UI 变更，截图必须来自至少完成一次完整多轮对话的运行。
+- 对于 proxy、runtime、client 或 trace 捕获变更，截图必须展示真实 trace viewer/dashboard 中的具体 API entry 或 session 状态，不能使用手写 HTML、终端输出截图、pytest 输出截图或只展示验证摘要的图片替代。
+- PR 正文必须说明截图来源，例如真实 `claude-tap` 命令、导出的 `trace_*.jsonl`、viewer HTML 或 dashboard session。
 
 # 截图质量门禁
 

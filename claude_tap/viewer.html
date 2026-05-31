@@ -1419,6 +1419,57 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   .sidebar-item { min-height: 44px; padding: 12px 16px; }
   .sidebar-group-header { min-height: 44px; }
 }
+body.embed-mode {
+  overflow: hidden !important;
+  background: var(--bg-card);
+}
+body.embed-mode .main {
+  height: 100vh;
+  min-height: 0;
+  background: var(--bg-card);
+}
+body.embed-mode.embed-hide-header .header {
+  display: none !important;
+}
+body.embed-mode.embed-hide-path .trace-path-bar {
+  display: none !important;
+}
+body.embed-mode.embed-hide-history #date-picker,
+body.embed-mode.embed-hide-history #history-delete-status {
+  display: none !important;
+}
+body.embed-mode.embed-hide-controls .viewer-actions,
+body.embed-mode.embed-hide-controls .theme-toggle,
+body.embed-mode.embed-hide-controls .lang-select,
+body.embed-mode.embed-hide-controls .sidebar-sort,
+body.embed-mode.embed-hide-controls #tool-filter,
+body.embed-mode.embed-hide-controls #search-bar,
+body.embed-mode.embed-hide-controls #mobile-back-btn,
+body.embed-mode.embed-hide-controls #mobile-nav-bar,
+body.embed-mode.embed-hide-controls .detail-inspector-bar,
+body.embed-mode.embed-hide-controls .action-bar,
+body.embed-mode.embed-hide-controls .trace-format-bar {
+  display: none !important;
+}
+body.embed-mode.embed-compact #sidebar-wrap {
+  width: 280px;
+  min-width: 240px;
+  max-width: 34vw;
+}
+body.embed-mode.embed-compact .search-bar {
+  padding: 6px 8px;
+}
+body.embed-mode.embed-compact .sidebar-item {
+  padding: 8px 12px;
+}
+body.embed-mode.embed-compact .detail {
+  padding: 12px 14px;
+}
+body.embed-mode.embed-compact .msg,
+body.embed-mode.embed-compact .section,
+body.embed-mode.embed-compact .content-block.block-framed {
+  border-radius: 8px;
+}
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 </style>
 </head>
@@ -1517,12 +1568,39 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 <script>
 const $ = s => document.querySelector(s);
+const EMBED_QUERY_OPTIONS = parseEmbedQueryOptions();
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
 let sessionImageRegistryCache = null, sessionImageRegistrySize = -1;
 let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
 const SIDEBAR_ORDER_MODES = ['model', 'turn', 'session'];
-const savedSidebarOrderMode = localStorage.getItem('claude-tap-sidebar-order');
+function safeLocalStorageGet(key) {
+  try { return window.localStorage.getItem(key); } catch(e) { return null; }
+}
+function safeLocalStorageSet(key, value) {
+  try { window.localStorage.setItem(key, value); } catch(e) {}
+}
+const savedSidebarOrderMode = safeLocalStorageGet('claude-tap-sidebar-order');
 let sidebarOrderMode = SIDEBAR_ORDER_MODES.includes(savedSidebarOrderMode) ? savedSidebarOrderMode : 'model';
+
+function readBooleanQuery(params, key) {
+  const value = params.get(key);
+  return value === '1' || value === 'true' || value === '';
+}
+
+function parseEmbedQueryOptions() {
+  const params = new URLSearchParams(window.location.search || '');
+  const enabled = readBooleanQuery(params, 'embed') || readBooleanQuery(params, 'iframe');
+  const theme = params.get('theme') === 'dark' ? 'dark' : params.get('theme') === 'light' ? 'light' : null;
+  return {
+    enabled,
+    hideHeader: enabled && readBooleanQuery(params, 'hideHeader'),
+    hidePath: enabled && readBooleanQuery(params, 'hidePath'),
+    hideHistory: enabled && readBooleanQuery(params, 'hideHistory'),
+    hideControls: enabled && readBooleanQuery(params, 'hideControls'),
+    compact: enabled && params.get('density') === 'compact',
+    theme,
+  };
+}
 
 function cloneJson(value) {
   if (value === undefined || value === null) return value;
@@ -1723,6 +1801,35 @@ function webSocketOutputMessages(events) {
         }]
       });
     } else if (item.type === 'message') {
+      messages.push({
+        type: 'message',
+        role: item.role || 'assistant',
+        content: Array.isArray(item.content) ? item.content : []
+      });
+    }
+  }
+  return messages;
+}
+
+function responseBodyOutputMessages(output) {
+  const messages = [];
+  if (!Array.isArray(output)) return messages;
+  for (const item of output) {
+    if (!item || typeof item !== 'object') continue;
+    if (isResponseCallItem(item)) {
+      messages.push({
+        type: 'message',
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: item.call_id || item.id || '',
+          name: responseCallToolName(item),
+          input: responseCallInput(item)
+        }]
+      });
+      continue;
+    }
+    if (item.type === 'message') {
       messages.push({
         type: 'message',
         role: item.role || 'assistant',
@@ -1939,6 +2046,50 @@ function storeWebSocketResponseHistory(historyByResponseId, responseId, previous
   });
 }
 
+function isDisplayableResponsesEntry(entry) {
+  const body = entry?.request?.body || {};
+  const payload = getResponsePayload(entry) || {};
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  const isGenerateFalse = body.generate === false || payload.generate === false;
+  return !(isGenerateFalse && output.length === 0 && (payload.usage?.output_tokens || 0) === 0);
+}
+
+function stitchDirectResponsesEntry(entry, historyByResponseId) {
+  const body = entry?.request?.body;
+  const payload = getResponsePayload(entry) || {};
+  if (!body || typeof body !== 'object') return entry;
+  if (!isDisplayableResponsesEntry(entry)) return null;
+  const previousId = body.previous_response_id || payload.previous_response_id || '';
+  let nextEntry = entry;
+  let requestBody = body;
+  if (previousId) {
+    const priorHistoryInput = webSocketHistoryInputForResponse(historyByResponseId, previousId);
+    if (Array.isArray(priorHistoryInput) && priorHistoryInput.length) {
+      requestBody = cloneJson(body) || {};
+      const currentInput = normalizeWebSocketDerivedInput(Array.isArray(requestBody.input) ? requestBody.input : []);
+      requestBody.input = uniqueMessages([...priorHistoryInput, ...currentInput]);
+      nextEntry = {
+        ...cloneJson(entry),
+        request: {
+          ...(cloneJson(entry.request) || {}),
+          body: requestBody,
+        },
+      };
+    }
+  }
+  const responseId = payload.id || '';
+  if (responseId) {
+    storeWebSocketResponseHistory(
+      historyByResponseId,
+      responseId,
+      previousId,
+      requestBody,
+      responseBodyOutputMessages(payload.output),
+    );
+  }
+  return nextEntry;
+}
+
 function expandWebSocketResponseEntries(rawEntries, historyByResponseId = createWebSocketResponseHistoryStore()) {
   const expanded = [];
   for (const entry of rawEntries || []) {
@@ -1948,7 +2099,8 @@ function expandWebSocketResponseEntries(rawEntries, historyByResponseId = create
     }
     const groups = splitWebSocketResponseEvents(entry.response?.ws_events || []);
     if (!groups.length) {
-      expanded.push(entry);
+      const stitchedEntry = stitchDirectResponsesEntry(entry, historyByResponseId);
+      if (stitchedEntry) expanded.push(stitchedEntry);
       continue;
     }
     const displayableGroups = groups
@@ -2096,10 +2248,12 @@ let vsFilteredItems = []; // {entry, idx} pairs for virtual scroll
 const globalSearchState = {
   open: false,
   query: '',
+  queries: [],
   matchCounts: [],
   totalMatches: 0,
   currentMatch: -1,
   textCache: new Map(),
+  recalcTimer: 0,
 };
 const TRACE_JSONL_PATH = typeof __TRACE_JSONL_PATH__ !== 'undefined' ? __TRACE_JSONL_PATH__ : '';
 const TRACE_HTML_PATH = typeof __TRACE_HTML_PATH__ !== 'undefined' ? __TRACE_HTML_PATH__ : '';
@@ -2117,7 +2271,7 @@ function detectLang() {
   const match = supported.find(s => s.startsWith(prefix));
   return match || 'en';
 }
-let currentLang = localStorage.getItem('claude-tap-lang') || detectLang();
+let currentLang = safeLocalStorageGet('claude-tap-lang') || detectLang();
 function t(key) {
   const en = I18N.en || {};
   return (I18N[currentLang] || en)[key] || en[key] || key;
@@ -2129,7 +2283,7 @@ function formatText(key, values = {}) {
 }
 function setLang(lang) {
   currentLang = lang;
-  localStorage.setItem('claude-tap-lang', lang);
+  safeLocalStorageSet('claude-tap-lang', lang);
   document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
   document.documentElement.lang = lang;
   $('#lang-select').value = lang;
@@ -2197,15 +2351,15 @@ function renderViewerActions() {
 
 /* ─── Theme ─── */
 function initTheme() {
-  const saved = localStorage.getItem('claude-tap-theme');
+  const saved = safeLocalStorageGet('claude-tap-theme');
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const theme = saved || (prefersDark ? 'dark' : 'light');
+  const theme = EMBED_QUERY_OPTIONS.theme || saved || (prefersDark ? 'dark' : 'light');
   applyTheme(theme);
 }
 function toggleTheme() {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   applyTheme(next);
-  localStorage.setItem('claude-tap-theme', next);
+  safeLocalStorageSet('claude-tap-theme', next);
 }
 function applyTheme(theme) {
   if (theme === 'dark') {
@@ -2218,6 +2372,17 @@ function applyTheme(theme) {
 }
 
 /* ─── Init ─── */
+function initEmbedMode() {
+  if (!EMBED_QUERY_OPTIONS.enabled) return;
+  document.documentElement.dataset.embedMode = 'true';
+  document.body.classList.add('embed-mode');
+  if (EMBED_QUERY_OPTIONS.hideHeader) document.body.classList.add('embed-hide-header');
+  if (EMBED_QUERY_OPTIONS.hidePath) document.body.classList.add('embed-hide-path');
+  if (EMBED_QUERY_OPTIONS.hideHistory) document.body.classList.add('embed-hide-history');
+  if (EMBED_QUERY_OPTIONS.hideControls) document.body.classList.add('embed-hide-controls');
+  if (EMBED_QUERY_OPTIONS.compact) document.body.classList.add('embed-compact');
+}
+
 function initLang() {
   document.documentElement.dir = currentLang === 'ar' ? 'rtl' : 'ltr';
   document.documentElement.lang = currentLang;
@@ -2226,6 +2391,7 @@ function initLang() {
 }
 
 function initCommonUi() {
+  initEmbedMode();
   initTheme();
   initLang();
   initGlobalSearch();
@@ -2769,7 +2935,7 @@ function setSidebarOrderMode(mode) {
   if (!SIDEBAR_ORDER_MODES.includes(mode)) return;
   if (sidebarOrderMode === mode) return;
   sidebarOrderMode = mode;
-  localStorage.setItem('claude-tap-sidebar-order', mode);
+  safeLocalStorageSet('claude-tap-sidebar-order', mode);
   updateSidebarSortControls();
   renderSidebar(true);
   updatePositionIndicator();
@@ -2858,7 +3024,7 @@ function initGlobalSearch() {
   $('#global-search-close').onclick = () => closeGlobalSearch();
   input.addEventListener('input', () => {
     globalSearchState.query = input.value.trim();
-    recalcGlobalSearchMatches();
+    scheduleGlobalSearchRecalc();
   });
 }
 
@@ -2876,9 +3042,14 @@ function openGlobalSearch() {
 function closeGlobalSearch() {
   globalSearchState.open = false;
   globalSearchState.query = '';
+  globalSearchState.queries = [];
   globalSearchState.matchCounts = [];
   globalSearchState.totalMatches = 0;
   globalSearchState.currentMatch = -1;
+  if (globalSearchState.recalcTimer) {
+    cancelAnimationFrame(globalSearchState.recalcTimer);
+    globalSearchState.recalcTimer = 0;
+  }
   $('#global-search-input').value = '';
   $('#global-search-overlay').classList.remove('open');
   clearGlobalSearchHighlights($('#detail'));
@@ -2900,11 +3071,63 @@ function normalizeFiltersForGlobalSearch() {
   if (changed) applyFilter(true);
 }
 
+function uniqueSearchQueries(values) {
+  const out = [];
+  const seen = new Set();
+  values.forEach(value => {
+    const q = String(value || '').toLowerCase();
+    if (!q || seen.has(q)) return;
+    seen.add(q);
+    out.push(q);
+  });
+  return out;
+}
+
+function buildGlobalSearchQueries(query) {
+  const base = String(query || '').toLowerCase().trim();
+  if (!base) return [];
+  const variants = [base];
+  const keyMatch = base.match(/^([a-z0-9_$.-]+):(\s*.*)$/i);
+  if (keyMatch) {
+    const key = keyMatch[1];
+    const tail = keyMatch[2] || '';
+    const compactTail = tail.trimStart();
+    variants.push(`"${key}":${compactTail}`);
+    variants.push(`"${key}":${tail}`);
+    variants.push(`"${key}": ${compactTail}`);
+    variants.push(`${key}":${compactTail}`);
+    variants.push(`${key}":${tail}`);
+    variants.push(`${key}": ${compactTail}`);
+  }
+  variants.slice().forEach(value => {
+    if (value.includes('"')) variants.push(value.replaceAll('"', '\\"'));
+  });
+  return uniqueSearchQueries(variants);
+}
+
+function buildGlobalHighlightQueries(query) {
+  const base = String(query || '').toLowerCase().trim();
+  if (!base) return [];
+  const variants = buildGlobalSearchQueries(base);
+  const keyMatch = base.match(/^([a-z0-9_$.-]+):(\s*.*)$/i);
+  if (keyMatch) {
+    const key = keyMatch[1];
+    variants.push(`"${key}"`, key);
+  }
+  return uniqueSearchQueries(variants);
+}
+
 function getEntrySearchText(entry) {
   if (!entry?.request_id) return '';
   if (globalSearchState.textCache.has(entry.request_id)) return globalSearchState.textCache.get(entry.request_id);
-  // For stubs, parse the full entry first
-  const resolved = entry._isStub ? getFullEntry(entry) : entry;
+  if (entry._isStub) {
+    const lines = getRawLines();
+    const raw = lines[entry._rawIdx] || '';
+    const text = raw.toLowerCase();
+    globalSearchState.textCache.set(entry.request_id, text);
+    return text;
+  }
+  const resolved = entry;
   const body = resolved.request?.body;
   const parts = [];
   parts.push(body?.model || '');
@@ -2914,28 +3137,49 @@ function getEntrySearchText(entry) {
   const output = getResponseOutput(resolved);
   if (output?.content) parts.push(msgToText({ role: 'assistant', content: output.content }));
   getResponseEvents(resolved).forEach(ev => parts.push(JSON.stringify(ev)));
-  parts.push(JSON.stringify(resolved));
+  parts.push(JSON.stringify(resolved, null, 2));
   const text = parts.join('\n').toLowerCase();
   globalSearchState.textCache.set(entry.request_id, text);
   return text;
 }
 
-function countMatchesInText(text, query) {
-  if (!text || !query) return 0;
-  let count = 0, from = 0;
-  while (true) {
+function countOneQueryInText(text, query) {
+  let count = 0;
+  let from = 0;
+  while (query) {
     const idx = text.indexOf(query, from);
-    if (idx === -1) break;
-    count++;
+    if (idx === -1) return count;
+    count += 1;
     from = idx + query.length;
   }
   return count;
 }
 
+function countMatchesInText(text, queries) {
+  if (!text || !queries.length) return 0;
+  return Math.max(...queries.map(query => countOneQueryInText(text, query)));
+}
+
+function scheduleGlobalSearchRecalc() {
+  if (globalSearchState.recalcTimer) cancelAnimationFrame(globalSearchState.recalcTimer);
+  globalSearchState.recalcTimer = requestAnimationFrame(() => {
+    globalSearchState.recalcTimer = 0;
+    recalcGlobalSearchMatches();
+  });
+}
+
+function flushGlobalSearchRecalc() {
+  if (!globalSearchState.recalcTimer) return;
+  cancelAnimationFrame(globalSearchState.recalcTimer);
+  globalSearchState.recalcTimer = 0;
+  recalcGlobalSearchMatches();
+}
+
 function recalcGlobalSearchMatches() {
   clearGlobalSearchHighlights($('#detail'));
-  const query = globalSearchState.query.toLowerCase();
-  if (!query) {
+  const queries = buildGlobalSearchQueries(globalSearchState.query);
+  globalSearchState.queries = queries;
+  if (!queries.length) {
     globalSearchState.matchCounts = [];
     globalSearchState.totalMatches = 0;
     globalSearchState.currentMatch = -1;
@@ -2945,7 +3189,7 @@ function recalcGlobalSearchMatches() {
   const counts = [];
   let total = 0;
   entries.forEach(entry => {
-    const c = countMatchesInText(getEntrySearchText(entry), query);
+    const c = countMatchesInText(getEntrySearchText(entry), queries);
     if (c > 0) counts.push({ requestId: entry.request_id, count: c });
     total += c;
   });
@@ -2995,6 +3239,7 @@ function ensureEntryVisibleForSearch(requestId) {
 }
 
 function navigateGlobalSearch(delta) {
+  flushGlobalSearchRecalc();
   if (!globalSearchState.totalMatches) return;
   const total = globalSearchState.totalMatches;
   globalSearchState.currentMatch = (globalSearchState.currentMatch + delta + total) % total;
@@ -3007,7 +3252,8 @@ function revealCurrentSearchMatch() {
   if (!target) return;
   const filteredIdx = ensureEntryVisibleForSearch(target.requestId);
   if (filteredIdx < 0) return;
-  selectEntry(filteredIdx);
+  const sameEntry = currentDetailRequestId === target.requestId;
+  selectEntry(filteredIdx, { force: !sameEntry });
   applyGlobalSearchHighlights(target.localIndex);
 }
 
@@ -3015,9 +3261,9 @@ function applyGlobalSearchHighlights(targetLocalIndex) {
   const detail = $('#detail');
   if (!detail) return;
   clearGlobalSearchHighlights(detail);
-  const query = globalSearchState.query.toLowerCase();
-  if (!query) return;
-  const marks = highlightSearchInContainer(detail, query);
+  const queries = buildGlobalHighlightQueries(globalSearchState.query);
+  if (!queries.length) return;
+  const marks = highlightSearchInContainer(detail, queries);
   autoExpandSearchMatches(marks);
   if (!marks.length) return;
   let idx = targetLocalIndex;
@@ -3034,8 +3280,20 @@ function clearGlobalSearchHighlights(container) {
   container.normalize();
 }
 
-function highlightSearchInContainer(container, query) {
-  if (!query) return [];
+function findNextSearchMatch(text, queries, from) {
+  let best = null;
+  queries.forEach(query => {
+    const idx = text.indexOf(query, from);
+    if (idx === -1) return;
+    if (!best || idx < best.index || (idx === best.index && query.length > best.query.length)) {
+      best = { index: idx, query };
+    }
+  });
+  return best;
+}
+
+function highlightSearchInContainer(container, queries) {
+  if (!queries.length) return [];
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
@@ -3052,18 +3310,18 @@ function highlightSearchInContainer(container, query) {
     const value = node.nodeValue;
     const lower = value.toLowerCase();
     let from = 0;
-    let found = lower.indexOf(query, from);
-    if (found === -1) return;
+    let found = findNextSearchMatch(lower, queries, from);
+    if (!found) return;
     const frag = document.createDocumentFragment();
-    while (found !== -1) {
-      if (found > from) frag.appendChild(document.createTextNode(value.slice(from, found)));
+    while (found) {
+      if (found.index > from) frag.appendChild(document.createTextNode(value.slice(from, found.index)));
       const mark = document.createElement('mark');
       mark.className = 'global-search-hit';
-      mark.textContent = value.slice(found, found + query.length);
+      mark.textContent = value.slice(found.index, found.index + found.query.length);
       frag.appendChild(mark);
       marks.push(mark);
-      from = found + query.length;
-      found = lower.indexOf(query, from);
+      from = found.index + found.query.length;
+      found = findNextSearchMatch(lower, queries, from);
     }
     if (from < value.length) frag.appendChild(document.createTextNode(value.slice(from)));
     node.parentNode.replaceChild(frag, node);
@@ -4495,16 +4753,16 @@ function shouldRenderRequestContext(entry, body, msgs, respOutput) {
 function normalizeUsage(usage) {
   if (!usage || typeof usage !== 'object') return null;
   const normalized = { ...usage };
-  if (normalized.input_tokens === undefined && usage.prompt_tokens !== undefined) {
+  if ((normalized.input_tokens === undefined || normalized.input_tokens === null || normalized.input_tokens === 0) && usage.prompt_tokens) {
     normalized.input_tokens = usage.prompt_tokens;
   }
-  if (normalized.input_tokens === undefined && usage.promptTokenCount !== undefined) {
+  if ((normalized.input_tokens === undefined || normalized.input_tokens === null || normalized.input_tokens === 0) && usage.promptTokenCount) {
     normalized.input_tokens = usage.promptTokenCount;
   }
-  if (normalized.output_tokens === undefined && usage.completion_tokens !== undefined) {
+  if ((normalized.output_tokens === undefined || normalized.output_tokens === null || normalized.output_tokens === 0) && usage.completion_tokens) {
     normalized.output_tokens = usage.completion_tokens;
   }
-  if (normalized.output_tokens === undefined && usage.candidatesTokenCount !== undefined) {
+  if ((normalized.output_tokens === undefined || normalized.output_tokens === null || normalized.output_tokens === 0) && usage.candidatesTokenCount) {
     normalized.output_tokens = usage.candidatesTokenCount;
   }
   if (normalized.cache_read_input_tokens === undefined) {
@@ -4549,11 +4807,31 @@ function normalizeResponseOutput(output) {
         else content.push(c);
       }
     } else if (isResponseCallItem(item)) {
-      content.push({ type: 'tool_use', name: responseCallToolName(item), input: responseCallInput(item) });
+      content.push({ type: 'tool_use', id: item.call_id || item.id || '', name: responseCallToolName(item), input: responseCallInput(item) });
     } else if (item.type === 'reasoning') {
       if (!item.summary) continue;
       const summaryText = Array.isArray(item.summary) ? item.summary.map(s => s?.text || '').join('\n') : (item.summary.text || JSON.stringify(item.summary));
       if (summaryText.trim()) content.push({ type: 'thinking', thinking: summaryText });
+    }
+  }
+  return content.length > 0 ? { content } : null;
+}
+
+function normalizeChatCompletionsChoiceOutput(body) {
+  if (!Array.isArray(body?.choices) || body.choices.length === 0) return null;
+  const content = [];
+  for (const choice of body.choices) {
+    const message = choice?.message || choice?.delta;
+    if (!message || typeof message !== 'object') continue;
+    if (typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) {
+      appendMergeableResponseBlock(content, { type: 'thinking', thinking: message.reasoning_content });
+    }
+    if (typeof message.thinking === 'string' && message.thinking.trim()) {
+      appendMergeableResponseBlock(content, { type: 'thinking', thinking: message.thinking });
+    }
+    const normalized = normalizeChatMessageForDisplay({ role: 'assistant', ...message });
+    for (const block of normalizeDisplayContentBlocks(normalized.content)) {
+      appendMergeableResponseBlock(content, block);
     }
   }
   return content.length > 0 ? { content } : null;
@@ -4655,6 +4933,8 @@ function getResponseOutput(entry) {
   if (geminiOutput) return geminiOutput;
   const body = getResponsePayload(entry);
   if (body?.content) return body;
+  const fromChoices = normalizeChatCompletionsChoiceOutput(body);
+  if (fromChoices) return fromChoices;
   const fromBody = normalizeResponseOutput(body?.output);
   if (fromBody) return fromBody;
   const events = getResponseEvents(entry);
@@ -4834,7 +5114,8 @@ function renderContent(content, role, options = {}) {
       return wrapContentBlock(`<span class="thinking-label">thinking</span><div class="pre-text">${esc(thinking)}</div>`, block, index, blocks.length, options);
     }
     if (block.type === 'tool_use') {
-      return wrapContentBlock(`<span class="tool-use-label">${esc(block.name || 'tool_use')}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre>`, block, index, blocks.length, options);
+      const label = block.id ? `${block.name || 'tool_use'} (${block.id})` : (block.name || 'tool_use');
+      return wrapContentBlock(`<span class="tool-use-label">${esc(label)}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre>`, block, index, blocks.length, options);
     }
     if (block.type === 'tool_result') {
       const rc = block.content;

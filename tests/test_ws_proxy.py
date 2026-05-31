@@ -51,7 +51,12 @@ async def _start_ws_upstream(handler) -> tuple[web.AppRunner, int]:
     return runner, port
 
 
-async def _start_proxy(target_url, writer, strip_prefix="") -> tuple[web.AppRunner, int, aiohttp.ClientSession]:
+async def _start_proxy(
+    target_url,
+    writer,
+    strip_prefix="",
+    store_stream_events=False,
+) -> tuple[web.AppRunner, int, aiohttp.ClientSession]:
     """Start the reverse proxy, return (runner, port, session)."""
     session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
     app = web.Application(client_max_size=0)
@@ -61,6 +66,7 @@ async def _start_proxy(target_url, writer, strip_prefix="") -> tuple[web.AppRunn
         "session": session,
         "turn_counter": 0,
         "strip_path_prefix": strip_prefix,
+        "store_stream_events": store_stream_events,
     }
     app.router.add_route("*", "/{path_info:.*}", proxy_handler)
     runner = web.AppRunner(app)
@@ -161,10 +167,9 @@ async def test_websocket_proxy_basic(trace_dir):
         assert r["request"]["method"] == "WEBSOCKET"
         assert r["request"]["path"] == "/v1/responses"
         assert r["request"]["body"]["model"] == "gpt-test"
-        assert r["request"]["ws_events"][0]["model"] == "gpt-test"
-        assert r["request"]["ws_events"][0]["input"] == "hello"
+        assert "ws_events" not in r["request"]
         assert r["response"]["status"] == 101
-        assert len(r["response"]["ws_events"]) == 4
+        assert "ws_events" not in r["response"]
         assert r["response"]["body"]["status"] == "completed"
         assert r["upstream_base_url"] == f"http://127.0.0.1:{upstream_port}"
 
@@ -562,6 +567,7 @@ async def test_websocket_duplicate_completed_keeps_pending_trailing_events(trace
         f"http://127.0.0.1:{upstream_port}",
         writer,
         strip_prefix="/v1",
+        store_stream_events=True,
     )
 
     try:
@@ -673,6 +679,7 @@ async def test_websocket_duplicate_completed_trailing_events_do_not_move_to_next
         f"http://127.0.0.1:{upstream_port}",
         writer,
         strip_prefix="/v1",
+        store_stream_events=True,
     )
 
     try:
@@ -1086,6 +1093,37 @@ def test_build_ws_record_merges_incremental_request_and_output_items() -> None:
     assert record["request"]["ws_events"][2]["input"][0]["type"] == "function_call_output"
     assert record["response"]["body"]["usage"] == {"input_tokens": 10, "output_tokens": 2}
     assert record["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_FROM_WS"
+
+
+def test_build_ws_record_can_omit_raw_events_after_reconstruction() -> None:
+    record = _build_ws_record(
+        req_id="req_compact",
+        turn=1,
+        duration_ms=25,
+        path_qs="/v1/responses",
+        req_headers={},
+        client_messages=[json.dumps({"model": "gpt-5.4", "input": "hello"})],
+        server_messages=[
+            json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "status": "completed",
+                        "output": [{"type": "message", "content": [{"type": "output_text", "text": "OK"}]}],
+                        "usage": {"input_tokens": 2, "output_tokens": 1},
+                    },
+                }
+            )
+        ],
+        upstream_base_url="https://chatgpt.com/backend-api/codex",
+        store_stream_events=False,
+    )
+
+    assert "ws_events" not in record["request"]
+    assert "ws_events" not in record["response"]
+    assert record["request"]["body"]["input"] == "hello"
+    assert record["response"]["body"]["output"][0]["content"][0]["text"] == "OK"
 
 
 def test_build_ws_record_treats_empty_error_string_as_failure() -> None:
