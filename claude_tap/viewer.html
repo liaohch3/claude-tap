@@ -1059,6 +1059,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   cursor: pointer;
 }
 .global-search-btn:hover { color: var(--blue); border-color: var(--blue); }
+.global-search-scope {
+  min-width: 54px;
+  color: var(--blue);
+  border-color: rgba(37, 99, 235, .28);
+}
 .global-search-hit {
   background: #fde047;
   color: inherit;
@@ -1510,7 +1515,8 @@ body.embed-mode.embed-compact .content-block.block-framed {
 <div class="trace-path-bar" id="trace-path-bar"></div>
 <div class="global-search-overlay" id="global-search-overlay">
   <div class="global-search-box">
-    <input type="text" id="global-search-input" placeholder="Find in trace">
+    <input type="text" id="global-search-input" placeholder="Find">
+    <button class="global-search-btn global-search-scope" id="global-search-scope" type="button" title="Search current turn">Current</button>
     <span class="global-search-count" id="global-search-count">0 of 0</span>
     <button class="global-search-btn" id="global-search-prev" type="button" title="Previous match (Shift+Enter)">Prev</button>
     <button class="global-search-btn" id="global-search-next" type="button" title="Next match (Enter)">Next</button>
@@ -2252,6 +2258,7 @@ const globalSearchState = {
   matchCounts: [],
   totalMatches: 0,
   currentMatch: -1,
+  scope: 'current',
   textCache: new Map(),
   recalcTimer: 0,
 };
@@ -3019,6 +3026,7 @@ function matchSearch(e, q) {
 /* ─── Global search (Cmd/Ctrl+F) ─── */
 function initGlobalSearch() {
   const input = $('#global-search-input');
+  $('#global-search-scope').onclick = () => toggleGlobalSearchScope();
   $('#global-search-prev').onclick = () => navigateGlobalSearch(-1);
   $('#global-search-next').onclick = () => navigateGlobalSearch(1);
   $('#global-search-close').onclick = () => closeGlobalSearch();
@@ -3029,9 +3037,10 @@ function initGlobalSearch() {
 }
 
 function openGlobalSearch() {
-  normalizeFiltersForGlobalSearch();
+  globalSearchState.scope = 'current';
   globalSearchState.open = true;
   $('#global-search-overlay').classList.add('open');
+  updateGlobalSearchScopeButton();
   const input = $('#global-search-input');
   input.value = globalSearchState.query;
   input.focus();
@@ -3046,6 +3055,7 @@ function closeGlobalSearch() {
   globalSearchState.matchCounts = [];
   globalSearchState.totalMatches = 0;
   globalSearchState.currentMatch = -1;
+  globalSearchState.scope = 'current';
   if (globalSearchState.recalcTimer) {
     cancelAnimationFrame(globalSearchState.recalcTimer);
     globalSearchState.recalcTimer = 0;
@@ -3053,7 +3063,23 @@ function closeGlobalSearch() {
   $('#global-search-input').value = '';
   $('#global-search-overlay').classList.remove('open');
   clearGlobalSearchHighlights($('#detail'));
+  updateGlobalSearchScopeButton();
   updateGlobalSearchCount();
+}
+
+function updateGlobalSearchScopeButton() {
+  const button = $('#global-search-scope');
+  if (!button) return;
+  const traceScope = globalSearchState.scope === 'trace';
+  button.textContent = traceScope ? 'Trace' : 'Current';
+  button.title = traceScope ? 'Search entire trace' : 'Search current turn';
+  button.setAttribute('aria-pressed', traceScope ? 'true' : 'false');
+}
+
+function toggleGlobalSearchScope() {
+  globalSearchState.scope = globalSearchState.scope === 'current' ? 'trace' : 'current';
+  updateGlobalSearchScopeButton();
+  recalcGlobalSearchMatches();
 }
 
 function normalizeFiltersForGlobalSearch() {
@@ -3115,6 +3141,23 @@ function buildGlobalHighlightQueries(query) {
     variants.push(`"${key}"`, key);
   }
   return uniqueSearchQueries(variants);
+}
+
+function getCurrentSearchEntry() {
+  if (currentDetailRequestId) {
+    const detailEntry = entries.find(entry => entry.request_id === currentDetailRequestId);
+    if (detailEntry) return detailEntry;
+  }
+  return activeIdx >= 0 ? filtered[activeIdx] : null;
+}
+
+function getGlobalSearchEntriesForScope() {
+  if (globalSearchState.scope === 'trace') {
+    normalizeFiltersForGlobalSearch();
+    return entries;
+  }
+  const currentEntry = getCurrentSearchEntry();
+  return currentEntry ? [currentEntry] : [];
 }
 
 function getEntrySearchText(entry) {
@@ -3188,7 +3231,7 @@ function recalcGlobalSearchMatches() {
   }
   const counts = [];
   let total = 0;
-  entries.forEach(entry => {
+  getGlobalSearchEntriesForScope().forEach(entry => {
     const c = countMatchesInText(getEntrySearchText(entry), queries);
     if (c > 0) counts.push({ requestId: entry.request_id, count: c });
     total += c;

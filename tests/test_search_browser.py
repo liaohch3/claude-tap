@@ -301,6 +301,20 @@ def _dispatch_find_shortcut(page, *, meta: bool, ctrl: bool) -> None:
     )
 
 
+def _set_global_search_scope(page, scope: str) -> None:
+    page.wait_for_selector("#global-search-overlay.open", timeout=3000)
+    target = scope.lower()
+    page.evaluate(
+        """target => {
+            const button = document.querySelector('#global-search-scope');
+            if (!button) throw new Error('missing global search scope button');
+            const current = button.textContent.trim().toLowerCase();
+            if (current !== target) button.click();
+        }""",
+        target,
+    )
+
+
 def _write_search_trace(path: Path, count: int = 1) -> None:
     records = []
     for idx in range(count):
@@ -349,6 +363,45 @@ def _write_search_trace(path: Path, count: int = 1) -> None:
     )
 
 
+def _write_current_scope_trace(path: Path) -> None:
+    records = []
+    for idx, marker in enumerate(("first", "second")):
+        records.append(
+            {
+                "timestamp": "2026-05-29T08:00:00+00:00",
+                "request_id": f"req_current_scope_{idx}",
+                "turn": idx + 1,
+                "duration_ms": 1200,
+                "request": {
+                    "method": "POST",
+                    "path": "/v1/messages",
+                    "headers": {"Host": "api.anthropic.com"},
+                    "body": {
+                        "model": "claude-sonnet-4-6",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": f"Find current-scope-needle in the {marker} turn only.",
+                            }
+                        ],
+                    },
+                },
+                "response": {
+                    "status": 200,
+                    "headers": {},
+                    "body": {
+                        "model": "claude-sonnet-4-6",
+                        "content": [{"type": "text", "text": f"The {marker} response is complete."}],
+                    },
+                },
+            }
+        )
+    path.write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_json_key_query_without_key_quotes_matches(tmp_path):
     trace_path = tmp_path / "quote_trace.jsonl"
     html_path = tmp_path / "quote_viewer.html"
@@ -372,6 +425,40 @@ def test_json_key_query_without_key_quotes_matches(tmp_path):
             assert " of " in count_text
             assert "0 of 0" not in count_text
             assert "subagent_type" in marked_text
+        finally:
+            browser.close()
+
+
+def test_global_search_defaults_to_current_entry(tmp_path):
+    trace_path = tmp_path / "current_scope_trace.jsonl"
+    html_path = tmp_path / "current_scope_viewer.html"
+    _write_current_scope_trace(trace_path)
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 760})
+            page.goto(f"file://{html_path}")
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+            page.locator(".sidebar-item").nth(1).click()
+            page.wait_for_timeout(120)
+            start_turn = page.inner_text(".sidebar-item.active .si-turn")
+
+            _dispatch_find_shortcut(page, meta=False, ctrl=True)
+            page.fill("#global-search-input", "current-scope-needle")
+            page.wait_for_function("() => globalSearchState.matchCounts.length === 1")
+            assert page.inner_text("#global-search-scope") == "Current"
+
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(100)
+            assert page.inner_text(".sidebar-item.active .si-turn") == start_turn
+
+            _set_global_search_scope(page, "Trace")
+            page.wait_for_function("() => globalSearchState.matchCounts.length === 2")
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(100)
+            assert page.inner_text(".sidebar-item.active .si-turn") != start_turn
         finally:
             browser.close()
 
@@ -454,6 +541,7 @@ class TestViewerGlobalSearch:
 
     def test_typing_highlights_and_match_counter(self, browser_page, trace_entries):
         _, _, cross_term, _ = trace_entries
+        _set_global_search_scope(browser_page, "Trace")
         browser_page.fill("#global-search-input", cross_term)
         browser_page.wait_for_function("() => document.querySelectorAll('mark.global-search-hit').length > 0")
         count_text = browser_page.inner_text("#global-search-count")
