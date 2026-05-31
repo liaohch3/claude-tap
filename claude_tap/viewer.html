@@ -698,7 +698,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  padding-right: 56px;
+  padding-right: 84px;
 }
 .tool-input-view.expanded {
   border-color: color-mix(in srgb, var(--blue) 35%, var(--border));
@@ -5179,8 +5179,10 @@ function renderToolInput(input) {
   const raw = JSON.stringify(input, null, 2) || '';
   if (!valueHasReadableEscapes(input)) return `<pre>${esc(raw)}</pre>`;
   const decoded = decodeEscapedTextForView(raw);
+  const copyIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`;
   return `<div class="tool-input-readable">`
     + `<span class="tool-input-actions">`
+    + `<button type="button" class="tool-input-btn tool-input-copy" title="${esc(t('copy'))}" aria-label="${esc(t('copy'))}">${copyIcon}</button>`
     + `<button type="button" class="tool-input-btn tool-input-toggle" aria-expanded="false" title="${esc(t('string_expand_escapes'))}" aria-label="${esc(t('string_expand_escapes'))}">↵</button>`
     + `</span>`
     + `<pre class="tool-input-view" data-raw="${encodeCopyText(raw)}" data-decoded="${encodeCopyText(decoded)}">${esc(raw)}</pre>`
@@ -5290,6 +5292,17 @@ function bindSections(container) {
       btn.title = expanded ? t('string_show_raw') : t('string_expand_escapes');
       btn.setAttribute('aria-label', expanded ? t('string_show_raw') : t('string_expand_escapes'));
       btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    });
+  });
+  container.querySelectorAll('.tool-input-copy').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const wrapper = btn.closest('.tool-input-readable');
+      const view = wrapper?.querySelector('.tool-input-view');
+      if (!view) return;
+      const dataKey = view.classList.contains('expanded') ? 'decoded' : 'raw';
+      const text = decodeURIComponent(escape(atob(view.dataset[dataKey] || '')));
+      copyToClipboard(text, btn, '✓');
     });
   });
 }

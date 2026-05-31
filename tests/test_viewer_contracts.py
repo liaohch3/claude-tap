@@ -1349,34 +1349,53 @@ def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Pa
         page.locator(".sidebar-item").first.click()
         page.wait_for_selector("#detail .section", timeout=5000)
         page.wait_for_selector("#detail .tool-input-toggle", timeout=5000)
+        page.evaluate(
+            """() => {
+              window.__copiedToolInput = '';
+              window.copyToClipboard = (text) => {
+                window.__copiedToolInput = text;
+                return Promise.resolve();
+              };
+            }"""
+        )
 
         input_view = page.locator("#detail .tool-input-view").first
         raw_text = input_view.inner_text()
         input_view_count = page.locator("#detail .tool-input-view").count()
         toggle_text_before = page.locator("#detail .tool-input-toggle").first.inner_text()
+        copy_button_count = page.locator("#detail .tool-input-copy").count()
+        page.locator("#detail .tool-input-copy").first.click()
+        copied_raw_text = page.evaluate("window.__copiedToolInput")
         page.locator("#detail .tool-input-toggle").first.click()
         page.wait_for_selector("#detail .tool-input-view.expanded", timeout=5000)
         decoded_text = input_view.inner_text()
         toggle_text_expanded = page.locator("#detail .tool-input-toggle").first.inner_text()
+        page.locator("#detail .tool-input-copy").first.click()
+        copied_decoded_text = page.evaluate("window.__copiedToolInput")
         expanded_view_count = page.locator("#detail .tool-input-view").count()
         decoded_box_count = page.locator("#detail .tool-input-decoded").count()
-        copy_button_count = page.locator("#detail .tool-input-copy-decoded").count()
+        decoded_copy_button_count = page.locator("#detail .tool-input-copy-decoded").count()
         page.locator("#detail .tool-input-toggle").first.click()
         restored_text = input_view.inner_text()
         full_json_buttons = page.locator("#detail .json-view .tool-input-toggle").count()
+        full_json_copy_buttons = page.locator("#detail .json-view .tool-input-copy").count()
     finally:
         page.close()
 
     assert errors == []
     assert "\\nprint" in raw_text
     assert "python - <<'PY'\nprint(\"hello\")\nPY" in decoded_text
+    assert copied_raw_text == raw_text
+    assert copied_decoded_text == decoded_text
     assert toggle_text_before == "\u21b5"
     assert toggle_text_expanded == "Raw"
     assert restored_text == raw_text
     assert input_view_count == expanded_view_count == 1
     assert decoded_box_count == 0
-    assert copy_button_count == 0
+    assert copy_button_count == 1
+    assert decoded_copy_button_count == 0
     assert full_json_buttons == 0
+    assert full_json_copy_buttons == 0
 
 
 def test_viewer_does_not_synthesize_messages_for_empty_responses_input(tmp_path: Path, chromium_browser) -> None:
