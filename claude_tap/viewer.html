@@ -154,6 +154,51 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .viewer-action:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
 .viewer-action:active { transform: translateY(1px); }
 .viewer-action svg { width: 13px; height: 13px; flex-shrink: 0; }
+.export-menu {
+  position: relative;
+  display: inline-flex;
+}
+.export-menu summary {
+  list-style: none;
+  cursor: pointer;
+}
+.export-menu summary::-webkit-details-marker { display: none; }
+.export-menu[open] .viewer-action,
+.export-menu[open] .act-btn {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: var(--blue-bg);
+}
+.export-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  display: grid;
+  gap: 2px;
+  min-width: 150px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+}
+.export-menu-item {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-family: var(--sans);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.export-menu-item:hover {
+  color: var(--blue);
+  background: var(--blue-bg);
+}
 .trace-path-bar {
   display: none; align-items: center; gap: 6px; padding: 4px 12px;
   background: var(--bg); border-bottom: 1px solid var(--border);
@@ -1286,6 +1331,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   }
   .viewer-actions::-webkit-scrollbar { display: none; }
   .viewer-action { min-height: 36px; padding: 7px 10px; }
+  .viewer-actions .export-menu-list {
+    left: 0;
+    right: auto;
+  }
   .trace-path-bar {
     flex-wrap: wrap;
     gap: 4px;
@@ -1320,6 +1369,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     justify-content: center;
     font-size: 13px;
     padding: 10px 16px;
+  }
+  .action-bar .export-menu { width: 100%; }
+  .action-bar .export-menu-list {
+    position: static;
+    width: 100%;
+    margin-top: 4px;
+    box-shadow: none;
   }
 
   /* R4: Detail panel — prevent horizontal overflow */
@@ -2333,22 +2389,25 @@ function renderViewerActions() {
   if (!wrap) return;
   const exports = TRACE_SESSION_EXPORTS && typeof TRACE_SESSION_EXPORTS === 'object' ? TRACE_SESSION_EXPORTS : {};
   const downloadIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>`;
-  const actions = [];
+  const links = [];
   if (typeof exports.jsonl === 'string' && exports.jsonl) {
-    actions.push(`<a class="viewer-action" href="${esc(exports.jsonl)}" download>${downloadIcon}${esc(t('export_jsonl'))}</a>`);
+    links.push(`<a class="export-menu-item" href="${esc(exports.jsonl)}" download>${esc(t('export_jsonl'))}</a>`);
   }
   if (typeof exports.log === 'string' && exports.log) {
-    actions.push(`<a class="viewer-action" href="${esc(exports.log)}" download>${downloadIcon}${esc(t('export_log'))}</a>`);
+    links.push(`<a class="export-menu-item" href="${esc(exports.log)}" download>${esc(t('export_log'))}</a>`);
   }
   if (typeof exports.html === 'string' && exports.html) {
-    actions.push(`<a class="viewer-action" href="${esc(exports.html)}" download>${downloadIcon}${esc(t('export_html'))}</a>`);
+    links.push(`<a class="export-menu-item" href="${esc(exports.html)}" download>${esc(t('export_html'))}</a>`);
   }
-  if (!actions.length) {
+  if (!links.length) {
     wrap.innerHTML = '';
     wrap.style.display = 'none';
     return;
   }
-  wrap.innerHTML = actions.join('');
+  wrap.innerHTML = `<details class="export-menu">
+    <summary class="viewer-action">${downloadIcon}${esc(t('export_menu'))}</summary>
+    <div class="export-menu-list">${links.join('')}</div>
+  </details>`;
   wrap.style.display = 'inline-flex';
 }
 

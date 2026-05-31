@@ -246,6 +246,7 @@ def test_dashboard_rejects_missing_session_ids(trace_db) -> None:
     assert 'data-i18n="table_first_message"' in template
     assert "export_jsonl" in template
     assert "export_html" in template
+    assert "export_menu" in template
     assert load_trace_session("not-a-valid-session-id") is None
 
 
@@ -531,6 +532,7 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 assert "session-list" in html
                 assert "export_jsonl" in html
                 assert "export_html" in html
+                assert "export_menu" in html
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
                 assert resp.status == 200
@@ -682,15 +684,21 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert await page.locator("#back-to-list").count() == 0
                 assert await page.locator("#session-list").count() == 0
                 assert await page.locator(".sidebar-item").count() >= 10
-                export_links = page.locator("#viewer-actions .viewer-action")
-                assert await export_links.count() == 3
-                hrefs = await export_links.evaluate_all("(links) => links.map((link) => link.getAttribute('href'))")
+                export_button = page.locator("#viewer-actions .export-menu > summary")
+                assert await export_button.count() == 1
+                assert await export_button.inner_text() == "Export"
+                assert await page.locator("#viewer-actions > .viewer-action").count() == 0
+                assert await page.locator("#viewer-actions .export-menu-item").count() == 3
+                hrefs = await page.locator("#viewer-actions .export-menu-item").evaluate_all(
+                    "(links) => links.map((link) => link.getAttribute('href'))"
+                )
                 assert f"/api/sessions/{session_id}/export/jsonl" in hrefs
                 assert f"/api/sessions/{session_id}/export/log" in hrefs
                 assert f"/api/sessions/{session_id}/export/html" in hrefs
 
                 async with page.expect_download() as download_info:
-                    await page.locator('#viewer-actions .viewer-action[href$="/export/html"]').click()
+                    await export_button.click()
+                    await page.locator('#viewer-actions .export-menu-item[href$="/export/html"]').click()
                 download = await download_info.value
                 assert download.suggested_filename == f"trace_{session_id[:8]}.html"
                 download_path = await download.path()
