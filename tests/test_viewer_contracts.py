@@ -1987,3 +1987,111 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
     assert mobile_dark["sidebar"]["width"] == 0
     assert mobile_dark["detail"]["width"] == 390
     assert mobile_dark["detail"]["left"] == 0
+
+
+def test_viewer_session_identical_prompts_and_image_tags(tmp_path: Path, chromium_browser) -> None:
+    model = "aws.claude-opus-4.6"
+    title_system = 'Generate a concise, sentence-case title for the session. Return JSON with a single "title" field.'
+
+    def make_record(
+        request_id: str,
+        turn: int,
+        messages: list[dict[str, Any]],
+        response_content: list[dict[str, Any]],
+        *,
+        system: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"model": model, "messages": messages}
+        if system is not None:
+            body["system"] = system
+        return {
+            "request_id": request_id,
+            "turn": turn,
+            "timestamp": f"2026-05-13T13:{20 + turn:02d}:00+00:00",
+            "duration_ms": 100,
+            "request": {"method": "POST", "path": "/v1/messages", "headers": {}, "body": body},
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {"stop_reason": "end_turn", "content": response_content},
+            },
+        }
+
+    records = (
+        # Turn 1
+        make_record(
+            "req_t1",
+            1,
+            [{"role": "user", "content": "继续"}],
+            [{"type": "text", "text": "Turn 1 done"}],
+        ),
+        # Turn 1 title-gen
+        make_record(
+            "req_t1_title",
+            2,
+            [{"role": "user", "content": "继续"}],
+            [{"type": "text", "text": '{"title": "Group1"}'}],
+            system=title_system,
+        ),
+        # Turn 2 (identical prompt)
+        make_record(
+            "req_t2",
+            3,
+            [{"role": "user", "content": "继续"}],
+            [{"type": "text", "text": "Turn 2 done"}],
+        ),
+        # Turn 2 title-gen
+        make_record(
+            "req_t2_title",
+            4,
+            [{"role": "user", "content": "继续"}],
+            [{"type": "text", "text": '{"title": "Group2"}'}],
+            system=title_system,
+        ),
+        # Turn 3 (image wrappers)
+        make_record(
+            "req_t3",
+            5,
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "<image name=[Image #1]>"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+                            },
+                        },
+                        {"type": "text", "text": "</image>"},
+                        {"type": "text", "text": "Analyze the flowchart"},
+                    ],
+                }
+            ],
+            [{"type": "text", "text": "Turn 3 done"}],
+        ),
+    )
+
+    html_path = _generate_case_html(tmp_path, "identical_prompts_and_image_tags", records)
+    page = chromium_browser.new_page()
+    page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'session')")
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              groups: Array.from(document.querySelectorAll('.sidebar-group-header .group-name')).map(el => el.textContent),
+              counts: Array.from(document.querySelectorAll('.sidebar-group-header .group-count')).map(el => el.textContent),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["groups"] == [
+        "Session 1 - 继续",
+        "Session 2 - 继续",
+        "Session 3 - Analyze the flowchart",
+    ]
+    assert state["counts"] == ["2", "2", "1"]

@@ -3180,6 +3180,7 @@ function cleanUserPromptText(text) {
     'user_information',
   ]);
   if (firstTag && injectedTags.has(firstTag[1].toLowerCase())) return '';
+  if (/^<\/?image(_input)?(\s+[^>]*)?>$/i.test(value)) return '';
   if (/^\[SUGGESTION MODE:/i.test(value)) return '';
   if (/^(web page content|page content|网页内容)\s*[:：]/i.test(value)) return '';
   if (/^\[Image:\s*source:/i.test(value)) return '';
@@ -3344,7 +3345,18 @@ function isTitleGenerationEntry(entry) {
 
 function shouldContinueSessionGroup(entry, info, currentGroup) {
   if (!currentGroup || !info.userText || currentGroup.userText !== info.userText) return false;
-  if (currentGroup.metadataOnly || isTitleGenerationEntry(entry)) return true;
+  if (isTitleGenerationEntry(entry)) {
+    const rootTurn = parseInt(String(entry?.turn ?? '').split('.')[0], 10);
+    if (!isNaN(rootTurn)) {
+      const groupTurnMatch = currentGroup.key.match(/turn:(\d+)/);
+      if (groupTurnMatch) {
+        const groupTurn = parseInt(groupTurnMatch[1], 10);
+        return Math.abs(groupTurn - rootTurn) <= 2;
+      }
+    }
+    return true;
+  }
+  if (currentGroup.metadataOnly) return true;
   if (info.messageCount > 1 && info.userIndex === currentGroup.userIndex) return true;
   return false;
 }
