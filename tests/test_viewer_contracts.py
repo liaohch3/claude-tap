@@ -2110,7 +2110,9 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
     assert mobile_dark["detail"]["left"] == 0
 
 
-def test_viewer_session_identical_prompts_and_image_tags(tmp_path: Path, chromium_browser) -> None:
+def test_viewer_session_identical_prompts_image_tags_and_early_title_generation(
+    tmp_path: Path, chromium_browser
+) -> None:
     model = "aws.claude-opus-4.6"
     title_system = 'Generate a concise, sentence-case title for the session. Return JSON with a single "title" field.'
 
@@ -2154,20 +2156,20 @@ def test_viewer_session_identical_prompts_and_image_tags(tmp_path: Path, chromiu
             [{"type": "text", "text": '{"title": "Group1"}'}],
             system=title_system,
         ),
-        # Turn 2 (identical prompt)
-        make_record(
-            "req_t2",
-            3,
-            [{"role": "user", "content": "继续"}],
-            [{"type": "text", "text": "Turn 2 done"}],
-        ),
-        # Turn 2 title-gen
+        # Turn 2 title-gen arrives before the real request with the same prompt.
         make_record(
             "req_t2_title",
-            4,
+            3,
             [{"role": "user", "content": "继续"}],
             [{"type": "text", "text": '{"title": "Group2"}'}],
             system=title_system,
+        ),
+        # Turn 2 (identical prompt)
+        make_record(
+            "req_t2",
+            4,
+            [{"role": "user", "content": "继续"}],
+            [{"type": "text", "text": "Turn 2 done"}],
         ),
         # Turn 3 (image wrappers)
         make_record(

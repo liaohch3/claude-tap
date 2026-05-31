@@ -3601,19 +3601,14 @@ function isTitleGenerationEntry(entry) {
   return /generate a concise/i.test(sys) && /single\s+"title"\s+field/i.test(sys);
 }
 
+function sessionRootTurn(entry) {
+  const rootTurn = parseInt(String(entry?.turn ?? '').split('.')[0], 10);
+  return isNaN(rootTurn) ? null : rootTurn;
+}
+
 function shouldContinueSessionGroup(entry, info, currentGroup) {
   if (!currentGroup || !info.userText || currentGroup.userText !== info.userText) return false;
-  if (isTitleGenerationEntry(entry)) {
-    const rootTurn = parseInt(String(entry?.turn ?? '').split('.')[0], 10);
-    if (!isNaN(rootTurn)) {
-      const groupTurnMatch = currentGroup.key.match(/turn:(\d+)/);
-      if (groupTurnMatch) {
-        const groupTurn = parseInt(groupTurnMatch[1], 10);
-        return Math.abs(groupTurn - rootTurn) <= 2;
-      }
-    }
-    return true;
-  }
+  if (isTitleGenerationEntry(entry)) return false;
   if (currentGroup.metadataOnly) return true;
   if (info.messageCount > 1 && info.userIndex === currentGroup.userIndex) return true;
   return false;
@@ -3622,21 +3617,23 @@ function shouldContinueSessionGroup(entry, info, currentGroup) {
 function sessionKeyForEntry(entry, currentGroup) {
   const info = latestUserInputInfo(entry);
   const metadataOnly = isTitleGenerationEntry(entry);
+  const rootTurn = sessionRootTurn(entry);
   if (info.userText) {
     if (shouldContinueSessionGroup(entry, info, currentGroup)) {
-      return { key: currentGroup.key, userText: info.userText, userIndex: info.userIndex, metadataOnly };
+      return { key: currentGroup.key, userText: info.userText, userIndex: info.userIndex, metadataOnly, rootTurn };
     }
     return {
       key: 'user:' + sessionTurnDiscriminator(entry) + ':' + info.userIndex + ':' + info.userText,
       userText: info.userText,
       userIndex: info.userIndex,
       metadataOnly,
+      rootTurn,
     };
   }
-  if (currentGroup) return { key: currentGroup.key, userText: '', userIndex: currentGroup.userIndex, metadataOnly };
-  const rootTurn = String(entry?.turn ?? '').split('.')[0];
-  if (rootTurn) return { key: 'turn:' + rootTurn, userText: '', userIndex: -1, metadataOnly };
-  return { key: 'request:' + (entry?.request_id || ''), userText: '', userIndex: -1, metadataOnly };
+  if (currentGroup) return { key: currentGroup.key, userText: '', userIndex: currentGroup.userIndex, metadataOnly, rootTurn };
+  const rootTurnText = String(entry?.turn ?? '').split('.')[0];
+  if (rootTurnText) return { key: 'turn:' + rootTurnText, userText: '', userIndex: -1, metadataOnly, rootTurn };
+  return { key: 'request:' + (entry?.request_id || ''), userText: '', userIndex: -1, metadataOnly, rootTurn: null };
 }
 
 function sessionTurnDiscriminator(entry) {
@@ -3647,28 +3644,74 @@ function sessionTurnDiscriminator(entry) {
 
 function buildSessionGroups(items) {
   const groups = [];
-  items.forEach(item => {
-    const current = groups[groups.length - 1] || null;
-    const info = sessionKeyForEntry(item.entry, current);
-    let group = current && current.key === info.key ? current : null;
-    if (!group) {
-      group = {
-        key: info.key,
-        userText: info.userText,
-        userIndex: info.userIndex,
-        metadataOnly: !!info.metadataOnly,
-        responseText: '',
-        items: [],
-      };
-      groups.push(group);
-    } else if (!group.userText && info.userText) {
+  const titleGenerationItems = [];
+
+  function createGroup(info, item) {
+    const group = {
+      key: info.key,
+      userText: info.userText,
+      userIndex: info.userIndex,
+      metadataOnly: !!info.metadataOnly,
+      rootTurn: info.rootTurn,
+      firstOrder: item.order,
+      responseText: '',
+      items: [],
+    };
+    groups.push(group);
+    return group;
+  }
+
+  function addItemToGroup(group, item, info) {
+    if (!group.userText && info.userText) {
       group.userText = info.userText;
       group.userIndex = info.userIndex;
     }
+    if (group.rootTurn == null && info.rootTurn != null) group.rootTurn = info.rootTurn;
     if (!info.metadataOnly) group.metadataOnly = false;
     const responseText = finalResponseText(item.entry);
     if (responseText) group.responseText = responseText;
     group.items.push(item);
+  }
+
+  function bestTitleGenerationGroup(item, info) {
+    let best = null;
+    groups.forEach(group => {
+      if (info.userText && group.userText && info.userText !== group.userText) return;
+      let distance;
+      if (info.rootTurn != null && group.rootTurn != null) {
+        distance = Math.abs(info.rootTurn - group.rootTurn);
+        if (distance > 2) return;
+      } else {
+        distance = Math.abs(item.order - group.firstOrder);
+      }
+      const futurePenalty = item.order < group.firstOrder ? 0.25 : 0;
+      const score = distance + futurePenalty;
+      if (!best || score < best.score) best = { group, score };
+    });
+    return best ? best.group : null;
+  }
+
+  items.forEach((rawItem, order) => {
+    const item = { ...rawItem, order };
+    if (isTitleGenerationEntry(item.entry)) {
+      titleGenerationItems.push(item);
+      return;
+    }
+    const current = groups[groups.length - 1] || null;
+    const info = sessionKeyForEntry(item.entry, current);
+    let group = current && current.key === info.key ? current : null;
+    if (!group) group = createGroup(info, item);
+    addItemToGroup(group, item, info);
+  });
+
+  titleGenerationItems.forEach(item => {
+    const info = sessionKeyForEntry(item.entry, null);
+    const group = bestTitleGenerationGroup(item, info) || createGroup(info, item);
+    addItemToGroup(group, item, info);
+  });
+
+  groups.forEach(group => {
+    group.items.sort((a, b) => a.order - b.order);
   });
   return groups;
 }
