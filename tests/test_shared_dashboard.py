@@ -98,11 +98,11 @@ def test_dashboard_spawn_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 
 def test_spawn_dashboard_subprocess(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    spawned_args = []
+    spawned_args: list[tuple[list[str], dict[str, object]]] = []
 
     class FakePopen:
         def __init__(self, cmd: list[str], **kwargs: object) -> None:
-            spawned_args.append(cmd)
+            spawned_args.append((cmd, kwargs))
             self.pid = 99999
 
     monkeypatch.setattr(subprocess, "Popen", FakePopen)
@@ -110,11 +110,67 @@ def test_spawn_dashboard_subprocess(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     _spawn_dashboard_subprocess("127.0.0.1", 19527, tmp_path)
 
     assert len(spawned_args) == 1
-    cmd = spawned_args[0]
+    cmd, kwargs = spawned_args[0]
     assert "dashboard" in cmd
     assert "--tap-live-port" in cmd
     assert "19527" in cmd
     assert str(tmp_path) in cmd
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["stdout"] == subprocess.DEVNULL
+    assert kwargs["stderr"] == subprocess.DEVNULL
+    assert kwargs["start_new_session"] is True
+
+
+def test_spawn_dashboard_subprocess_hides_windows_console(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeStartupInfo:
+        def __init__(self) -> None:
+            self.dwFlags = 0
+            self.wShowWindow: int | None = None
+
+    class FakePopen:
+        def __init__(self, cmd: list[str], **kwargs: object) -> None:
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            self.pid = 99999
+
+    scripts_dir = tmp_path / "uv" / "tools" / "claude-tap" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    python_exe = scripts_dir / "python.exe"
+    pythonw_exe = scripts_dir / "pythonw.exe"
+    python_exe.touch()
+    pythonw_exe.touch()
+
+    monkeypatch.setattr("claude_tap.shared_dashboard.sys.platform", "win32")
+    monkeypatch.setattr("claude_tap.shared_dashboard.sys.executable", str(python_exe))
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x1000, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x2000, raising=False)
+    monkeypatch.setattr(subprocess, "STARTF_USESHOWWINDOW", 0x4000, raising=False)
+    monkeypatch.setattr(subprocess, "SW_HIDE", 0, raising=False)
+    monkeypatch.setattr(subprocess, "STARTUPINFO", FakeStartupInfo, raising=False)
+
+    _spawn_dashboard_subprocess("0.0.0.0", 19527, tmp_path)
+
+    cmd = captured["cmd"]
+    kwargs = captured["kwargs"]
+    assert isinstance(cmd, list)
+    assert isinstance(kwargs, dict)
+    assert cmd[0] == str(pythonw_exe)
+    assert cmd[-2:] == ["--tap-host", "0.0.0.0"]
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["stdout"] == subprocess.DEVNULL
+    assert kwargs["stderr"] == subprocess.DEVNULL
+    assert kwargs["creationflags"] == 0x1000 | 0x2000
+    assert "start_new_session" not in kwargs
+    startupinfo = kwargs["startupinfo"]
+    assert isinstance(startupinfo, FakeStartupInfo)
+    assert startupinfo.dwFlags == 0x4000
+    assert startupinfo.wShowWindow == 0
 
 
 @pytest.mark.asyncio
