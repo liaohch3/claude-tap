@@ -163,8 +163,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   cursor: pointer;
 }
 .export-menu summary::-webkit-details-marker { display: none; }
-.export-menu[open] .viewer-action,
-.export-menu[open] .act-btn {
+.export-menu[open] .viewer-action {
   border-color: var(--blue);
   color: var(--blue);
   background: var(--blue-bg);
@@ -1370,14 +1369,6 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     font-size: 13px;
     padding: 10px 16px;
   }
-  .action-bar .export-menu { width: 100%; }
-  .action-bar .export-menu-list {
-    position: static;
-    width: 100%;
-    margin-top: 4px;
-    box-shadow: none;
-  }
-
   /* R4: Detail panel — prevent horizontal overflow */
   .section-body { overflow-x: auto; }
   .section-body pre, .section-body .pre-text {
