@@ -32,6 +32,7 @@ def _is_aws_native_bedrock_url(url: str) -> bool:
     """
     try:
         from urllib.parse import urlparse
+
         host = urlparse(url).hostname or ""
     except Exception:
         return False
