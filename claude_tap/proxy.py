@@ -20,6 +20,7 @@ from yarl import URL
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
 from claude_tap.usage import normalize_usage
+from claude_tap.viewer import _decode_bedrock_eventstream_events
 
 log = logging.getLogger("claude-tap")
 
@@ -227,6 +228,8 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     is_streaming = False
     if isinstance(req_body, dict):
         is_streaming = req_body.get("stream", False)
+    if not is_streaming and "invoke-with-response-stream" in request.path:
+        is_streaming = True
 
     ctx["turn_counter"] = ctx.get("turn_counter", 0) + 1
     turn = ctx["turn_counter"]
@@ -302,12 +305,17 @@ async def _handle_streaming(
     )
     await resp.prepare(request)
 
+    is_bedrock_stream = "invoke-with-response-stream" in request.path
     reassembler = SSEReassembler(store_events=store_stream_events)
+    raw_chunks: list[bytes] = []
 
     try:
         async for chunk in upstream_resp.content.iter_any():
             await resp.write(chunk)
-            reassembler.feed_bytes(chunk)
+            if is_bedrock_stream:
+                raw_chunks.append(chunk)
+            else:
+                reassembler.feed_bytes(chunk)
     except (ConnectionError, asyncio.CancelledError):
         pass
 
@@ -317,9 +325,19 @@ async def _handle_streaming(
         pass
 
     duration_ms = int((time.monotonic() - t0) * 1000)
-    reconstructed = reassembler.reconstruct()
 
-    usage = normalize_usage(reconstructed.get("usage", {}) if reconstructed else {})
+    if is_bedrock_stream:
+        raw_body = b"".join(raw_chunks).decode("utf-8", errors="replace")
+        bedrock_events = _decode_bedrock_eventstream_events(raw_body)
+        for event in bedrock_events:
+            reassembler.add_event(event["event"], event["data"])
+        reconstructed = reassembler.reconstruct()
+        if not reconstructed:
+            reconstructed = raw_body
+    else:
+        reconstructed = reassembler.reconstruct()
+
+    usage = normalize_usage(reconstructed.get("usage", {}) if isinstance(reconstructed, dict) else {})
     in_tok = usage.get("input_tokens", 0)
     out_tok = usage.get("output_tokens", 0)
     cache_read = usage.get("cache_read_input_tokens", 0)

@@ -165,22 +165,27 @@ claude-tap -- --permission-mode bypassPermissions
 <details>
 <summary>Claude Code with AWS Bedrock</summary>
 
-When Claude Code is configured to use AWS Bedrock as its backend, `claude-tap` auto-detects the upstream from `ANTHROPIC_BEDROCK_BASE_URL` in your environment or Claude settings.
+`claude-tap` supports two Bedrock scenarios and auto-detects which applies:
+
+**Custom Bedrock gateway (company proxy, no SigV4)**
 
 ```bash
-export CLAUDE_CODE_USE_BEDROCK=1
-export ANTHROPIC_BEDROCK_BASE_URL="https://your-bedrock-endpoint.example.com/bedrock"
-export AWS_REGION="us-east-1"
-```
-
-```bash
+export ANTHROPIC_BEDROCK_BASE_URL="https://your-gateway.company.com/bedrock"
 claude-tap
 ```
 
-`claude-tap` will:
-1. Detect the Bedrock target from `ANTHROPIC_BEDROCK_BASE_URL`
-2. Redirect both `ANTHROPIC_BASE_URL` and `ANTHROPIC_BEDROCK_BASE_URL` to the local proxy
-3. Decode the AWS EventStream binary response format to extract token usage and model info
+`claude-tap` detects the non-AWS host, redirects both `ANTHROPIC_BASE_URL` and `ANTHROPIC_BEDROCK_BASE_URL` to the local proxy, and decodes the AWS EventStream binary response format to extract token usage and model info.
+
+**AWS native Bedrock (SigV4-signed requests)**
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_BEDROCK_BASE_URL="https://bedrock-runtime.us-east-1.amazonaws.com"
+export AWS_REGION="us-east-1"
+claude-tap --tap-proxy-mode forward
+```
+
+When the endpoint is a real AWS domain (`*.amazonaws.com`), `claude-tap` does **not** rewrite `ANTHROPIC_BEDROCK_BASE_URL` to localhost — doing so would break AWS SigV4 signature validation. Use forward proxy mode (`--tap-proxy-mode forward`) to capture this traffic without modifying the signed request.
 
 Use `--tap-target` only as a manual override when auto-detection does not apply.
 

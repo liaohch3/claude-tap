@@ -5,12 +5,32 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import signal
 import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _is_aws_native_bedrock_url(url: str) -> bool:
+    """Return True if the URL points to a real AWS Bedrock endpoint (SigV4-signed).
+
+    AWS native Bedrock endpoints match patterns like:
+      - bedrock-runtime.us-east-1.amazonaws.com
+      - bedrock-runtime-fips.us-west-2.amazonaws.com
+      - vpce-xxx.bedrock-runtime.us-east-1.vpce.amazonaws.com
+
+    Custom gateways (e.g. company proxies) that happen to forward to Bedrock
+    do NOT use SigV4, so rewriting their URL to localhost is safe.
+    """
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return False
+    return host.endswith(".amazonaws.com") or host.endswith(".amazonaws.com.cn")
 
 
 @dataclass(frozen=True)
@@ -68,7 +88,14 @@ class ClientConfig:
 
     def reverse_base_url_env_map(self, port: int) -> dict[str, str]:
         base_url = self.reverse_base_url(port)
-        return {env_key: base_url for env_key in self.reverse_base_url_envs}
+        env_map: dict[str, str] = {}
+        for env_key in self.reverse_base_url_envs:
+            if env_key in self.extra_base_url_envs:
+                current_value = os.environ.get(env_key, "").strip()
+                if current_value and _is_aws_native_bedrock_url(current_value):
+                    continue
+            env_map[env_key] = base_url
+        return env_map
 
     def reverse_strip_path_prefix(self, target: str) -> str:
         if not self.strip_path_prefix:
@@ -635,7 +662,7 @@ def _detect_claude_target() -> str:
     repeat ``--tap-target``.
     """
     bedrock_target = os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "").strip()
-    if bedrock_target:
+    if bedrock_target and not _is_aws_native_bedrock_url(bedrock_target):
         return bedrock_target
 
     env_target = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
@@ -647,8 +674,8 @@ def _detect_claude_target() -> str:
         Path.cwd() / ".claude" / "settings.json",
         Path.home() / ".claude" / "settings.json",
     )
-    for env_key in CLIENT_CONFIGS["claude"].reverse_base_url_envs:
-        for path in candidate_paths:
+    for path in candidate_paths:
+        for env_key in CLIENT_CONFIGS["claude"].reverse_base_url_envs:
             target = _read_settings_env_base_url(path, env_key)
             if target:
                 return target

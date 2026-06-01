@@ -164,22 +164,27 @@ claude-tap -- --permission-mode bypassPermissions
 <details>
 <summary>Claude Code + AWS Bedrock</summary>
 
-当 Claude Code 配置为使用 AWS Bedrock 后端时，`claude-tap` 会自动从环境变量或 Claude settings 中的 `ANTHROPIC_BEDROCK_BASE_URL` 检测上游地址。
+`claude-tap` 支持两种 Bedrock 场景，并自动检测适用哪种：
+
+**自定义 Bedrock 网关（公司代理，无 SigV4）**
 
 ```bash
-export CLAUDE_CODE_USE_BEDROCK=1
-export ANTHROPIC_BEDROCK_BASE_URL="https://your-bedrock-endpoint.example.com/bedrock"
-export AWS_REGION="us-east-1"
-```
-
-```bash
+export ANTHROPIC_BEDROCK_BASE_URL="https://your-gateway.company.com/bedrock"
 claude-tap
 ```
 
-`claude-tap` 会：
-1. 从 `ANTHROPIC_BEDROCK_BASE_URL` 检测 Bedrock 上游
-2. 将 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_BEDROCK_BASE_URL` 都重定向到本地代理
-3. 解码 AWS EventStream 二进制响应格式，提取 token 用量和模型信息
+`claude-tap` 检测到非 AWS 域名后，会将 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_BEDROCK_BASE_URL` 都重定向到本地代理，并解码 AWS EventStream 二进制响应格式以提取 token 用量和模型信息。
+
+**AWS 原生 Bedrock（SigV4 签名请求）**
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_BEDROCK_BASE_URL="https://bedrock-runtime.us-east-1.amazonaws.com"
+export AWS_REGION="us-east-1"
+claude-tap --tap-proxy-mode forward
+```
+
+当端点是真实 AWS 域名（`*.amazonaws.com`）时，`claude-tap` **不会**将 `ANTHROPIC_BEDROCK_BASE_URL` 重写为 localhost — 这样做会破坏 AWS SigV4 签名验证。请使用正向代理模式（`--tap-proxy-mode forward`）来捕获此流量，而不修改已签名的请求。
 
 只有手动覆盖时才需要 `--tap-target`。
 

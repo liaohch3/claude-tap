@@ -394,12 +394,20 @@ def _record_usage(record: dict[str, Any]) -> dict[str, int]:
                 usage = candidate
                 break
     if not usage:
-        for event in reversed(_bedrock_events(record)):
+        merged_usage: dict[str, int] = {}
+        for event in _bedrock_events(record):
             payload = event.get("data", {}) if isinstance(event, dict) else {}
             candidate = payload.get("usage", {}) if isinstance(payload, dict) else {}
-            if candidate:
-                usage = candidate
-                break
+            for key, value in candidate.items():
+                if isinstance(value, int):
+                    merged_usage[key] = max(merged_usage.get(key, 0), value)
+            message = payload.get("message", {}) if isinstance(payload, dict) else {}
+            msg_usage = message.get("usage", {}) if isinstance(message, dict) else {}
+            for key, value in msg_usage.items():
+                if isinstance(value, int):
+                    merged_usage[key] = max(merged_usage.get(key, 0), value)
+        if merged_usage:
+            usage = merged_usage
     if not usage and isinstance(body, dict):
         usage = body
     return normalize_usage(usage)
