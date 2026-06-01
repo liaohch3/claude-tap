@@ -170,6 +170,7 @@ claude-tap -- --permission-mode bypassPermissions
 **Custom Bedrock gateway (company proxy, no SigV4)**
 
 ```bash
+export CLAUDE_CODE_USE_BEDROCK=1
 export ANTHROPIC_BEDROCK_BASE_URL="https://your-gateway.company.com/bedrock"
 claude-tap
 ```

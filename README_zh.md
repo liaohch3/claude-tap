@@ -169,6 +169,7 @@ claude-tap -- --permission-mode bypassPermissions
 **自定义 Bedrock 网关（公司代理，无 SigV4）**
 
 ```bash
+export CLAUDE_CODE_USE_BEDROCK=1
 export ANTHROPIC_BEDROCK_BASE_URL="https://your-gateway.company.com/bedrock"
 claude-tap
 ```

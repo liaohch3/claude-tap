@@ -14,8 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _BEDROCK_HOST_RE = re.compile(
-    r"(^|\.)(bedrock-runtime|bedrock-runtime-fips)"
-    r"\.[a-z0-9-]+\.(amazonaws\.com|amazonaws\.com\.cn|vpce\.amazonaws\.com)$"
+    r"(^|\.)("
+    r"(bedrock-runtime|bedrock-runtime-fips)"
+    r"\.[a-z0-9-]+\.(amazonaws\.com|amazonaws\.com\.cn|vpce\.amazonaws\.com)"
+    r"|bedrock-mantle\.[a-z0-9-]+\.api\.aws"
+    r")$"
 )
 
 
@@ -26,6 +29,7 @@ def _is_aws_native_bedrock_url(url: str) -> bool:
       - bedrock-runtime.us-east-1.amazonaws.com
       - bedrock-runtime-fips.us-west-2.amazonaws.com
       - vpce-xxx.bedrock-runtime.us-east-1.vpce.amazonaws.com
+      - bedrock-mantle.us-east-1.api.aws
 
     Custom gateways on other AWS services (e.g. API Gateway *.execute-api.*)
     or company proxies do NOT use SigV4, so rewriting their URL is safe.
@@ -37,6 +41,23 @@ def _is_aws_native_bedrock_url(url: str) -> bool:
     except Exception:
         return False
     return bool(_BEDROCK_HOST_RE.search(host))
+
+
+def _is_truthy_env_value(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_claude_bedrock_enabled() -> bool:
+    return _is_truthy_env_value(_resolve_env_value("CLAUDE_CODE_USE_BEDROCK"))
+
+
+def _should_rewrite_extra_base_url_env(env_key: str) -> bool:
+    if env_key != "ANTHROPIC_BEDROCK_BASE_URL":
+        return True
+    if not _is_claude_bedrock_enabled():
+        return False
+    current_value = _resolve_env_value(env_key)
+    return not (current_value and _is_aws_native_bedrock_url(current_value))
 
 
 @dataclass(frozen=True)
@@ -96,10 +117,8 @@ class ClientConfig:
         base_url = self.reverse_base_url(port)
         env_map: dict[str, str] = {}
         for env_key in self.reverse_base_url_envs:
-            if env_key in self.extra_base_url_envs:
-                current_value = _resolve_env_value(env_key)
-                if current_value and _is_aws_native_bedrock_url(current_value):
-                    continue
+            if env_key in self.extra_base_url_envs and not _should_rewrite_extra_base_url_env(env_key):
+                continue
             env_map[env_key] = base_url
         return env_map
 
@@ -679,29 +698,22 @@ def _read_settings_env_base_url(path: Path, env_key: str) -> str | None:
 def _detect_claude_target() -> str:
     """Auto-detect the upstream target Claude Code would normally use.
 
-    Claude Code can source ``ANTHROPIC_BASE_URL`` or ``ANTHROPIC_BEDROCK_BASE_URL``
-    from settings files or environment. Mirror that behavior so reverse proxy mode
-    captures custom gateways (including AWS Bedrock) without forcing users to
-    repeat ``--tap-target``.
+    Claude Code can source ``ANTHROPIC_BASE_URL`` from settings files rather
+    than the process environment. When Bedrock mode is enabled, it can also
+    source ``ANTHROPIC_BEDROCK_BASE_URL``. Mirror that behavior for custom
+    gateways without forcing users to repeat ``--tap-target``.
     """
-    bedrock_target = os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "").strip()
+    if _is_claude_bedrock_enabled():
+        bedrock_target = _resolve_env_value("ANTHROPIC_BEDROCK_BASE_URL")
+    else:
+        bedrock_target = ""
     if bedrock_target and not _is_aws_native_bedrock_url(bedrock_target):
         return bedrock_target
 
-    env_target = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    env_target = _resolve_env_value("ANTHROPIC_BASE_URL")
     if env_target:
         return env_target
 
-    candidate_paths = (
-        Path.cwd() / ".claude" / "settings.local.json",
-        Path.cwd() / ".claude" / "settings.json",
-        Path.home() / ".claude" / "settings.json",
-    )
-    for path in candidate_paths:
-        for env_key in CLIENT_CONFIGS["claude"].reverse_base_url_envs:
-            target = _read_settings_env_base_url(path, env_key)
-            if target:
-                return target
     return CLIENT_CONFIGS["claude"].default_target
 
 

@@ -82,9 +82,7 @@ async def test_run_client_passes_resolved_path_for_cmd_shim(monkeypatch) -> None
     import json
 
     injected = json.loads(cmd[2])
-    assert injected == {
-        "env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:43123", "ANTHROPIC_BEDROCK_BASE_URL": "http://127.0.0.1:43123"}
-    }
+    assert injected == {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:43123"}}
     assert cmd[3:] == ("--version",), "original args must follow --settings payload"
 
 
