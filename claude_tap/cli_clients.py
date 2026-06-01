@@ -84,6 +84,7 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         label="Claude Code",
         install_url="https://docs.anthropic.com/en/docs/claude-code",
         base_url_env="ANTHROPIC_BASE_URL",
+        extra_base_url_envs=("ANTHROPIC_BEDROCK_BASE_URL",),
         base_url_suffix="",
         default_target="https://api.anthropic.com",
         nesting_env_keys=("CLAUDECODE", "CLAUDE_CODE_SSE_PORT"),
@@ -628,24 +629,29 @@ def _read_settings_env_base_url(path: Path, env_key: str) -> str | None:
 def _detect_claude_target() -> str:
     """Auto-detect the upstream target Claude Code would normally use.
 
-    Claude Code can source ``ANTHROPIC_BASE_URL`` from settings files rather
-    than the process environment. Mirror that behavior so reverse proxy mode
-    captures custom gateways without forcing users to repeat ``--tap-target``.
+    Claude Code can source ``ANTHROPIC_BASE_URL`` or ``ANTHROPIC_BEDROCK_BASE_URL``
+    from settings files or environment. Mirror that behavior so reverse proxy mode
+    captures custom gateways (including AWS Bedrock) without forcing users to
+    repeat ``--tap-target``.
     """
+    bedrock_target = os.environ.get("ANTHROPIC_BEDROCK_BASE_URL", "").strip()
+    if bedrock_target:
+        return bedrock_target
+
     env_target = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
     if env_target:
         return env_target
 
-    env_key = CLIENT_CONFIGS["claude"].base_url_env
     candidate_paths = (
         Path.cwd() / ".claude" / "settings.local.json",
         Path.cwd() / ".claude" / "settings.json",
         Path.home() / ".claude" / "settings.json",
     )
-    for path in candidate_paths:
-        target = _read_settings_env_base_url(path, env_key)
-        if target:
-            return target
+    for env_key in CLIENT_CONFIGS["claude"].reverse_base_url_envs:
+        for path in candidate_paths:
+            target = _read_settings_env_base_url(path, env_key)
+            if target:
+                return target
     return CLIENT_CONFIGS["claude"].default_target
 
 

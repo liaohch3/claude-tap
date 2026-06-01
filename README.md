@@ -51,7 +51,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 
 | Client | Typical use |
 |--------|-------------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API or Claude-compatible gateways such as DeepSeek / GLM |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, or Claude-compatible gateways such as DeepSeek / GLM |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API key mode or ChatGPT subscription OAuth |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code or Moonshot Open Platform |
@@ -129,8 +129,8 @@ claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
 `claude-tap` auto-detects custom Claude Code upstreams from `ANTHROPIC_BASE_URL`
-in your environment or Claude settings. Use `--tap-target` only when you want to
-override that detected target.
+or `ANTHROPIC_BEDROCK_BASE_URL` in your environment or Claude settings. Use
+`--tap-target` only when you want to override that detected target.
 
 For the Claude Code VS Code extension, set `Claude Code: Claude Process Wrapper` to `claude-tap`; on Windows, use the full `claude-tap.exe` path if VS Code cannot find it.
 
@@ -159,6 +159,30 @@ claude-tap -- --permission-mode bypassPermissions
 ```
 
 `claude-tap` reads the DeepSeek upstream from `ANTHROPIC_BASE_URL`, then launches Claude Code against the local proxy. Use `--tap-target https://api.deepseek.com/anthropic` only as a manual override.
+
+</details>
+
+<details>
+<summary>Claude Code with AWS Bedrock</summary>
+
+When Claude Code is configured to use AWS Bedrock as its backend, `claude-tap` auto-detects the upstream from `ANTHROPIC_BEDROCK_BASE_URL` in your environment or Claude settings.
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_BEDROCK_BASE_URL="https://your-bedrock-endpoint.example.com/bedrock"
+export AWS_REGION="us-east-1"
+```
+
+```bash
+claude-tap
+```
+
+`claude-tap` will:
+1. Detect the Bedrock target from `ANTHROPIC_BEDROCK_BASE_URL`
+2. Redirect both `ANTHROPIC_BASE_URL` and `ANTHROPIC_BEDROCK_BASE_URL` to the local proxy
+3. Decode the AWS EventStream binary response format to extract token usage and model info
+
+Use `--tap-target` only as a manual override when auto-detection does not apply.
 
 </details>
 

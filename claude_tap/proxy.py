@@ -86,6 +86,8 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     # Anthropic API (Claude Code)
     "/v1/messages",
     "/v1/complete",
+    # AWS Bedrock API (Claude Code via Bedrock)
+    "/model",
     # OpenAI API (Codex CLI)
     "/v1/responses",
     "/v1/chat/completions",

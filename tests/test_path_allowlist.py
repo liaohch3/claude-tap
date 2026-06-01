@@ -33,6 +33,10 @@ from claude_tap.proxy import _is_allowed_path
         "/fetch",
         "/usages",
         "/feedback",
+        # AWS Bedrock paths
+        "/model/anthropic.claude-sonnet-4-20250514-v1:0/invoke",
+        "/model/anthropic.claude-sonnet-4-20250514-v1:0/invoke-with-response-stream",
+        "/model/us.anthropic.claude-sonnet-4-20250514-v1:0/messages",
     ],
 )
 def test_allowed_paths(path: str):
