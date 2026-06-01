@@ -3,8 +3,6 @@
 import os
 from unittest.mock import patch
 
-import pytest
-
 from claude_tap.cli_clients import (
     CLIENT_CONFIGS,
     _detect_claude_target,

@@ -23,7 +23,7 @@ SUPPORTED_CLIENTS = {
     "codebuddy",
 }
 
-SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"gemini"}
+SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"claude", "gemini"}
 
 SUPPORTED_DEFAULT_PROXY_MODES = {
     "agy": "forward",
