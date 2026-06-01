@@ -29,6 +29,7 @@ CLIENT_LABELS = {
     "pi": "Pi",
     "qoder": "Qoder",
 }
+DASHBOARD_SUMMARY_VERSION = 2
 
 
 def read_dashboard_template() -> str:
@@ -142,6 +143,7 @@ def merge_record_into_summary(
         )
 
     summary = dict(summary)
+    summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
     usage = _record_usage(record)
     summary["record_count"] = record_count
     summary["turn_count"] = max(int(summary.get("turn_count") or 0), record_count)
@@ -208,7 +210,11 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
             cached = json.loads(summary_json)
         except json.JSONDecodeError:
             cached = None
-        if isinstance(cached, dict) and cached.get("id") == row["id"]:
+        if (
+            isinstance(cached, dict)
+            and cached.get("id") == row["id"]
+            and cached.get("summary_version") == DASHBOARD_SUMMARY_VERSION
+        ):
             if row["status"] != "active":
                 return cached
             cached = dict(cached)
@@ -335,6 +341,7 @@ def _summarize_session(
     count = record_count if record_count is not None else len(records)
     return {
         "id": session_id,
+        "summary_version": DASHBOARD_SUMMARY_VERSION,
         "date": date_key if _DATE_RE.match(date_key) else "legacy",
         "agent": agent,
         "agent_key": _agent_key(agent),

@@ -9,6 +9,7 @@ import pytest
 from aiohttp.test_utils import make_mocked_request
 
 from claude_tap.dashboard import (
+    DASHBOARD_SUMMARY_VERSION,
     _clean_user_prompt_text,
     _content_text,
     _event_payload,
@@ -261,6 +262,61 @@ def test_dashboard_first_message_skips_injected_user_content_blocks(trace_db, tm
     summary = list_trace_sessions()[0]
 
     assert summary["first_user"] == "Fix the failing dashboard prompt preview."
+
+
+def test_dashboard_recomputes_stale_first_message_summary_cache(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(
+        client="claude",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 5, 20, 10, 15, tzinfo=timezone.utc),
+    )
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-20T10:15:00+00:00",
+            "turn": 1,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "<system-reminder>\nInjected context\n</system-reminder>"},
+                                {"type": "tool_result", "content": "stale tool output"},
+                                {"type": "text", "text": "Fix the failing dashboard prompt preview."},
+                            ],
+                        }
+                    ],
+                },
+            },
+            "response": {"status": 200, "body": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 1}}},
+        },
+    )
+
+    stale_summary = {
+        "id": session_id,
+        "status": "complete",
+        "record_count": 1,
+        "updated_at": "2026-05-20T10:15:00+00:00",
+        "first_user": "stale tool output",
+    }
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (json.dumps(stale_summary, ensure_ascii=False, separators=(",", ":")), session_id),
+    )
+    conn.commit()
+
+    summary = list_trace_sessions()[0]
+    cached = json.loads(store.load_session_row(session_id)["summary_json"])
+
+    assert summary["first_user"] == "Fix the failing dashboard prompt preview."
+    assert cached["first_user"] == "Fix the failing dashboard prompt preview."
+    assert cached["summary_version"] == DASHBOARD_SUMMARY_VERSION
 
 
 def test_dashboard_loads_session_by_id(trace_db, tmp_path: Path) -> None:
