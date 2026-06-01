@@ -1,0 +1,225 @@
+/* ─── Live Mode SSE Support ─── */
+let liveEventSource = null;
+let liveConnected = false;
+let currentDetailRequestId = null;
+let liveRecords = [];
+let viewingDate = null; // null = live, string = historical date
+let liveRenderTimer = null;
+const liveSeenIds = new Set();
+
+function initLiveMode() {
+  const statusEl = $('#live-status');
+  statusEl.style.display = 'flex';
+  updateLiveStatus('connecting');
+
+  liveEventSource = new EventSource('/events');
+
+  liveEventSource.onopen = () => {
+    liveConnected = true;
+    updateLiveStatus('connected', liveRecords.length);
+  };
+
+  liveEventSource.onmessage = (event) => {
+    try {
+      const record = JSON.parse(event.data);
+      // Deduplicate: SSE replays full history on each reconnect
+      const id = record.request_id || record.req_id;
+      if (id && liveSeenIds.has(id)) return;
+      if (id) liveSeenIds.add(id);
+
+      liveRecords.push(record);
+      if (!viewingDate) {
+        entries.push(...expandLiveWebSocketResponseEntries([record]));
+        updateLiveStatus('connected', entries.length);
+        clearTimeout(liveRenderTimer);
+        liveRenderTimer = setTimeout(() => renderApp(true), 50);
+      }
+    } catch (e) {
+      console.error('Failed to parse SSE data:', e);
+    }
+  };
+
+  // EventSource auto-reconnects on transient errors;
+  // only update status indicator here.
+  liveEventSource.onerror = () => {
+    liveConnected = false;
+    updateLiveStatus('disconnected');
+  };
+}
+
+function updateLiveStatus(status, count) {
+  const el = $('#live-status');
+  if (!el) return;
+  const colors = {
+    connecting: { bg: 'var(--amber-bg)', color: 'var(--amber)', dot: 'var(--amber)' },
+    connected: { bg: 'var(--green-bg)', color: 'var(--green)', dot: 'var(--green)' },
+    disconnected: { bg: 'var(--red-bg)', color: 'var(--red)', dot: 'var(--red)' }
+  };
+  const c = colors[status] || colors.connecting;
+  const labels = { connecting: 'Connecting...', connected: 'Live', disconnected: 'Disconnected' };
+  const countText = count !== undefined ? ` (${count})` : '';
+  el.style.background = c.bg;
+  el.style.color = c.color;
+  el.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:${c.dot};${status === 'connected' ? 'animation:pulse 2s infinite;' : ''}"></span>${labels[status]}${countText}`;
+}
+
+function renderLiveWaitingState() {
+  $('#drop-zone').style.display = 'none';
+  $('#sidebar-wrap').style.display = 'flex';
+  $('#date-picker').style.display = 'flex';
+  ['search-bar','sidebar-sort','tool-filter','position-indicator','sidebar'].forEach(id => {
+    const el = $('#' + id);
+    if (el) el.style.display = 'none';
+  });
+  $('#detail').style.display = '';
+  $('#detail').innerHTML = '<div class="empty-state" role="status" aria-live="polite"><div style="font-size:48px;margin-bottom:16px;">📡</div><h2 style="margin-bottom:8px;color:var(--text);font-size:18px;">Waiting for API calls...</h2><p style="color:var(--text-secondary);">Start using Claude Code to see traces here in real-time</p></div>';
+  $('#stats').style.display = 'none';
+  $('#path-filter').style.display = 'none';
+  updateHistoryDeleteButton();
+}
+
+function updateHistoryDeleteButton() {
+  const btn = $('#history-delete-btn');
+  const text = $('#history-delete-text');
+  const sel = $('#date-select');
+  if (!btn || !sel) return;
+  const canDelete = sel.value && sel.value !== 'live';
+  btn.disabled = !canDelete;
+  btn.title = canDelete ? t('history_delete_title') : t('history_delete_live_title');
+  btn.setAttribute('aria-label', btn.title);
+  if (text) text.textContent = t('history_delete_btn');
+}
+
+function setHistoryDeleteStatus(message, tone = '') {
+  const el = $('#history-delete-status');
+  if (!el) return;
+  el.className = `history-delete-status ${tone}`.trim();
+  el.textContent = message || '';
+  el.style.display = message ? 'block' : 'none';
+}
+
+async function fetchDates(preferredValue = null) {
+  try {
+    const resp = await fetch('/api/dates');
+    const data = await resp.json();
+    const sel = $('#date-select');
+    if (!sel || !data.dates) return;
+    const previous = preferredValue || sel.value || 'live';
+    sel.innerHTML = '<option value="live">Live (current session)</option>';
+    for (const d of data.dates) {
+      sel.insertAdjacentHTML('beforeend', `<option value="${d}">${d}</option>`);
+    }
+    if (data.has_legacy) {
+      sel.insertAdjacentHTML('beforeend', '<option value="legacy">Legacy (flat)</option>');
+    }
+    if ([...sel.options].some(option => option.value === previous)) sel.value = previous;
+    const picker = $('#date-picker');
+    if (picker) picker.style.display = 'flex';
+    updateHistoryDeleteButton();
+  } catch (e) {
+    console.error('Failed to fetch dates:', e);
+  }
+}
+
+async function onDateChange(value) {
+  setHistoryDeleteStatus('');
+  updateHistoryDeleteButton();
+  if (value === 'live') {
+    viewingDate = null;
+    activePaths.clear();
+    entries = expandLiveWebSocketResponseEntries(liveRecords.slice(), true);
+    if (entries.length) renderApp(true);
+    else renderLiveWaitingState();
+    return;
+  }
+  viewingDate = value;
+  try {
+    const resp = await fetch('/api/traces/' + encodeURIComponent(value));
+    activePaths.clear();
+    entries = expandWebSocketResponseEntries(await resp.json());
+    renderApp();
+  } catch (e) {
+    console.error('Failed to load traces for date:', value, e);
+  }
+}
+
+async function deleteSelectedTraceDate() {
+  const sel = $('#date-select');
+  if (!sel || !sel.value || sel.value === 'live') return;
+  const value = sel.value;
+  const label = sel.options[sel.selectedIndex]?.textContent || value;
+  if (!window.confirm(formatText('history_delete_confirm', { date: label }))) return;
+
+  const btn = $('#history-delete-btn');
+  if (btn) btn.disabled = true;
+  setHistoryDeleteStatus(t('history_delete_working'), 'warn');
+  try {
+    const resp = await fetch('/api/traces/' + encodeURIComponent(value), { method: 'DELETE' });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || resp.statusText || String(resp.status));
+
+    const deleted = Number(data.deleted_files || 0);
+    setHistoryDeleteStatus(
+      deleted > 0
+        ? formatText('history_delete_done', { count: deleted })
+        : formatText('history_delete_empty', { date: label }),
+      deleted > 0 ? 'ok' : 'warn'
+    );
+    await fetchDates('live');
+    viewingDate = null;
+    activePaths.clear();
+    entries = expandLiveWebSocketResponseEntries(liveRecords.slice(), true);
+    if (entries.length) renderApp(true);
+    else renderLiveWaitingState();
+  } catch (e) {
+    console.error('Failed to delete trace history:', value, e);
+    setHistoryDeleteStatus(formatText('history_delete_failed', { error: e.message || e }), 'error');
+  } finally {
+    updateHistoryDeleteButton();
+  }
+}
+
+if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
+  entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? expandLiveWebSocketResponseEntries(EMBEDDED_TRACE_DATA, true) : [];
+  document.addEventListener('DOMContentLoaded', () => {
+    initCommonUi();
+    initLiveMode();
+    fetchDates();
+    if (entries.length) renderApp();
+    else {
+      renderLiveWaitingState();
+    }
+  });
+} else if (typeof EMBEDDED_TRACE_META !== 'undefined') {
+  // Lazy mode: build stub entries from metadata
+  lazyMode = true;
+  entries = EMBEDDED_TRACE_META.map((meta, i) => buildStubEntry(meta, i));
+  document.addEventListener('DOMContentLoaded', () => {
+    initCommonUi();
+    if (entries.length) renderApp();
+    else renderEmptyTraceState();
+  });
+} else if (typeof EMBEDDED_TRACE_DATA !== 'undefined') {
+  entries = expandWebSocketResponseEntries(EMBEDDED_TRACE_DATA);
+  document.addEventListener('DOMContentLoaded', () => {
+    initCommonUi();
+    if (entries.length) renderApp();
+    else renderEmptyTraceState();
+  });
+} else {
+  document.addEventListener('DOMContentLoaded', () => {
+    initCommonUi();
+    initFileDropZone();
+  });
+}
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    entries = expandWebSocketResponseEntries(reader.result.trim().split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean));
+    if (!entries.length) { alert('No valid entries found / 未找到有效条目'); return; }
+    renderApp();
+  };
+  reader.readAsText(file);
+}
+

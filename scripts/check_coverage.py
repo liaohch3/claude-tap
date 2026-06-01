@@ -4,7 +4,7 @@
 Python coverage is read from a coverage.py JSON report. Viewer frontend coverage
 is measured with Chromium V8 precise coverage against the cross-client viewer
 contract traces. The frontend incremental metric is function-oriented: changed
-viewer.html JavaScript functions must be exercised by V8 coverage.
+viewer JavaScript functions must be exercised by V8 coverage.
 """
 
 from __future__ import annotations
@@ -31,6 +31,26 @@ DEFAULT_THRESHOLDS = {
     "viewer_css_selector_min": 65.0,
     "viewer_css_diff_min": 80.0,
 }
+VIEWER_HTML_SOURCE = "claude_tap/viewer.html"
+VIEWER_LEGACY_JS_SOURCE = "claude_tap/viewer_assets/viewer.js"
+VIEWER_JS_SOURCES = (
+    "claude_tap/viewer_assets/state.js",
+    "claude_tap/viewer_assets/responses.js",
+    "claude_tap/viewer_assets/lazy_loading.js",
+    "claude_tap/viewer_assets/i18n_ui.js",
+    "claude_tap/viewer_assets/live_bootstrap.js",
+    "claude_tap/viewer_assets/filters_search.js",
+    "claude_tap/viewer_assets/sidebar.js",
+    "claude_tap/viewer_assets/detail_trace.js",
+    "claude_tap/viewer_assets/renderers.js",
+    "claude_tap/viewer_assets/sections_json.js",
+    "claude_tap/viewer_assets/diff.js",
+    "claude_tap/viewer_assets/utilities_mobile.js",
+)
+VIEWER_CSS_SOURCE = "claude_tap/viewer_assets/viewer.css"
+VIEWER_DIFF_PATHS = ["claude_tap/*.py", VIEWER_HTML_SOURCE, "claude_tap/viewer_assets/*"]
+VIEWER_STYLE_TEMPLATE_ANCHOR = "<!-- CLAUDE_TAP_VIEWER_STYLE -->"
+VIEWER_SCRIPT_TEMPLATE_ANCHOR = "<!-- CLAUDE_TAP_VIEWER_SCRIPT -->"
 
 
 @dataclass(frozen=True)
@@ -80,6 +100,98 @@ def changed_lines_from_diff(diff_text: str) -> dict[str, set[int]]:
             new_line += 1
 
     return {path: lines for path, lines in changed.items() if lines}
+
+
+def _tag_content(source: str, tag: str) -> str | None:
+    start_tag = f"<{tag}>"
+    end_tag = f"</{tag}>"
+    start = source.find(start_tag)
+    if start < 0:
+        return None
+    content_start = start + len(start_tag)
+    end = source.find(end_tag, content_start)
+    if end < 0:
+        return None
+    return source[content_start:end].strip("\n")
+
+
+def _replace_tag_block(source: str, tag: str, replacement: str) -> str | None:
+    start_tag = f"<{tag}>"
+    end_tag = f"</{tag}>"
+    start = source.find(start_tag)
+    if start < 0:
+        return None
+    end = source.find(end_tag, start + len(start_tag))
+    if end < 0:
+        return None
+    return source[:start] + replacement + source[end + len(end_tag) :]
+
+
+def _base_file_text(base: str, path: str) -> str | None:
+    try:
+        return subprocess.check_output(["git", "show", f"{base}:{path}"], cwd=REPO_ROOT, text=True)
+    except subprocess.CalledProcessError:
+        return None
+
+
+def _filter_pure_viewer_asset_split(changed_lines: dict[str, set[int]], base: str) -> dict[str, set[int]]:
+    """Ignore asset files that are exact extractions from the base monolithic viewer."""
+    js_changed = [source for source in (VIEWER_LEGACY_JS_SOURCE, *VIEWER_JS_SOURCES) if source in changed_lines]
+    if not js_changed and VIEWER_CSS_SOURCE not in changed_lines and VIEWER_HTML_SOURCE not in changed_lines:
+        return changed_lines
+
+    base_viewer = _base_file_text(base, VIEWER_HTML_SOURCE)
+    if base_viewer is None:
+        return changed_lines
+
+    filtered = dict(changed_lines)
+    expected_js = _tag_content(base_viewer, "script")
+    expected_css = _tag_content(base_viewer, "style")
+
+    js_exact = False
+    if js_changed and expected_js is not None:
+        try:
+            if (REPO_ROOT / VIEWER_LEGACY_JS_SOURCE).exists():
+                current_js = (REPO_ROOT / VIEWER_LEGACY_JS_SOURCE).read_text(encoding="utf-8").strip("\n")
+            else:
+                current_js = "".join((REPO_ROOT / source).read_text(encoding="utf-8") for source in VIEWER_JS_SOURCES)
+                current_js = current_js.strip("\n")
+        except OSError:
+            current_js = None
+        js_exact = current_js == expected_js
+        if js_exact:
+            for source in (VIEWER_LEGACY_JS_SOURCE, *VIEWER_JS_SOURCES):
+                filtered.pop(source, None)
+
+    css_exact = False
+    if VIEWER_CSS_SOURCE in filtered and expected_css is not None:
+        try:
+            current_css = (REPO_ROOT / VIEWER_CSS_SOURCE).read_text(encoding="utf-8").strip("\n")
+        except OSError:
+            current_css = None
+        css_exact = current_css == expected_css
+        if css_exact:
+            filtered.pop(VIEWER_CSS_SOURCE, None)
+
+    if (
+        VIEWER_HTML_SOURCE in filtered
+        and (js_exact or not js_changed)
+        and (css_exact or VIEWER_CSS_SOURCE not in changed_lines)
+    ):
+        expected_template = _replace_tag_block(base_viewer, "style", VIEWER_STYLE_TEMPLATE_ANCHOR)
+        if expected_template is not None:
+            expected_template = _replace_tag_block(expected_template, "script", VIEWER_SCRIPT_TEMPLATE_ANCHOR)
+        try:
+            current_template = (REPO_ROOT / VIEWER_HTML_SOURCE).read_text(encoding="utf-8")
+        except OSError:
+            current_template = None
+        if (
+            expected_template is not None
+            and current_template is not None
+            and current_template.strip() == expected_template.strip()
+        ):
+            filtered.pop(VIEWER_HTML_SOURCE, None)
+    return filtered
 
 
 def load_thresholds(config_path: Path = DEFAULT_CONFIG) -> dict[str, float]:
@@ -190,15 +302,37 @@ def js_function_ranges(source: str) -> dict[str, tuple[int, int]]:
     return ranges
 
 
-def changed_viewer_functions(viewer_html: Path, changed_lines: dict[str, set[int]]) -> set[str]:
-    changed = changed_lines.get("claude_tap/viewer.html", set())
-    if not changed:
-        return set()
-    ranges = js_function_ranges(viewer_html.read_text(encoding="utf-8"))
+def _changed_lines_for_source(source_path: Path, changed_lines: dict[str, set[int]], fallback_key: str) -> set[int]:
+    keys = []
+    if source_path.name == "viewer.js":
+        keys.append(VIEWER_LEGACY_JS_SOURCE)
+    elif source_path.name == "viewer.css":
+        keys.append(VIEWER_CSS_SOURCE)
+    try:
+        keys.insert(0, source_path.resolve().relative_to(REPO_ROOT).as_posix())
+    except ValueError:
+        pass
+    if source_path.name not in {
+        Path(source).name for source in (*VIEWER_JS_SOURCES, VIEWER_LEGACY_JS_SOURCE, VIEWER_CSS_SOURCE)
+    }:
+        keys.append(fallback_key)
+    for key in keys:
+        changed = changed_lines.get(key)
+        if changed:
+            return changed
+    return set()
+
+
+def changed_viewer_functions(viewer_js: Path | tuple[Path, ...], changed_lines: dict[str, set[int]]) -> set[str]:
     functions: set[str] = set()
-    for name, (start, end) in ranges.items():
-        if any(start <= line <= end for line in changed):
-            functions.add(name)
+    for source_path in viewer_js if isinstance(viewer_js, tuple) else (viewer_js,):
+        changed = _changed_lines_for_source(source_path, changed_lines, VIEWER_HTML_SOURCE)
+        if not changed:
+            continue
+        ranges = js_function_ranges(source_path.read_text(encoding="utf-8"))
+        for name, (start, end) in ranges.items():
+            if any(start <= line <= end for line in changed):
+                functions.add(name)
     return functions
 
 
@@ -223,6 +357,8 @@ def _style_block_ranges(source: str) -> list[tuple[int, int]]:
         if "</style>" in line and start is not None:
             ranges.append((start, idx - 1))
             start = None
+    if not ranges:
+        ranges.append((1, len(source.splitlines())))
     return ranges
 
 
@@ -262,11 +398,11 @@ def css_selector_ranges(source: str) -> dict[str, list[tuple[int, int]]]:
     return ranges
 
 
-def changed_viewer_css_selectors(viewer_html: Path, changed_lines: dict[str, set[int]]) -> set[str]:
-    changed = changed_lines.get("claude_tap/viewer.html", set())
+def changed_viewer_css_selectors(viewer_css: Path, changed_lines: dict[str, set[int]]) -> set[str]:
+    changed = _changed_lines_for_source(viewer_css, changed_lines, VIEWER_HTML_SOURCE)
     if not changed:
         return set()
-    ranges = css_selector_ranges(viewer_html.read_text(encoding="utf-8"))
+    ranges = css_selector_ranges(viewer_css.read_text(encoding="utf-8"))
     selectors: set[str] = set()
     for selector, selector_ranges in ranges.items():
         if any(start <= line <= end for start, end in selector_ranges for line in changed):
@@ -730,7 +866,7 @@ def check_viewer_js_coverage(
                 percent=None,
                 minimum=diff_min,
                 passed=True,
-                detail="no changed viewer.html JavaScript functions",
+                detail="no changed viewer JavaScript functions",
             )
         )
         return results
@@ -774,7 +910,7 @@ def check_viewer_css_coverage(
                 percent=None,
                 minimum=diff_min,
                 passed=True,
-                detail="no changed viewer.html CSS selectors",
+                detail="no changed viewer CSS selectors",
             )
         )
         return results
@@ -817,7 +953,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     thresholds = load_thresholds(args.config)
-    changed_lines = changed_lines_from_diff(_run_git_diff(args.base, ["claude_tap/*.py", "claude_tap/viewer.html"]))
+    changed_lines = _filter_pure_viewer_asset_split(
+        changed_lines_from_diff(_run_git_diff(args.base, VIEWER_DIFF_PATHS)),
+        args.base,
+    )
 
     results: list[CheckResult] = []
     if not args.skip_python:
@@ -832,7 +971,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_viewer_js:
         results.extend(
             check_viewer_js_coverage(
-                changed_viewer_functions(REPO_ROOT / "claude_tap" / "viewer.html", changed_lines),
+                changed_viewer_functions(tuple(REPO_ROOT / source for source in VIEWER_JS_SOURCES), changed_lines),
                 thresholds["viewer_js_function_min"],
                 thresholds["viewer_js_diff_min"],
             )
@@ -840,7 +979,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_viewer_css:
         results.extend(
             check_viewer_css_coverage(
-                changed_viewer_css_selectors(REPO_ROOT / "claude_tap" / "viewer.html", changed_lines),
+                changed_viewer_css_selectors(REPO_ROOT / VIEWER_CSS_SOURCE, changed_lines),
                 thresholds["viewer_css_selector_min"],
                 thresholds["viewer_css_diff_min"],
             )

@@ -18,7 +18,25 @@ except Exception:
 # Threshold: traces with more entries than this use lazy mode
 LAZY_THRESHOLD = 50
 VIEWER_TEMPLATE_PATH = Path(__file__).parent / "viewer.html"
+VIEWER_ASSETS_DIR = Path(__file__).parent / "viewer_assets"
+VIEWER_CSS_PATH = VIEWER_ASSETS_DIR / "viewer.css"
+VIEWER_JS_PATHS = (
+    VIEWER_ASSETS_DIR / "state.js",
+    VIEWER_ASSETS_DIR / "responses.js",
+    VIEWER_ASSETS_DIR / "lazy_loading.js",
+    VIEWER_ASSETS_DIR / "i18n_ui.js",
+    VIEWER_ASSETS_DIR / "live_bootstrap.js",
+    VIEWER_ASSETS_DIR / "filters_search.js",
+    VIEWER_ASSETS_DIR / "sidebar.js",
+    VIEWER_ASSETS_DIR / "detail_trace.js",
+    VIEWER_ASSETS_DIR / "renderers.js",
+    VIEWER_ASSETS_DIR / "sections_json.js",
+    VIEWER_ASSETS_DIR / "diff.js",
+    VIEWER_ASSETS_DIR / "utilities_mobile.js",
+)
 VIEWER_I18N_PATH = Path(__file__).parent / "viewer_i18n.json"
+VIEWER_STYLE_TEMPLATE_ANCHOR = "<!-- CLAUDE_TAP_VIEWER_STYLE -->"
+VIEWER_SCRIPT_TEMPLATE_ANCHOR = "<!-- CLAUDE_TAP_VIEWER_SCRIPT -->"
 VIEWER_SCRIPT_ANCHOR = "<script>\nconst $ = s =>"
 
 
@@ -41,13 +59,21 @@ def _viewer_i18n_script() -> str:
 
 def _read_viewer_template() -> str:
     html = VIEWER_TEMPLATE_PATH.read_text(encoding="utf-8")
-    if VIEWER_SCRIPT_ANCHOR not in html:
-        raise ValueError("viewer.html is missing the main script anchor.")
-    return html.replace(
-        VIEWER_SCRIPT_ANCHOR,
-        f"<script>\n{_viewer_i18n_script()}</script>\n{VIEWER_SCRIPT_ANCHOR}",
+    if VIEWER_STYLE_TEMPLATE_ANCHOR not in html:
+        raise ValueError("viewer.html is missing the style asset anchor.")
+    if VIEWER_SCRIPT_TEMPLATE_ANCHOR not in html:
+        raise ValueError("viewer.html is missing the script asset anchor.")
+    css = VIEWER_CSS_PATH.read_text(encoding="utf-8").rstrip()
+    js = "".join(path.read_text(encoding="utf-8") for path in VIEWER_JS_PATHS).rstrip()
+    html = html.replace(VIEWER_STYLE_TEMPLATE_ANCHOR, f"<style>\n{css}\n</style>", 1)
+    html = html.replace(
+        VIEWER_SCRIPT_TEMPLATE_ANCHOR,
+        f"<script>\n{_viewer_i18n_script()}</script>\n<script>\n{js}\n</script>",
         1,
     )
+    if VIEWER_SCRIPT_ANCHOR not in html:
+        raise ValueError("viewer asset script is missing the main script anchor.")
+    return html
 
 
 def _iter_response_events(resp: dict) -> list[dict]:

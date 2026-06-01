@@ -2507,8 +2507,9 @@ def test_e2e_with_cleanup():
 
 def test_live_viewer_scroll_preservation():
     """Verify viewer.html contains preserveDetail parameter chain for scroll fix."""
-    viewer_path = Path(__file__).parent.parent / "claude_tap" / "viewer.html"
-    html = viewer_path.read_text(encoding="utf-8")
+    from claude_tap.viewer import _read_viewer_template
+
+    html = _read_viewer_template()
 
     # selectEntry should accept opts parameter
     assert "function selectEntry(idx, opts)" in html, "selectEntry should accept opts parameter"
@@ -2528,8 +2529,9 @@ def test_live_viewer_scroll_preservation():
 
 def test_live_viewer_diff_nav_update():
     """Verify viewer.html contains dynamic diff nav button update logic."""
-    viewer_path = Path(__file__).parent.parent / "claude_tap" / "viewer.html"
-    html = viewer_path.read_text(encoding="utf-8")
+    from claude_tap.viewer import _read_viewer_template
+
+    html = _read_viewer_template()
 
     # updateNavButtons function should exist
     assert "function updateNavButtons()" in html, "Should have updateNavButtons function"
