@@ -1252,6 +1252,170 @@ def _claude_code_session_round_records() -> tuple[dict[str, Any], ...]:
     )
 
 
+def _codex_display_turn_records() -> tuple[dict[str, Any], ...]:
+    return (
+        {
+            "timestamp": "2026-06-01T00:57:34.069390+00:00",
+            "request_id": "req_models",
+            "turn": 1,
+            "duration_ms": 4031,
+            "request": {
+                "method": "GET",
+                "path": "/v1/models?client_version=0.134.0",
+                "headers": {},
+                "body": None,
+            },
+            "response": {"status": 200, "headers": {}, "body": {"data": []}},
+        },
+        {
+            "timestamp": "2026-06-01T00:57:40.306340+00:00",
+            "request_id": "req_prefetch",
+            "turn": 2,
+            "duration_ms": 1643,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {"type": "response.create", "model": "gpt-5.5", "generate": False, "input": []},
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_prefetch",
+                    "model": "gpt-5.5",
+                    "generate": False,
+                    "output": [],
+                    "usage": {"input_tokens": 10088, "output_tokens": 0},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:58:53.101027+00:00",
+            "request_id": "req_first_visible",
+            "turn": "2.2",
+            "duration_ms": 74200,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Clean local branches."}],
+                        }
+                    ],
+                },
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_first_visible",
+                    "model": "gpt-5.5",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "I will inspect the worktree."}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 23768, "output_tokens": 407},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:59:02.416139+00:00",
+            "request_id": "req_second_visible",
+            "turn": "2.3",
+            "duration_ms": 83000,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "previous_response_id": "resp_first_visible",
+                    "input": [{"type": "function_call_output", "call_id": "call_status", "output": "{}"}],
+                },
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_second_visible",
+                    "model": "gpt-5.5",
+                    "previous_response_id": "resp_first_visible",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "name": "exec_command",
+                            "call_id": "call_branch",
+                            "arguments": '{"cmd":"git branch"}',
+                        }
+                    ],
+                    "usage": {"input_tokens": 25076, "output_tokens": 303},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:59:12.416139+00:00",
+            "request_id": "req_zero_output_visible",
+            "turn": "2.4",
+            "duration_ms": 5000,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "simple",
+                    "previous_response_id": "resp_second_visible",
+                    "input": [{"type": "function_call_output", "call_id": "call_branch", "output": "{}"}],
+                },
+            },
+            "response": {
+                "status": 500,
+                "headers": {},
+                "body": {
+                    "error": {"message": "upstream timeout"},
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
+            },
+        },
+    )
+
+
+def _codex_lazy_display_turn_records() -> tuple[dict[str, Any], ...]:
+    records = list(_codex_display_turn_records())
+    for idx in range(60):
+        records.append(
+            {
+                "timestamp": f"2026-06-01T01:{idx % 60:02d}:00.000000+00:00",
+                "request_id": f"req_model_{idx}",
+                "turn": 100 + idx,
+                "duration_ms": 10,
+                "request": {
+                    "method": "GET",
+                    "path": "/v1/models",
+                    "headers": {},
+                    "body": None,
+                },
+                "response": {"status": 200, "headers": {}, "body": {"data": []}},
+            }
+        )
+    return tuple(records)
+
+
 def _write_trace(trace_path: Path, records: tuple[dict[str, Any], ...]) -> None:
     trace_path.write_text(
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
@@ -1584,6 +1748,102 @@ def test_viewer_session_order_groups_claude_code_tool_loop_rounds(tmp_path: Path
     assert state["counts"] == ["3", "2", "2"]
     assert state["turns"] == ["Turn 1", "Turn 2", "Turn 3", "Turn 4", "Turn 5", "Turn 6", "Turn 7"]
     assert "SUGGESTION MODE" not in state["headerText"]
+
+
+def test_viewer_codex_display_turns_skip_capture_control_records(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "codex_display_turns", _codex_display_turn_records())
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              sidebarTurns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+              codexEntries: entries
+                .filter(entry => entry.request?.path === '/v1/responses')
+                .map(entry => ({
+                  turn: entry.turn,
+                  displayTurn: entry.display_turn,
+                  captureTurn: entry.capture_turn,
+                  requestId: entry.request_id,
+                })),
+              resetTurns: (() => {
+                const extra = JSON.parse(JSON.stringify(entries.find(entry => entry.request?.path === '/v1/responses' && entry.display_turn === 3)));
+                delete extra.display_turn;
+                extra.turn = '2.5';
+                extra.capture_turn = '2.5';
+                extra.request_id = 'req_after_reset';
+                return normalizeDisplayTurns([...entries, extra], true)
+                  .filter(entry => entry.request?.path === '/v1/responses' && entry.display_turn !== undefined)
+                  .map(entry => entry.display_turn);
+              })(),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["sidebarTurns"] == ["Turn 1", "Turn 2", "Turn 3"]
+    assert state["codexEntries"] == [
+        {
+            "turn": "2.2",
+            "displayTurn": 1,
+            "captureTurn": "2.2",
+            "requestId": "req_first_visible",
+        },
+        {
+            "turn": "2.3",
+            "displayTurn": 2,
+            "captureTurn": "2.3",
+            "requestId": "req_second_visible",
+        },
+        {
+            "turn": "2.4",
+            "displayTurn": 3,
+            "captureTurn": "2.4",
+            "requestId": "req_zero_output_visible",
+        },
+    ]
+    assert state["resetTurns"] == [1, 2, 3, 4]
+
+
+def test_viewer_codex_lazy_display_turns_skip_capture_control_records(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "codex_lazy_display_turns", _codex_lazy_display_turn_records())
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              usesLazyMode: typeof EMBEDDED_TRACE_META !== 'undefined',
+              sidebarTurns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+              sidebarPaths: Array.from(document.querySelectorAll('.sidebar-item .si-path')).map(el => el.textContent),
+              codexEntries: entries
+                .filter(entry => entry.request?.path === '/v1/responses')
+                .map(entry => ({
+                  turn: entry.turn,
+                  displayTurn: entry.display_turn ?? null,
+                  captureTurn: entry.capture_turn ?? null,
+                  generate: entry.request?.body?.generate ?? null,
+                })),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["usesLazyMode"] is True
+    assert state["sidebarTurns"] == ["Turn 1", "Turn 2", "Turn 3"]
+    assert state["sidebarPaths"] == ["WEBSOCKET /v1/responses", "WEBSOCKET /v1/responses", "WEBSOCKET /v1/responses"]
+    assert state["codexEntries"][0] == {
+        "turn": 2,
+        "displayTurn": None,
+        "captureTurn": 2,
+        "generate": False,
+    }
+    assert state["codexEntries"][1]["displayTurn"] == 1
+    assert state["codexEntries"][2]["displayTurn"] == 2
+    assert state["codexEntries"][3]["displayTurn"] == 3
 
 
 def test_viewer_session_group_hover_shows_full_truncated_user_input(tmp_path: Path, chromium_browser) -> None:
@@ -1967,7 +2227,25 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
               if (entries.length) {
                 sessionTurnDiscriminator(entries[0]);
                 sessionKeyForEntry(entries[0], null);
+                matchSearch(entries[0], '1');
+                const originalPrompt = window.prompt;
+                window.prompt = () => '1';
+                promptJumpToTurn();
+                window.prompt = originalPrompt;
+                _buildDiffTargetOptions(Math.min(1, filtered.length - 1));
+                if (filtered.length > 1) showDiffForIdx(1, null, 0);
               }
+              const stubEntry = buildStubEntry({
+                turn: '2.2',
+                transport: 'websocket',
+                method: 'WEBSOCKET',
+                path: '/v1/responses',
+                model: 'gpt-5.5',
+                request_generate: true,
+                response_output_count: 1,
+                output_tokens: 1,
+              }, 0);
+              normalizeDisplayTurns([stubEntry], true);
               renderImageElement('data:image/png;base64,abc', 'coverage image');
               renderImageElementForBlock(imageBlock);
               document.body.insertAdjacentHTML('beforeend', renderImageBlock(imageBlock, 0, 1, { frameBlocks: true }));
