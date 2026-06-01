@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
+from claude_tap.compact_trace import build_compact_trace_bundle
 from claude_tap.dashboard import (
     dashboard_trace_snapshot,
     ensure_trace_store,
@@ -22,7 +23,13 @@ from claude_tap.dashboard import (
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
 from claude_tap.trace_store import get_trace_store, resolve_db_path
-from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, VIEWER_TEMPLATE_PATH, _generate_html_viewer, _read_viewer_template
+from claude_tap.viewer import (
+    VIEWER_SCRIPT_ANCHOR,
+    VIEWER_TEMPLATE_PATH,
+    _generate_html_viewer,
+    _generate_html_viewer_from_compact_bundle,
+    _read_viewer_template,
+)
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -101,6 +108,7 @@ class LiveViewerServer:
         app.router.add_get("/api/sessions/{session_id}/records", self._handle_session_records)
         app.router.add_get("/api/sessions/{session_id}/html", self._handle_session_html_compat)
         app.router.add_get("/api/sessions/{session_id}/export/jsonl", self._handle_export_jsonl)
+        app.router.add_get("/api/sessions/{session_id}/export/compact", self._handle_export_compact)
         app.router.add_get("/api/sessions/{session_id}/export/log", self._handle_export_log)
         app.router.add_get("/api/sessions/{session_id}/export/html", self._handle_export_html)
 
@@ -336,18 +344,17 @@ class LiveViewerServer:
             return web.Response(status=404, text="Session not found")
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
-            trace_path = tmp_path / f"session-{session_id[:8]}.jsonl"
             html_path = tmp_path / f"session-{session_id[:8]}.html"
-            trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
             export_urls = {
                 "jsonl": f"/api/sessions/{quote(session_id)}/export/jsonl",
+                "compact": f"/api/sessions/{quote(session_id)}/export/compact",
                 "log": f"/api/sessions/{quote(session_id)}/export/log",
                 "html": f"/api/sessions/{quote(session_id)}/export/html",
             }
-            _generate_html_viewer(
-                trace_path,
+            _generate_html_viewer_from_compact_bundle(
+                build_compact_trace_bundle(store.load_records(session_id)),
                 html_path,
-                display_trace_path=export_urls["jsonl"],
+                display_trace_path=export_urls["compact"],
                 display_html_path=f"/dashboard/session/{quote(session_id)}",
             )
             if not html_path.exists():
@@ -375,6 +382,20 @@ class LiveViewerServer:
         return web.Response(
             body=body,
             content_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    async def _handle_export_compact(self, request: web.Request) -> web.Response:
+        session_id = request.match_info["session_id"]
+        store = ensure_trace_store()
+        if store.load_session_row(session_id) is None:
+            return web.Response(status=404, text="Session not found")
+        body = store.export_compact(session_id)
+        filename = f"trace_{session_id[:8]}.ctap.json"
+        return web.Response(
+            text=body,
+            content_type="application/json",
+            charset="utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 

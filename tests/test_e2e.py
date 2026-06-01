@@ -1183,6 +1183,7 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.no_launch is False
     assert a.live_viewer is True
     assert a.open_viewer is True
+    assert a.client_cmd is None
     assert a.store_stream_events is False
     print("  OK: defaults")
 
@@ -1216,6 +1217,21 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.open_viewer is False
     assert a.claude_args == []
     print("  OK: --tap-* flags consumed")
+
+    # VSCode claudeProcessWrapper passes the bundled Claude binary as argv[0].
+    wrapped_claude = tmp_path / "claude"
+    wrapped_claude.write_text("#!/bin/sh\n", encoding="utf-8")
+    a = parse_args([str(wrapped_claude), "--output-format", "stream-json", "--verbose"])
+    assert a.client_cmd == str(wrapped_claude)
+    assert a.claude_args == ["--output-format", "stream-json", "--verbose"]
+    print("  OK: VSCode wrapper Claude binary path consumed")
+
+    prompt_dir_named_claude = tmp_path / "context" / "claude"
+    prompt_dir_named_claude.mkdir(parents=True)
+    a = parse_args([str(prompt_dir_named_claude), "--output-format", "stream-json"])
+    assert a.client_cmd is None
+    assert a.claude_args == [str(prompt_dir_named_claude), "--output-format", "stream-json"]
+    print("  OK: directory named claude is not consumed as wrapper binary")
 
     a = parse_args(["--tap-no-live"])
     assert a.live_viewer is False
@@ -1292,8 +1308,8 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatch, tmp_path):
-    """A second claude-tap run should attach to an existing dashboard and honor browser opens."""
+async def test_async_main_reuses_existing_dashboard_without_reopening_browser(monkeypatch, tmp_path):
+    """A second claude-tap run should attach to an existing dashboard without opening another tab."""
     from claude_tap import async_main, parse_args
     from claude_tap.live import LiveViewerServer
 
@@ -1313,8 +1329,6 @@ async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatc
             if open_browser:
                 open_browser_fn(server.url)
             return server.url, True
-        if open_browser:
-            open_browser_fn(f"http://{host}:{port}")
         return f"http://{host}:{port}", False
 
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-shared.sqlite3"))
@@ -1330,7 +1344,7 @@ async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatc
         for server in spawned_servers:
             await server.stop()
 
-    assert len(opened_urls) == 2
+    assert len(opened_urls) == 1
 
 
 @pytest.mark.asyncio

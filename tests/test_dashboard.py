@@ -551,14 +551,15 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
             async with session.get(f"http://127.0.0.1:{port}/dashboard/session/{session_id}") as resp:
                 assert resp.status == 200
                 html = await resp.text()
-                assert "EMBEDDED_TRACE_DATA" in html
+                assert "EMBEDDED_TRACE_COMPACT_DATA" in html
                 assert "req_claude" in html
-                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/jsonl";' in html
+                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/compact";' in html
                 assert f'const __TRACE_HTML_PATH__ = "/dashboard/session/{session_id}";' in html
                 assert f"session-{session_id[:8]}.jsonl" not in html
                 assert f"session-{session_id[:8]}.html" not in html
                 assert "__TRACE_SESSION_EXPORTS__" in html
                 assert f"/api/sessions/{session_id}/export/jsonl" in html
+                assert f"/api/sessions/{session_id}/export/compact" in html
                 assert f"/api/sessions/{session_id}/export/log" in html
                 assert f"/api/sessions/{session_id}/export/html" in html
                 assert "session-list" not in html
@@ -580,9 +581,9 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
             ) as resp:
                 assert resp.status == 200
                 html = await resp.text()
-                assert "EMBEDDED_TRACE_DATA" in html
+                assert "EMBEDDED_TRACE_COMPACT_DATA" in html
                 assert "req_claude" in html
-                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/jsonl";' in html
+                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/compact";' in html
                 assert f'const __TRACE_HTML_PATH__ = "/dashboard/session/{session_id}";' in html
                 assert f"session-{session_id[:8]}.jsonl" not in html
                 assert f"session-{session_id[:8]}.html" not in html
@@ -599,6 +600,13 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/jsonl") as resp:
                 assert resp.status == 200
                 body = await resp.text()
+                assert "req_claude" in body
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/compact") as resp:
+                assert resp.status == 200
+                assert resp.content_type == "application/json"
+                body = await resp.text()
+                assert "__claude_tap_compact_trace__" in body
                 assert "req_claude" in body
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/log") as resp:
@@ -688,11 +696,12 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert await export_button.count() == 1
                 assert await export_button.inner_text() == "Export"
                 assert await page.locator("#viewer-actions > .viewer-action").count() == 0
-                assert await page.locator("#viewer-actions .export-menu-item").count() == 3
+                assert await page.locator("#viewer-actions .export-menu-item").count() == 4
                 hrefs = await page.locator("#viewer-actions .export-menu-item").evaluate_all(
                     "(links) => links.map((link) => link.getAttribute('href'))"
                 )
                 assert f"/api/sessions/{session_id}/export/jsonl" in hrefs
+                assert f"/api/sessions/{session_id}/export/compact" in hrefs
                 assert f"/api/sessions/{session_id}/export/log" in hrefs
                 assert f"/api/sessions/{session_id}/export/html" in hrefs
 
@@ -736,7 +745,7 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                 await page.locator("#viewer-actions .export-menu > summary").click()
                 menu = page.locator("#viewer-actions .export-menu-list")
                 assert await menu.is_visible()
-                assert await page.locator("#viewer-actions .export-menu-item").count() == 3
+                assert await page.locator("#viewer-actions .export-menu-item").count() == 4
 
                 layout = await page.evaluate(
                     """() => {

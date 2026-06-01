@@ -11,6 +11,8 @@ import subprocess
 import sys
 import urllib.request
 
+from claude_tap.process_utils import windows_no_console_subprocess_kwargs
+
 # ---------------------------------------------------------------------------
 # Smart update check
 # ---------------------------------------------------------------------------
@@ -52,7 +54,12 @@ def _start_background_update(installer: str) -> subprocess.Popen | None:
         cmd = _build_update_command(installer)
         if cmd is None:
             return None
-        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **windows_no_console_subprocess_kwargs(),
+        )
     except Exception:
         return None
 
