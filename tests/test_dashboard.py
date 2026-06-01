@@ -225,6 +225,44 @@ def test_dashboard_first_message_uses_first_user_prompt(trace_db, tmp_path: Path
     assert summary["first_user"] == "What is this project?"
 
 
+def test_dashboard_first_message_skips_injected_user_content_blocks(trace_db, tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_101500.jsonl"
+    _write_jsonl(
+        trace_path,
+        [
+            {
+                "timestamp": "2026-05-20T10:15:00+00:00",
+                "turn": 1,
+                "request": {
+                    "method": "POST",
+                    "path": "/v1/messages",
+                    "body": {
+                        "model": "claude-sonnet-4-6",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "<system-reminder>\nInjected context\n</system-reminder>",
+                                    },
+                                    {"type": "text", "text": "Fix the failing dashboard prompt preview."},
+                                ],
+                            }
+                        ],
+                    },
+                },
+                "response": {"status": 200, "body": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 1}}},
+            }
+        ],
+    )
+
+    _seed_legacy(tmp_path)
+    summary = list_trace_sessions()[0]
+
+    assert summary["first_user"] == "Fix the failing dashboard prompt preview."
+
+
 def test_dashboard_loads_session_by_id(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
@@ -403,14 +441,62 @@ def test_dashboard_extracts_usage_models_errors_and_text() -> None:
         )
         == "raw user prompt"
     )
+    assert (
+        _request_user_text(
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "<system-reminder>\nskip\n</system-reminder>"},
+                            {"type": "text", "text": "actual response prompt"},
+                        ],
+                    }
+                ]
+            }
+        )
+        == "actual response prompt"
+    )
     assert _request_user_text({"messages": [{"role": "user", "content": ["hello", {"text": "world"}]}]}) == (
         "hello\nworld"
+    )
+    assert (
+        _request_user_text(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "<system-reminder>\nskip\n</system-reminder>"},
+                            {"type": "text", "text": "actual message prompt"},
+                        ],
+                    }
+                ]
+            }
+        )
+        == "actual message prompt"
     )
     assert (
         _request_user_text(
             {"contents": [{"role": "model", "parts": [{"text": "skip"}]}, {"role": "USER", "parts": [{"text": "use"}]}]}
         )
         == "use"
+    )
+    assert (
+        _request_user_text(
+            {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": "<session_context>\nskip\n</session_context>"},
+                            {"text": "actual gemini prompt"},
+                        ],
+                    }
+                ]
+            }
+        )
+        == "actual gemini prompt"
     )
 
     assert _response_text("raw response") == "raw response"

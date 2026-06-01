@@ -662,8 +662,7 @@ def _request_user_text(body: Any) -> str:
         for message in messages:
             role = str(message.get("role") or "").lower() if isinstance(message, dict) else ""
             if isinstance(message, dict) and role == "user":
-                text = _content_text(message.get("content"))
-                prompt = _clean_user_prompt_text(text)
+                prompt = _clean_user_content_text(message.get("content"))
                 if prompt:
                     return prompt
 
@@ -683,8 +682,7 @@ def _request_user_text(body: Any) -> str:
             role = str(content.get("role") or "user").lower()
             if role != "user":
                 continue
-            text = _parts_text(content.get("parts"))
-            prompt = _clean_user_prompt_text(text)
+            prompt = _clean_user_content_text(content.get("parts"))
             if prompt:
                 return prompt
 
@@ -694,11 +692,11 @@ def _request_user_text(body: Any) -> str:
 
 def _input_user_text(value: Any) -> str:
     if isinstance(value, str):
-        return value
+        return _clean_user_prompt_text(value)
     if isinstance(value, dict):
         role = str(value.get("role") or "").lower()
         if role == "user":
-            return _clean_user_prompt_text(_content_text(value.get("content") or value.get("text")))
+            return _clean_user_content_text(value.get("content") or value.get("text"))
         return ""
     if not isinstance(value, list):
         return ""
@@ -708,8 +706,7 @@ def _input_user_text(value: Any) -> str:
             continue
         role = str(item.get("role") or "").lower()
         if role == "user":
-            text = _content_text(item.get("content") or item.get("text"))
-            prompt = _clean_user_prompt_text(text)
+            prompt = _clean_user_content_text(item.get("content") or item.get("text"))
             if prompt:
                 return prompt
 
@@ -721,11 +718,21 @@ def _input_user_text(value: Any) -> str:
         if role or item_type in ("function_call_output", "tool_result", "reasoning"):
             continue
         if item_type in ("message", "input_text") or "content" in item:
-            text = _content_text(item.get("content") or item.get("text"))
-            prompt = _clean_user_prompt_text(text)
+            prompt = _clean_user_content_text(item.get("content") or item.get("text"))
             if prompt:
                 return prompt
     return ""
+
+
+def _clean_user_content_text(value: Any) -> str:
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            prompt = _clean_user_prompt_text(_content_text(item))
+            if prompt:
+                parts.append(prompt)
+        return "\n".join(parts).strip()
+    return _clean_user_prompt_text(_content_text(value))
 
 
 def _clean_user_prompt_text(text: str) -> str:
