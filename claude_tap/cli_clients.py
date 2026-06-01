@@ -14,6 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+_BEDROCK_HOST_RE = re.compile(
+    r"(^|\.)(bedrock-runtime|bedrock-runtime-fips)"
+    r"\.[a-z0-9-]+\.(amazonaws\.com|amazonaws\.com\.cn|vpce\.amazonaws\.com)$"
+)
+
+
 def _is_aws_native_bedrock_url(url: str) -> bool:
     """Return True if the URL points to a real AWS Bedrock endpoint (SigV4-signed).
 
@@ -22,15 +28,15 @@ def _is_aws_native_bedrock_url(url: str) -> bool:
       - bedrock-runtime-fips.us-west-2.amazonaws.com
       - vpce-xxx.bedrock-runtime.us-east-1.vpce.amazonaws.com
 
-    Custom gateways (e.g. company proxies) that happen to forward to Bedrock
-    do NOT use SigV4, so rewriting their URL to localhost is safe.
+    Custom gateways on other AWS services (e.g. API Gateway *.execute-api.*)
+    or company proxies do NOT use SigV4, so rewriting their URL is safe.
     """
     try:
         from urllib.parse import urlparse
         host = urlparse(url).hostname or ""
     except Exception:
         return False
-    return host.endswith(".amazonaws.com") or host.endswith(".amazonaws.com.cn")
+    return bool(_BEDROCK_HOST_RE.search(host))
 
 
 @dataclass(frozen=True)
@@ -91,7 +97,7 @@ class ClientConfig:
         env_map: dict[str, str] = {}
         for env_key in self.reverse_base_url_envs:
             if env_key in self.extra_base_url_envs:
-                current_value = os.environ.get(env_key, "").strip()
+                current_value = _resolve_env_value(env_key)
                 if current_value and _is_aws_native_bedrock_url(current_value):
                     continue
             env_map[env_key] = base_url
@@ -633,6 +639,23 @@ def _settings_arg(env_values: dict[str, str]) -> list[str]:
 
 
 _CODEX_CHATGPT_TARGET = "https://chatgpt.com/backend-api/codex"
+
+
+def _resolve_env_value(env_key: str) -> str:
+    """Resolve an env key from process env or Claude settings files."""
+    value = os.environ.get(env_key, "").strip()
+    if value:
+        return value
+    candidate_paths = (
+        Path.cwd() / ".claude" / "settings.local.json",
+        Path.cwd() / ".claude" / "settings.json",
+        Path.home() / ".claude" / "settings.json",
+    )
+    for path in candidate_paths:
+        found = _read_settings_env_base_url(path, env_key)
+        if found:
+            return found
+    return ""
 
 
 def _read_settings_env_base_url(path: Path, env_key: str) -> str | None:

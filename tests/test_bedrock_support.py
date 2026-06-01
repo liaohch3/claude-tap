@@ -25,6 +25,9 @@ class TestIsAwsNativeBedrockUrl:
     def test_aws_china_endpoint(self):
         assert _is_aws_native_bedrock_url("https://bedrock-runtime.cn-north-1.amazonaws.com.cn") is True
 
+    def test_api_gateway_not_native(self):
+        assert _is_aws_native_bedrock_url("https://abc123.execute-api.us-east-1.amazonaws.com/bedrock") is False
+
     def test_custom_gateway(self):
         assert _is_aws_native_bedrock_url("https://ai-gateway.internal.example.com/bedrock") is False
 
