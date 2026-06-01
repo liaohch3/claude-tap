@@ -478,6 +478,24 @@ def test_dashboard_extracts_usage_models_errors_and_text() -> None:
     )
     assert (
         _request_user_text(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "<system-reminder>\nskip\n</system-reminder>"},
+                            {"type": "tool_result", "content": "tool output should not be first prompt"},
+                            {"type": "function_call_output", "output": "function output should not be first prompt"},
+                            {"type": "text", "text": "actual prompt after tools"},
+                        ],
+                    }
+                ]
+            }
+        )
+        == "actual prompt after tools"
+    )
+    assert (
+        _request_user_text(
             {"contents": [{"role": "model", "parts": [{"text": "skip"}]}, {"role": "USER", "parts": [{"text": "use"}]}]}
         )
         == "use"

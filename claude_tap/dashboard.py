@@ -728,11 +728,22 @@ def _clean_user_content_text(value: Any) -> str:
     if isinstance(value, list):
         parts = []
         for item in value:
+            if _is_auxiliary_user_content_block(item):
+                continue
             prompt = _clean_user_prompt_text(_content_text(item))
             if prompt:
                 parts.append(prompt)
         return "\n".join(parts).strip()
+    if _is_auxiliary_user_content_block(value):
+        return ""
     return _clean_user_prompt_text(_content_text(value))
+
+
+def _is_auxiliary_user_content_block(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    block_type = str(value.get("type") or "").lower()
+    return block_type in {"function_call_output", "tool_result"}
 
 
 def _clean_user_prompt_text(text: str) -> str:
