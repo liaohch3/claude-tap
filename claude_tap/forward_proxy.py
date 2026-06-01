@@ -482,6 +482,14 @@ class ForwardProxyServer:
         # Parse request body for logging
         try:
             req_body = json.loads(body) if body else None
+            # Guard against double-serialized JSON (body is a JSON string wrapping the real object)
+            if isinstance(req_body, str):
+                try:
+                    inner = json.loads(req_body)
+                    if isinstance(inner, dict):
+                        req_body = inner
+                except (json.JSONDecodeError, ValueError):
+                    pass
         except (json.JSONDecodeError, ValueError):
             req_body = body.decode("utf-8", errors="replace") if body else None
 

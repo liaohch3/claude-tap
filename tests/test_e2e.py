@@ -2027,6 +2027,84 @@ def test_filter_headers():
 
 
 ## ---------------------------------------------------------------------------
+## Test: double-serialized request body decoding
+## ---------------------------------------------------------------------------
+
+
+def test_double_serialized_request_body():
+    """Verify proxy decodes double-serialized JSON request bodies into dicts."""
+    received_bodies: list[dict] = []
+
+    async def handler(request):
+        body = await request.json()
+        received_bodies.append(body)
+        from aiohttp import web
+
+        return web.json_response(
+            {
+                "id": "msg_test",
+                "type": "message",
+                "content": [{"type": "text", "text": "OK"}],
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+                "model": "claude-test",
+            }
+        )
+
+    # Build a fake claude script that sends a double-serialized body
+    double_serial_script = r'''#!/usr/bin/env python3
+"""Fake claude CLI — sends a double-serialized JSON body."""
+import json, os, sys, urllib.request
+
+base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+url = f"{base}/v1/messages"
+inner = {"model": "claude-test", "messages": [{"role": "user", "content": "hi"}]}
+# Double-serialize: the outer JSON is a string wrapping the real object
+payload = json.dumps(json.dumps(inner)).encode()
+
+req = urllib.request.Request(url, data=payload, headers={
+    "Content-Type": "application/json",
+    "x-api-key": "sk-test",
+})
+try:
+    resp = urllib.request.urlopen(req)
+    print(resp.read().decode())
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_double_serial_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_double_serial_")
+    fake_claude = Path(fake_bin_dir) / "claude"
+    fake_claude.write_text(double_serial_script)
+    fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19244, handler)
+
+    try:
+        proc = _run_tap(
+            trace_dir,
+            fake_bin_dir,
+            target_port=19244,
+        )
+
+        assert proc.returncode == 0, f"double-serial test failed: stdout={proc.stdout} stderr={proc.stderr}"
+        assert len(received_bodies) == 1
+        assert received_bodies[0]["model"] == "claude-test"
+
+        # Verify the trace record stored the body as a dict, not a string
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1
+        req_body = records[0]["request"]["body"]
+        assert isinstance(req_body, dict), f"Expected dict body, got {type(req_body)}: {req_body!r}"
+        assert req_body["model"] == "claude-test"
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "claude")
+
+    print("\n  test_double_serialized_request_body PASSED")
+
+
+## ---------------------------------------------------------------------------
 ## Test 8: test_sse_reassembler — unit test SSE parsing edge cases
 ## ---------------------------------------------------------------------------
 
