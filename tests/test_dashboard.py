@@ -712,6 +712,59 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
         await server.stop()
 
 
+@pytest.mark.asyncio
+async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    _write_jsonl(trace_path, [_anthropic_record()])
+    _seed_legacy(tmp_path)
+    session_id = list_trace_sessions()[0]["id"]
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 390, "height": 900})
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
+                    wait_until="domcontentloaded",
+                )
+                await page.wait_for_selector("#viewer-actions .export-menu > summary", timeout=5000)
+
+                await page.locator("#viewer-actions .export-menu > summary").click()
+                menu = page.locator("#viewer-actions .export-menu-list")
+                assert await menu.is_visible()
+                assert await page.locator("#viewer-actions .export-menu-item").count() == 3
+
+                layout = await page.evaluate(
+                    """() => {
+                      const actions = document.querySelector('#viewer-actions');
+                      const menu = document.querySelector('#viewer-actions .export-menu-list');
+                      const actionsBox = actions.getBoundingClientRect();
+                      const menuBox = menu.getBoundingClientRect();
+                      const actionStyles = getComputedStyle(actions);
+                      const menuStyles = getComputedStyle(menu);
+                      return {
+                        actionsBottom: actionsBox.bottom,
+                        menuBottom: menuBox.bottom,
+                        menuHeight: menuBox.height,
+                        overflowX: actionStyles.overflowX,
+                        menuPosition: menuStyles.position,
+                      };
+                    }"""
+                )
+                assert layout["overflowX"] == "visible"
+                assert layout["menuPosition"] == "static"
+                assert layout["menuHeight"] > 80
+                assert layout["menuBottom"] <= layout["actionsBottom"] + 1
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
 def test_live_viewer_exposes_current_session_id(trace_db) -> None:
     session_id = get_trace_store().create_session(client="claude", proxy_mode="reverse")
     server = LiveViewerServer(session_id=session_id)

@@ -1324,15 +1324,21 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   .viewer-actions {
     width: 100%;
     justify-content: flex-start;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+    flex-wrap: wrap;
+    overflow: visible;
   }
   .viewer-actions::-webkit-scrollbar { display: none; }
   .viewer-action { min-height: 36px; padding: 7px 10px; }
+  .viewer-actions .export-menu {
+    flex-direction: column;
+    align-items: flex-start;
+  }
   .viewer-actions .export-menu-list {
+    position: static;
     left: 0;
     right: auto;
+    margin-top: 6px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
   }
   .trace-path-bar {
     flex-wrap: wrap;
