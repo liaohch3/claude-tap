@@ -202,7 +202,9 @@ def _spawn_dashboard_subprocess(host: str, port: int, output_dir: Path) -> subpr
         "stderr": subprocess.DEVNULL,
     }
     if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+        )
     else:
         kwargs["start_new_session"] = True
     return subprocess.Popen(cmd, **kwargs)
