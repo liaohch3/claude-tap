@@ -38,6 +38,9 @@ class TestIsAwsNativeBedrockUrl:
     def test_empty_string(self):
         assert _is_aws_native_bedrock_url("") is False
 
+    def test_malformed_url(self):
+        assert _is_aws_native_bedrock_url("https://[") is False
+
 
 class TestDetectClaudeTargetBedrock:
     def test_custom_bedrock_gateway_takes_priority(self):
