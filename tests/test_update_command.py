@@ -55,7 +55,11 @@ def test_update_main_runs_selected_command(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert update_main(["--installer", "pip"]) == 7
     assert captured["cmd"] == [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
-    assert captured["kwargs"] == {"check": False}
+    assert captured["kwargs"]["check"] is False
+    if sys.platform == "win32":
+        assert captured["kwargs"]["creationflags"] == subprocess.CREATE_NO_WINDOW
+    else:
+        assert "creationflags" not in captured["kwargs"]
 
 
 def test_update_main_reports_missing_uv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

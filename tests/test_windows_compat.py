@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_tap.cli import _start_background_update, run_client
+from claude_tap.cli import _start_background_update, run_client, update_main
 from claude_tap.history import _rel_posix
 
 
@@ -119,3 +119,70 @@ def test_start_background_update_resolves_uv_shim(monkeypatch) -> None:
 def test_start_background_update_returns_none_when_uv_missing(monkeypatch) -> None:
     monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: None)
     assert _start_background_update("uv") is None
+
+
+def test_start_background_update_create_no_window_on_win32(monkeypatch) -> None:
+    """Verify CREATE_NO_WINDOW is passed to Popen when sys.platform is win32."""
+    captured: dict[str, object] = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    # CREATE_NO_WINDOW (0x08000000) may not exist on non-Windows subprocess module.
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda name: "/tmp/uv" if name == "uv" else None)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    _start_background_update("uv")
+    assert captured["kwargs"].get("creationflags") == 0x08000000
+
+
+def test_start_background_update_no_creationflags_on_posix(monkeypatch) -> None:
+    """Verify no creationflags are passed when sys.platform is not win32."""
+    captured: dict[str, object] = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda name: "/tmp/uv" if name == "uv" else None)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    _start_background_update("uv")
+    assert "creationflags" not in captured["kwargs"]
+
+
+def test_update_main_create_no_window_on_win32(monkeypatch) -> None:
+    """Verify CREATE_NO_WINDOW is passed to subprocess.run when sys.platform is win32."""
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda name: "/tmp/uv" if name == "uv" else None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert update_main(["--installer", "uv"]) == 0
+    assert captured["kwargs"]["creationflags"] == 0x08000000
+
+
+def test_update_main_no_creationflags_on_posix(monkeypatch) -> None:
+    """Verify no creationflags are passed when sys.platform is not win32."""
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda name: "/tmp/uv" if name == "uv" else None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert update_main(["--installer", "uv"]) == 0
+    assert "creationflags" not in captured["kwargs"]
