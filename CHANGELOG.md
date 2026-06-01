@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.96] - 2026-06-01
+
+### Changed
+- perf: compact repeated trace payload fields (#250)
+- fix: hide Windows background subprocess consoles (#260)
 ## [0.1.95] - 2026-06-01
 
 ### Changed
