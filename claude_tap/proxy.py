@@ -187,7 +187,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     # Strip path prefix (e.g. /v1) for codex client so that
     # /v1/responses -> target + /responses
     strip_prefix: str = ctx.get("strip_path_prefix", "")
-    fwd_path = request.path_qs
+    fwd_path = request.raw_path
     if strip_prefix and fwd_path.startswith(strip_prefix):
         fwd_path = fwd_path[len(strip_prefix) :] or "/"
     upstream_url = target.rstrip("/") + "/" + fwd_path.lstrip("/")
@@ -352,7 +352,7 @@ async def _handle_streaming(
         turn,
         duration_ms,
         request.method,
-        request.path_qs,
+        request.raw_path,
         request.headers,
         req_body,
         upstream_resp.status,
@@ -404,7 +404,7 @@ async def _handle_non_streaming(
         turn,
         duration_ms,
         request.method,
-        request.path_qs,
+        request.raw_path,
         request.headers,
         req_body,
         upstream_resp.status,

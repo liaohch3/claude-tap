@@ -26,6 +26,9 @@ class TestIsAwsNativeBedrockUrl:
     def test_aws_api_aws_endpoint(self):
         assert _is_aws_native_bedrock_url("https://bedrock-mantle.us-east-1.api.aws") is True
 
+    def test_aws_mantle_amazonaws_endpoint(self):
+        assert _is_aws_native_bedrock_url("https://bedrock-mantle.us-east-1.amazonaws.com") is True
+
     def test_api_gateway_not_native(self):
         assert _is_aws_native_bedrock_url("https://abc123.execute-api.us-east-1.amazonaws.com/bedrock") is False
 
@@ -156,12 +159,32 @@ class TestClaudeConfigBedrockEnv:
             assert env_map["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8080"
             assert "ANTHROPIC_BEDROCK_BASE_URL" not in env_map
 
+    def test_env_map_ignores_bedrock_when_no_bedrock_base_url_is_configured(self):
+        cfg = CLIENT_CONFIGS["claude"]
+        with patch.dict(os.environ, {"CLAUDE_CODE_USE_BEDROCK": "1"}, clear=False):
+            os.environ.pop("ANTHROPIC_BEDROCK_BASE_URL", None)
+            with patch("claude_tap.cli_clients._read_settings_env_base_url", return_value=None):
+                env_map = cfg.reverse_base_url_env_map(8080)
+        assert env_map["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8080"
+        assert "ANTHROPIC_BEDROCK_BASE_URL" not in env_map
+
     def test_env_map_skips_aws_native(self):
         """AWS native endpoints must NOT be rewritten (SigV4 would fail)."""
         cfg = CLIENT_CONFIGS["claude"]
         env = {
             "CLAUDE_CODE_USE_BEDROCK": "1",
             "ANTHROPIC_BEDROCK_BASE_URL": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            env_map = cfg.reverse_base_url_env_map(8080)
+            assert env_map["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8080"
+            assert "ANTHROPIC_BEDROCK_BASE_URL" not in env_map
+
+    def test_env_map_skips_mantle_amazonaws_native(self):
+        cfg = CLIENT_CONFIGS["claude"]
+        env = {
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "ANTHROPIC_BEDROCK_BASE_URL": "https://bedrock-mantle.us-east-1.amazonaws.com",
         }
         with patch.dict(os.environ, env, clear=False):
             env_map = cfg.reverse_base_url_env_map(8080)

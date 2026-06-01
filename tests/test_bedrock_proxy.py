@@ -84,9 +84,10 @@ async def test_reverse_proxy_records_bedrock_eventstream_without_stream_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bedrock_bytes = _bedrock_body()
+    bedrock_path = "/model/arn:aws:bedrock:us-east-1:123456789012:provisioned-model%2Fabc/invoke-with-response-stream"
 
     async def upstream_handler(request: web.Request) -> web.StreamResponse:
-        assert request.path == "/model/global.anthropic.claude-sonnet-4-6-v1/invoke-with-response-stream"
+        assert request.raw_path == bedrock_path
         assert (await request.json())["messages"][0]["role"] == "user"
         response = web.StreamResponse(status=200, headers={"Content-Type": "application/vnd.amazon.eventstream"})
         await response.prepare(request)
@@ -109,7 +110,7 @@ async def test_reverse_proxy_records_bedrock_eventstream_without_stream_flag(
     try:
         async with aiohttp.ClientSession(auto_decompress=False) as client:
             async with client.post(
-                f"http://127.0.0.1:{proxy_port}/model/global.anthropic.claude-sonnet-4-6-v1/invoke-with-response-stream",
+                f"http://127.0.0.1:{proxy_port}{bedrock_path}",
                 json={"messages": [{"role": "user", "content": [{"type": "text", "text": "ping"}]}]},
             ) as response:
                 assert response.status == 200
@@ -119,7 +120,7 @@ async def test_reverse_proxy_records_bedrock_eventstream_without_stream_flag(
         records = store.load_records(session_id)
         assert len(records) == 1
         record = records[0]
-        assert record["request"]["path"].endswith("/invoke-with-response-stream")
+        assert record["request"]["path"] == bedrock_path
         assert record["response"]["body"]["model"] == "claude-sonnet-4-6"
         assert record["response"]["body"]["content"] == [{"type": "text", "text": "OK"}]
         assert record["response"]["body"]["usage"]["input_tokens"] == 6

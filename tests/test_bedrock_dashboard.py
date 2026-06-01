@@ -21,6 +21,11 @@ def _bedrock_body(*payloads: dict) -> str:
     return "".join(_bedrock_frame(p) for p in payloads)
 
 
+def _wrapped_bedrock_frame(payload: dict) -> str:
+    encoded = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+    return "\x00\x00binary-prefix" + json.dumps({"chunk": {"bytes": encoded}}) + "�"
+
+
 class TestBedrockEvents:
     def test_decodes_eventstream_body(self):
         body = _bedrock_body(
@@ -32,6 +37,19 @@ class TestBedrockEvents:
         assert len(events) == 2
         assert events[0]["event"] == "message_start"
         assert events[1]["event"] == "message_delta"
+
+    def test_decodes_chunk_wrapped_eventstream_body(self):
+        body = _wrapped_bedrock_frame({"type": "message_start", "message": {"model": "claude-sonnet-4-6"}})
+        record = {"response": {"body": body}}
+        events = _bedrock_events(record)
+        assert events == [
+            {"event": "message_start", "data": {"type": "message_start", "message": {"model": "claude-sonnet-4-6"}}}
+        ]
+
+    def test_preserves_bedrock_error_events(self):
+        record = {"response": {"body": json.dumps({"modelStreamErrorException": {"message": "stream failed"}})}}
+        events = _bedrock_events(record)
+        assert events == [{"event": "modelStreamErrorException", "data": {"message": "stream failed"}}]
 
     def test_returns_empty_for_non_bedrock_response(self):
         record = {"response": {"body": {"content": [], "usage": {}}}}
@@ -81,3 +99,10 @@ class TestBedrockRecordModel:
             "response": {"body": ""},
         }
         assert _record_model(record) == "us.anthropic.claude-opus-4-6-v1"
+
+    def test_preserves_bedrock_model_version_suffix_from_path(self):
+        record = {
+            "request": {"path": "/model/anthropic.claude-sonnet-4-20250514-v1:0/invoke"},
+            "response": {"body": ""},
+        }
+        assert _record_model(record) == "anthropic.claude-sonnet-4-20250514-v1:0"

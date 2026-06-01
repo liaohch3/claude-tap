@@ -89,8 +89,44 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
     frames. Legacy traces may contain those bytes decoded as text with invalid
     frame bytes replaced, but the JSON payloads inside the frames remain intact.
     """
-    if not isinstance(body, str) or '"bytes"' not in body:
+    error_event_keys = {
+        "internalServerException",
+        "modelStreamErrorException",
+        "modelTimeoutException",
+        "serviceUnavailableException",
+        "throttlingException",
+        "validationException",
+    }
+    if not isinstance(body, str):
         return []
+    if '"bytes"' not in body and not any(f'"{key}"' in body for key in error_event_keys):
+        return []
+
+    def _event_payload_from_frame(frame: dict) -> tuple[str | None, dict | None]:
+        encoded = frame.get("bytes")
+        if not isinstance(encoded, str):
+            chunk = frame.get("chunk")
+            if isinstance(chunk, dict):
+                encoded = chunk.get("bytes")
+        if isinstance(encoded, str):
+            try:
+                payload_bytes = base64.b64decode(encoded, validate=True)
+                payload = json.loads(payload_bytes)
+            except (ValueError, json.JSONDecodeError):
+                return None, None
+            if not isinstance(payload, dict):
+                return None, None
+
+            event_type = payload.get("type")
+            if isinstance(event_type, str) and event_type:
+                return event_type, payload
+            return None, None
+
+        for event_type in error_event_keys:
+            payload = frame.get(event_type)
+            if isinstance(payload, dict):
+                return event_type, payload
+        return None, None
 
     events: list[dict] = []
     decoder = json.JSONDecoder()
@@ -108,19 +144,8 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
 
         if not isinstance(frame, dict):
             continue
-        encoded = frame.get("bytes")
-        if not isinstance(encoded, str):
-            continue
-        try:
-            payload_bytes = base64.b64decode(encoded, validate=True)
-            payload = json.loads(payload_bytes)
-        except (ValueError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-
-        event_type = payload.get("type")
-        if isinstance(event_type, str) and event_type:
+        event_type, payload = _event_payload_from_frame(frame)
+        if event_type and payload:
             events.append({"event": event_type, "data": payload})
 
     return events

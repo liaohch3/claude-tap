@@ -17,7 +17,7 @@ _BEDROCK_HOST_RE = re.compile(
     r"(^|\.)("
     r"(bedrock-runtime|bedrock-runtime-fips)"
     r"\.[a-z0-9-]+\.(amazonaws\.com|amazonaws\.com\.cn|vpce\.amazonaws\.com)"
-    r"|bedrock-mantle\.[a-z0-9-]+\.api\.aws"
+    r"|bedrock-mantle\.[a-z0-9-]+\.(api\.aws|amazonaws\.com|amazonaws\.com\.cn)"
     r")$"
 )
 
@@ -30,6 +30,7 @@ def _is_aws_native_bedrock_url(url: str) -> bool:
       - bedrock-runtime-fips.us-west-2.amazonaws.com
       - vpce-xxx.bedrock-runtime.us-east-1.vpce.amazonaws.com
       - bedrock-mantle.us-east-1.api.aws
+      - bedrock-mantle.us-east-1.amazonaws.com
 
     Custom gateways on other AWS services (e.g. API Gateway *.execute-api.*)
     or company proxies do NOT use SigV4, so rewriting their URL is safe.
@@ -57,6 +58,8 @@ def _should_rewrite_extra_base_url_env(env_key: str) -> bool:
     if not _is_claude_bedrock_enabled():
         return False
     current_value = _resolve_env_value(env_key)
+    if not current_value:
+        return False
     return not (current_value and _is_aws_native_bedrock_url(current_value))
 
 
