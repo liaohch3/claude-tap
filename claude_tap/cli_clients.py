@@ -13,7 +13,6 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-
 _BEDROCK_HOST_RE = re.compile(
     r"(^|\.)(bedrock-runtime|bedrock-runtime-fips)"
     r"\.[a-z0-9-]+\.(amazonaws\.com|amazonaws\.com\.cn|vpce\.amazonaws\.com)$"
