@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.99] - 2026-06-02
+
+### Changed
+- refactor: split viewer assets (#271)
+- docs: add agent trace viewer seo pages
 ## [0.1.98] - 2026-06-02
 
 ### Changed
