@@ -49,6 +49,18 @@ def _bedrock_body() -> bytes:
     )
 
 
+def _bedrock_converse_body() -> bytes:
+    return b"".join(
+        [
+            _bedrock_frame({"messageStart": {"role": "assistant"}}),
+            _bedrock_frame({"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "OK"}}}),
+            _bedrock_frame({"contentBlockStop": {"contentBlockIndex": 0}}),
+            _bedrock_frame({"messageStop": {"stopReason": "end_turn"}}),
+            _bedrock_frame({"metadata": {"usage": {"inputTokens": 6, "outputTokens": 2, "totalTokens": 8}}}),
+        ]
+    )
+
+
 def _make_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, str, TraceWriter]:
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "traces.sqlite3"))
     reset_trace_store()
@@ -91,7 +103,7 @@ async def test_reverse_proxy_records_bedrock_eventstream_without_stream_flag(
     monkeypatch: pytest.MonkeyPatch,
     bedrock_path: str,
 ) -> None:
-    bedrock_bytes = _bedrock_body()
+    bedrock_bytes = _bedrock_converse_body() if "converse-stream" in bedrock_path else _bedrock_body()
 
     async def upstream_handler(request: web.Request) -> web.StreamResponse:
         assert request.raw_path == bedrock_path
@@ -128,11 +140,12 @@ async def test_reverse_proxy_records_bedrock_eventstream_without_stream_flag(
         assert len(records) == 1
         record = records[0]
         assert record["request"]["path"] == bedrock_path
-        assert record["response"]["body"]["model"] == "claude-sonnet-4-6"
+        if "converse-stream" not in bedrock_path:
+            assert record["response"]["body"]["model"] == "claude-sonnet-4-6"
         assert record["response"]["body"]["content"] == [{"type": "text", "text": "OK"}]
         assert record["response"]["body"]["usage"]["input_tokens"] == 6
         assert record["response"]["body"]["usage"]["output_tokens"] == 2
-        assert [event["event"] for event in record["response"]["sse_events"]][-1] == "message_stop"
+        assert "content_block_delta" in [event["event"] for event in record["response"]["sse_events"]]
     finally:
         await proxy_session.close()
         await proxy_runner.cleanup()
@@ -192,7 +205,7 @@ async def test_forward_proxy_records_bedrock_eventstream_without_stream_flag(
     monkeypatch: pytest.MonkeyPatch,
     bedrock_path: str,
 ) -> None:
-    bedrock_bytes = _bedrock_body()
+    bedrock_bytes = _bedrock_converse_body() if "converse-stream" in bedrock_path else _bedrock_body()
     store, session_id, writer = _make_writer(tmp_path, monkeypatch)
     fake_session = _FakeSession(bedrock_bytes)
     client_writer = _MemoryWriter()
@@ -221,9 +234,11 @@ async def test_forward_proxy_records_bedrock_eventstream_without_stream_flag(
     assert fake_session.calls[0]["data"]
     assert b"Transfer-Encoding: chunked" in client_writer.data
     assert client_writer.data.endswith(b"0\r\n\r\n")
-    assert record["response"]["body"]["model"] == "claude-sonnet-4-6"
+    if "converse-stream" not in bedrock_path:
+        assert record["response"]["body"]["model"] == "claude-sonnet-4-6"
     assert record["response"]["body"]["content"] == [{"type": "text", "text": "OK"}]
-    assert record["response"]["body"]["usage"]["cache_read_input_tokens"] == 2
+    if "converse-stream" not in bedrock_path:
+        assert record["response"]["body"]["usage"]["cache_read_input_tokens"] == 2
     assert record["response"]["body"]["usage"]["output_tokens"] == 2
     assert [event["event"] for event in record["response"]["sse_events"]][0] == "message_start"
     reset_trace_store()

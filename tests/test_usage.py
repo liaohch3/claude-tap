@@ -55,6 +55,14 @@ def test_normalize_usage_prefers_openai_tokens_over_zero_aliases() -> None:
     assert usage["cache_read_input_tokens"] == 0
 
 
+def test_normalize_usage_maps_bedrock_converse_tokens() -> None:
+    usage = normalize_usage({"inputTokens": 12, "outputTokens": 3, "totalTokens": 15})
+
+    assert usage["input_tokens"] == 12
+    assert usage["output_tokens"] == 3
+    assert usage["total_tokens"] == 15
+
+
 def test_normalize_usage_preserves_explicit_anthropic_cache_read() -> None:
     usage = normalize_usage(
         {

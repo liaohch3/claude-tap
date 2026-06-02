@@ -20,10 +20,16 @@ def normalize_usage(usage: object) -> dict:
         normalized["input_tokens"] = usage["prompt_tokens"]
     if _missing_or_zero(normalized.get("input_tokens")) and usage.get("promptTokenCount"):
         normalized["input_tokens"] = usage["promptTokenCount"]
+    if _missing_or_zero(normalized.get("input_tokens")) and usage.get("inputTokens"):
+        normalized["input_tokens"] = usage["inputTokens"]
     if _missing_or_zero(output_tokens) and usage.get("completion_tokens"):
         normalized["output_tokens"] = usage["completion_tokens"]
     if _missing_or_zero(normalized.get("output_tokens")) and usage.get("candidatesTokenCount"):
         normalized["output_tokens"] = usage["candidatesTokenCount"]
+    if _missing_or_zero(normalized.get("output_tokens")) and usage.get("outputTokens"):
+        normalized["output_tokens"] = usage["outputTokens"]
+    if _missing_or_zero(normalized.get("total_tokens")) and usage.get("totalTokens"):
+        normalized["total_tokens"] = usage["totalTokens"]
 
     if "cache_read_input_tokens" not in normalized:
         cached = usage.get("cached_tokens")

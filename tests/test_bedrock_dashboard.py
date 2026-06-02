@@ -46,6 +46,18 @@ class TestBedrockEvents:
             {"event": "message_start", "data": {"type": "message_start", "message": {"model": "claude-sonnet-4-6"}}}
         ]
 
+    def test_decodes_converse_stream_eventstream_body(self):
+        body = _bedrock_body(
+            {"messageStart": {"role": "assistant"}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "OK"}}},
+            {"metadata": {"usage": {"inputTokens": 6, "outputTokens": 2}}},
+        )
+        record = {"response": {"body": body}}
+        events = _bedrock_events(record)
+        assert [event["event"] for event in events] == ["message_start", "content_block_delta", "message_delta"]
+        assert events[1]["data"]["delta"] == {"type": "text_delta", "text": "OK"}
+        assert events[2]["data"]["usage"] == {"inputTokens": 6, "outputTokens": 2}
+
     def test_preserves_bedrock_error_events(self):
         record = {"response": {"body": json.dumps({"modelStreamErrorException": {"message": "stream failed"}})}}
         events = _bedrock_events(record)
@@ -83,6 +95,25 @@ class TestBedrockRecordUsage:
         usage = _record_usage(record)
         assert usage["input_tokens"] == 3
         assert usage["output_tokens"] == 2
+
+    def test_extracts_usage_from_bedrock_converse_response_body(self):
+        record = {"response": {"body": {"usage": {"inputTokens": 9, "outputTokens": 4, "totalTokens": 13}}}}
+        usage = _record_usage(record)
+        assert usage["input_tokens"] == 9
+        assert usage["output_tokens"] == 4
+        assert usage["total_tokens"] == 13
+
+    def test_extracts_usage_from_bedrock_converse_stream_metadata(self):
+        body = _bedrock_body(
+            {"messageStart": {"role": "assistant"}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "OK"}}},
+            {"metadata": {"usage": {"inputTokens": 6, "outputTokens": 2, "totalTokens": 8}}},
+        )
+        record = {"response": {"body": body}}
+        usage = _record_usage(record)
+        assert usage["input_tokens"] == 6
+        assert usage["output_tokens"] == 2
+        assert usage["total_tokens"] == 8
 
 
 class TestBedrockRecordModel:

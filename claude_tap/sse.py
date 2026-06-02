@@ -100,8 +100,8 @@ class SSEReassembler:
             elif event_type == "content_block_delta":
                 idx = data.get("index", 0)
                 delta = data.get("delta", {})
-                if idx < len(self._snapshot.get("content", [])):
-                    block = self._snapshot["content"][idx]
+                block = self._content_block_for_delta(idx, delta)
+                if block is not None:
                     if delta.get("type") == "text_delta":
                         block["text"] = block.get("text", "") + delta.get("text", "")
                     elif delta.get("type") == "thinking_delta":
@@ -126,9 +126,35 @@ class SSEReassembler:
                 if usage:
                     if "usage" not in self._snapshot:
                         self._snapshot["usage"] = {}
-                    self._snapshot["usage"].update(usage)
+                    self._snapshot["usage"].update(normalize_usage(usage))
         except Exception:
             pass
+
+    def _content_block_for_delta(self, idx: int, delta: dict) -> dict | None:
+        if not isinstance(idx, int) or idx < 0:
+            idx = 0
+        if "content" not in self._snapshot:
+            self._snapshot["content"] = []
+        content = self._snapshot["content"]
+        if not isinstance(content, list):
+            content = []
+            self._snapshot["content"] = content
+        while len(content) <= idx:
+            content.append(self._empty_content_block_for_delta(delta))
+        block = content[idx]
+        if not isinstance(block, dict):
+            block = self._empty_content_block_for_delta(delta)
+            content[idx] = block
+        if not block:
+            block.update(self._empty_content_block_for_delta(delta))
+        return block
+
+    def _empty_content_block_for_delta(self, delta: dict) -> dict:
+        if delta.get("type") == "thinking_delta":
+            return {"type": "thinking", "thinking": ""}
+        if delta.get("type") == "input_json_delta":
+            return {"type": "tool_use", "id": "", "name": "", "input": {}}
+        return {"type": "text", "text": ""}
 
     def _accumulate_chat_completion_chunk(self, data: dict) -> None:
         choices = data.get("choices") or []

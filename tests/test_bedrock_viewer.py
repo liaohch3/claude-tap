@@ -86,6 +86,42 @@ def test_normalize_record_for_viewer_decodes_bedrock_eventstream() -> None:
     assert normalized["response"]["body"]["usage"]["output_tokens"] == 1
 
 
+def test_normalize_record_for_viewer_decodes_bedrock_converse_stream() -> None:
+    body = "".join(
+        [
+            _bedrock_frame({"messageStart": {"role": "assistant"}}),
+            _bedrock_frame({"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "OK"}}}),
+            _bedrock_frame({"contentBlockStop": {"contentBlockIndex": 0}}),
+            _bedrock_frame({"messageStop": {"stopReason": "end_turn"}}),
+            _bedrock_frame({"metadata": {"usage": {"inputTokens": 4, "outputTokens": 2, "totalTokens": 6}}}),
+        ]
+    )
+    record = {
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/model/anthropic.claude-sonnet-4-20250514-v1:0/converse-stream",
+            "body": {"messages": [{"role": "user", "content": [{"text": "ping"}]}]},
+        },
+        "response": {"status": 200, "headers": {}, "body": body},
+    }
+
+    normalized = json.loads(_normalize_record_for_viewer(json.dumps(record)))
+
+    assert [event["event"] for event in normalized["response"]["sse_events"]] == [
+        "message_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_delta",
+    ]
+    assert normalized["response"]["body"]["content"] == [{"type": "text", "text": "OK"}]
+    assert normalized["response"]["body"]["stop_reason"] == "end_turn"
+    assert normalized["response"]["body"]["usage"]["input_tokens"] == 4
+    assert normalized["response"]["body"]["usage"]["output_tokens"] == 2
+    assert normalized["response"]["body"]["usage"]["total_tokens"] == 6
+
+
 @pytest.mark.skipif(pw_missing, reason="playwright not installed")
 def test_bedrock_invoke_path_is_primary_filter(tmp_path) -> None:
     from playwright.sync_api import sync_playwright
