@@ -638,7 +638,11 @@ class TraceStore:
         record: dict[str, Any],
         record_count: int,
     ) -> None:
-        from claude_tap.dashboard import merge_record_into_summary
+        from claude_tap.dashboard import (
+            build_stored_session_summary,
+            is_dashboard_summary_current,
+            merge_record_into_summary,
+        )
 
         row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         if row is None:
@@ -649,12 +653,15 @@ class TraceStore:
                 existing = json.loads(row["summary_json"])
             except json.JSONDecodeError:
                 existing = None
-        summary = merge_record_into_summary(
-            existing,
-            row=row,
-            record=record,
-            record_count=record_count,
-        )
+        if existing is not None and not is_dashboard_summary_current(existing, session_id):
+            summary = build_stored_session_summary(row, self.load_records(session_id))
+        else:
+            summary = merge_record_into_summary(
+                existing,
+                row=row,
+                record=record,
+                record_count=record_count,
+            )
         conn.execute(
             """
             UPDATE sessions
