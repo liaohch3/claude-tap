@@ -943,6 +943,65 @@ def _gemini_record() -> dict[str, Any]:
     }
 
 
+def _bedrock_converse_record() -> dict[str, Any]:
+    return {
+        "timestamp": "2026-05-13T13:30:00+00:00",
+        "request_id": "req_bedrock_converse_contract",
+        "turn": 1,
+        "duration_ms": 100,
+        "request": {
+            "method": "POST",
+            "path": "/model/anthropic.claude-sonnet-4-20250514-v1:0/converse",
+            "headers": {},
+            "body": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Use Bedrock Converse to answer."}],
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "description": "Look up a value.",
+                        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                    }
+                ],
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"text": "Bedrock Converse final OK."},
+                            {
+                                "reasoningContent": {
+                                    "reasoningText": {
+                                        "text": "Bedrock reasoning OK.",
+                                        "signature": "sig-contract",
+                                    }
+                                }
+                            },
+                            {"toolUse": {"toolUseId": "tool-1", "name": "lookup", "input": {"query": "bedrock"}}},
+                        ],
+                    }
+                },
+                "usage": {
+                    "inputTokens": 180,
+                    "outputTokens": 18,
+                    "totalTokens": 198,
+                    "cacheReadInputTokens": 60,
+                    "cacheWriteInputTokens": 12,
+                },
+            },
+        },
+    }
+
+
 def _contract_cases() -> tuple[ViewerContractCase, ...]:
     return (
         ViewerContractCase(
@@ -1077,6 +1136,27 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             expected_usage={"input_tokens": 170, "output_tokens": 13, "cache_read_input_tokens": 80},
             required_detail_text=("Use shell to inspect the workspace.", "Output: /repo", "Gemini final OK."),
             min_stream_events=2,
+        ),
+        ViewerContractCase(
+            name="bedrock_converse",
+            records=(_bedrock_converse_record(),),
+            expected_sections=("Tools", "Messages", "Response"),
+            expected_system=None,
+            expected_roles=("user",),
+            expected_tools=("lookup",),
+            expected_output_types=("text", "thinking", "tool_use"),
+            expected_usage={
+                "input_tokens": 180,
+                "output_tokens": 18,
+                "cache_read_input_tokens": 60,
+                "cache_creation_input_tokens": 12,
+            },
+            required_detail_text=(
+                "Use Bedrock Converse to answer.",
+                "Bedrock Converse final OK.",
+                "Bedrock reasoning OK.",
+                "lookup",
+            ),
         ),
         ViewerContractCase(
             name="content_block_boundaries",
