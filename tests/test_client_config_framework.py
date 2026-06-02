@@ -23,7 +23,7 @@ SUPPORTED_CLIENTS = {
     "codebuddy",
 }
 
-SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"gemini"}
+SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"claude", "gemini"}
 
 SUPPORTED_DEFAULT_PROXY_MODES = {
     "agy": "forward",
@@ -95,6 +95,12 @@ def test_gemini_declares_both_reverse_base_url_envs() -> None:
         "GOOGLE_GEMINI_BASE_URL": "http://127.0.0.1:43123",
         "GOOGLE_VERTEX_BASE_URL": "http://127.0.0.1:43123",
     }
+
+
+def test_claude_declares_bedrock_reverse_base_url_env() -> None:
+    cfg = CLIENT_CONFIGS["claude"]
+
+    assert cfg.reverse_base_url_envs == ("ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL")
 
 
 def test_agy_declares_cloud_code_bridge_env() -> None:

@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from claude_tap.bedrock import bedrock_model_from_path
 from claude_tap.trace_store import TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
+from claude_tap.viewer import _decode_bedrock_eventstream_events
 
 DASHBOARD_TEMPLATE_PATH = Path(__file__).parent / "dashboard.html"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -422,6 +424,21 @@ def _record_usage(record: dict[str, Any]) -> dict[str, int]:
             if candidate:
                 usage = candidate
                 break
+    if not usage:
+        merged_usage: dict[str, int] = {}
+        for event in _bedrock_events(record):
+            payload = event.get("data", {}) if isinstance(event, dict) else {}
+            candidate = payload.get("usage", {}) if isinstance(payload, dict) else {}
+            for key, value in candidate.items():
+                if isinstance(value, int):
+                    merged_usage[key] = max(merged_usage.get(key, 0), value)
+            message = payload.get("message", {}) if isinstance(payload, dict) else {}
+            msg_usage = message.get("usage", {}) if isinstance(message, dict) else {}
+            for key, value in msg_usage.items():
+                if isinstance(value, int):
+                    merged_usage[key] = max(merged_usage.get(key, 0), value)
+        if merged_usage:
+            usage = merged_usage
     if not usage and isinstance(body, dict):
         usage = body
     return normalize_usage(usage)
@@ -446,9 +463,19 @@ def _record_model(record: dict[str, Any]) -> str:
         value = resp_body.get("model")
         if isinstance(value, str) and value:
             return value
+    for event in _bedrock_events(record)[:3]:
+        data = event.get("data", {}) if isinstance(event, dict) else {}
+        msg = data.get("message", {}) if isinstance(data, dict) else {}
+        if isinstance(msg, dict):
+            value = msg.get("model")
+            if isinstance(value, str) and value:
+                return value
     path = request.get("path") if isinstance(request, dict) else ""
     if isinstance(path, str):
-        match = re.search(r"/models/([^:?/]+)", path)
+        bedrock_model = bedrock_model_from_path(path)
+        if bedrock_model:
+            return bedrock_model
+        match = re.search(r"/models?/([^:?/]+)", path)
         if match:
             return match.group(1)
     return ""
@@ -666,6 +693,15 @@ def _response_events(record: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _bedrock_events(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Decode AWS Bedrock EventStream binary body into structured events."""
+    response = record.get("response")
+    if not isinstance(response, dict):
+        return []
+    body = response.get("body")
+    return _decode_bedrock_eventstream_events(body)
+
+
 def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     data = event.get("data", event)
     if isinstance(data, str):
@@ -856,6 +892,13 @@ def _response_text(body: Any) -> str:
             return text
 
     output = body.get("output")
+    if isinstance(output, dict):
+        message = output.get("message")
+        if isinstance(message, dict):
+            text = _content_text(message.get("content"))
+            if text:
+                return text
+
     text = _content_text(output)
     if text:
         return text

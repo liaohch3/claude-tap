@@ -384,15 +384,25 @@ function normalizeUsage(usage) {
   if ((normalized.input_tokens === undefined || normalized.input_tokens === null || normalized.input_tokens === 0) && usage.promptTokenCount) {
     normalized.input_tokens = usage.promptTokenCount;
   }
+  if ((normalized.input_tokens === undefined || normalized.input_tokens === null || normalized.input_tokens === 0) && usage.inputTokens) {
+    normalized.input_tokens = usage.inputTokens;
+  }
   if ((normalized.output_tokens === undefined || normalized.output_tokens === null || normalized.output_tokens === 0) && usage.completion_tokens) {
     normalized.output_tokens = usage.completion_tokens;
   }
   if ((normalized.output_tokens === undefined || normalized.output_tokens === null || normalized.output_tokens === 0) && usage.candidatesTokenCount) {
     normalized.output_tokens = usage.candidatesTokenCount;
   }
+  if ((normalized.output_tokens === undefined || normalized.output_tokens === null || normalized.output_tokens === 0) && usage.outputTokens) {
+    normalized.output_tokens = usage.outputTokens;
+  }
+  if ((normalized.total_tokens === undefined || normalized.total_tokens === null || normalized.total_tokens === 0) && usage.totalTokens) {
+    normalized.total_tokens = usage.totalTokens;
+  }
   if (normalized.cache_read_input_tokens === undefined) {
     let cached = usage.cached_tokens;
     if (cached === undefined) cached = usage.cachedContentTokenCount;
+    if (cached === undefined) cached = usage.cacheReadInputTokens;
     if (cached === undefined && usage.input_tokens_details && typeof usage.input_tokens_details === 'object') {
       cached = usage.input_tokens_details.cached_tokens;
     }
@@ -402,6 +412,9 @@ function normalizeUsage(usage) {
     if (cached !== undefined && cached !== null) {
       normalized.cache_read_input_tokens = cached;
     }
+  }
+  if (normalized.cache_creation_input_tokens === undefined && usage.cacheWriteInputTokens !== undefined && usage.cacheWriteInputTokens !== null) {
+    normalized.cache_creation_input_tokens = usage.cacheWriteInputTokens;
   }
   return normalized;
 }
@@ -439,6 +452,46 @@ function normalizeResponseOutput(output) {
       if (summaryText.trim()) content.push({ type: 'thinking', thinking: summaryText });
     }
   }
+  return content.length > 0 ? { content } : null;
+}
+
+function normalizeBedrockConverseContent(blocks) {
+  if (!Array.isArray(blocks) || blocks.length === 0) return [];
+  const content = [];
+  for (const block of blocks) {
+    if (!block || typeof block !== 'object') continue;
+    if (typeof block.text === 'string') {
+      appendMergeableResponseBlock(content, { type: 'text', text: block.text });
+      continue;
+    }
+    const reasoning = block.reasoningContent;
+    if (reasoning && typeof reasoning === 'object') {
+      const reasoningText = reasoning.text || reasoning.reasoningText?.text || '';
+      const signature = reasoning.signature || reasoning.reasoningText?.signature || '';
+      const thinking = { type: 'thinking', thinking: reasoningText };
+      if (signature) thinking.signature = signature;
+      if (reasoningText.trim() || signature) content.push(thinking);
+      continue;
+    }
+    const toolUse = block.toolUse;
+    if (toolUse && typeof toolUse === 'object') {
+      content.push({
+        type: 'tool_use',
+        id: toolUse.toolUseId || '',
+        name: toolUse.name || 'tool_use',
+        input: toolUse.input && typeof toolUse.input === 'object' ? toolUse.input : {},
+      });
+      continue;
+    }
+    if (block.type) content.push(block);
+  }
+  return content;
+}
+
+function normalizeBedrockConverseOutput(body) {
+  const message = body?.output?.message;
+  if (!message || typeof message !== 'object') return null;
+  const content = normalizeBedrockConverseContent(message.content);
   return content.length > 0 ? { content } : null;
 }
 
@@ -558,6 +611,8 @@ function getResponseOutput(entry) {
   if (geminiOutput) return geminiOutput;
   const body = getResponsePayload(entry);
   if (body?.content) return body;
+  const fromBedrockConverse = normalizeBedrockConverseOutput(body);
+  if (fromBedrockConverse) return fromBedrockConverse;
   const fromChoices = normalizeChatCompletionsChoiceOutput(body);
   if (fromChoices) return fromChoices;
   const fromBody = normalizeResponseOutput(body?.output);
