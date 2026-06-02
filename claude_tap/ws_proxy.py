@@ -65,6 +65,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     target: str = ctx["target_url"]
     writer: TraceWriter = ctx["writer"]
     session: aiohttp.ClientSession = ctx["session"]
+    store_stream_events = bool(ctx.get("store_stream_events", False))
 
     strip_prefix: str = ctx.get("strip_path_prefix", "")
     fwd_path = request.path_qs
@@ -133,6 +134,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             server_messages=[],
             upstream_base_url=target,
             error=error_message,
+            store_stream_events=store_stream_events,
         )
         await writer.write(record)
         return web.Response(status=502, text=error_message)
@@ -177,6 +179,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
             client_messages=record_client_messages,
             server_messages=record_server_messages,
             upstream_base_url=target,
+            store_stream_events=store_stream_events,
         )
         await writer.write(record)
 
@@ -306,6 +309,7 @@ def _build_ws_record(
     server_messages: list[str],
     upstream_base_url: str,
     error: str | None = None,
+    store_stream_events: bool = True,
 ) -> dict:
     """Build a trace record for a WebSocket session."""
     req_body = _reconstruct_ws_request_body(client_messages)
@@ -340,9 +344,9 @@ def _build_ws_record(
             "body": resp_body,
         },
     }
-    if ws_events:
+    if store_stream_events and ws_events:
         record["response"]["ws_events"] = ws_events
-    if req_events:
+    if store_stream_events and req_events:
         record["request"]["ws_events"] = req_events
     if error is not None:
         record["response"]["error"] = error

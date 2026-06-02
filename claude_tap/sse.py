@@ -12,7 +12,8 @@ class SSEReassembler:
     """Parse raw SSE bytes and reconstruct the full API response object
     by accumulating streaming events into a complete message snapshot."""
 
-    def __init__(self):
+    def __init__(self, *, store_events: bool = True):
+        self._store_events = store_events
         self.events: list[dict] = []
         self._buf = b""
         self._current_event: str | None = None
@@ -59,7 +60,8 @@ class SSEReassembler:
 
     def add_event(self, event_type: str, data) -> None:
         """Append an already-parsed stream event and update the snapshot."""
-        self.events.append({"event": event_type, "data": data})
+        if self._store_events:
+            self.events.append({"event": event_type, "data": data})
         self._accumulate(event_type, data)
 
     def _accumulate(self, event_type: str, data) -> None:

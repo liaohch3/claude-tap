@@ -37,6 +37,24 @@ def test_normalize_usage_maps_chat_completion_cached_tokens() -> None:
     assert usage["cache_read_input_tokens"] == 3
 
 
+def test_normalize_usage_prefers_openai_tokens_over_zero_aliases() -> None:
+    usage = normalize_usage(
+        {
+            "prompt_tokens": 743,
+            "completion_tokens": 95,
+            "total_tokens": 838,
+            "prompt_tokens_details": {"cached_tokens": 0},
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+    )
+
+    assert usage["input_tokens"] == 743
+    assert usage["output_tokens"] == 95
+    assert usage["total_tokens"] == 838
+    assert usage["cache_read_input_tokens"] == 0
+
+
 def test_normalize_usage_preserves_explicit_anthropic_cache_read() -> None:
     usage = normalize_usage(
         {

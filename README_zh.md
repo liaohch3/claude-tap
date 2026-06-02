@@ -11,6 +11,8 @@
 
 `claude-tap` 是给 AI 编程 agent 用的本地代理和 trace 查看器。把 CLI 通过它启动，就能看到真实 API 流量：system prompt、对话历史、工具 schema、工具调用、流式响应、token 用量和请求 diff。
 
+网站：[本地 AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · 指南：[如何本地查看 Agent traces](docs/guides/agent-trace-viewer.zh.md)
+
 它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli)、[Qoder CLI](https://qoder.com/cli)、[Antigravity CLI](https://antigravity.google/product/antigravity-cli) 和 [CodeBuddy CLI](https://www.codebuddy.ai)。
 
 <p align="center">
@@ -371,6 +373,13 @@ claude-tap dashboard
 # 从已有 JSONL trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
+# 导出可独立搬运的压缩 trace，再按需渲染
+claude-tap export <session-id> --format compact -o trace.ctap.json
+claude-tap export trace.ctap.json -o trace.html
+
+# 在 iframe 中嵌入导出的查看器，并减少外层 chrome
+# trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light
+
 # 自定义 trace 输出目录，或限制保留数量
 claude-tap --tap-output-dir ./my-traces
 claude-tap --tap-max-traces 10
@@ -383,6 +392,8 @@ claude-tap --tap-no-open
 ```
 
 纯代理模式下，可以在另一个终端启动客户端，并把它的 base URL 或代理配置指向本地代理。具体接法见 [客户端支持矩阵](docs/support-matrix.md)。
+
+作为 VSCode Claude Code 的 `claudeProcessWrapper` 使用时，claude-tap 会识别扩展传入的 Claude binary 路径并用它启动 Claude。
 
 ### CLI 选项
 
@@ -400,6 +411,7 @@ claude-tap --tap-no-open
 --tap-host HOST          绑定地址（默认: 127.0.0.1，--tap-no-launch 模式下为 0.0.0.0）
 --tap-no-launch          仅启动代理，不启动客户端
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
+--tap-store-stream-events 捕获时把原始 SSE/WebSocket event 数组写入 trace 存储，以便查看器/导出结果展示（默认关闭）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
 --tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi/codebuddy 用 reverse，agy/gemini/opencode/pi/hermes/cursor/qoder 用 forward）
@@ -421,6 +433,7 @@ claude-tap --tap-no-open
 - **工具检查器** — 可展开的卡片，显示工具名称、描述和参数 schema
 - **全文搜索** — 搜索消息、工具、prompt 和响应
 - **暗色模式** — 切换亮色/暗色主题（跟随系统偏好）
+- **iframe 嵌入模式** — 添加 `embed=1`、`hideHeader=1`、`hidePath=1`、`hideHistory=1`、`hideControls=1`、`density=compact`、`theme=light|dark` 等 query 参数
 - **键盘导航** — `j`/`k` 或方向键
 - **复制助手** — 一键复制请求 JSON 或 cURL 命令
 - **多语言** — English, 简体中文, 日本語, 한국어, Français, العربية, Deutsch, Русский
@@ -437,7 +450,7 @@ claude-tap --tap-no-open
 1. `claude-tap` 启动反向代理或 forward proxy，并启动所选客户端
 2. 支持 base URL 的客户端会指向反向代理；不支持 base URL 的客户端会通过 proxy/CA 环境变量接入
 3. SSE 和 WebSocket 流会在收到 chunk/message 时实时转发，代理开销很低
-4. 每个请求-响应对或 WebSocket 会话记录到按日期保存的 `trace_*.jsonl`
+4. 每个请求-响应对或 WebSocket 会话记录到本地 trace 存储；原始 SSE/WebSocket event 数组默认不写入，如果后续需要在查看器/导出结果中展示，必须在捕获时开启 `--tap-store-stream-events`
 5. 退出时生成自包含的 HTML 查看器
 6. 实时模式默认开启，并通过 SSE 向浏览器广播更新
 

@@ -265,6 +265,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             writer,
             log_prefix,
             upstream_base_url=target,
+            store_stream_events=bool(ctx.get("store_stream_events", False)),
         )
         return resp_body
 
@@ -291,6 +292,7 @@ async def _handle_streaming(
     writer: TraceWriter,
     log_prefix: str,
     upstream_base_url: str,
+    store_stream_events: bool,
 ) -> web.StreamResponse:
     resp = web.StreamResponse(
         status=upstream_resp.status,
@@ -298,7 +300,7 @@ async def _handle_streaming(
     )
     await resp.prepare(request)
 
-    reassembler = SSEReassembler()
+    reassembler = SSEReassembler(store_events=store_stream_events)
 
     try:
         async for chunk in upstream_resp.content.iter_any():

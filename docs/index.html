@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>claude-tap - Local AI Agent Trace Viewer</title>
+    <meta
+      name="description"
+      content="claude-tap is a local AI agent trace viewer and HTML exporter for Claude Code, Codex, Gemini, Cursor, OpenCode, Kimi, Pi, Hermes, Qoder, Antigravity, and CodeBuddy."
+    >
+    <link rel="canonical" href="https://liaohch3.com/claude-tap/">
+    <link rel="alternate" hreflang="en" href="https://liaohch3.com/claude-tap/">
+    <link rel="alternate" hreflang="zh-Hans" href="https://liaohch3.com/claude-tap/index.zh.html">
+    <link rel="alternate" hreflang="x-default" href="https://liaohch3.com/claude-tap/">
+    <meta property="og:title" content="claude-tap - Local AI Agent Trace Viewer">
+    <meta
+      property="og:description"
+      content="Inspect coding agent traces locally: tool calls, prompts, token usage, latency, streaming responses, and request diffs."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://liaohch3.com/claude-tap/">
+    <meta property="og:image" content="https://liaohch3.com/claude-tap/viewer-light.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <style>
+      :root {
+        --color-bg: #f4f7fb;
+        --color-panel: #ffffff;
+        --color-ink: #111827;
+        --color-muted: #5f6f84;
+        --color-line: #dce5ef;
+        --color-blue: #2563eb;
+        --color-blue-soft: #dbeafe;
+        --color-cyan: #06b6d4;
+        --color-green: #059669;
+        --color-orange: #ea580c;
+        --color-shadow: rgba(26, 43, 68, 0.12);
+        --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        --space-1: 0.25rem;
+        --space-2: 0.5rem;
+        --space-3: 0.75rem;
+        --space-4: 1rem;
+        --space-5: 1.25rem;
+        --space-6: 1.5rem;
+        --space-8: 2rem;
+        --space-10: 2.5rem;
+        --space-12: 3rem;
+        --space-16: 4rem;
+        --radius: 8px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        overflow-x: clip;
+      }
+
+      body {
+        background: var(--color-bg);
+        color: var(--color-ink);
+        font-family: var(--font-sans);
+        line-height: 1.55;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      img {
+        display: block;
+        max-width: 100%;
+      }
+
+      .page {
+        min-height: 100vh;
+      }
+
+      .shell {
+        width: min(1180px, calc(100% - 32px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        border-bottom: 1px solid var(--color-line);
+        background: rgba(244, 247, 251, 0.92);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        backdrop-filter: blur(14px);
+      }
+
+      .topbar-inner {
+        align-items: center;
+        display: flex;
+        gap: var(--space-4);
+        justify-content: space-between;
+        min-height: 68px;
+      }
+
+      .brand {
+        align-items: center;
+        display: flex;
+        gap: var(--space-3);
+        min-width: 0;
+        text-decoration: none;
+      }
+
+      .brand-mark {
+        align-items: center;
+        background: var(--color-ink);
+        border-radius: 6px;
+        color: #fff;
+        display: inline-flex;
+        font-family: var(--font-mono);
+        font-size: 0.92rem;
+        font-weight: 700;
+        height: 34px;
+        justify-content: center;
+        width: 34px;
+      }
+
+      .brand strong {
+        font-size: 1rem;
+      }
+
+      .nav {
+        align-items: center;
+        display: flex;
+        gap: var(--space-4);
+        font-size: 0.94rem;
+        white-space: nowrap;
+      }
+
+      .nav a {
+        color: var(--color-muted);
+        text-decoration: none;
+      }
+
+      .nav .primary {
+        background: var(--color-ink);
+        border-radius: 999px;
+        color: #fff;
+        padding: 0.58rem 0.92rem;
+      }
+
+      .hero {
+        padding: var(--space-16) 0 var(--space-10);
+      }
+
+      .hero-grid {
+        align-items: center;
+        display: grid;
+        gap: var(--space-12);
+        grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+      }
+
+      .eyebrow {
+        color: var(--color-blue);
+        font-size: 0.84rem;
+        font-weight: 700;
+        letter-spacing: 0;
+        margin: 0 0 var(--space-4);
+        text-transform: uppercase;
+      }
+
+      h1 {
+        font-size: clamp(2.75rem, 6vw, 5.7rem);
+        letter-spacing: 0;
+        line-height: 0.95;
+        margin: 0;
+        max-width: 11ch;
+        overflow-wrap: anywhere;
+      }
+
+      .lead {
+        color: var(--color-muted);
+        font-size: clamp(1.05rem, 2vw, 1.28rem);
+        margin: var(--space-6) 0 0;
+        max-width: 62ch;
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-3);
+        margin-top: var(--space-8);
+      }
+
+      .button {
+        align-items: center;
+        border: 1px solid var(--color-line);
+        border-radius: 999px;
+        display: inline-flex;
+        font-weight: 700;
+        justify-content: center;
+        min-height: 44px;
+        padding: 0.72rem 1rem;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+
+      .button.dark {
+        background: var(--color-ink);
+        border-color: var(--color-ink);
+        color: #fff;
+      }
+
+      .button.light {
+        background: var(--color-panel);
+        color: var(--color-ink);
+      }
+
+      .terminal {
+        background: #0e1726;
+        border: 1px solid #1f2f46;
+        border-radius: var(--radius);
+        box-shadow: 0 24px 50px var(--color-shadow);
+        color: #d8e7ff;
+        font-family: var(--font-mono);
+        font-size: 0.92rem;
+        margin-top: var(--space-8);
+        overflow: auto;
+        padding: var(--space-5);
+      }
+
+      .terminal code {
+        white-space: pre;
+      }
+
+      .viewer-shot {
+        background: var(--color-panel);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius);
+        box-shadow: 0 24px 60px var(--color-shadow);
+        overflow: hidden;
+      }
+
+      .viewer-shot img {
+        width: 100%;
+      }
+
+      .caption {
+        color: var(--color-muted);
+        font-size: 0.9rem;
+        padding: var(--space-3) var(--space-4);
+      }
+
+      .strip {
+        border-top: 1px solid var(--color-line);
+        border-bottom: 1px solid var(--color-line);
+        background: var(--color-panel);
+      }
+
+      .strip-grid {
+        display: grid;
+        gap: var(--space-6);
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        padding: var(--space-6) 0;
+      }
+
+      .metric strong {
+        display: block;
+        font-size: 1.02rem;
+      }
+
+      .metric span {
+        color: var(--color-muted);
+        display: block;
+        font-size: 0.92rem;
+        margin-top: var(--space-1);
+      }
+
+      .section {
+        padding: var(--space-16) 0;
+      }
+
+      .section-head {
+        align-items: end;
+        display: grid;
+        gap: var(--space-6);
+        grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+        margin-bottom: var(--space-8);
+      }
+
+      h2 {
+        font-size: clamp(2rem, 4vw, 3.2rem);
+        line-height: 1;
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .section-head p,
+      .section-copy {
+        color: var(--color-muted);
+        margin: 0;
+      }
+
+      .cards {
+        display: grid;
+        gap: var(--space-4);
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .card {
+        background: var(--color-panel);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius);
+        padding: var(--space-6);
+      }
+
+      .card h3 {
+        font-size: 1.12rem;
+        margin: 0 0 var(--space-3);
+      }
+
+      .card p {
+        color: var(--color-muted);
+        margin: 0;
+      }
+
+      .workflow {
+        display: grid;
+        gap: var(--space-4);
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .step {
+        border-left: 3px solid var(--color-blue);
+        padding-left: var(--space-4);
+      }
+
+      .step strong {
+        display: block;
+      }
+
+      .step span {
+        color: var(--color-muted);
+        display: block;
+        margin-top: var(--space-2);
+      }
+
+      .image-grid {
+        display: grid;
+        gap: var(--space-4);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .image-grid figure {
+        background: var(--color-panel);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius);
+        margin: 0;
+        overflow: hidden;
+      }
+
+      .image-grid figcaption {
+        color: var(--color-muted);
+        font-size: 0.9rem;
+        padding: var(--space-3) var(--space-4);
+      }
+
+      .clients {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+      }
+
+      .client {
+        background: var(--color-panel);
+        border: 1px solid var(--color-line);
+        border-radius: 999px;
+        color: var(--color-muted);
+        font-size: 0.92rem;
+        padding: 0.48rem 0.74rem;
+      }
+
+      .cta {
+        background: var(--color-ink);
+        border-radius: var(--radius);
+        color: #fff;
+        display: grid;
+        gap: var(--space-6);
+        grid-template-columns: minmax(0, 1fr) auto;
+        padding: var(--space-8);
+      }
+
+      .cta h2 {
+        color: #fff;
+      }
+
+      .cta p {
+        color: #d1d8e3;
+        margin: var(--space-4) 0 0;
+      }
+
+      .footer {
+        color: var(--color-muted);
+        padding: var(--space-8) 0;
+      }
+
+      @media (max-width: 860px) {
+        .hero-grid,
+        .section-head,
+        .cards,
+        .workflow,
+        .image-grid,
+        .cta {
+          grid-template-columns: 1fr;
+        }
+
+        .strip-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .nav {
+          gap: var(--space-3);
+        }
+
+        .nav a:not(.primary):not(.lang) {
+          display: none;
+        }
+      }
+
+      @media (max-width: 520px) {
+        .shell {
+          width: min(100% - 24px, 1180px);
+        }
+
+        .hero {
+          padding-top: var(--space-12);
+        }
+
+        .strip-grid {
+          grid-template-columns: 1fr;
+        }
+
+        h1 {
+          font-size: clamp(2.4rem, 18vw, 4rem);
+        }
+
+        .button {
+          width: 100%;
+        }
+
+        .cta {
+          padding: var(--space-6);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="shell topbar-inner">
+          <a class="brand" href="https://github.com/liaohch3/claude-tap">
+            <span class="brand-mark">ct</span>
+            <strong>claude-tap</strong>
+          </a>
+          <nav class="nav" aria-label="Main navigation">
+            <a href="guides/agent-trace-viewer.html">Guide</a>
+            <a href="support-matrix.html">Clients</a>
+            <a class="lang" href="index.zh.html">中文</a>
+            <a class="primary" href="https://github.com/liaohch3/claude-tap">GitHub</a>
+          </nav>
+        </div>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div class="shell hero-grid">
+            <div>
+              <p class="eyebrow">Local AI agent trace viewer</p>
+              <h1>See what your coding agent really sent.</h1>
+              <p class="lead">
+                claude-tap captures real API traffic from AI coding agents and turns it into a local trace viewer.
+                Inspect prompts, tool calls, token usage, latency, streaming responses, and request diffs without
+                uploading private traces to a hosted dashboard.
+              </p>
+              <div class="hero-actions">
+                <a class="button dark" href="https://github.com/liaohch3/claude-tap">View on GitHub</a>
+                <a class="button light" href="guides/agent-trace-viewer.html">Read the trace viewer guide</a>
+              </div>
+              <pre class="terminal"><code>uv tool install claude-tap
+claude-tap --tap-client codex
+claude-tap export --format html trace.jsonl</code></pre>
+            </div>
+            <figure class="viewer-shot">
+              <img src="viewer-light.png" alt="claude-tap local AI agent trace viewer showing requests, tool calls, and token usage">
+              <figcaption class="caption">Open a real agent run, inspect each request, and compare context between turns.</figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <section class="strip" aria-label="Trace viewer capabilities">
+          <div class="shell strip-grid">
+            <div class="metric">
+              <strong>Tool calls</strong>
+              <span>Inputs, outputs, parameters, and adjacent diffs.</span>
+            </div>
+            <div class="metric">
+              <strong>Token usage</strong>
+              <span>Prompt, completion, cache, and latency metadata.</span>
+            </div>
+            <div class="metric">
+              <strong>HTML export</strong>
+              <span>Portable trace files for review and archiving.</span>
+            </div>
+            <div class="metric">
+              <strong>Local-first</strong>
+              <span>No hosted dashboard required for private traces.</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="shell">
+            <div class="section-head">
+              <h2>Built for coding agent traces, not generic logs.</h2>
+              <p>
+                Agent runs are shaped by prompts, tool schemas, retries, streaming chunks, and model-specific
+                request formats. claude-tap keeps those pieces visible so debugging can start from the actual trace.
+              </p>
+            </div>
+            <div class="cards">
+              <article class="card">
+                <h3>Inspect full request flow</h3>
+                <p>Review system prompts, conversation history, tool schemas, raw request bodies, and reconstructed responses.</p>
+              </article>
+              <article class="card">
+                <h3>Debug behavior with evidence</h3>
+                <p>Use structured diffs to see which message, prompt, tool, or parameter changed between adjacent turns.</p>
+              </article>
+              <article class="card">
+                <h3>Share a trace without a service</h3>
+                <p>Export a self-contained HTML viewer that teammates can open locally for review, support, or incident notes.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="shell">
+            <div class="section-head">
+              <h2>One workflow across agent clients.</h2>
+              <p>
+                Use one local trace viewer for Claude Code traces, Codex traces, OpenAI Responses API traces,
+                Gemini traces, and other coding-agent sessions.
+              </p>
+            </div>
+            <div class="clients" aria-label="Supported clients">
+              <span class="client">Claude Code</span>
+              <span class="client">Codex CLI</span>
+              <span class="client">Gemini CLI</span>
+              <span class="client">Cursor CLI</span>
+              <span class="client">OpenCode</span>
+              <span class="client">Kimi CLI</span>
+              <span class="client">Pi</span>
+              <span class="client">Hermes Agent</span>
+              <span class="client">Qoder CLI</span>
+              <span class="client">Antigravity CLI</span>
+              <span class="client">CodeBuddy CLI</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="shell image-grid">
+            <figure>
+              <img src="diff-modal.png" alt="Structured diff between adjacent AI agent requests">
+              <figcaption>Structured request diffs show how context changes from one turn to the next.</figcaption>
+            </figure>
+            <figure>
+              <img src="viewer-dark.png" alt="Dark mode local trace viewer for long AI agent review sessions">
+              <figcaption>Light and dark viewer modes support longer debugging and review sessions.</figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="shell">
+            <div class="section-head">
+              <h2>From run to review artifact.</h2>
+              <p>
+                Keep the trace local while you inspect it, then export a static HTML artifact only when you need to share.
+              </p>
+            </div>
+            <div class="workflow">
+              <div class="step">
+                <strong>Run</strong>
+                <span>Launch your agent through claude-tap.</span>
+              </div>
+              <div class="step">
+                <strong>Capture</strong>
+                <span>Record real API traffic and streaming responses.</span>
+              </div>
+              <div class="step">
+                <strong>Inspect</strong>
+                <span>Search turns, tools, usage, latency, and diffs.</span>
+              </div>
+              <div class="step">
+                <strong>Export</strong>
+                <span>Save a standalone HTML trace for review.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="shell cta">
+            <div>
+              <h2>Start with a local trace.</h2>
+              <p>
+                Use claude-tap when you need to understand what an AI coding agent actually did before you tune prompts,
+                compare tools, or share a run with another reviewer.
+              </p>
+            </div>
+            <a class="button light" href="https://github.com/liaohch3/claude-tap">Install from GitHub</a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <div class="shell">
+          <span>claude-tap is open source under the MIT license.</span>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

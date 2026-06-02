@@ -646,6 +646,49 @@ body.detail-route .detail-inspector-bar {
   transition: all .15s;
 }
 .act-btn:hover { background: var(--bg-hover); color: var(--blue); }
+.export-menu {
+  position: relative;
+  display: inline-flex;
+}
+.export-menu summary {
+  list-style: none;
+  cursor: pointer;
+}
+.export-menu summary::-webkit-details-marker { display: none; }
+.export-menu[open] .act-btn {
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+.export-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  min-width: 150px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+}
+.export-menu-item {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-family: var(--sans);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.export-menu-item:hover {
+  color: var(--blue);
+  background: var(--blue-bg);
+}
 .badge {
   display: inline-flex; align-items: center;
   font-size: 11px; padding: 2px 8px; border-radius: 10px;
@@ -818,6 +861,10 @@ pre {
   .table-scroll { max-height: none; }
   .detail-page-head { align-items: flex-start; }
   .viewer-frame-wrap { height: 78vh; min-height: 520px; }
+  .action-bar .export-menu-list {
+    left: 0;
+    right: auto;
+  }
 }
 </style>
 </head>
@@ -1059,7 +1106,10 @@ const DASHBOARD_I18N = {
     log: "Log",
     session_id: "Session",
     export_jsonl: "Export JSONL",
+    export_compact: "Export Compact",
     export_log: "Export Log",
+    export_html: "Export HTML",
+    export_menu: "Export",
     copy_session_id: "Copy session id",
     unable_load_session: "Unable to load session: {error}",
     unable_load_dashboard: "Unable to load dashboard: {error}",
@@ -1149,7 +1199,10 @@ const DASHBOARD_I18N = {
     log: "日志",
     session_id: "会话",
     export_jsonl: "导出 JSONL",
+    export_compact: "导出压缩文件",
     export_log: "导出日志",
+    export_html: "导出 HTML",
+    export_menu: "导出",
     copy_session_id: "复制会话 ID",
     unable_load_session: "无法加载会话：{error}",
     unable_load_dashboard: "无法加载面板：{error}",
@@ -1750,8 +1803,15 @@ function renderDetail(session, records) {
         <button class="detail-tab" data-tab="${alternateTab}">${esc(alternateLabel)}</button>
       </div>
       <div class="action-bar">
-        <a class="act-btn" data-detail-i18n="export_jsonl" href="/api/sessions/${encodeURIComponent(session.id)}/export/jsonl" download>${esc(t("export_jsonl"))}</a>
-        <a class="act-btn" data-detail-i18n="export_log" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
+        <details class="export-menu">
+          <summary class="act-btn" data-detail-i18n="export_menu">${esc(t("export_menu"))}</summary>
+          <div class="export-menu-list">
+            <a class="export-menu-item" data-detail-i18n="export_jsonl" href="/api/sessions/${encodeURIComponent(session.id)}/export/jsonl" download>${esc(t("export_jsonl"))}</a>
+            <a class="export-menu-item" data-detail-i18n="export_compact" href="/api/sessions/${encodeURIComponent(session.id)}/export/compact" download>${esc(t("export_compact"))}</a>
+            <a class="export-menu-item" data-detail-i18n="export_log" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
+            <a class="export-menu-item" data-detail-i18n="export_html" href="/api/sessions/${encodeURIComponent(session.id)}/export/html" download>${esc(t("export_html"))}</a>
+          </div>
+        </details>
         <button class="act-btn" data-detail-i18n="copy_path" data-copy-path="${esc(session.id)}">${esc(t("copy_path"))}</button>
       </div>
     </div>

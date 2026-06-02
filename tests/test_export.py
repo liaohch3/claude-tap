@@ -46,6 +46,20 @@ def test_export_html_inferred_from_output_suffix(tmp_path, capsys) -> None:
     assert f"Exported 1 turns to {html_path}" in capsys.readouterr().out
 
 
+def test_export_html_includes_iframe_embed_query_support(tmp_path, capsys) -> None:
+    trace_path = _write_trace(tmp_path)
+    html_path = tmp_path / "trace.html"
+
+    assert export_main([str(trace_path), "-o", str(html_path)]) == 0
+
+    html = html_path.read_text(encoding="utf-8")
+    assert "parseEmbedQueryOptions" in html
+    assert "embed-hide-header" in html
+    assert "hideControls" in html
+    assert "density') === 'compact'" in html
+    assert f"Exported 1 turns to {html_path}" in capsys.readouterr().out
+
+
 def test_export_html_format_defaults_to_trace_html_path(tmp_path, capsys) -> None:
     trace_path = _write_trace(tmp_path)
     html_path = trace_path.with_suffix(".html")
@@ -96,8 +110,54 @@ def test_export_help_mentions_html(capsys) -> None:
 
     assert exc_info.value.code == 0
     help_text = capsys.readouterr().out
-    assert "{markdown,json,html}" in help_text
+    assert "{markdown,json,html,compact}" in help_text
     assert "for HTML" in help_text
+
+
+def test_export_compact_trace_is_standalone_and_html_renderable(tmp_path, capsys) -> None:
+    from claude_tap.compact_trace import load_compact_trace
+
+    trace_path = tmp_path / "trace.jsonl"
+    compact_path = tmp_path / "trace.ctap.json"
+    html_path = tmp_path / "trace.html"
+    repeated_tools = [{"type": "function", "name": "shell", "description": "tool schema " * 200}]
+    records = []
+    for turn in range(1, 4):
+        records.append(
+            {
+                "timestamp": f"2026-05-30T10:00:0{turn}+00:00",
+                "turn": turn,
+                "request": {
+                    "body": {
+                        "model": "gpt-5.5",
+                        "instructions": "shared instructions " * 200,
+                        "tools": repeated_tools,
+                        "input": [{"role": "user", "content": f"turn {turn}"}],
+                    }
+                },
+                "response": {
+                    "body": {
+                        "output": [{"type": "message", "content": [{"type": "output_text", "text": f"ok {turn}"}]}]
+                    }
+                },
+            }
+        )
+    raw_jsonl = "\n".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) for record in records) + "\n"
+    trace_path.write_text(raw_jsonl, encoding="utf-8")
+
+    assert export_main([str(trace_path), "--format", "compact", "-o", str(compact_path)]) == 0
+
+    compact_text = compact_path.read_text(encoding="utf-8")
+    assert "__claude_tap_compact_trace__" in compact_text
+    assert "__claude_tap_blob_ref__" in compact_text
+    assert len(compact_text.encode("utf-8")) < len(raw_jsonl.encode("utf-8")) * 0.5
+    assert load_compact_trace(compact_text) == records
+
+    assert export_main([str(compact_path), "-o", str(html_path)]) == 0
+    html = html_path.read_text(encoding="utf-8")
+    assert "EMBEDDED_TRACE_COMPACT_DATA" in html
+    assert "turn 3" in html
+    assert f"Exported 3 turns to {compact_path}" in capsys.readouterr().out
 
 
 def _bedrock_frame(event: dict) -> str:
@@ -204,3 +264,46 @@ def test_export_accepts_positional_sqlite_session_id(trace_db, tmp_path, capsys)
     assert exported[0]["messages"] == [{"role": "user", "content": "hello from session"}]
     assert exported[0]["response"]["content"] == [{"type": "text", "text": "stored response"}]
     assert f"Exported 1 turns to {json_path}" in capsys.readouterr().out
+
+
+def test_export_session_html_does_not_materialize_jsonl_file(trace_db, tmp_path, capsys, monkeypatch) -> None:
+    from claude_tap.trace_store import TraceStore, get_trace_store
+
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-30T10:00:00+00:00",
+            "turn": 1,
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "body": {
+                    "model": "gpt-5.5",
+                    "instructions": "system instructions " * 100,
+                    "tools": [{"type": "function", "name": "shell", "description": "tool " * 200}],
+                    "input": [{"role": "user", "content": "hello"}],
+                },
+            },
+            "response": {
+                "status": 101,
+                "body": {
+                    "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+                },
+            },
+        },
+    )
+
+    def fail_export_jsonl(self, session_id):  # noqa: ANN001, ARG001
+        raise AssertionError("HTML export should not materialize a full JSONL file first")
+
+    monkeypatch.setattr(TraceStore, "export_jsonl", fail_export_jsonl)
+    html_path = tmp_path / "session.html"
+
+    assert export_main([session_id, "--format", "html", "-o", str(html_path)]) == 0
+
+    html = html_path.read_text(encoding="utf-8")
+    assert "EMBEDDED_TRACE_COMPACT_DATA" in html
+    assert "gpt-5.5" in html
+    assert "Exported 1 turns" in capsys.readouterr().out

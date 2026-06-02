@@ -46,6 +46,8 @@ def test_policy_accepts_raw_screenshot_for_runtime_changes() -> None:
 
 ## Evidence
 ![viewer](https://raw.githubusercontent.com/liaohch3/claude-tap/branch/.agents/evidence/pr/viewer.png)
+
+Trace viewer screenshot exported from `.traces/trace_120000.jsonl`.
 """
 
     result = module.validate_policy(body, ["claude_tap/viewer.html"])
@@ -84,6 +86,84 @@ def test_policy_rejects_non_raw_image_urls() -> None:
 
     assert result.ok is False
     assert "PR image evidence must use raw.githubusercontent.com URLs" in result.failures
+
+
+def test_policy_requires_committed_evidence_image_for_runtime_changes() -> None:
+    module = _load_module()
+    body = """## Summary
+- Update viewer behavior.
+
+## Validation
+- `uv run pytest tests/ -x --timeout=60`
+
+## Evidence
+![viewer](https://raw.githubusercontent.com/liaohch3/claude-tap/branch/tmp/viewer.png)
+
+Trace viewer screenshot exported from `.traces/trace_120000.jsonl`.
+"""
+
+    result = module.validate_policy(body, ["claude_tap/viewer.html"])
+
+    assert result.ok is False
+    assert "PR runtime screenshot evidence must link to committed .agents/evidence/pr/ images" in result.failures
+
+
+def test_policy_rejects_test_output_art_for_runtime_changes() -> None:
+    module = _load_module()
+    body = """## Summary
+- Update proxy behavior.
+
+## Validation
+- `uv run pytest tests/ -x --timeout=60`
+
+## Evidence
+![tests](https://raw.githubusercontent.com/liaohch3/claude-tap/branch/.agents/evidence/pr/227/package-noise-tests.png)
+
+Trace viewer screenshot exported from `.traces/trace_120000.jsonl`.
+"""
+
+    result = module.validate_policy(body, ["claude_tap/forward_proxy.py"])
+
+    assert result.ok is False
+    assert (
+        "PR runtime screenshot evidence must be trace/viewer/dashboard evidence, not test-output art" in result.failures
+    )
+
+
+def test_policy_requires_real_trace_source_for_runtime_evidence() -> None:
+    module = _load_module()
+    body = """## Summary
+- Update proxy behavior.
+
+## Validation
+- `uv run pytest tests/ -x --timeout=60`
+
+## Evidence
+![viewer](https://raw.githubusercontent.com/liaohch3/claude-tap/branch/.agents/evidence/pr/227/trace-viewer.png)
+"""
+
+    result = module.validate_policy(body, ["claude_tap/forward_proxy.py"])
+
+    assert result.ok is False
+    assert "PR runtime evidence must document the real trace/viewer source used for screenshots" in result.failures
+
+
+def test_policy_does_not_accept_real_trace_markers_from_image_urls() -> None:
+    module = _load_module()
+    body = """## Summary
+- Update proxy behavior.
+
+## Validation
+- `uv run pytest tests/ -x --timeout=60`
+
+## Evidence
+![viewer](https://raw.githubusercontent.com/liaohch3/claude-tap/branch/.agents/evidence/pr/227/dashboard-trace-viewer.png)
+"""
+
+    result = module.validate_policy(body, ["claude_tap/forward_proxy.py"])
+
+    assert result.ok is False
+    assert "PR runtime evidence must document the real trace/viewer source used for screenshots" in result.failures
 
 
 def test_policy_blocks_raw_trace_artifacts() -> None:

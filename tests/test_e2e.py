@@ -73,6 +73,7 @@ req_body2 = json.dumps({
     "model": "claude-test-model",
     "max_tokens": 100,
     "stream": True,
+    "system": "streaming system prompt must remain stored when raw stream events are omitted",
     "messages": [{"role": "user", "content": "count to 3"}],
 }).encode()
 req2 = urllib.request.Request(url, data=req_body2, headers={
@@ -237,7 +238,17 @@ def test_e2e():
         stop_upstream()
 
 
-def _run_test(upstream_port):
+def test_e2e_store_stream_events_flag():
+    stop_upstream, upstream_port = run_fake_upstream_in_thread()
+    print(f"[test] Fake upstream on :{upstream_port}")
+
+    try:
+        _run_test(upstream_port, store_stream_events=True)
+    finally:
+        stop_upstream()
+
+
+def _run_test(upstream_port, store_stream_events=False):
     project_dir = PROJECT_ROOT
     trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_")
 
@@ -255,17 +266,20 @@ def _run_test(upstream_port):
     print("[test] Running: python -m claude_tap ...")
 
     try:
+        cmd = [
+            sys.executable,
+            "-m",
+            "claude_tap",
+            "--tap-output-dir",
+            trace_dir,
+            "--tap-no-open",
+            "--tap-target",
+            f"http://127.0.0.1:{upstream_port}",
+        ]
+        if store_stream_events:
+            cmd.append("--tap-store-stream-events")
         proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "claude_tap",
-                "--tap-output-dir",
-                trace_dir,
-                "--tap-no-open",
-                "--tap-target",
-                f"http://127.0.0.1:{upstream_port}",
-            ],
+            cmd,
             cwd=str(project_dir),
             env=env,
             capture_output=True,
@@ -313,13 +327,21 @@ def _run_test(upstream_port):
     r2 = records[1]
     assert r2["turn"] == 2
     assert r2["request"]["body"]["stream"] is True
+    assert r2["request"]["body"]["system"] == (
+        "streaming system prompt must remain stored when raw stream events are omitted"
+    )
+    assert r2["request"]["body"]["messages"][0]["content"] == "count to 3"
     assert r2["response"]["status"] == 200
     assert r2["response"]["body"]["content"][0]["text"] == "1, 2, 3"
     assert r2["response"]["body"]["usage"]["output_tokens"] == 8
     assert r2["response"]["body"]["stop_reason"] == "end_turn"
-    assert "sse_events" in r2["response"]
-    assert len(r2["response"]["sse_events"]) == 8
-    print("  ✅ Turn 2 (streaming, SSE reassembly): OK")
+    if store_stream_events:
+        assert "sse_events" in r2["response"]
+        assert len(r2["response"]["sse_events"]) == 8
+        print("  ✅ Turn 2 (streaming, opt-in raw SSE event storage): OK")
+    else:
+        assert "sse_events" not in r2["response"]
+        print("  ✅ Turn 2 (streaming, SSE reassembly without raw event storage): OK")
 
     # ── Terminal output is clean ──
     assert "Trace summary" in proc.stdout
@@ -677,11 +699,10 @@ def test_malformed_sse():
         assert r["response"]["status"] == 200
         assert r["request"]["body"]["stream"] is True
 
-        # The SSE events list should contain the events the reassembler parsed
-        # (both valid and malformed ones that had an event: prefix)
-        sse_events = r["response"]["sse_events"]
-        assert len(sse_events) >= 5, f"Expected at least 5 SSE events, got {len(sse_events)}"
-        print(f"  OK: recorded {len(sse_events)} SSE events (including malformed)")
+        # Raw SSE events are not persisted by default, but the reconstructed
+        # body should still be usable.
+        assert "sse_events" not in r["response"]
+        print("  OK: raw SSE events omitted by default")
 
         # The reconstructed body should still have the partial text from valid events
         body = r["response"]["body"]
@@ -1148,6 +1169,7 @@ def test_parse_args(monkeypatch, tmp_path):
 
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
     monkeypatch.chdir(tmp_path)
 
@@ -1161,6 +1183,8 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.no_launch is False
     assert a.live_viewer is True
     assert a.open_viewer is True
+    assert a.client_cmd is None
+    assert a.store_stream_events is False
     print("  OK: defaults")
 
     # Codex defaults
@@ -1194,10 +1218,30 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.claude_args == []
     print("  OK: --tap-* flags consumed")
 
+    # VSCode claudeProcessWrapper passes the bundled Claude binary as argv[0].
+    wrapped_claude = tmp_path / "claude"
+    wrapped_claude.write_text("#!/bin/sh\n", encoding="utf-8")
+    a = parse_args([str(wrapped_claude), "--output-format", "stream-json", "--verbose"])
+    assert a.client_cmd == str(wrapped_claude)
+    assert a.claude_args == ["--output-format", "stream-json", "--verbose"]
+    print("  OK: VSCode wrapper Claude binary path consumed")
+
+    prompt_dir_named_claude = tmp_path / "context" / "claude"
+    prompt_dir_named_claude.mkdir(parents=True)
+    a = parse_args([str(prompt_dir_named_claude), "--output-format", "stream-json"])
+    assert a.client_cmd is None
+    assert a.claude_args == [str(prompt_dir_named_claude), "--output-format", "stream-json"]
+    print("  OK: directory named claude is not consumed as wrapper binary")
+
     a = parse_args(["--tap-no-live"])
     assert a.live_viewer is False
     assert a.claude_args == []
     print("  OK: --tap-no-live disables live viewer")
+
+    a = parse_args(["--tap-store-stream-events"])
+    assert a.store_stream_events is True
+    assert a.claude_args == []
+    print("  OK: --tap-store-stream-events enables raw event storage")
 
     # Mix: tap flags + claude flags
     a = parse_args(["--tap-port", "9999", "-c", "--model", "sonnet"])
@@ -1264,8 +1308,8 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatch, tmp_path):
-    """A second claude-tap run should attach to an existing dashboard and honor browser opens."""
+async def test_async_main_reuses_existing_dashboard_without_reopening_browser(monkeypatch, tmp_path):
+    """A second claude-tap run should attach to an existing dashboard without opening another tab."""
     from claude_tap import async_main, parse_args
     from claude_tap.live import LiveViewerServer
 
@@ -1285,8 +1329,6 @@ async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatc
             if open_browser:
                 open_browser_fn(server.url)
             return server.url, True
-        if open_browser:
-            open_browser_fn(f"http://{host}:{port}")
         return f"http://{host}:{port}", False
 
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-shared.sqlite3"))
@@ -1302,7 +1344,7 @@ async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatc
         for server in spawned_servers:
             await server.stop()
 
-    assert len(opened_urls) == 2
+    assert len(opened_urls) == 1
 
 
 @pytest.mark.asyncio
@@ -2479,8 +2521,9 @@ def test_e2e_with_cleanup():
 
 def test_live_viewer_scroll_preservation():
     """Verify viewer.html contains preserveDetail parameter chain for scroll fix."""
-    viewer_path = Path(__file__).parent.parent / "claude_tap" / "viewer.html"
-    html = viewer_path.read_text(encoding="utf-8")
+    from claude_tap.viewer import _read_viewer_template
+
+    html = _read_viewer_template()
 
     # selectEntry should accept opts parameter
     assert "function selectEntry(idx, opts)" in html, "selectEntry should accept opts parameter"
@@ -2500,8 +2543,9 @@ def test_live_viewer_scroll_preservation():
 
 def test_live_viewer_diff_nav_update():
     """Verify viewer.html contains dynamic diff nav button update logic."""
-    viewer_path = Path(__file__).parent.parent / "claude_tap" / "viewer.html"
-    html = viewer_path.read_text(encoding="utf-8")
+    from claude_tap.viewer import _read_viewer_template
+
+    html = _read_viewer_template()
 
     # updateNavButtons function should exist
     assert "function updateNavButtons()" in html, "Should have updateNavButtons function"
@@ -2719,6 +2763,7 @@ def test_codex_upstream_url_construction(monkeypatch, tmp_path):
     from claude_tap import parse_args
 
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
     def _build_upstream(target: str, strip_prefix: str, request_path: str) -> str:
         fwd_path = request_path
@@ -2766,6 +2811,95 @@ def test_codex_upstream_url_construction(monkeypatch, tmp_path):
 ## ---------------------------------------------------------------------------
 ## Test: Forward proxy CONNECT handler
 ## ---------------------------------------------------------------------------
+
+
+def test_forward_proxy_trace_skip_rules_are_narrow():
+    from claude_tap.forward_proxy import _should_skip_trace_record
+
+    json_headers = {"Content-Type": "application/json"}
+    binary_headers = {"Content-Type": "application/octet-stream"}
+    npm_headers = {"User-Agent": "npm/10.8.2 node/v22.0.0 linux x64 workspaces/false"}
+
+    assert _should_skip_trace_record("https://registry.npmjs.org:443/effect", "/effect", json_headers)
+    assert _should_skip_trace_record(
+        "https://registry.npmjs.org:443/@opencode-ai%2fsdk",
+        "/@opencode-ai%2fsdk",
+        json_headers,
+    )
+    assert _should_skip_trace_record(
+        "https://cdn.example.test:443/effect/-/effect-4.0.0-beta.59.tgz",
+        "/effect/-/effect-4.0.0-beta.59.tgz",
+        binary_headers,
+    )
+    assert _should_skip_trace_record(
+        "https://npm.mycorp.internal:443/private-pkg",
+        "/private-pkg",
+        json_headers,
+        npm_headers,
+        "GET",
+    )
+
+    assert not _should_skip_trace_record("https://api.anthropic.com:443/v1/messages", "/v1/messages", json_headers)
+    assert not _should_skip_trace_record(
+        "https://chatgpt.com:443/backend-api/codex/responses",
+        "/backend-api/codex/responses",
+        json_headers,
+    )
+    assert not _should_skip_trace_record(
+        "https://npm.mycorp.internal:443/private-pkg",
+        "/private-pkg",
+        json_headers,
+    )
+    assert not _should_skip_trace_record(
+        "https://api.anthropic.com:443/v1/messages",
+        "/v1/messages",
+        json_headers,
+        npm_headers,
+        "POST",
+    )
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_unrecorded_response_closes_upstream_on_client_disconnect():
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    class FakeContent:
+        async def iter_chunked(self, size):
+            assert size == 65536
+            yield b"package-bytes"
+
+    class FakeResponse:
+        status = 200
+        reason = "OK"
+        headers = {"Content-Type": "application/json"}
+        content = FakeContent()
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class DisconnectingWriter:
+        def __init__(self) -> None:
+            self.drain_calls = 0
+            self.writes: list[bytes] = []
+
+        def write(self, data: bytes) -> None:
+            self.writes.append(data)
+
+        async def drain(self) -> None:
+            self.drain_calls += 1
+            if self.drain_calls > 1:
+                raise ConnectionError("client disconnected")
+
+    upstream_resp = FakeResponse()
+    writer = DisconnectingWriter()
+
+    with pytest.raises(ConnectionError, match="client disconnected"):
+        await ForwardProxyServer._relay_unrecorded_response(object(), upstream_resp, writer)
+
+    assert upstream_resp.closed is True
 
 
 @pytest.mark.asyncio
@@ -2864,6 +2998,113 @@ async def test_forward_proxy_connect():
             await session.close()
 
     print("  test_forward_proxy_connect PASSED")
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_skips_package_noise_but_keeps_long_model_payloads(monkeypatch):
+    """Real localhost proxy test for long npm noise and long model responses."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port, upstream_runner = await _start_fake_long_payload_https_upstream(tmpdir_path)
+        store, session_id, writer = _writer_for_dir(tmpdir_path)
+
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False)
+        original_request = session.request
+
+        async def _rewrite_to_localhost(method, url, **kwargs):
+            rewritten = URL(str(url)).with_host("127.0.0.1").with_port(upstream_port)
+            return await original_request(method=method, url=rewritten, **kwargs)
+
+        monkeypatch.setattr(session, "request", _rewrite_to_localhost)
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+        )
+        proxy_port = await server.start()
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+
+            async with aiohttp.ClientSession(connector=connector, auto_decompress=False) as client:
+                async with client.get(
+                    f"https://registry.npmjs.org:{upstream_port}/effect",
+                    proxy=proxy_url,
+                ) as resp:
+                    assert resp.status == 200
+                    metadata = await resp.json()
+                    assert len(metadata["versions"]) >= 100
+
+                async with client.get(
+                    f"https://cdn.example.test:{upstream_port}/effect/-/effect-4.0.0-beta.59.tgz",
+                    proxy=proxy_url,
+                ) as resp:
+                    assert resp.status == 200
+                    assert len(await resp.read()) == 1024 * 1024
+
+                async with client.post(
+                    f"https://api.anthropic.test:{upstream_port}/v1/messages",
+                    proxy=proxy_url,
+                    json={
+                        "model": "claude-3-5-sonnet-test",
+                        "max_tokens": 200000,
+                        "messages": [{"role": "user", "content": "write a very long answer"}],
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    anthropic_body = await resp.json()
+                    assert len(anthropic_body["content"][0]["text"]) > 200000
+
+                async with client.post(
+                    f"https://api.openai.test:{upstream_port}/v1/chat/completions",
+                    proxy=proxy_url,
+                    json={
+                        "model": "gpt-5-test",
+                        "messages": [{"role": "user", "content": "write a very long answer"}],
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    openai_body = await resp.json()
+                    assert len(openai_body["choices"][0]["message"]["content"]) > 200000
+
+            await asyncio.sleep(0.1)
+            writer.close()
+            records = [json.loads(line) for line in store.export_jsonl(session_id).splitlines()]
+
+            paths = [record["request"]["path"] for record in records]
+            assert paths == ["/v1/messages", "/v1/chat/completions"]
+            assert all("effect" not in path for path in paths)
+
+            anthropic_record = records[0]
+            openai_record = records[1]
+            assert anthropic_record["request"]["body"]["model"] == "claude-3-5-sonnet-test"
+            assert len(anthropic_record["response"]["body"]["content"][0]["text"]) > 200000
+            assert openai_record["request"]["body"]["model"] == "gpt-5-test"
+            assert len(openai_record["response"]["body"]["choices"][0]["message"]["content"]) > 200000
+        finally:
+            await server.stop()
+            await session.close()
+            await upstream_runner.cleanup()
 
 
 @pytest.mark.asyncio
@@ -3022,6 +3263,7 @@ async def test_forward_proxy_connect_websocket():
             ca=ca,
             writer=writer,
             session=session,
+            store_stream_events=True,
         )
         proxy_port = await server.start()
         print(f"  Forward proxy on port {proxy_port}")
@@ -3074,6 +3316,8 @@ async def test_forward_proxy_connect_websocket():
             assert records[0]["response"]["status"] == 101
             assert records[0]["response"]["body"]["status"] == "completed"
             assert records[0]["response"]["body"]["output"][0]["content"][0]["text"] == "Hello over WSS"
+            assert records[0]["request"]["ws_events"][0]["model"] == "gpt-test"
+            assert len(records[0]["response"]["ws_events"]) == 3
             print("  OK: WS trace recorded correctly")
         finally:
             await server.stop()
@@ -3273,6 +3517,121 @@ async def _start_fake_https_upstream(tmpdir: Path) -> int:
     server = await asyncio.start_server(handle_client, "127.0.0.1", 0, ssl=ssl_ctx)
     port = server.sockets[0].getsockname()[1]
     return port
+
+
+async def _start_fake_long_payload_https_upstream(tmpdir: Path):
+    """Start a fake HTTPS upstream with package noise and long model payloads."""
+    import datetime
+    import ssl as ssl_module
+
+    from aiohttp import web
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName("127.0.0.1"),
+                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                ]
+            ),
+            critical=False,
+        )
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+
+    cert_path = tmpdir / "long-upstream.pem"
+    key_path = tmpdir / "long-upstream-key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+
+    ssl_ctx = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_SERVER)
+    ssl_ctx.load_cert_chain(str(cert_path), str(key_path))
+
+    async def long_payload_handler(request):
+        if request.path == "/effect":
+            package_padding = "npm-metadata-padding-" * 1000
+            versions = {
+                f"4.0.0-beta.{index}": {
+                    "name": "effect",
+                    "dist": {"tarball": f"https://registry.npmjs.org/effect/-/effect-{index}.tgz"},
+                    "readme": package_padding,
+                }
+                for index in range(120)
+            }
+            return web.json_response({"name": "effect", "versions": versions})
+
+        if request.path.endswith(".tgz"):
+            return web.Response(body=b"x" * 1024 * 1024, content_type="application/octet-stream")
+
+        if request.path == "/v1/messages":
+            req_body = await request.json()
+            long_text = "anthropic-long-response " * 10000
+            return web.json_response(
+                {
+                    "id": "msg_long_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": long_text}],
+                    "model": req_body["model"],
+                    "usage": {
+                        "input_tokens": 120000,
+                        "output_tokens": 50000,
+                        "cache_read_input_tokens": 90000,
+                    },
+                    "stop_reason": "end_turn",
+                }
+            )
+
+        if request.path == "/v1/chat/completions":
+            req_body = await request.json()
+            long_text = "openai-long-response " * 11000
+            return web.json_response(
+                {
+                    "id": "chatcmpl_long_1",
+                    "object": "chat.completion",
+                    "model": req_body["model"],
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": long_text}}],
+                    "usage": {
+                        "prompt_tokens": 130000,
+                        "completion_tokens": 55000,
+                        "prompt_tokens_details": {"cached_tokens": 95000},
+                    },
+                }
+            )
+
+        return web.Response(status=404, text="not found")
+
+    app = web.Application()
+    app.router.add_route("*", "/{tail:.*}", long_payload_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=ssl_ctx)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    return port, runner
 
 
 async def _start_fake_wss_upstream(tmpdir: Path) -> int:

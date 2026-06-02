@@ -15,6 +15,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.1.99] - 2026-06-02
+
+### Changed
+- refactor: split viewer assets (#271)
+- docs: add agent trace viewer seo pages
+## [0.1.98] - 2026-06-02
+
+### Changed
+- Fix dashboard first prompt extraction (#270)
+## [0.1.97] - 2026-06-01
+
+### Changed
+- Add dashboard HTML export (#265)
+## [0.1.96] - 2026-06-01
+
+### Changed
+- perf: compact repeated trace payload fields (#250)
+- fix: hide Windows background subprocess consoles (#260)
+## [0.1.95] - 2026-06-01
+
+### Changed
+- feat: add readable tool call parameters (#261)
+- fix: support VSCode Claude wrapper browser controls (#244)
+## [0.1.94] - 2026-05-31
+
+### Changed
+- Fix viewer session round grouping (#235)
+## [0.1.93] - 2026-05-31
+
+### Changed
+- Refactor CLI module boundaries (#247)
+## [0.1.92] - 2026-05-30
+
+### Changed
+- fix: count OpenAI usage when aliases are zero
+### Fixed
+- Count OpenAI-compatible `prompt_tokens` and `completion_tokens` when provider aliases report `input_tokens` and `output_tokens` as zero.
+
+## [0.1.91] - 2026-05-30
+
+### Changed
+- perf: guard trace compaction and skip package noise (#227)
+### Changed
+- Skip persisted trace records for package registry metadata and archive downloads in forward proxy mode while still forwarding responses to clients.
+
+
+
+
+
+
+## [0.1.90] - 2026-05-30
+
+### Changed
+- fix: render chat completion choices in viewer (#251)
+## [0.1.89] - 2026-05-30
+
+### Changed
+- Fix Codex Responses viewer continuity (#245)
+## [0.1.88] - 2026-05-30
+
+### Changed
+- Fix viewer global search navigation (#239)
+## [0.1.87] - 2026-05-29
+
+### Changed
+- feat(viewer): support iframe embed query options (#246)
+## [0.1.86] - 2026-05-28
+
+### Changed
+- feat!: omit raw stream events by default (#231)
+### Changed
+- **Breaking change:** raw SSE and WebSocket stream event arrays are no longer persisted by default. Pass `--tap-store-stream-events` when capturing a trace to store those raw event arrays in trace storage and viewer/export output; traces captured without the flag cannot recover the omitted raw events later.
+
+## [0.1.85] - 2026-05-28
+
+### Changed
+- fix(codex): capture custom provider base URLs (#228)
+### Fixed
+- Capture Codex custom OpenAI-compatible providers by overriding the selected provider base URL, not only `openai_base_url`.
+
+
+
+
+
+
+
+
 
 
 ## [0.1.84] - 2026-05-26

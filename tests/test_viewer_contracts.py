@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from claude_tap.viewer import _generate_html_viewer
+from claude_tap.compact_trace import build_compact_trace_bundle
+from claude_tap.viewer import _generate_html_viewer, _generate_html_viewer_from_compact_bundle, _read_viewer_template
 
 pw_missing = False
 try:
@@ -357,7 +358,35 @@ def _chat_completions_record() -> dict[str, Any]:
             "status": 200,
             "headers": {},
             "body": {
-                "content": [{"type": "text", "text": "Chat final OK."}],
+                "id": "chatcmpl-contract",
+                "object": "chat.completion",
+                "model": "kimi-k2-turbo-preview",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning_content": "Need to inspect metadata before answering.",
+                            "tool_calls": [
+                                {
+                                    "id": "call_response_read",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "inspect_metadata",
+                                        "arguments": '{"path":"pyproject.toml"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    },
+                    {
+                        "index": 1,
+                        "message": {"role": "assistant", "content": "Chat final OK."},
+                        "finish_reason": "stop",
+                    },
+                ],
                 "usage": {"prompt_tokens": 150, "completion_tokens": 10, "cached_tokens": 70},
             },
         },
@@ -969,9 +998,15 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             expected_system="Kimi contract system prompt.",
             expected_roles=("user", "assistant", "tool"),
             expected_tools=("read_file",),
-            expected_output_types=("text",),
+            expected_output_types=("thinking", "tool_use", "text"),
             expected_usage={"input_tokens": 150, "output_tokens": 10, "cache_read_input_tokens": 70},
-            required_detail_text=("Read the project metadata.", "read_file", "Chat final OK."),
+            required_detail_text=(
+                "Read the project metadata.",
+                "read_file",
+                "Need to inspect metadata before answering.",
+                "inspect_metadata",
+                "Chat final OK.",
+            ),
         ),
         ViewerContractCase(
             name="opencode_chat_completions",
@@ -1104,6 +1139,120 @@ def _sidebar_order_records() -> tuple[dict[str, Any], ...]:
     return tuple(records)
 
 
+def _claude_code_session_round_records() -> tuple[dict[str, Any], ...]:
+    model = "aws.claude-opus-4.6"
+
+    def make_record(
+        request_id: str,
+        turn: int,
+        messages: list[dict[str, Any]],
+        response_content: list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        stop_reason: str = "end_turn",
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"model": model, "messages": messages}
+        if system is not None:
+            body["system"] = system
+        return {
+            "request_id": request_id,
+            "turn": turn,
+            "timestamp": f"2026-05-13T13:{20 + turn:02d}:00+00:00",
+            "duration_ms": 100,
+            "request": {"method": "POST", "path": "/v1/messages", "headers": {}, "body": body},
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {"stop_reason": stop_reason, "content": response_content},
+            },
+        }
+
+    first_prompt = "Check configured MCP settings"
+    second_prompt = "Diagnose portfolio holdings"
+    third_prompt = "Add portfolio positions"
+    title_system = 'Generate a concise, sentence-case title for the session. Return JSON with a single "title" field.'
+    first_tool = {"type": "tool_use", "id": "tool_1", "name": "ListMcpResourcesTool", "input": {}}
+    second_tool = {"type": "tool_use", "id": "tool_2", "name": "portfolio", "input": {}}
+    third_tool = {"type": "tool_use", "id": "tool_3", "name": "search_stock_by_name", "input": {"query": "ACME"}}
+
+    return (
+        make_record(
+            "req_title",
+            1,
+            [{"role": "user", "content": [{"type": "text", "text": f"<session>\n{first_prompt}\n</session>"}]}],
+            [{"type": "text", "text": '{"title": "Check configured MCP settings"}'}],
+            system=title_system,
+        ),
+        make_record(
+            "req_first_tool",
+            2,
+            [{"role": "user", "content": first_prompt}],
+            [first_tool],
+            stop_reason="tool_use",
+        ),
+        make_record(
+            "req_first_final",
+            3,
+            [
+                {"role": "user", "content": first_prompt},
+                {"role": "assistant", "content": [first_tool]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool_1", "content": "mcp list"}]},
+            ],
+            [{"type": "text", "text": "Configured MCP server: wyckoff."}],
+        ),
+        make_record(
+            "req_second_tool",
+            4,
+            [
+                {"role": "user", "content": first_prompt},
+                {"role": "assistant", "content": "Configured MCP server: wyckoff."},
+                {"role": "user", "content": second_prompt},
+            ],
+            [second_tool],
+            stop_reason="tool_use",
+        ),
+        make_record(
+            "req_second_final",
+            5,
+            [
+                {"role": "user", "content": first_prompt},
+                {"role": "assistant", "content": "Configured MCP server: wyckoff."},
+                {"role": "user", "content": second_prompt},
+                {"role": "assistant", "content": [second_tool]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool_2", "content": "empty"}]},
+            ],
+            [{"type": "text", "text": "No holdings found."}],
+        ),
+        make_record(
+            "req_third_tool",
+            6,
+            [
+                {"role": "user", "content": first_prompt},
+                {"role": "assistant", "content": "Configured MCP server: wyckoff."},
+                {"role": "user", "content": second_prompt},
+                {"role": "assistant", "content": "No holdings found."},
+                {"role": "user", "content": third_prompt},
+            ],
+            [third_tool],
+            stop_reason="tool_use",
+        ),
+        make_record(
+            "req_third_suggestion",
+            7,
+            [
+                {"role": "user", "content": first_prompt},
+                {"role": "assistant", "content": "Configured MCP server: wyckoff."},
+                {"role": "user", "content": second_prompt},
+                {"role": "assistant", "content": "No holdings found."},
+                {"role": "user", "content": third_prompt},
+                {"role": "assistant", "content": "Portfolio diagnosis complete."},
+                {"role": "user", "content": "[SUGGESTION MODE: Suggest what the user might naturally type next.]"},
+            ],
+            [{"type": "text", "text": "Give me an action plan."}],
+        ),
+    )
+
+
 def _write_trace(trace_path: Path, records: tuple[dict[str, Any], ...]) -> None:
     trace_path.write_text(
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
@@ -1117,6 +1266,39 @@ def _generate_case_html(tmp_path: Path, name: str, records: tuple[dict[str, Any]
     _write_trace(trace_path, records)
     _generate_html_viewer(trace_path, html_path)
     return html_path
+
+
+def _compact_contract_records() -> tuple[dict[str, Any], ...]:
+    records = []
+    for turn in (1, 2):
+        record = json.loads(json.dumps(_responses_record()))
+        record["request_id"] = f"req_compact_contract_{turn}"
+        record["turn"] = turn
+        record["request"]["body"]["instructions"] = "Shared compact system prompt. " * 120
+        record["request"]["body"]["tools"] = [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "description": "Large repeated tool schema. " * 120,
+                "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}},
+            }
+        ]
+        record["request"]["body"]["input"] = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": f"Compact bundle turn {turn}."}],
+            }
+        ]
+        record["response"]["body"]["output"] = [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": f"Compact response {turn}."}],
+            }
+        ]
+        records.append(record)
+    return tuple(records)
 
 
 def _open_viewer_with_error_capture(page: Page, html_path: Path) -> list[str]:
@@ -1300,6 +1482,133 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert remaining_tabs == ["default", "trace"]
 
 
+def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Path, chromium_browser) -> None:
+    record = json.loads(json.dumps(_responses_record()))
+    decoded_command = "python - <<'PY'\nprint(\"hello\")\nPY"
+    record["response"]["body"]["output"][0]["arguments"] = json.dumps(
+        {"cmd": decoded_command, "yield_time_ms": 1000},
+        ensure_ascii=False,
+    )
+    html_path = _generate_case_html(tmp_path, "tool_call_param_escapes", (record,))
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").first.click()
+        page.wait_for_selector("#detail .section", timeout=5000)
+        page.wait_for_selector("#detail .tool-input-toggle", timeout=5000)
+        page.evaluate(
+            """() => {
+              window.__copiedToolInput = '';
+              window.copyToClipboard = (text) => {
+                window.__copiedToolInput = text;
+                return Promise.resolve();
+              };
+            }"""
+        )
+
+        input_view = page.locator("#detail .tool-input-view").first
+        raw_text = input_view.inner_text()
+        input_view_count = page.locator("#detail .tool-input-view").count()
+        toggle_text_before = page.locator("#detail .tool-input-toggle").first.inner_text()
+        copy_button_count = page.locator("#detail .tool-input-copy").count()
+        page.locator("#detail .tool-input-copy").first.click()
+        copied_raw_text = page.evaluate("window.__copiedToolInput")
+        page.locator("#detail .tool-input-toggle").first.click()
+        page.wait_for_selector("#detail .tool-input-view.expanded", timeout=5000)
+        decoded_text = input_view.inner_text()
+        toggle_text_expanded = page.locator("#detail .tool-input-toggle").first.inner_text()
+        page.locator("#detail .tool-input-copy").first.click()
+        copied_decoded_text = page.evaluate("window.__copiedToolInput")
+        expanded_view_count = page.locator("#detail .tool-input-view").count()
+        decoded_box_count = page.locator("#detail .tool-input-decoded").count()
+        decoded_copy_button_count = page.locator("#detail .tool-input-copy-decoded").count()
+        page.locator("#detail .tool-input-toggle").first.click()
+        restored_text = input_view.inner_text()
+        full_json_buttons = page.locator("#detail .json-view .tool-input-toggle").count()
+        full_json_copy_buttons = page.locator("#detail .json-view .tool-input-copy").count()
+    finally:
+        page.close()
+
+    assert errors == []
+    assert "\\nprint" in raw_text
+    assert "python - <<'PY'\nprint(\"hello\")\nPY" in decoded_text
+    assert copied_raw_text == raw_text
+    assert copied_decoded_text == decoded_text
+    assert toggle_text_before == "\u21b5"
+    assert toggle_text_expanded == "Raw"
+    assert restored_text == raw_text
+    assert input_view_count == expanded_view_count == 1
+    assert decoded_box_count == 0
+    assert copy_button_count == 1
+    assert decoded_copy_button_count == 0
+    assert full_json_buttons == 0
+    assert full_json_copy_buttons == 0
+
+
+def test_viewer_renders_embedded_and_dropped_compact_trace_bundle(tmp_path: Path, chromium_browser) -> None:
+    records = _compact_contract_records()
+    bundle = build_compact_trace_bundle(list(records))
+    html_path = tmp_path / "compact.html"
+    bundle_path = tmp_path / "compact.ctap.json"
+    blank_html_path = tmp_path / "blank.html"
+
+    _generate_html_viewer_from_compact_bundle(
+        bundle,
+        html_path,
+        display_trace_path=bundle_path,
+        display_html_path=html_path,
+    )
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    blank_html_path.write_text(_read_viewer_template(), encoding="utf-8")
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").nth(1).click()
+        page.wait_for_selector("#detail .section", timeout=5000)
+        embedded_state = page.evaluate(
+            """() => ({
+              entryCount: entries.length,
+              hasBlobRef: JSON.stringify(EMBEDDED_TRACE_COMPACT_DATA).includes('__claude_tap_blob_ref__'),
+              detailText: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert embedded_state["entryCount"] == 2
+    assert embedded_state["hasBlobRef"] is True
+    assert "Compact bundle turn 2." in embedded_state["detailText"]
+    assert "Compact response 2." in embedded_state["detailText"]
+
+    drop_page = chromium_browser.new_page()
+    drop_errors: list[str] = []
+    drop_page.on("pageerror", lambda exc: drop_errors.append(f"pageerror: {exc}"))
+    drop_page.on(
+        "console", lambda msg: drop_errors.append(f"console.error: {msg.text}") if msg.type == "error" else None
+    )
+    try:
+        drop_page.goto(blank_html_path.resolve().as_uri(), timeout=10000)
+        drop_page.set_input_files("#file-input", str(bundle_path))
+        drop_page.wait_for_selector(".sidebar-item", timeout=5000)
+        dropped_state = drop_page.evaluate(
+            """() => ({
+              entryCount: entries.length,
+              sidebarText: document.querySelector('#sidebar')?.innerText || '',
+              detailText: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+    finally:
+        drop_page.close()
+
+    assert drop_errors == []
+    assert dropped_state["entryCount"] == 2
+    assert "Compact bundle turn 1." in dropped_state["detailText"]
+    assert "gpt-5.4" in dropped_state["sidebarText"]
+
+
 def test_viewer_does_not_synthesize_messages_for_empty_responses_input(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "responses_empty_input", (_responses_empty_input_record(),))
 
@@ -1409,6 +1718,35 @@ def test_viewer_sidebar_order_can_switch_between_model_turn_and_session_sequence
     assert session_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
 
 
+def test_viewer_session_order_groups_claude_code_tool_loop_rounds(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "claude_code_session_rounds", _claude_code_session_round_records())
+
+    page = chromium_browser.new_page()
+    page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'session')")
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              groups: Array.from(document.querySelectorAll('.sidebar-group-header .group-name')).map(el => el.textContent),
+              counts: Array.from(document.querySelectorAll('.sidebar-group-header .group-count')).map(el => el.textContent),
+              turns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+              headerText: document.querySelector('#sidebar')?.innerText || '',
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["groups"] == [
+        "Session 1 - Check configured MCP settings",
+        "Session 2 - Diagnose portfolio holdings",
+        "Session 3 - Add portfolio positions",
+    ]
+    assert state["counts"] == ["3", "2", "2"]
+    assert state["turns"] == ["Turn 1", "Turn 2", "Turn 3", "Turn 4", "Turn 5", "Turn 6", "Turn 7"]
+    assert "SUGGESTION MODE" not in state["headerText"]
+
+
 def test_viewer_session_group_hover_shows_full_truncated_user_input(tmp_path: Path, chromium_browser) -> None:
     long_prompt = (
         "Investigate why the dashboard session group title is truncated, then preserve this full original "
@@ -1430,6 +1768,10 @@ def test_viewer_session_group_hover_shows_full_truncated_user_input(tmp_path: Pa
                         "role": "user",
                         "content": [
                             {"type": "text", "text": "<system-reminder>\nskip injected context\n</system-reminder>"},
+                            {
+                                "type": "text",
+                                "text": "<local-command-caveat>\nskip local command context\n</local-command-caveat>",
+                            },
                             {"type": "text", "text": long_prompt},
                             {"type": "text", "text": "[Image: source: /tmp/screenshot.png]"},
                         ],
@@ -1627,6 +1969,93 @@ def test_viewer_trace_path_copy_handles_apostrophes(tmp_path: Path, chromium_bro
     assert errors == []
 
 
+def test_viewer_iframe_embed_query_hides_chrome_and_keeps_trace_loaded(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "embed_trace", (_anthropic_messages_record(),))
+    query = "embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light"
+
+    page = chromium_browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+    page.on("console", lambda msg: errors.append(f"console.error: {msg.text}") if msg.type == "error" else None)
+    try:
+        page.goto(
+            f"{html_path.resolve().as_uri()}?{query}",
+            timeout=10000,
+        )
+        page.wait_for_selector(".sidebar-item", timeout=5000)
+        state = page.evaluate(
+            """() => ({
+              embedMode: document.documentElement.dataset.embedMode || '',
+              bodyClasses: Array.from(document.body.classList),
+              headerDisplay: getComputedStyle(document.querySelector('.header')).display,
+              pathDisplay: getComputedStyle(document.querySelector('#trace-path-bar')).display,
+              themeToggleDisplay: getComputedStyle(document.querySelector('#theme-toggle')).display,
+              langSelectDisplay: getComputedStyle(document.querySelector('#lang-select')).display,
+              searchBarDisplay: getComputedStyle(document.querySelector('#search-bar')).display,
+              sidebarSortDisplay: getComputedStyle(document.querySelector('#sidebar-sort')).display,
+              detailTabsDisplay: getComputedStyle(document.querySelector('.detail-inspector-bar')).display,
+              actionBarDisplay: getComputedStyle(document.querySelector('.action-bar')).display,
+              sidebarWidth: Math.round(document.querySelector('#sidebar-wrap').getBoundingClientRect().width),
+              theme: document.documentElement.dataset.theme || 'light',
+              sidebarItemCount: document.querySelectorAll('.sidebar-item').length,
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["embedMode"] == "true"
+    assert "embed-mode" in state["bodyClasses"]
+    assert "embed-compact" in state["bodyClasses"]
+    assert state["headerDisplay"] == "none"
+    assert state["pathDisplay"] == "none"
+    assert state["themeToggleDisplay"] == "none"
+    assert state["langSelectDisplay"] == "none"
+    assert state["searchBarDisplay"] == "none"
+    assert state["sidebarSortDisplay"] == "none"
+    assert state["detailTabsDisplay"] == "none"
+    assert state["actionBarDisplay"] == "none"
+    assert state["sidebarWidth"] <= 280
+    assert state["theme"] == "light"
+    assert state["sidebarItemCount"] == 1
+
+    sandbox_page = chromium_browser.new_page()
+    sandbox_errors: list[str] = []
+    sandbox_page.on("pageerror", lambda exc: sandbox_errors.append(f"pageerror: {exc}"))
+    sandbox_page.on(
+        "console",
+        lambda msg: sandbox_errors.append(f"console.error: {msg.text}") if msg.type == "error" else None,
+    )
+    harness_path = tmp_path / "embed_harness.html"
+    harness_path.write_text(
+        f'<iframe sandbox="allow-scripts" src="{html_path.resolve().as_uri()}?{query}" '
+        'style="width:1200px;height:800px"></iframe>',
+        encoding="utf-8",
+    )
+    try:
+        sandbox_page.goto(harness_path.resolve().as_uri(), timeout=10000)
+        frame = sandbox_page.frame_locator("iframe")
+        frame.locator(".sidebar-item").first.wait_for(state="attached", timeout=5000)
+        sandbox_state = frame.locator("body").evaluate(
+            """() => ({
+              embedMode: document.documentElement.dataset.embedMode || '',
+              headerDisplay: getComputedStyle(document.querySelector('.header')).display,
+              pathDisplay: getComputedStyle(document.querySelector('#trace-path-bar')).display,
+              sidebarItemCount: document.querySelectorAll('.sidebar-item').length,
+              dropZoneDisplay: getComputedStyle(document.querySelector('#drop-zone')).display,
+            })"""
+        )
+    finally:
+        sandbox_page.close()
+
+    assert sandbox_errors == []
+    assert sandbox_state["embedMode"] == "true"
+    assert sandbox_state["headerDisplay"] == "none"
+    assert sandbox_state["pathDisplay"] == "none"
+    assert sandbox_state["sidebarItemCount"] == 1
+    assert sandbox_state["dropZoneDisplay"] == "none"
+
+
 def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, chromium_browser) -> None:
     records = tuple(record for case in _contract_cases() for record in case.records)
     html_path = _generate_case_html(tmp_path, "v8_coverage", records)
@@ -1704,6 +2133,13 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
               renderImageElementForBlock(imageBlock);
               document.body.insertAdjacentHTML('beforeend', renderImageBlock(imageBlock, 0, 1, { frameBlocks: true }));
               renderViewerActions();
+              valueHasReadableEscapes({ cmd: 'printf "coverage\\\\n"' });
+              decodeEscapedTextForView('line1\\\\nline2\\\\t\\\\u4e00');
+              document.body.insertAdjacentHTML(
+                'beforeend',
+                renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
+              );
+              document.querySelector('.tool-input-toggle')?.click();
               const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
               if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
               tooltipTrigger.dataset.fullUserInput = 'coverage tooltip prompt';
@@ -1840,3 +2276,113 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
     assert mobile_dark["sidebar"]["width"] == 0
     assert mobile_dark["detail"]["width"] == 390
     assert mobile_dark["detail"]["left"] == 0
+
+
+def test_viewer_session_identical_prompts_image_tags_and_early_title_generation(
+    tmp_path: Path, chromium_browser
+) -> None:
+    model = "aws.claude-opus-4.6"
+    title_system = 'Generate a concise, sentence-case title for the session. Return JSON with a single "title" field.'
+
+    def make_record(
+        request_id: str,
+        turn: int,
+        messages: list[dict[str, Any]],
+        response_content: list[dict[str, Any]],
+        *,
+        system: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"model": model, "messages": messages}
+        if system is not None:
+            body["system"] = system
+        return {
+            "request_id": request_id,
+            "turn": turn,
+            "timestamp": f"2026-05-13T13:{20 + turn:02d}:00+00:00",
+            "duration_ms": 100,
+            "request": {"method": "POST", "path": "/v1/messages", "headers": {}, "body": body},
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {"stop_reason": "end_turn", "content": response_content},
+            },
+        }
+
+    records = (
+        # Turn 1
+        make_record(
+            "req_t1",
+            1,
+            [{"role": "user", "content": "继续"}],
+            [{"type": "text", "text": "Turn 1 done"}],
+        ),
+        # Turn 1 title-gen
+        make_record(
+            "req_t1_title",
+            2,
+            [{"role": "user", "content": "继续"}],
+            [{"type": "text", "text": '{"title": "Group1"}'}],
+            system=title_system,
+        ),
+        # Turn 2 title-gen arrives before the real request with the same prompt.
+        make_record(
+            "req_t2_title",
+            3,
+            [{"role": "user", "content": "继续"}],
+            [{"type": "text", "text": '{"title": "Group2"}'}],
+            system=title_system,
+        ),
+        # Turn 2 (identical prompt)
+        make_record(
+            "req_t2",
+            4,
+            [{"role": "user", "content": "继续"}],
+            [{"type": "text", "text": "Turn 2 done"}],
+        ),
+        # Turn 3 (image wrappers)
+        make_record(
+            "req_t3",
+            5,
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "<image name=[Image #1]>"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+                            },
+                        },
+                        {"type": "text", "text": "</image>"},
+                        {"type": "text", "text": "Analyze the flowchart"},
+                    ],
+                }
+            ],
+            [{"type": "text", "text": "Turn 3 done"}],
+        ),
+    )
+
+    html_path = _generate_case_html(tmp_path, "identical_prompts_and_image_tags", records)
+    page = chromium_browser.new_page()
+    page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'session')")
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              groups: Array.from(document.querySelectorAll('.sidebar-group-header .group-name')).map(el => el.textContent),
+              counts: Array.from(document.querySelectorAll('.sidebar-group-header .group-count')).map(el => el.textContent),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["groups"] == [
+        "Session 1 - 继续",
+        "Session 2 - 继续",
+        "Session 3 - Analyze the flowchart",
+    ]
+    assert state["counts"] == ["2", "2", "1"]

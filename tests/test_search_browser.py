@@ -301,6 +301,142 @@ def _dispatch_find_shortcut(page, *, meta: bool, ctrl: bool) -> None:
     )
 
 
+def _write_search_trace(path: Path, count: int = 1) -> None:
+    records = []
+    for idx in range(count):
+        records.append(
+            {
+                "timestamp": "2026-05-29T08:00:00+00:00",
+                "request_id": f"req_search_quote_{idx}",
+                "turn": idx + 1,
+                "duration_ms": 1200,
+                "request": {
+                    "method": "POST",
+                    "path": "/v1/messages",
+                    "headers": {"Host": "api.anthropic.com"},
+                    "body": {
+                        "model": "claude-sonnet-4-6",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "Investigate agent routing metadata.",
+                            }
+                        ],
+                        "metadata": {
+                            "subagent_type": "code-review",
+                            "subagent_hint": "subagent_type appears in JSON tree rendering.",
+                        },
+                    },
+                },
+                "response": {
+                    "status": 200,
+                    "headers": {},
+                    "body": {
+                        "model": "claude-sonnet-4-6",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "The search target is present in metadata.",
+                            }
+                        ],
+                    },
+                },
+            }
+        )
+    path.write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_json_key_query_without_key_quotes_matches(tmp_path):
+    trace_path = tmp_path / "quote_trace.jsonl"
+    html_path = tmp_path / "quote_viewer.html"
+    _write_search_trace(trace_path)
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 760})
+            page.goto(f"file://{html_path}")
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+
+            _dispatch_find_shortcut(page, meta=False, ctrl=True)
+            page.fill("#global-search-input", 'subagent_type: "')
+            page.wait_for_function("() => document.querySelector('#global-search-count')?.textContent !== '0 of 0'")
+            page.wait_for_function("() => document.querySelectorAll('mark.global-search-hit').length > 0")
+
+            count_text = page.inner_text("#global-search-count")
+            marked_text = page.locator("mark.global-search-hit.current").first.inner_text()
+            assert " of " in count_text
+            assert "0 of 0" not in count_text
+            assert "subagent_type" in marked_text
+        finally:
+            browser.close()
+
+
+def test_same_entry_search_navigation_does_not_rerender_detail(tmp_path):
+    trace_path = tmp_path / "same_entry_trace.jsonl"
+    html_path = tmp_path / "same_entry_viewer.html"
+    _write_search_trace(trace_path)
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 760})
+            page.goto(f"file://{html_path}")
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+            page.evaluate(
+                """() => {
+                    window.__renderDetailCount = 0;
+                    const original = window.renderDetail;
+                    window.renderDetail = function(...args) {
+                        window.__renderDetailCount += 1;
+                        return original.apply(this, args);
+                    };
+                }"""
+            )
+
+            _dispatch_find_shortcut(page, meta=False, ctrl=True)
+            page.fill("#global-search-input", "subagent")
+            page.wait_for_function("() => document.querySelectorAll('mark.global-search-hit').length > 1")
+            before = page.evaluate("window.__renderDetailCount")
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(100)
+            after = page.evaluate("window.__renderDetailCount")
+
+            assert after == before
+        finally:
+            browser.close()
+
+
+def test_lazy_global_search_does_not_parse_every_entry(tmp_path):
+    trace_path = tmp_path / "lazy_trace.jsonl"
+    html_path = tmp_path / "lazy_viewer.html"
+    _write_search_trace(trace_path, count=60)
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 760})
+            page.goto(f"file://{html_path}")
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+            initial_cache_size = page.evaluate("entryCache.size")
+
+            _dispatch_find_shortcut(page, meta=False, ctrl=True)
+            page.fill("#global-search-input", 'subagent_type: "')
+            page.wait_for_function("() => document.querySelector('#global-search-count')?.textContent !== '0 of 0'")
+
+            parsed_entries = page.evaluate("entryCache.size")
+            assert parsed_entries < 10
+            assert parsed_entries <= initial_cache_size + 1
+        finally:
+            browser.close()
+
+
 class TestViewerGlobalSearch:
     def test_cmd_or_ctrl_f_opens_custom_search(self, browser_page):
         _dispatch_find_shortcut(browser_page, meta=True, ctrl=False)
