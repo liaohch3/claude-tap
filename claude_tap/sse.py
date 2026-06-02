@@ -106,6 +106,8 @@ class SSEReassembler:
                         block["text"] = block.get("text", "") + delta.get("text", "")
                     elif delta.get("type") == "thinking_delta":
                         block["thinking"] = block.get("thinking", "") + delta.get("thinking", "")
+                        if delta.get("signature"):
+                            block["signature"] = delta["signature"]
                     elif delta.get("type") == "input_json_delta":
                         block["_partial_json"] = block.get("_partial_json", "") + delta.get("partial_json", "")
             elif event_type == "content_block_stop":

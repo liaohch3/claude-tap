@@ -99,7 +99,19 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
     }
     if not isinstance(body, str):
         return []
-    if '"bytes"' not in body and not any(f'"{key}"' in body for key in error_event_keys):
+    stream_event_keys = (
+        "bytes",
+        "chunk",
+        "type",
+        "messageStart",
+        "contentBlockStart",
+        "contentBlockDelta",
+        "contentBlockStop",
+        "messageStop",
+        "metadata",
+        *error_event_keys,
+    )
+    if not any(f'"{key}"' in body for key in stream_event_keys):
         return []
 
     def _converse_event_payload(payload: dict) -> tuple[str | None, dict | None]:
@@ -140,6 +152,9 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
                 reasoning = delta["reasoningContent"]
                 text = reasoning.get("text") if isinstance(reasoning.get("text"), str) else ""
                 normalized_delta = {"type": "thinking_delta", "thinking": text}
+                signature = reasoning.get("signature") if isinstance(reasoning.get("signature"), str) else ""
+                if signature:
+                    normalized_delta["signature"] = signature
             elif isinstance(delta.get("toolUse"), dict):
                 tool_delta = delta["toolUse"]
                 partial = tool_delta.get("input") if isinstance(tool_delta.get("input"), str) else ""
@@ -190,6 +205,13 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
             if event_type and event_payload:
                 return event_type, event_payload
             return None, None
+
+        event_type = frame.get("type")
+        if isinstance(event_type, str) and event_type:
+            return event_type, frame
+        event_type, event_payload = _converse_event_payload(frame)
+        if event_type and event_payload:
+            return event_type, event_payload
 
         for event_type in error_event_keys:
             payload = frame.get(event_type)

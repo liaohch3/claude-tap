@@ -56,7 +56,19 @@ def _bedrock_converse_body() -> bytes:
             _bedrock_frame({"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "OK"}}}),
             _bedrock_frame({"contentBlockStop": {"contentBlockIndex": 0}}),
             _bedrock_frame({"messageStop": {"stopReason": "end_turn"}}),
-            _bedrock_frame({"metadata": {"usage": {"inputTokens": 6, "outputTokens": 2, "totalTokens": 8}}}),
+            _bedrock_frame(
+                {
+                    "metadata": {
+                        "usage": {
+                            "inputTokens": 6,
+                            "outputTokens": 2,
+                            "totalTokens": 8,
+                            "cacheReadInputTokens": 3,
+                            "cacheWriteInputTokens": 1,
+                        }
+                    }
+                }
+            ),
         ]
     )
 
@@ -145,6 +157,9 @@ async def test_reverse_proxy_records_bedrock_eventstream_without_stream_flag(
         assert record["response"]["body"]["content"] == [{"type": "text", "text": "OK"}]
         assert record["response"]["body"]["usage"]["input_tokens"] == 6
         assert record["response"]["body"]["usage"]["output_tokens"] == 2
+        if "converse-stream" in bedrock_path:
+            assert record["response"]["body"]["usage"]["cache_read_input_tokens"] == 3
+            assert record["response"]["body"]["usage"]["cache_creation_input_tokens"] == 1
         assert "content_block_delta" in [event["event"] for event in record["response"]["sse_events"]]
     finally:
         await proxy_session.close()
@@ -239,6 +254,9 @@ async def test_forward_proxy_records_bedrock_eventstream_without_stream_flag(
     assert record["response"]["body"]["content"] == [{"type": "text", "text": "OK"}]
     if "converse-stream" not in bedrock_path:
         assert record["response"]["body"]["usage"]["cache_read_input_tokens"] == 2
+    else:
+        assert record["response"]["body"]["usage"]["cache_read_input_tokens"] == 3
+        assert record["response"]["body"]["usage"]["cache_creation_input_tokens"] == 1
     assert record["response"]["body"]["usage"]["output_tokens"] == 2
     assert [event["event"] for event in record["response"]["sse_events"]][0] == "message_start"
     reset_trace_store()

@@ -840,6 +840,13 @@ def _response_text(body: Any) -> str:
             return text
 
     output = body.get("output")
+    if isinstance(output, dict):
+        message = output.get("message")
+        if isinstance(message, dict):
+            text = _content_text(message.get("content"))
+            if text:
+                return text
+
     text = _content_text(output)
     if text:
         return text

@@ -122,6 +122,65 @@ def test_normalize_record_for_viewer_decodes_bedrock_converse_stream() -> None:
     assert normalized["response"]["body"]["usage"]["total_tokens"] == 6
 
 
+def test_normalize_record_for_viewer_decodes_raw_bedrock_converse_stream_payloads() -> None:
+    body = "".join(
+        json.dumps(payload, separators=(",", ":"))
+        for payload in (
+            {"messageStart": {"role": "assistant"}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "OK"}}},
+            {"metadata": {"usage": {"inputTokens": 4, "outputTokens": 2, "totalTokens": 6}}},
+        )
+    )
+    record = {
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/model/anthropic.claude-sonnet-4-20250514-v1:0/converse-stream",
+            "body": {"messages": [{"role": "user", "content": [{"text": "ping"}]}]},
+        },
+        "response": {"status": 200, "headers": {}, "body": body},
+    }
+
+    normalized = json.loads(_normalize_record_for_viewer(json.dumps(record)))
+
+    assert normalized["response"]["body"]["content"] == [{"type": "text", "text": "OK"}]
+    assert normalized["response"]["body"]["usage"]["input_tokens"] == 4
+    assert normalized["response"]["body"]["usage"]["output_tokens"] == 2
+
+
+def test_normalize_record_for_viewer_preserves_bedrock_reasoning_signature() -> None:
+    body = "".join(
+        [
+            _bedrock_frame({"messageStart": {"role": "assistant"}}),
+            _bedrock_frame(
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"reasoningContent": {"text": "thinking", "signature": "sig-123"}},
+                    }
+                }
+            ),
+        ]
+    )
+    record = {
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/model/anthropic.claude-sonnet-4-20250514-v1:0/converse-stream",
+            "body": {"messages": [{"role": "user", "content": [{"text": "ping"}]}]},
+        },
+        "response": {"status": 200, "headers": {}, "body": body},
+    }
+
+    normalized = json.loads(_normalize_record_for_viewer(json.dumps(record)))
+
+    delta = normalized["response"]["sse_events"][1]["data"]["delta"]
+    assert delta == {"type": "thinking_delta", "thinking": "thinking", "signature": "sig-123"}
+    assert normalized["response"]["body"]["content"] == [
+        {"type": "thinking", "thinking": "thinking", "signature": "sig-123"}
+    ]
+
+
 @pytest.mark.skipif(pw_missing, reason="playwright not installed")
 def test_bedrock_invoke_path_is_primary_filter(tmp_path) -> None:
     from playwright.sync_api import sync_playwright
@@ -226,3 +285,85 @@ def test_bedrock_billing_header_does_not_become_task_label(tmp_path) -> None:
         browser.close()
 
     assert label == "Claude Agent"
+
+
+@pytest.mark.skipif(pw_missing, reason="playwright not installed")
+def test_bedrock_converse_response_output_and_usage_render(tmp_path) -> None:
+    from playwright.sync_api import sync_playwright
+
+    from claude_tap.viewer import _generate_html_viewer
+
+    trace_path = tmp_path / "trace.jsonl"
+    _write_trace(
+        trace_path,
+        [
+            {
+                "timestamp": "2026-04-27T09:15:01+00:00",
+                "request_id": "req_1",
+                "turn": 1,
+                "duration_ms": 100,
+                "request": {
+                    "method": "POST",
+                    "path": "/model/anthropic.claude-sonnet-4-20250514-v1:0/converse",
+                    "headers": {},
+                    "body": {
+                        "messages": [{"role": "user", "content": [{"text": "ping"}]}],
+                    },
+                },
+                "response": {
+                    "status": 200,
+                    "headers": {},
+                    "body": {
+                        "output": {
+                            "message": {
+                                "role": "assistant",
+                                "content": [
+                                    {"text": "Bedrock says OK"},
+                                    {
+                                        "toolUse": {
+                                            "toolUseId": "tool-1",
+                                            "name": "lookup",
+                                            "input": {"query": "ping"},
+                                        }
+                                    },
+                                ],
+                            }
+                        },
+                        "usage": {
+                            "inputTokens": 9,
+                            "outputTokens": 4,
+                            "totalTokens": 13,
+                            "cacheReadInputTokens": 3,
+                            "cacheWriteInputTokens": 2,
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    html_path = tmp_path / "trace.html"
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
+        result = page.evaluate(
+            """
+            () => ({
+              output: getResponseOutput(entries[0]).content,
+              usage: getUsage(entries[0]),
+            })
+            """
+        )
+        browser.close()
+
+    assert result["output"] == [
+        {"type": "text", "text": "Bedrock says OK"},
+        {"type": "tool_use", "id": "tool-1", "name": "lookup", "input": {"query": "ping"}},
+    ]
+    assert result["usage"]["input_tokens"] == 9
+    assert result["usage"]["output_tokens"] == 4
+    assert result["usage"]["cache_read_input_tokens"] == 3
+    assert result["usage"]["cache_creation_input_tokens"] == 2

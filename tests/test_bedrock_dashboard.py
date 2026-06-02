@@ -8,6 +8,7 @@ import json
 from claude_tap.dashboard import (
     _bedrock_events,
     _record_model,
+    _record_response_text,
     _record_usage,
 )
 
@@ -58,6 +59,19 @@ class TestBedrockEvents:
         assert events[1]["data"]["delta"] == {"type": "text_delta", "text": "OK"}
         assert events[2]["data"]["usage"] == {"inputTokens": 6, "outputTokens": 2}
 
+    def test_decodes_raw_converse_stream_payloads(self):
+        body = "".join(
+            json.dumps(payload, separators=(",", ":"))
+            for payload in (
+                {"messageStart": {"role": "assistant"}},
+                {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "OK"}}},
+                {"metadata": {"usage": {"inputTokens": 6, "outputTokens": 2}}},
+            )
+        )
+        record = {"response": {"body": body}}
+        events = _bedrock_events(record)
+        assert [event["event"] for event in events] == ["message_start", "content_block_delta", "message_delta"]
+
     def test_preserves_bedrock_error_events(self):
         record = {"response": {"body": json.dumps({"modelStreamErrorException": {"message": "stream failed"}})}}
         events = _bedrock_events(record)
@@ -97,11 +111,25 @@ class TestBedrockRecordUsage:
         assert usage["output_tokens"] == 2
 
     def test_extracts_usage_from_bedrock_converse_response_body(self):
-        record = {"response": {"body": {"usage": {"inputTokens": 9, "outputTokens": 4, "totalTokens": 13}}}}
+        record = {
+            "response": {
+                "body": {
+                    "usage": {
+                        "inputTokens": 9,
+                        "outputTokens": 4,
+                        "totalTokens": 13,
+                        "cacheReadInputTokens": 3,
+                        "cacheWriteInputTokens": 2,
+                    }
+                }
+            }
+        }
         usage = _record_usage(record)
         assert usage["input_tokens"] == 9
         assert usage["output_tokens"] == 4
         assert usage["total_tokens"] == 13
+        assert usage["cache_read_input_tokens"] == 3
+        assert usage["cache_creation_input_tokens"] == 2
 
     def test_extracts_usage_from_bedrock_converse_stream_metadata(self):
         body = _bedrock_body(
@@ -114,6 +142,22 @@ class TestBedrockRecordUsage:
         assert usage["input_tokens"] == 6
         assert usage["output_tokens"] == 2
         assert usage["total_tokens"] == 8
+
+
+def test_record_response_text_reads_bedrock_converse_output_message() -> None:
+    record = {
+        "response": {
+            "body": {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "Bedrock says OK"}],
+                    }
+                }
+            }
+        }
+    }
+    assert _record_response_text(record) == "Bedrock says OK"
 
 
 class TestBedrockRecordModel:
