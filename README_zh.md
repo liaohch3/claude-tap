@@ -11,6 +11,8 @@
 
 `claude-tap` 是给 AI 编程 agent 用的本地代理和 trace 查看器。把 CLI 通过它启动，就能看到真实 API 流量：system prompt、对话历史、工具 schema、工具调用、流式响应、token 用量和请求 diff。
 
+网站：[本地 AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · 指南：[如何本地查看 Agent traces](docs/guides/agent-trace-viewer.zh.md)
+
 它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli)、[Qoder CLI](https://qoder.com/cli)、[Antigravity CLI](https://antigravity.google/product/antigravity-cli) 和 [CodeBuddy CLI](https://www.codebuddy.ai)。
 
 <p align="center">
@@ -401,6 +403,10 @@ claude-tap dashboard
 # 从已有 JSONL trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
+# 导出可独立搬运的压缩 trace，再按需渲染
+claude-tap export <session-id> --format compact -o trace.ctap.json
+claude-tap export trace.ctap.json -o trace.html
+
 # 在 iframe 中嵌入导出的查看器，并减少外层 chrome
 # trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light
 
@@ -416,6 +422,8 @@ claude-tap --tap-no-open
 ```
 
 纯代理模式下，可以在另一个终端启动客户端，并把它的 base URL 或代理配置指向本地代理。具体接法见 [客户端支持矩阵](docs/support-matrix.md)。
+
+作为 VSCode Claude Code 的 `claudeProcessWrapper` 使用时，claude-tap 会识别扩展传入的 Claude binary 路径并用它启动 Claude。
 
 ### CLI 选项
 

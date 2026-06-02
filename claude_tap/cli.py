@@ -123,6 +123,29 @@ async def _is_dashboard_reusable(host: str, port: int) -> bool:
     return await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port)
 
 
+_CLAUDE_EXECUTABLE_NAMES = {"claude", "claude.exe", "claude.cmd", "claude.bat"}
+
+
+def _looks_like_claude_binary_path(value: str) -> bool:
+    if not value or value.startswith("-"):
+        return False
+    # VSCode's claudeProcessWrapper passes the bundled Claude binary path as
+    # argv[0]. Require a path-looking file so normal prompts/dirs named
+    # "claude" are not silently stripped or executed.
+    if "/" not in value and "\\" not in value and not (len(value) > 1 and value[1] == ":"):
+        return False
+    path = Path(value)
+    return path.name.lower() in _CLAUDE_EXECUTABLE_NAMES and path.is_file()
+
+
+def _extract_wrapped_client_command(client: str, args: list[str]) -> tuple[str | None, list[str]]:
+    if client != "claude" or not args:
+        return None, args
+    if _looks_like_claude_binary_path(args[0]):
+        return args[0], args[1:]
+    return None, args
+
+
 def _trust_ca_for_current_user(ca_cert_path: Path) -> int:
     """Trust the forward-proxy CA in the current user's macOS login keychain."""
     if sys.platform != "darwin":
@@ -305,6 +328,7 @@ async def async_main(args: argparse.Namespace):
                     client=args.client,
                     proxy_mode=args.proxy_mode,
                     ca_cert_path=ca_cert_path,
+                    client_cmd=getattr(args, "client_cmd", None),
                 )
             except asyncio.CancelledError:
                 pass
@@ -602,6 +626,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Strip leading "--" separator if present (argparse leaves it in remainder)
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
+    args.client_cmd, claude_args = _extract_wrapped_client_command(args.client, claude_args)
     args.claude_args = claude_args
     # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
     # 127.0.0.1 otherwise (launching the client locally).

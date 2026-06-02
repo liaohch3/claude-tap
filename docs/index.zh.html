@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>claude-tap - 本地 AI Agent Trace Viewer</title>
+    <meta
+      name="description"
+      content="claude-tap 是面向 AI 编程 Agent 的本地 trace viewer 和 HTML 导出工具，支持 Claude Code、Codex、Gemini、Cursor、OpenCode、Kimi、Pi、Hermes、Qoder、Antigravity 和 CodeBuddy。"
+    >
+    <link rel="canonical" href="https://liaohch3.com/claude-tap/index.zh.html">
+    <link rel="alternate" hreflang="en" href="https://liaohch3.com/claude-tap/">
+    <link rel="alternate" hreflang="zh-Hans" href="https://liaohch3.com/claude-tap/index.zh.html">
+    <link rel="alternate" hreflang="x-default" href="https://liaohch3.com/claude-tap/">
+    <style>
+      :root {
+        --color-bg: #f4f7fb;
+        --color-panel: #ffffff;
+        --color-ink: #111827;
+        --color-muted: #5f6f84;
+        --color-line: #dce5ef;
+        --color-blue: #2563eb;
+        --color-shadow: rgba(26, 43, 68, 0.12);
+        --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        --space-3: 0.75rem;
+        --space-4: 1rem;
+        --space-5: 1.25rem;
+        --space-6: 1.5rem;
+        --space-8: 2rem;
+        --space-10: 2.5rem;
+        --space-12: 3rem;
+        --space-16: 4rem;
+        --radius: 8px;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; overflow-x: clip; }
+      body { background: var(--color-bg); color: var(--color-ink); font-family: var(--font-sans); line-height: 1.65; }
+      a { color: inherit; }
+      img { display: block; max-width: 100%; }
+      .shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+      .topbar { border-bottom: 1px solid var(--color-line); background: rgba(244, 247, 251, 0.92); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(14px); }
+      .topbar-inner { align-items: center; display: flex; gap: var(--space-4); justify-content: space-between; min-height: 68px; }
+      .brand { align-items: center; display: flex; gap: var(--space-3); text-decoration: none; }
+      .brand-mark { align-items: center; background: var(--color-ink); border-radius: 6px; color: #fff; display: inline-flex; font-family: var(--font-mono); font-size: 0.92rem; font-weight: 700; height: 34px; justify-content: center; width: 34px; }
+      .nav { align-items: center; display: flex; gap: var(--space-4); font-size: 0.94rem; white-space: nowrap; }
+      .nav a { color: var(--color-muted); text-decoration: none; }
+      .nav .primary { background: var(--color-ink); border-radius: 999px; color: #fff; padding: 0.58rem 0.92rem; }
+      .hero { padding: var(--space-16) 0 var(--space-10); }
+      .hero-grid { align-items: center; display: grid; gap: var(--space-12); grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr); }
+      .eyebrow { color: var(--color-blue); font-size: 0.84rem; font-weight: 700; margin: 0 0 var(--space-4); text-transform: uppercase; }
+      h1 { font-size: clamp(2.65rem, 6vw, 5.5rem); letter-spacing: 0; line-height: 0.98; margin: 0; max-width: 12ch; overflow-wrap: anywhere; }
+      .lead { color: var(--color-muted); font-size: clamp(1.05rem, 2vw, 1.28rem); margin: var(--space-6) 0 0; max-width: 62ch; }
+      .hero-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-8); }
+      .button { align-items: center; border: 1px solid var(--color-line); border-radius: 999px; display: inline-flex; font-weight: 700; justify-content: center; min-height: 44px; padding: 0.72rem 1rem; text-decoration: none; white-space: nowrap; }
+      .button.dark { background: var(--color-ink); border-color: var(--color-ink); color: #fff; }
+      .button.light { background: var(--color-panel); color: var(--color-ink); }
+      .terminal { background: #0e1726; border: 1px solid #1f2f46; border-radius: var(--radius); box-shadow: 0 24px 50px var(--color-shadow); color: #d8e7ff; font-family: var(--font-mono); font-size: 0.92rem; margin-top: var(--space-8); overflow: auto; padding: var(--space-5); }
+      .terminal code { white-space: pre; }
+      .viewer-shot { background: var(--color-panel); border: 1px solid var(--color-line); border-radius: var(--radius); box-shadow: 0 24px 60px var(--color-shadow); overflow: hidden; }
+      .viewer-shot img { width: 100%; }
+      .caption { color: var(--color-muted); font-size: 0.9rem; padding: var(--space-3) var(--space-4); }
+      .strip { border-top: 1px solid var(--color-line); border-bottom: 1px solid var(--color-line); background: var(--color-panel); }
+      .strip-grid { display: grid; gap: var(--space-6); grid-template-columns: repeat(4, minmax(0, 1fr)); padding: var(--space-6) 0; }
+      .metric strong { display: block; font-size: 1.02rem; }
+      .metric span { color: var(--color-muted); display: block; font-size: 0.92rem; margin-top: 0.25rem; }
+      .section { padding: var(--space-16) 0; }
+      .section-head { align-items: end; display: grid; gap: var(--space-6); grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); margin-bottom: var(--space-8); }
+      h2 { font-size: clamp(2rem, 4vw, 3.2rem); line-height: 1; margin: 0; overflow-wrap: anywhere; }
+      .section-head p { color: var(--color-muted); margin: 0; }
+      .cards { display: grid; gap: var(--space-4); grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .card { background: var(--color-panel); border: 1px solid var(--color-line); border-radius: var(--radius); padding: var(--space-6); }
+      .card h3 { font-size: 1.12rem; margin: 0 0 var(--space-3); }
+      .card p { color: var(--color-muted); margin: 0; }
+      .workflow { display: grid; gap: var(--space-4); grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .step { border-left: 3px solid var(--color-blue); padding-left: var(--space-4); }
+      .step strong, .step span { display: block; }
+      .step span { color: var(--color-muted); margin-top: 0.5rem; }
+      .image-grid { display: grid; gap: var(--space-4); grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .image-grid figure { background: var(--color-panel); border: 1px solid var(--color-line); border-radius: var(--radius); margin: 0; overflow: hidden; }
+      .image-grid figcaption { color: var(--color-muted); font-size: 0.9rem; padding: var(--space-3) var(--space-4); }
+      .clients { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+      .client { background: var(--color-panel); border: 1px solid var(--color-line); border-radius: 999px; color: var(--color-muted); font-size: 0.92rem; padding: 0.48rem 0.74rem; }
+      .cta { background: var(--color-ink); border-radius: var(--radius); color: #fff; display: grid; gap: var(--space-6); grid-template-columns: minmax(0, 1fr) auto; padding: var(--space-8); }
+      .cta h2 { color: #fff; }
+      .cta p { color: #d1d8e3; margin: var(--space-4) 0 0; }
+      .footer { color: var(--color-muted); padding: var(--space-8) 0; }
+      @media (max-width: 860px) {
+        .hero-grid, .section-head, .cards, .workflow, .image-grid, .cta { grid-template-columns: 1fr; }
+        .strip-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .nav a:not(.primary):not(.lang) { display: none; }
+      }
+      @media (max-width: 520px) {
+        .shell { width: min(100% - 24px, 1180px); }
+        .hero { padding-top: var(--space-12); }
+        .strip-grid { grid-template-columns: 1fr; }
+        h1 { font-size: clamp(2.4rem, 18vw, 4rem); }
+        .button { width: 100%; }
+        .cta { padding: var(--space-6); }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <a class="brand" href="https://github.com/liaohch3/claude-tap"><span class="brand-mark">ct</span><strong>claude-tap</strong></a>
+        <nav class="nav" aria-label="主导航">
+          <a href="guides/agent-trace-viewer.zh.html">指南</a>
+          <a href="support-matrix.zh.html">客户端</a>
+          <a class="lang" href="index.html">English</a>
+          <a class="primary" href="https://github.com/liaohch3/claude-tap">GitHub</a>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <section class="hero">
+        <div class="shell hero-grid">
+          <div>
+            <p class="eyebrow">本地 AI Agent Trace Viewer</p>
+            <h1>看清编程 Agent 真正发出了什么。</h1>
+            <p class="lead">
+              claude-tap 捕获 AI 编程 Agent 的真实 API 流量，并生成本地 trace viewer。你可以查看 prompt、工具调用、token 用量、延迟、流式响应和请求 diff，不需要把私有 trace 上传到云端 dashboard。
+            </p>
+            <div class="hero-actions">
+              <a class="button dark" href="https://github.com/liaohch3/claude-tap">打开 GitHub</a>
+              <a class="button light" href="guides/agent-trace-viewer.zh.html">阅读 Trace Viewer 指南</a>
+            </div>
+            <pre class="terminal"><code>uv tool install claude-tap
+claude-tap --tap-client codex
+claude-tap export --format html trace.jsonl</code></pre>
+          </div>
+          <figure class="viewer-shot">
+            <img src="viewer-zh.png" alt="claude-tap 本地 AI agent trace viewer，展示请求、工具调用和 token 用量">
+            <figcaption class="caption">打开一次真实 agent 运行，检查每个请求，并对比上下文在多轮之间如何变化。</figcaption>
+          </figure>
+        </div>
+      </section>
+      <section class="strip" aria-label="Trace viewer 能力">
+        <div class="shell strip-grid">
+          <div class="metric"><strong>工具调用</strong><span>查看输入、输出、参数和相邻请求 diff。</span></div>
+          <div class="metric"><strong>Token 用量</strong><span>记录 prompt、completion、cache 和 latency 信息。</span></div>
+          <div class="metric"><strong>HTML 导出</strong><span>生成便于 review 和归档的可移植 trace 文件。</span></div>
+          <div class="metric"><strong>本地优先</strong><span>查看私有 trace 不需要托管 dashboard。</span></div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="shell">
+          <div class="section-head">
+            <h2>为编程 Agent trace 设计，而不是泛用日志。</h2>
+            <p>Agent 运行受到 prompt、工具 schema、重试、流式 chunk 和模型请求格式影响。claude-tap 把这些内容保留下来，让调试从真实 trace 开始。</p>
+          </div>
+          <div class="cards">
+            <article class="card"><h3>查看完整请求链路</h3><p>检查 system prompt、对话历史、工具 schema、原始请求体和重建后的响应。</p></article>
+            <article class="card"><h3>用证据调试行为</h3><p>通过结构化 diff 看清相邻轮次之间是哪条消息、prompt、工具或参数发生了变化。</p></article>
+            <article class="card"><h3>不用服务也能分享 trace</h3><p>导出自包含 HTML viewer，团队成员可以本地打开用于 review、支持或复盘。</p></article>
+          </div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="shell">
+          <div class="section-head">
+            <h2>一套流程覆盖多种 Agent 客户端。</h2>
+            <p>用同一个本地 trace viewer 查看 Claude Code traces、Codex traces、OpenAI Responses API traces、Gemini traces 和其他编程 Agent 会话。</p>
+          </div>
+          <div class="clients" aria-label="支持的客户端">
+            <span class="client">Claude Code</span><span class="client">Codex CLI</span><span class="client">Gemini CLI</span><span class="client">Cursor CLI</span><span class="client">OpenCode</span><span class="client">Kimi CLI</span><span class="client">Pi</span><span class="client">Hermes Agent</span><span class="client">Qoder CLI</span><span class="client">Antigravity CLI</span><span class="client">CodeBuddy CLI</span>
+          </div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="shell image-grid">
+          <figure><img src="diff-modal.png" alt="AI agent 相邻请求之间的结构化 diff"><figcaption>结构化请求 diff 展示上下文如何从一轮变化到下一轮。</figcaption></figure>
+          <figure><img src="viewer-dark.png" alt="适合长时间 review 的暗色模式本地 trace viewer"><figcaption>亮色和暗色模式适合更长时间的调试和 review。</figcaption></figure>
+        </div>
+      </section>
+      <section class="section">
+        <div class="shell">
+          <div class="section-head">
+            <h2>从一次运行到一份 review 证据。</h2>
+            <p>先把 trace 留在本地检查；只有需要分享时，再导出静态 HTML artifact。</p>
+          </div>
+          <div class="workflow">
+            <div class="step"><strong>运行</strong><span>通过 claude-tap 启动你的 Agent。</span></div>
+            <div class="step"><strong>捕获</strong><span>记录真实 API 流量和流式响应。</span></div>
+            <div class="step"><strong>检查</strong><span>搜索轮次、工具、用量、延迟和 diff。</span></div>
+            <div class="step"><strong>导出</strong><span>保存独立 HTML trace 供 review。</span></div>
+          </div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="shell cta">
+          <div><h2>从本地 trace 开始。</h2><p>当你需要理解一个 AI 编程 Agent 到底做了什么，再去调 prompt、比较工具或分享运行记录。</p></div>
+          <a class="button light" href="https://github.com/liaohch3/claude-tap">从 GitHub 安装</a>
+        </div>
+      </section>
+    </main>
+    <footer class="footer"><div class="shell"><span>claude-tap 是 MIT 协议开源项目。</span></div></footer>
+  </body>
+</html>

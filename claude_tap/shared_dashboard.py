@@ -15,6 +15,7 @@ from pathlib import Path
 
 import aiohttp
 
+from claude_tap.process_utils import windows_no_console_subprocess_kwargs
 from claude_tap.trace_store import resolve_db_path
 
 DEFAULT_DASHBOARD_PORT = 19527
@@ -184,7 +185,7 @@ async def wait_for_dashboard_healthy(
 
 def _spawn_dashboard_subprocess(host: str, port: int, output_dir: Path) -> subprocess.Popen[bytes]:
     cmd = [
-        sys.executable,
+        _dashboard_python_executable(),
         "-m",
         "claude_tap",
         "dashboard",
@@ -198,14 +199,29 @@ def _spawn_dashboard_subprocess(host: str, port: int, output_dir: Path) -> subpr
         cmd.extend(["--tap-host", host])
 
     kwargs: dict = {
+        "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
     }
     if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        kwargs.update(windows_no_console_subprocess_kwargs())
     else:
         kwargs["start_new_session"] = True
     return subprocess.Popen(cmd, **kwargs)
+
+
+def _dashboard_python_executable() -> str:
+    if sys.platform != "win32":
+        return sys.executable
+
+    executable = Path(sys.executable)
+    if executable.name.lower() != "python.exe":
+        return sys.executable
+
+    pythonw = executable.with_name("pythonw.exe")
+    if pythonw.exists():
+        return str(pythonw)
+    return sys.executable
 
 
 async def ensure_shared_dashboard(
@@ -220,8 +236,6 @@ async def ensure_shared_dashboard(
     url = dashboard_url(host, port)
     if await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port):
         _migrate_legacy_traces(output_dir)
-        if open_browser:
-            open_browser_fn(url)
         return url, False
 
     spawned = await asyncio.to_thread(_spawn_dashboard_subprocess_if_needed, host, port, output_dir)
@@ -231,6 +245,6 @@ async def ensure_shared_dashboard(
     else:
         _migrate_legacy_traces(output_dir)
 
-    if open_browser:
+    if open_browser and spawned:
         open_browser_fn(url)
     return url, spawned

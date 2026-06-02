@@ -4,7 +4,7 @@
 Python coverage is read from a coverage.py JSON report. Viewer frontend coverage
 is measured with Chromium V8 precise coverage against the cross-client viewer
 contract traces. The frontend incremental metric is function-oriented: changed
-viewer.html JavaScript functions must be exercised by V8 coverage.
+viewer JavaScript functions must be exercised by V8 coverage.
 """
 
 from __future__ import annotations
@@ -31,6 +31,26 @@ DEFAULT_THRESHOLDS = {
     "viewer_css_selector_min": 65.0,
     "viewer_css_diff_min": 80.0,
 }
+VIEWER_HTML_SOURCE = "claude_tap/viewer.html"
+VIEWER_LEGACY_JS_SOURCE = "claude_tap/viewer_assets/viewer.js"
+VIEWER_JS_SOURCES = (
+    "claude_tap/viewer_assets/state.js",
+    "claude_tap/viewer_assets/responses.js",
+    "claude_tap/viewer_assets/lazy_loading.js",
+    "claude_tap/viewer_assets/i18n_ui.js",
+    "claude_tap/viewer_assets/live_bootstrap.js",
+    "claude_tap/viewer_assets/filters_search.js",
+    "claude_tap/viewer_assets/sidebar.js",
+    "claude_tap/viewer_assets/detail_trace.js",
+    "claude_tap/viewer_assets/renderers.js",
+    "claude_tap/viewer_assets/sections_json.js",
+    "claude_tap/viewer_assets/diff.js",
+    "claude_tap/viewer_assets/utilities_mobile.js",
+)
+VIEWER_CSS_SOURCE = "claude_tap/viewer_assets/viewer.css"
+VIEWER_DIFF_PATHS = ["claude_tap/*.py", VIEWER_HTML_SOURCE, "claude_tap/viewer_assets/*"]
+VIEWER_STYLE_TEMPLATE_ANCHOR = "<!-- CLAUDE_TAP_VIEWER_STYLE -->"
+VIEWER_SCRIPT_TEMPLATE_ANCHOR = "<!-- CLAUDE_TAP_VIEWER_SCRIPT -->"
 
 
 @dataclass(frozen=True)
@@ -80,6 +100,98 @@ def changed_lines_from_diff(diff_text: str) -> dict[str, set[int]]:
             new_line += 1
 
     return {path: lines for path, lines in changed.items() if lines}
+
+
+def _tag_content(source: str, tag: str) -> str | None:
+    start_tag = f"<{tag}>"
+    end_tag = f"</{tag}>"
+    start = source.find(start_tag)
+    if start < 0:
+        return None
+    content_start = start + len(start_tag)
+    end = source.find(end_tag, content_start)
+    if end < 0:
+        return None
+    return source[content_start:end].strip("\n")
+
+
+def _replace_tag_block(source: str, tag: str, replacement: str) -> str | None:
+    start_tag = f"<{tag}>"
+    end_tag = f"</{tag}>"
+    start = source.find(start_tag)
+    if start < 0:
+        return None
+    end = source.find(end_tag, start + len(start_tag))
+    if end < 0:
+        return None
+    return source[:start] + replacement + source[end + len(end_tag) :]
+
+
+def _base_file_text(base: str, path: str) -> str | None:
+    try:
+        return subprocess.check_output(["git", "show", f"{base}:{path}"], cwd=REPO_ROOT, text=True)
+    except subprocess.CalledProcessError:
+        return None
+
+
+def _filter_pure_viewer_asset_split(changed_lines: dict[str, set[int]], base: str) -> dict[str, set[int]]:
+    """Ignore asset files that are exact extractions from the base monolithic viewer."""
+    js_changed = [source for source in (VIEWER_LEGACY_JS_SOURCE, *VIEWER_JS_SOURCES) if source in changed_lines]
+    if not js_changed and VIEWER_CSS_SOURCE not in changed_lines and VIEWER_HTML_SOURCE not in changed_lines:
+        return changed_lines
+
+    base_viewer = _base_file_text(base, VIEWER_HTML_SOURCE)
+    if base_viewer is None:
+        return changed_lines
+
+    filtered = dict(changed_lines)
+    expected_js = _tag_content(base_viewer, "script")
+    expected_css = _tag_content(base_viewer, "style")
+
+    js_exact = False
+    if js_changed and expected_js is not None:
+        try:
+            if (REPO_ROOT / VIEWER_LEGACY_JS_SOURCE).exists():
+                current_js = (REPO_ROOT / VIEWER_LEGACY_JS_SOURCE).read_text(encoding="utf-8").strip("\n")
+            else:
+                current_js = "".join((REPO_ROOT / source).read_text(encoding="utf-8") for source in VIEWER_JS_SOURCES)
+                current_js = current_js.strip("\n")
+        except OSError:
+            current_js = None
+        js_exact = current_js == expected_js
+        if js_exact:
+            for source in (VIEWER_LEGACY_JS_SOURCE, *VIEWER_JS_SOURCES):
+                filtered.pop(source, None)
+
+    css_exact = False
+    if VIEWER_CSS_SOURCE in filtered and expected_css is not None:
+        try:
+            current_css = (REPO_ROOT / VIEWER_CSS_SOURCE).read_text(encoding="utf-8").strip("\n")
+        except OSError:
+            current_css = None
+        css_exact = current_css == expected_css
+        if css_exact:
+            filtered.pop(VIEWER_CSS_SOURCE, None)
+
+    if (
+        VIEWER_HTML_SOURCE in filtered
+        and (js_exact or not js_changed)
+        and (css_exact or VIEWER_CSS_SOURCE not in changed_lines)
+    ):
+        expected_template = _replace_tag_block(base_viewer, "style", VIEWER_STYLE_TEMPLATE_ANCHOR)
+        if expected_template is not None:
+            expected_template = _replace_tag_block(expected_template, "script", VIEWER_SCRIPT_TEMPLATE_ANCHOR)
+        try:
+            current_template = (REPO_ROOT / VIEWER_HTML_SOURCE).read_text(encoding="utf-8")
+        except OSError:
+            current_template = None
+        if (
+            expected_template is not None
+            and current_template is not None
+            and current_template.strip() == expected_template.strip()
+        ):
+            filtered.pop(VIEWER_HTML_SOURCE, None)
+    return filtered
 
 
 def load_thresholds(config_path: Path = DEFAULT_CONFIG) -> dict[str, float]:
@@ -190,15 +302,37 @@ def js_function_ranges(source: str) -> dict[str, tuple[int, int]]:
     return ranges
 
 
-def changed_viewer_functions(viewer_html: Path, changed_lines: dict[str, set[int]]) -> set[str]:
-    changed = changed_lines.get("claude_tap/viewer.html", set())
-    if not changed:
-        return set()
-    ranges = js_function_ranges(viewer_html.read_text(encoding="utf-8"))
+def _changed_lines_for_source(source_path: Path, changed_lines: dict[str, set[int]], fallback_key: str) -> set[int]:
+    keys = []
+    if source_path.name == "viewer.js":
+        keys.append(VIEWER_LEGACY_JS_SOURCE)
+    elif source_path.name == "viewer.css":
+        keys.append(VIEWER_CSS_SOURCE)
+    try:
+        keys.insert(0, source_path.resolve().relative_to(REPO_ROOT).as_posix())
+    except ValueError:
+        pass
+    if source_path.name not in {
+        Path(source).name for source in (*VIEWER_JS_SOURCES, VIEWER_LEGACY_JS_SOURCE, VIEWER_CSS_SOURCE)
+    }:
+        keys.append(fallback_key)
+    for key in keys:
+        changed = changed_lines.get(key)
+        if changed:
+            return changed
+    return set()
+
+
+def changed_viewer_functions(viewer_js: Path | tuple[Path, ...], changed_lines: dict[str, set[int]]) -> set[str]:
     functions: set[str] = set()
-    for name, (start, end) in ranges.items():
-        if any(start <= line <= end for line in changed):
-            functions.add(name)
+    for source_path in viewer_js if isinstance(viewer_js, tuple) else (viewer_js,):
+        changed = _changed_lines_for_source(source_path, changed_lines, VIEWER_HTML_SOURCE)
+        if not changed:
+            continue
+        ranges = js_function_ranges(source_path.read_text(encoding="utf-8"))
+        for name, (start, end) in ranges.items():
+            if any(start <= line <= end for line in changed):
+                functions.add(name)
     return functions
 
 
@@ -223,6 +357,8 @@ def _style_block_ranges(source: str) -> list[tuple[int, int]]:
         if "</style>" in line and start is not None:
             ranges.append((start, idx - 1))
             start = None
+    if not ranges:
+        ranges.append((1, len(source.splitlines())))
     return ranges
 
 
@@ -262,11 +398,11 @@ def css_selector_ranges(source: str) -> dict[str, list[tuple[int, int]]]:
     return ranges
 
 
-def changed_viewer_css_selectors(viewer_html: Path, changed_lines: dict[str, set[int]]) -> set[str]:
-    changed = changed_lines.get("claude_tap/viewer.html", set())
+def changed_viewer_css_selectors(viewer_css: Path, changed_lines: dict[str, set[int]]) -> set[str]:
+    changed = _changed_lines_for_source(viewer_css, changed_lines, VIEWER_HTML_SOURCE)
     if not changed:
         return set()
-    ranges = css_selector_ranges(viewer_html.read_text(encoding="utf-8"))
+    ranges = css_selector_ranges(viewer_css.read_text(encoding="utf-8"))
     selectors: set[str] = set()
     for selector, selector_ranges in ranges.items():
         if any(start <= line <= end for start, end in selector_ranges for line in changed):
@@ -305,7 +441,7 @@ def _is_function_covered(function: dict[str, Any]) -> bool:
     return any(item.get("count", 0) > 0 for item in function.get("ranges", []))
 
 
-def _load_viewer_contract_helpers() -> tuple[Any, Any]:
+def _load_viewer_contract_helpers() -> tuple[Any, Any, Any]:
     contracts_path = REPO_ROOT / "tests" / "test_viewer_contracts.py"
     spec = importlib.util.spec_from_file_location("viewer_contracts_for_coverage", contracts_path)
     if spec is None or spec.loader is None:
@@ -313,7 +449,7 @@ def _load_viewer_contract_helpers() -> tuple[Any, Any]:
     contracts = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = contracts
     spec.loader.exec_module(contracts)
-    return contracts._contract_cases, contracts._generate_case_html
+    return contracts._contract_cases, contracts._generate_case_html, contracts._compact_contract_records
 
 
 def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
@@ -322,7 +458,7 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
     except ImportError as exc:  # pragma: no cover - exercised in dependency-free environments
         raise RuntimeError("Playwright is required for viewer JS coverage") from exc
 
-    _contract_cases, _generate_case_html = _load_viewer_contract_helpers()
+    _contract_cases, _generate_case_html, _compact_contract_records = _load_viewer_contract_helpers()
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -332,6 +468,22 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
             tuple(record for case in _contract_cases() for record in case.records),
         )
         empty_html_path = _generate_case_html(tmp_path, "empty_coverage", ())
+        compact_html_path = tmp_path / "compact_coverage.html"
+        compact_bundle_path = tmp_path / "compact_coverage.ctap.json"
+        from claude_tap.compact_trace import build_compact_trace_bundle
+        from claude_tap.viewer import _generate_html_viewer_from_compact_bundle
+
+        compact_bundle = build_compact_trace_bundle(list(_compact_contract_records()))
+        _generate_html_viewer_from_compact_bundle(
+            compact_bundle,
+            compact_html_path,
+            display_trace_path=compact_bundle_path,
+            display_html_path=compact_html_path,
+        )
+        compact_bundle_path.write_text(
+            json.dumps(compact_bundle, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
@@ -404,6 +556,13 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   renderImageElementForBlock(imageBlock);
                   document.body.insertAdjacentHTML('beforeend', renderImageBlock(imageBlock, 0, 1, { frameBlocks: true }));
                   renderViewerActions();
+                  valueHasReadableEscapes({ cmd: 'printf "coverage\\\\n"' });
+                  decodeEscapedTextForView('line1\\\\nline2\\\\t\\\\u4e00');
+                  document.body.insertAdjacentHTML(
+                    'beforeend',
+                    renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
+                  );
+                  document.querySelector('.tool-input-toggle')?.click();
                   const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
                   if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
                   tooltipTrigger.dataset.fullUserInput = 'coverage tooltip prompt';
@@ -497,6 +656,27 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     }""",
                     index,
                 )
+            page.goto(compact_html_path.resolve().as_uri(), timeout=10000)
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+            page.evaluate(
+                """(bundleText) => {
+                  const parsed = JSON.parse(bundleText);
+                  const compactRecords = materializeCompactTraceBundle(parsed);
+                  parseTraceText(bundleText);
+                  entries = expandWebSocketResponseEntries(compactRecords);
+                  applyFilter(true);
+                  selectEntry(0);
+                  const blobRef = parsed.records[0].record.request.body.instructions;
+                  isCompactBlobRef(blobRef);
+                  materializeCompactValue(blobRef, parsed.blobs, new Map());
+                  materializeCompactRecord(parsed.records[0], parsed.blobs, new Map());
+                }""",
+                compact_bundle_path.read_text(encoding="utf-8"),
+            )
+            page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
+            page.wait_for_selector(".empty-trace-state", timeout=5000)
+            page.set_input_files("#file-input", str(compact_bundle_path))
+            page.wait_for_selector(".sidebar-item", timeout=5000)
             page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".empty-trace-state", timeout=5000)
             coverage = session.send("Profiler.takePreciseCoverage")
@@ -506,15 +686,16 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
 
     main_functions = _viewer_script_functions(_main_viewer_script(coverage, "v8_coverage.html"))
     empty_functions = _viewer_script_functions(_main_viewer_script(coverage, "empty_coverage.html"))
-    empty_covered_names = {
+    compact_functions = _viewer_script_functions(_main_viewer_script(coverage, "compact_coverage.html"))
+    auxiliary_covered_names = {
         function.get("functionName", "")
-        for function in empty_functions
+        for function in [*empty_functions, *compact_functions]
         if function.get("functionName") and _is_function_covered(function)
     }
     covered_functions = [
         function
         for function in main_functions
-        if _is_function_covered(function) or function.get("functionName", "") in empty_covered_names
+        if _is_function_covered(function) or function.get("functionName", "") in auxiliary_covered_names
     ]
     covered_names = {function.get("functionName", "") for function in covered_functions if function.get("functionName")}
     percent = len(covered_functions) / len(main_functions) * 100 if main_functions else 100.0
@@ -527,7 +708,7 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
     except ImportError as exc:  # pragma: no cover - exercised in dependency-free environments
         raise RuntimeError("Playwright is required for viewer CSS coverage") from exc
 
-    _contract_cases, _generate_case_html = _load_viewer_contract_helpers()
+    _contract_cases, _generate_case_html, _ = _load_viewer_contract_helpers()
     collect_css_script = r"""() => {
       const skipped = [];
       const used = new Set();
@@ -607,6 +788,11 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
                   if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
                   tooltipTrigger.dataset.fullUserInput = 'coverage tooltip prompt';
                   showSessionTooltip(tooltipTrigger);
+                  document.body.insertAdjacentHTML(
+                    'beforeend',
+                    renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
+                  );
+                  document.querySelector('.tool-input-view')?.classList.add('expanded');
                 }"""
             )
             merge(page.evaluate(collect_css_script))
@@ -730,7 +916,7 @@ def check_viewer_js_coverage(
                 percent=None,
                 minimum=diff_min,
                 passed=True,
-                detail="no changed viewer.html JavaScript functions",
+                detail="no changed viewer JavaScript functions",
             )
         )
         return results
@@ -774,7 +960,7 @@ def check_viewer_css_coverage(
                 percent=None,
                 minimum=diff_min,
                 passed=True,
-                detail="no changed viewer.html CSS selectors",
+                detail="no changed viewer CSS selectors",
             )
         )
         return results
@@ -817,7 +1003,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     thresholds = load_thresholds(args.config)
-    changed_lines = changed_lines_from_diff(_run_git_diff(args.base, ["claude_tap/*.py", "claude_tap/viewer.html"]))
+    changed_lines = _filter_pure_viewer_asset_split(
+        changed_lines_from_diff(_run_git_diff(args.base, VIEWER_DIFF_PATHS)),
+        args.base,
+    )
 
     results: list[CheckResult] = []
     if not args.skip_python:
@@ -832,7 +1021,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_viewer_js:
         results.extend(
             check_viewer_js_coverage(
-                changed_viewer_functions(REPO_ROOT / "claude_tap" / "viewer.html", changed_lines),
+                changed_viewer_functions(tuple(REPO_ROOT / source for source in VIEWER_JS_SOURCES), changed_lines),
                 thresholds["viewer_js_function_min"],
                 thresholds["viewer_js_diff_min"],
             )
@@ -840,7 +1029,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_viewer_css:
         results.extend(
             check_viewer_css_coverage(
-                changed_viewer_css_selectors(REPO_ROOT / "claude_tap" / "viewer.html", changed_lines),
+                changed_viewer_css_selectors(REPO_ROOT / VIEWER_CSS_SOURCE, changed_lines),
                 thresholds["viewer_css_selector_min"],
                 thresholds["viewer_css_diff_min"],
             )

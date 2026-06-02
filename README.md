@@ -11,6 +11,8 @@
 
 `claude-tap` is a local proxy and trace viewer for AI coding agents. Run your CLI through it, then inspect the real API traffic: system prompts, conversation history, tool schemas, tool calls, streaming responses, token usage, and request diffs.
 
+Website: [Local AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · Guide: [How to view agent traces locally](docs/guides/agent-trace-viewer.md)
+
 It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
 
 <p align="center">
@@ -404,6 +406,10 @@ claude-tap dashboard
 # Regenerate a self-contained HTML viewer from JSONL
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
+# Export a portable compact trace bundle, then render it later
+claude-tap export <session-id> --format compact -o trace.ctap.json
+claude-tap export trace.ctap.json -o trace.html
+
 # Embed the exported viewer in an iframe with reduced chrome
 # trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light
 
@@ -419,6 +425,8 @@ claude-tap --tap-no-open
 ```
 
 In proxy-only mode, start your client in another terminal and point its base URL or proxy settings at the local proxy. Use the [client support matrix](docs/support-matrix.md) for exact wiring.
+
+When used as VSCode Claude Code's `claudeProcessWrapper`, claude-tap honors the Claude binary path passed by the extension.
 
 ### CLI Options
 
