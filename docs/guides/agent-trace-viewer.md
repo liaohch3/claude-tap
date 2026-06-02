@@ -1,8 +1,3 @@
----
-title: Local AI Agent Trace Viewer
-description: How to view Claude Code, Codex, OpenAI Responses API, Gemini, and other AI coding agent traces locally with claude-tap.
----
-
 # Local AI Agent Trace Viewer
 
 `claude-tap` is a local trace viewer and HTML exporter for AI coding agents. It helps you inspect Claude Code traces, Codex traces, OpenAI Responses API traces, Anthropic Messages traces, Gemini traces, and other agent runs without uploading private data to a hosted dashboard.
