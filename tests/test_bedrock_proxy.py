@@ -73,6 +73,30 @@ def _bedrock_converse_body() -> bytes:
     )
 
 
+def _bedrock_body_with_error() -> bytes:
+    return b"".join(
+        [
+            _bedrock_frame(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-6",
+                        "content": [],
+                        "usage": {"input_tokens": 6},
+                    },
+                }
+            ),
+            _bedrock_frame(
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
+            ),
+            _bedrock_frame({"modelStreamErrorException": {"message": "stream failed", "originalStatusCode": 424}}),
+        ]
+    )
+
+
 def _make_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, str, TraceWriter]:
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "traces.sqlite3"))
     reset_trace_store()
@@ -82,7 +106,7 @@ def _make_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, 
 
 
 async def _start_reverse_proxy(
-    target_url: str, writer: TraceWriter
+    target_url: str, writer: TraceWriter, *, store_stream_events: bool = True
 ) -> tuple[web.AppRunner, int, aiohttp.ClientSession]:
     session = aiohttp.ClientSession(auto_decompress=False)
     app = web.Application(client_max_size=0)
@@ -91,7 +115,7 @@ async def _start_reverse_proxy(
         "writer": writer,
         "session": session,
         "turn_counter": 0,
-        "store_stream_events": True,
+        "store_stream_events": store_stream_events,
     }
     app.router.add_route("*", "/{path_info:.*}", proxy_handler)
     runner = web.AppRunner(app)
@@ -142,6 +166,7 @@ async def test_reverse_proxy_records_bedrock_eventstream_without_stream_flag(
         async with aiohttp.ClientSession(auto_decompress=False) as client:
             async with client.post(
                 f"http://127.0.0.1:{proxy_port}{bedrock_path}",
+                headers={"X-Amz-Security-Token": "aws-session-token-secret"},
                 json={"messages": [{"role": "user", "content": [{"type": "text", "text": "ping"}]}]},
             ) as response:
                 assert response.status == 200
@@ -152,6 +177,7 @@ async def test_reverse_proxy_records_bedrock_eventstream_without_stream_flag(
         assert len(records) == 1
         record = records[0]
         assert record["request"]["path"] == bedrock_path
+        assert record["request"]["headers"]["X-Amz-Security-Token"] == "***"
         if "converse-stream" not in bedrock_path:
             assert record["response"]["body"]["model"] == "claude-sonnet-4-6"
         assert record["response"]["body"]["content"] == [{"type": "text", "text": "OK"}]
@@ -161,6 +187,60 @@ async def test_reverse_proxy_records_bedrock_eventstream_without_stream_flag(
             assert record["response"]["body"]["usage"]["cache_read_input_tokens"] == 3
             assert record["response"]["body"]["usage"]["cache_creation_input_tokens"] == 1
         assert "content_block_delta" in [event["event"] for event in record["response"]["sse_events"]]
+    finally:
+        await proxy_session.close()
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+        reset_trace_store()
+
+
+@pytest.mark.asyncio
+async def test_reverse_proxy_preserves_bedrock_stream_error_without_stream_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bedrock_path = "/model/global.anthropic.claude-sonnet-4-6-v1/invoke-with-response-stream"
+    bedrock_bytes = _bedrock_body_with_error()
+
+    async def upstream_handler(request: web.Request) -> web.StreamResponse:
+        response = web.StreamResponse(status=200, headers={"Content-Type": "application/vnd.amazon.eventstream"})
+        await response.prepare(request)
+        await response.write(bedrock_bytes)
+        await response.write_eof()
+        return response
+
+    upstream_app = web.Application()
+    upstream_app.router.add_post("/{path_info:.*}", upstream_handler)
+    upstream_runner = web.AppRunner(upstream_app)
+    await upstream_runner.setup()
+    upstream_site = web.TCPSite(upstream_runner, "127.0.0.1", 0)
+    await upstream_site.start()
+    upstream_port = upstream_site._server.sockets[0].getsockname()[1]
+
+    store, session_id, writer = _make_writer(tmp_path, monkeypatch)
+    proxy_runner, proxy_port, proxy_session = await _start_reverse_proxy(
+        f"http://127.0.0.1:{upstream_port}", writer, store_stream_events=False
+    )
+
+    try:
+        async with aiohttp.ClientSession(auto_decompress=False) as client:
+            async with client.post(
+                f"http://127.0.0.1:{proxy_port}{bedrock_path}",
+                json={"messages": [{"role": "user", "content": [{"type": "text", "text": "ping"}]}]},
+            ) as response:
+                assert response.status == 200
+                assert await response.read() == bedrock_bytes
+
+        writer.close()
+        record = store.load_records(session_id)[0]
+        body = record["response"]["body"]
+        assert "sse_events" not in record["response"]
+        assert body["content"] == [{"type": "text", "text": "partial"}]
+        assert body["error"]["type"] == "modelStreamErrorException"
+        assert body["error"]["message"] == "stream failed"
+        assert body["bedrock_errors"] == [
+            {"type": "modelStreamErrorException", "message": "stream failed", "originalStatusCode": 424}
+        ]
     finally:
         await proxy_session.close()
         await proxy_runner.cleanup()
@@ -236,7 +316,11 @@ async def test_forward_proxy_records_bedrock_eventstream_without_stream_flag(
     await server._forward_and_record(
         "POST",
         bedrock_path,
-        {"Host": "bedrock-runtime.us-east-1.amazonaws.com", "Authorization": "Bearer test"},
+        {
+            "Host": "bedrock-runtime.us-east-1.amazonaws.com",
+            "Authorization": "Bearer test",
+            "X-Amz-Security-Token": "aws-session-token-secret",
+        },
         json.dumps({"messages": [{"role": "user", "content": [{"type": "text", "text": "ping"}]}]}).encode(),
         f"https://bedrock-runtime.us-east-1.amazonaws.com{bedrock_path}",
         client_writer,
@@ -247,6 +331,7 @@ async def test_forward_proxy_records_bedrock_eventstream_without_stream_flag(
     assert len(records) == 1
     record = records[0]
     assert fake_session.calls[0]["data"]
+    assert record["request"]["headers"]["X-Amz-Security-Token"] == "***"
     assert b"Transfer-Encoding: chunked" in client_writer.data
     assert client_writer.data.endswith(b"0\r\n\r\n")
     if "converse-stream" not in bedrock_path:
@@ -259,4 +344,44 @@ async def test_forward_proxy_records_bedrock_eventstream_without_stream_flag(
         assert record["response"]["body"]["usage"]["cache_creation_input_tokens"] == 1
     assert record["response"]["body"]["usage"]["output_tokens"] == 2
     assert [event["event"] for event in record["response"]["sse_events"]][0] == "message_start"
+    reset_trace_store()
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_preserves_bedrock_stream_error_without_stream_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bedrock_path = "/model/global.anthropic.claude-sonnet-4-6-v1/invoke-with-response-stream"
+    store, session_id, writer = _make_writer(tmp_path, monkeypatch)
+    fake_session = _FakeSession(_bedrock_body_with_error())
+    client_writer = _MemoryWriter()
+    server = ForwardProxyServer(
+        host="127.0.0.1",
+        port=0,
+        ca=object(),
+        writer=writer,
+        session=fake_session,
+        store_stream_events=False,
+    )
+
+    await server._forward_and_record(
+        "POST",
+        bedrock_path,
+        {"Host": "bedrock-runtime.us-east-1.amazonaws.com", "Authorization": "Bearer test"},
+        json.dumps({"messages": [{"role": "user", "content": [{"type": "text", "text": "ping"}]}]}).encode(),
+        f"https://bedrock-runtime.us-east-1.amazonaws.com{bedrock_path}",
+        client_writer,
+    )
+
+    writer.close()
+    record = store.load_records(session_id)[0]
+    body = record["response"]["body"]
+    assert "sse_events" not in record["response"]
+    assert body["content"] == [{"type": "text", "text": "partial"}]
+    assert body["error"]["type"] == "modelStreamErrorException"
+    assert body["error"]["message"] == "stream failed"
+    assert body["bedrock_errors"] == [
+        {"type": "modelStreamErrorException", "message": "stream failed", "originalStatusCode": 424}
+    ]
     reset_trace_store()

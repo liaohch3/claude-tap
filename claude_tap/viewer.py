@@ -231,6 +231,10 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
             event_type, event_payload = _converse_event_payload(payload)
             if event_type and event_payload:
                 return event_type, event_payload
+            for event_type in error_event_keys:
+                event_payload = payload.get(event_type)
+                if isinstance(event_payload, dict):
+                    return event_type, event_payload
             return None, None
 
         event_type = frame.get("type")

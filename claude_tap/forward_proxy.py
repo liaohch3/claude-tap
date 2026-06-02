@@ -33,7 +33,7 @@ from aiohttp import WSMessage, WSMsgType
 from aiohttp._websocket.reader import WebSocketDataQueue, WebSocketReader
 from aiohttp.http_websocket import WS_KEY, WebSocketWriter
 
-from claude_tap.bedrock import is_bedrock_eventstream_path
+from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
 from claude_tap.certs import CertificateAuthority
 from claude_tap.proxy import (
     HOP_BY_HOP,
@@ -624,6 +624,7 @@ class ForwardProxyServer:
             reconstructed = reassembler.reconstruct()
             if not reconstructed:
                 reconstructed = raw_body
+            reconstructed = attach_bedrock_errors(reconstructed, bedrock_events)
         else:
             reconstructed = reassembler.reconstruct()
 

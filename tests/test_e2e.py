@@ -1993,6 +1993,7 @@ def test_filter_headers():
         "Cosy-MachineId": "qoder-machine-id-secret-value",
         "Cosy-MachineType": "qoder-machine-type-secret-value",
         "Cosy-User": "qoder-user-id-secret-value",
+        "X-Amz-Security-Token": "aws-session-token-secret-value",
         "Transfer-Encoding": "chunked",
         "Connection": "keep-alive",
         "X-Custom": "custom-value",
@@ -2027,6 +2028,8 @@ def test_filter_headers():
     assert "machine-type-secret" not in out["Cosy-MachineType"]
     assert out["Cosy-User"] == "***"
     assert "user-id-secret" not in out["Cosy-User"]
+    assert out["X-Amz-Security-Token"] == "***"
+    assert "session-token-secret" not in out["X-Amz-Security-Token"]
     assert out["Content-Type"] == "application/json"
     assert out["X-Custom"] == "custom-value"
     print("  OK: secrets redacted")

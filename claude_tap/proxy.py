@@ -17,7 +17,7 @@ import aiohttp
 from aiohttp import web
 from yarl import URL
 
-from claude_tap.bedrock import is_bedrock_eventstream_path
+from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
 from claude_tap.usage import normalize_usage
@@ -49,6 +49,7 @@ SENSITIVE_HEADER_KEYS = frozenset(
         "set-cookie",
         "set-cookie2",
         "x-api-key",
+        "x-amz-security-token",
         # Qoder/Cosy runtime headers can carry account, machine, or token-derived
         # identifiers and must not be persisted in trace evidence.
         "cosy-key",
@@ -335,6 +336,7 @@ async def _handle_streaming(
         reconstructed = reassembler.reconstruct()
         if not reconstructed:
             reconstructed = raw_body
+        reconstructed = attach_bedrock_errors(reconstructed, bedrock_events)
     else:
         reconstructed = reassembler.reconstruct()
 
