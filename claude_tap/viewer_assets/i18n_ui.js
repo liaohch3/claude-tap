@@ -71,19 +71,28 @@ function renderViewerActions() {
   if (!wrap) return;
   const exports = TRACE_SESSION_EXPORTS && typeof TRACE_SESSION_EXPORTS === 'object' ? TRACE_SESSION_EXPORTS : {};
   const downloadIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>`;
-  const actions = [];
+  const links = [];
   if (typeof exports.jsonl === 'string' && exports.jsonl) {
-    actions.push(`<a class="viewer-action" href="${esc(exports.jsonl)}" download>${downloadIcon}${esc(t('export_jsonl'))}</a>`);
+    links.push(`<a class="export-menu-item" href="${esc(exports.jsonl)}" download>${esc(t('export_jsonl'))}</a>`);
+  }
+  if (typeof exports.compact === 'string' && exports.compact) {
+    links.push(`<a class="export-menu-item" href="${esc(exports.compact)}" download>${esc(t('export_compact'))}</a>`);
   }
   if (typeof exports.log === 'string' && exports.log) {
-    actions.push(`<a class="viewer-action" href="${esc(exports.log)}" download>${downloadIcon}${esc(t('export_log'))}</a>`);
+    links.push(`<a class="export-menu-item" href="${esc(exports.log)}" download>${esc(t('export_log'))}</a>`);
   }
-  if (!actions.length) {
+  if (typeof exports.html === 'string' && exports.html) {
+    links.push(`<a class="export-menu-item" href="${esc(exports.html)}" download>${esc(t('export_html'))}</a>`);
+  }
+  if (!links.length) {
     wrap.innerHTML = '';
     wrap.style.display = 'none';
     return;
   }
-  wrap.innerHTML = actions.join('');
+  wrap.innerHTML = `<details class="export-menu">
+    <summary class="viewer-action">${downloadIcon}${esc(t('export_menu'))}</summary>
+    <div class="export-menu-list">${links.join('')}</div>
+  </details>`;
   wrap.style.display = 'inline-flex';
 }
 
@@ -173,7 +182,7 @@ function renderEmptyTraceState() {
         <span class="empty-trace-pill" id="empty-trace-hint">${esc(t('empty_trace_hint'))}</span>
       </div>
       <label for="file-input" id="drop-btn-label">${esc(t('drop_btn'))}</label>
-      <input type="file" id="file-input" accept=".jsonl,.json">
+      <input type="file" id="file-input" accept=".jsonl,.json,.ctap">
     </div>`;
   initFileDropZone();
 }

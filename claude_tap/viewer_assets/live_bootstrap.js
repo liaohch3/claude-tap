@@ -179,6 +179,71 @@ async function deleteSelectedTraceDate() {
   }
 }
 
+function isCompactBlobRef(value) {
+  return value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 1 &&
+    value.__claude_tap_blob_ref__ &&
+    value.__claude_tap_blob_ref__.version === 1 &&
+    value.__claude_tap_blob_ref__.kind === 'json' &&
+    typeof value.__claude_tap_blob_ref__.hash === 'string';
+}
+
+function materializeCompactValue(value, blobs, cache) {
+  if (isCompactBlobRef(value)) {
+    const ref = value.__claude_tap_blob_ref__;
+    if (!cache.has(ref.hash)) {
+      const blob = blobs[ref.hash];
+      if (!blob || blob.kind !== (ref.kind || 'json')) throw new Error(`Missing compact trace blob: ${ref.hash}`);
+      cache.set(ref.hash, blob.payload);
+    }
+    return cache.get(ref.hash);
+  }
+  if (Array.isArray(value)) return value.map(item => materializeCompactValue(item, blobs, cache));
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) out[key] = materializeCompactValue(item, blobs, cache);
+    return out;
+  }
+  return value;
+}
+
+function materializeCompactRecord(payload, blobs, cache) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const marker = payload.__claude_tap_compact_record__;
+  if (!marker) return payload;
+  if (marker.version !== 1) throw new Error(`Unsupported compact trace record version: ${marker.version}`);
+  const record = materializeCompactValue(payload.record, blobs, cache);
+  return record && typeof record === 'object' && !Array.isArray(record) ? record : null;
+}
+
+function materializeCompactTraceBundle(bundle) {
+  const marker = bundle && typeof bundle === 'object' ? bundle.__claude_tap_compact_trace__ : null;
+  if (!marker) return null;
+  if (marker.version !== 1) throw new Error(`Unsupported compact trace bundle version: ${marker.version}`);
+  const records = Array.isArray(bundle.records) ? bundle.records : [];
+  const blobs = bundle.blobs && typeof bundle.blobs === 'object' ? bundle.blobs : {};
+  const cache = new Map();
+  return records.map(record => materializeCompactRecord(record, blobs, cache)).filter(Boolean);
+}
+
+function parseTraceText(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed);
+    const compactRecords = materializeCompactTraceBundle(parsed);
+    if (compactRecords) return compactRecords;
+    if (Array.isArray(parsed)) return parsed.filter(item => item && typeof item === 'object' && !Array.isArray(item));
+  } catch {
+    // Fall through to JSONL parsing.
+  }
+  return trimmed.split('\n').map(line => {
+    try { return JSON.parse(line); } catch { return null; }
+  }).filter(Boolean);
+}
+
 if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
   entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? expandLiveWebSocketResponseEntries(EMBEDDED_TRACE_DATA, true) : [];
   document.addEventListener('DOMContentLoaded', () => {
@@ -189,6 +254,13 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
     else {
       renderLiveWaitingState();
     }
+  });
+} else if (typeof EMBEDDED_TRACE_COMPACT_DATA !== 'undefined') {
+  entries = expandWebSocketResponseEntries(materializeCompactTraceBundle(EMBEDDED_TRACE_COMPACT_DATA) || []);
+  document.addEventListener('DOMContentLoaded', () => {
+    initCommonUi();
+    if (entries.length) renderApp();
+    else renderEmptyTraceState();
   });
 } else if (typeof EMBEDDED_TRACE_META !== 'undefined') {
   // Lazy mode: build stub entries from metadata
@@ -216,10 +288,9 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
 function loadFile(file) {
   const reader = new FileReader();
   reader.onload = () => {
-    entries = expandWebSocketResponseEntries(reader.result.trim().split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean));
+    entries = expandWebSocketResponseEntries(parseTraceText(reader.result));
     if (!entries.length) { alert('No valid entries found / 未找到有效条目'); return; }
     renderApp();
   };
   reader.readAsText(file);
 }
-

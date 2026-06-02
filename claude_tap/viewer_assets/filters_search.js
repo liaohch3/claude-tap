@@ -1,3 +1,4 @@
+
 /* ─── Path & filter ─── */
 function getPath(e) { return (e.request?.path || '/unknown').replace(/\?.*$/, ''); }
 
@@ -677,4 +678,3 @@ function autoExpandSearchMatches(marks) {
     }
   });
 }
-

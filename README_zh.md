@@ -371,6 +371,10 @@ claude-tap dashboard
 # 从已有 JSONL trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
+# 导出可独立搬运的压缩 trace，再按需渲染
+claude-tap export <session-id> --format compact -o trace.ctap.json
+claude-tap export trace.ctap.json -o trace.html
+
 # 在 iframe 中嵌入导出的查看器，并减少外层 chrome
 # trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light
 
@@ -386,6 +390,8 @@ claude-tap --tap-no-open
 ```
 
 纯代理模式下，可以在另一个终端启动客户端，并把它的 base URL 或代理配置指向本地代理。具体接法见 [客户端支持矩阵](docs/support-matrix.md)。
+
+作为 VSCode Claude Code 的 `claudeProcessWrapper` 使用时，claude-tap 会识别扩展传入的 Claude binary 路径并用它启动 Claude。
 
 ### CLI 选项
 

@@ -7,6 +7,7 @@ import json
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
+from claude_tap.compact_trace import COMPACT_TRACE_MARKER, is_compact_trace_bundle
 from claude_tap.sse import SSEReassembler
 from claude_tap.usage import normalize_usage
 
@@ -716,10 +717,21 @@ def _generate_html_viewer(
     display_html_path: str | Path | None = None,
 ) -> None:
     """Read viewer.html template, embed JSONL data, write self-contained HTML."""
-    if not VIEWER_TEMPLATE_PATH.exists():
-        return
+    if trace_path.exists():
+        text = trace_path.read_text(encoding="utf-8")
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if is_compact_trace_bundle(parsed):
+            _generate_html_viewer_from_compact_bundle(
+                parsed,
+                html_path,
+                display_trace_path=display_trace_path if display_trace_path is not None else trace_path.absolute(),
+                display_html_path=display_html_path if display_html_path is not None else html_path.absolute(),
+            )
+            return
 
-    # Read JSONL records
     records: list[str] = []
     if trace_path.exists():
         with open(trace_path, "r", encoding="utf-8") as f:
@@ -727,6 +739,59 @@ def _generate_html_viewer(
                 line = line.strip()
                 if line:
                     records.append(_normalize_record_for_viewer(line))
+    _generate_html_viewer_from_records(
+        records,
+        html_path,
+        display_trace_path=display_trace_path if display_trace_path is not None else trace_path.absolute(),
+        display_html_path=display_html_path if display_html_path is not None else html_path.absolute(),
+    )
+
+
+def _generate_html_viewer_from_compact_bundle(
+    compact_bundle: dict,
+    html_path: Path,
+    *,
+    display_trace_path: str | Path,
+    display_html_path: str | Path,
+) -> None:
+    """Write a self-contained HTML viewer that embeds compact trace data."""
+    if not VIEWER_TEMPLATE_PATH.exists():
+        return
+    if not is_compact_trace_bundle(compact_bundle):
+        raise ValueError(f"Expected {COMPACT_TRACE_MARKER} compact trace bundle.")
+
+    trace_path_label = str(display_trace_path)
+    html_path_label = str(display_html_path)
+    compact_js = json.dumps(compact_bundle, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    jsonl_path_js = json.dumps(trace_path_label)
+    html_path_js = json.dumps(html_path_label)
+    version_js = json.dumps(CLAUDE_TAP_VERSION)
+    data_js = (
+        f"const EMBEDDED_TRACE_COMPACT_DATA = {compact_js};\n"
+        f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
+        f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
+        f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
+    )
+
+    html = _read_viewer_template()
+    html = html.replace(
+        VIEWER_SCRIPT_ANCHOR,
+        f"<script>\n{data_js}</script>\n{VIEWER_SCRIPT_ANCHOR}",
+        1,
+    )
+    html_path.write_text(html, encoding="utf-8")
+
+
+def _generate_html_viewer_from_records(
+    record_json_lines: list[str],
+    html_path: Path,
+    *,
+    display_trace_path: str | Path,
+    display_html_path: str | Path,
+) -> None:
+    """Write a self-contained HTML viewer from already-loaded JSON records."""
+    if not VIEWER_TEMPLATE_PATH.exists():
+        return
 
     # Escape </ sequences so embedded record JSON cannot prematurely close the
     # surrounding <script> / <script type="text/plain"> blocks. Forward-proxy
@@ -734,10 +799,10 @@ def _generate_html_viewer(
     # contain </script>; without this, the browser closes the data block early
     # and renders the captured HTML as page content. JSON's \/ is a valid
     # escape for /, so the parsed JSON value is unchanged.
-    records = [rec.replace("</", "<\\/") for rec in records]
+    records = [rec.replace("</", "<\\/") for rec in record_json_lines]
 
-    trace_path_label = str(display_trace_path) if display_trace_path is not None else str(trace_path.absolute())
-    html_path_label = str(display_html_path) if display_html_path is not None else str(html_path.absolute())
+    trace_path_label = str(display_trace_path)
+    html_path_label = str(display_html_path)
     jsonl_path_js = json.dumps(trace_path_label)
     html_path_js = json.dumps(html_path_label)
     version_js = json.dumps(CLAUDE_TAP_VERSION)

@@ -1,0 +1,18 @@
+{
+  "source_jsonl": "<tmp>/claude-tap-storage-baseline-20260530-035427/codex-tmux-5turn-storage-baseline.jsonl",
+  "rewrite_base": "<tmp>/claude-tap-compact-rewrite-final-ahzir_s4",
+  "session_id": "21cd91af-62ad-4eb4-9df4-d2ca2a7f76a3",
+  "records": 26,
+  "source_jsonl_bytes": 2506380,
+  "source_jsonl_gzip_bytes": 802997,
+  "record_payload_bytes": 139917,
+  "blob_count": 3,
+  "blob_payload_bytes": 70696,
+  "stored_payload_plus_blobs": 210613,
+  "compact_rows": 26,
+  "db_bytes": 278528,
+  "roundtrip_sha256": "8b6a7925ca9079d9a35ba087a4a78ae041e153abf7a629ff66308b6eaf772bc4",
+  "source_sha256": "8b6a7925ca9079d9a35ba087a4a78ae041e153abf7a629ff66308b6eaf772bc4",
+  "roundtrip_exact": true,
+  "stored_payload_savings_percent": 91.6
+}

@@ -1,0 +1,100 @@
+{
+  "scenario": "synthetic_storage_stress",
+  "note": "Synthetic deterministic records; no raw trace, HTML, compact bundle, terminal log, credential, or private prompt is committed.",
+  "parameters": {
+    "turns": 100,
+    "tool_calls_per_turn": 10,
+    "records": 1000,
+    "image_every_turns": 10,
+    "image_records": 10,
+    "tools_per_record": 16,
+    "instructions_bytes_per_record": 14560
+  },
+  "sizes": {
+    "materialized_jsonl_bytes": 135318933,
+    "materialized_jsonl_gzip_bytes": 1741011,
+    "sqlite_db_bytes": 4096000,
+    "sqlite_wal_bytes": 4152992,
+    "record_payload_bytes": 2432933,
+    "blob_count": 2,
+    "blob_payload_bytes": 67049,
+    "stored_payload_plus_blobs": 2499982,
+    "compact_rows": 1000,
+    "compact_bundle_bytes_generated_locally": 2501343,
+    "compact_bundle_gzip_bytes_generated_locally": 57654,
+    "compact_html_bytes_generated_locally": 2775211
+  },
+  "savings": {
+    "stored_payload_vs_materialized_percent": 98.15,
+    "sqlite_db_file_vs_materialized_percent": 96.97,
+    "compact_bundle_vs_materialized_percent": 98.15
+  },
+  "performance": {
+    "phases": {
+      "append_1000_records_to_sqlite": {
+        "wall_seconds": 3.9309,
+        "cpu_seconds": 2.2039,
+        "avg_cpu_percent_single_process": 56.07,
+        "rss_start_kib": 185008,
+        "rss_end_kib": 187320,
+        "max_rss_kib": 318080
+      },
+      "load_records_materialized": {
+        "wall_seconds": 0.0685,
+        "cpu_seconds": 0.0685,
+        "avg_cpu_percent_single_process": 100.0,
+        "rss_start_kib": 187320,
+        "rss_end_kib": 196676,
+        "max_rss_kib": 318080
+      },
+      "export_jsonl_materialized": {
+        "wall_seconds": 1.056,
+        "cpu_seconds": 1.0558,
+        "avg_cpu_percent_single_process": 99.98,
+        "rss_start_kib": 196676,
+        "rss_end_kib": 335048,
+        "max_rss_kib": 467992
+      },
+      "export_compact_bundle": {
+        "wall_seconds": 1.2419,
+        "cpu_seconds": 1.2418,
+        "avg_cpu_percent_single_process": 99.99,
+        "rss_start_kib": 335048,
+        "rss_end_kib": 334036,
+        "max_rss_kib": 467992
+      },
+      "load_compact_trace_bundle": {
+        "wall_seconds": 0.0698,
+        "cpu_seconds": 0.0698,
+        "avg_cpu_percent_single_process": 100.0,
+        "rss_start_kib": 334036,
+        "rss_end_kib": 343800,
+        "max_rss_kib": 467992
+      },
+      "generate_compact_html_viewer": {
+        "wall_seconds": 0.0563,
+        "cpu_seconds": 0.0563,
+        "avg_cpu_percent_single_process": 99.99,
+        "rss_start_kib": 345648,
+        "rss_end_kib": 352808,
+        "max_rss_kib": 467992
+      }
+    },
+    "max_rss_kib_total": 484940,
+    "max_rss_mib_total": 473.57,
+    "append_records_per_second": 254.39
+  },
+  "correctness": {
+    "loaded_records_equal_original": true,
+    "export_jsonl_sha256_matches_original": true,
+    "compact_materialized_equal_original": true,
+    "record_count_matches": true,
+    "image_record_count_matches": true,
+    "html_generated": true
+  },
+  "hashes": {
+    "materialized_jsonl_sha256": "a65812e3741d5fed6f4203ddbfcc57b86d8d888c6c09d26ab62ab91b8087374e",
+    "exported_jsonl_sha256": "a65812e3741d5fed6f4203ddbfcc57b86d8d888c6c09d26ab62ab91b8087374e",
+    "compact_bundle_materialized_jsonl_sha256": "a65812e3741d5fed6f4203ddbfcc57b86d8d888c6c09d26ab62ab91b8087374e"
+  }
+}

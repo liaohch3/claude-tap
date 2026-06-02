@@ -215,14 +215,19 @@ async def run_client(
     client: str = "claude",
     proxy_mode: str = "reverse",
     ca_cert_path: Path | None = None,
+    client_cmd: str | None = None,
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
 
     # asyncio.create_subprocess_exec uses CreateProcess on Windows, which only
     # auto-appends `.exe`; resolve here so npm `.cmd`/`.bat` shims also work.
-    resolved_cmd = shutil.which(cfg.cmd)
+    display_cmd = client_cmd or cfg.cmd
+    resolved_cmd = str(Path(client_cmd)) if client_cmd and Path(client_cmd).is_file() else shutil.which(display_cmd)
     if resolved_cmd is None:
-        print(cfg.missing_help)
+        if client_cmd:
+            print(f"\nError: '{client_cmd}' command not found.\nPlease check the wrapper-provided {cfg.label} path.\n")
+        else:
+            print(cfg.missing_help)
         return 1
 
     env = os.environ.copy()
@@ -301,7 +306,7 @@ async def run_client(
         env.pop(key, None)
 
     cmd = [resolved_cmd] + cmd_args
-    print(f"\n🚀 Starting {cfg.label}: {' '.join([cfg.cmd, *cmd_args])}")
+    print(f"\n🚀 Starting {cfg.label}: {' '.join([display_cmd, *cmd_args])}")
     if proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
         for env_key in cfg.forward_base_url_envs:

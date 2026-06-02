@@ -1,3 +1,4 @@
+
 /* ─── Detail ─── */
 // Persist section collapse state across turn switches.
 // Key: section title text, Value: true = open, false = collapsed.
@@ -273,4 +274,3 @@ function renderTracePrettyValue(value, depth = 0) {
     return `<div class="trace-nested"><div class="trace-nested-title">${esc(key)}</div>${renderTracePrettyValue(item, depth + 1)}</div>`;
   }).join('')}</div>`;
 }
-

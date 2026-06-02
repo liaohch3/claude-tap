@@ -1,3 +1,4 @@
+
 /* ─── Section ─── */
 function encodeCopyText(text) {
   return btoa(unescape(encodeURIComponent(text)));
@@ -34,6 +35,32 @@ function bindSections(container) {
     h.addEventListener('click', () => {
       h.nextElementSibling.classList.toggle('open');
       h.querySelector('.tb-arrow').classList.toggle('open');
+    });
+  });
+  container.querySelectorAll('.tool-input-toggle').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const wrapper = btn.closest('.tool-input-readable');
+      const view = wrapper?.querySelector('.tool-input-view');
+      if (!view) return;
+      const expanded = view.classList.toggle('expanded');
+      const dataKey = expanded ? 'decoded' : 'raw';
+      view.textContent = decodeURIComponent(escape(atob(view.dataset[dataKey] || '')));
+      btn.textContent = expanded ? t('string_show_raw') : '↵';
+      btn.title = expanded ? t('string_show_raw') : t('string_expand_escapes');
+      btn.setAttribute('aria-label', expanded ? t('string_show_raw') : t('string_expand_escapes'));
+      btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    });
+  });
+  container.querySelectorAll('.tool-input-copy').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const wrapper = btn.closest('.tool-input-readable');
+      const view = wrapper?.querySelector('.tool-input-view');
+      if (!view) return;
+      const dataKey = view.classList.contains('expanded') ? 'decoded' : 'raw';
+      const text = decodeURIComponent(escape(atob(view.dataset[dataKey] || '')));
+      copyToClipboard(text, btn, '✓');
     });
   });
 }
@@ -117,4 +144,3 @@ function copyCurl(btn) {
   if (body) cmd += ` \\\n  -d '${JSON.stringify(body).replace(/'/g, "'\\''")}'`;
   copyToClipboard(cmd, btn);
 }
-

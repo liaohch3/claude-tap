@@ -1,3 +1,4 @@
+
 /* ─── Diff ─── */
 function isMainTurn(e) {
   const b = e?.request?.body;
@@ -592,4 +593,3 @@ function truncJson(v) {
   const s = typeof v === 'string' ? v : JSON.stringify(v);
   return s.length > 80 ? s.substring(0, 77) + '...' : s;
 }
-

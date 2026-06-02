@@ -1,3 +1,4 @@
+
 /* ─── Renderers ─── */
 function chatMessageContentToText(content) {
   if (typeof content === 'string') return content;
@@ -739,7 +740,7 @@ function renderContent(content, role, options = {}) {
     }
     if (block.type === 'tool_use') {
       const label = block.id ? `${block.name || 'tool_use'} (${block.id})` : (block.name || 'tool_use');
-      return wrapContentBlock(`<span class="tool-use-label">${esc(label)}</span><pre>${esc(JSON.stringify(block.input, null, 2))}</pre>`, block, index, blocks.length, options);
+      return wrapContentBlock(`<span class="tool-use-label">${esc(label)}</span>${renderToolInput(block.input)}`, block, index, blocks.length, options);
     }
     if (block.type === 'tool_result') {
       const rc = block.content;
@@ -775,6 +776,48 @@ function renderContent(content, role, options = {}) {
     ? recoveredImagesForContent(content).map((block, index, images) => renderImageBlock(block, index, images.length)).join('')
     : '';
   return renderedBlocks + recovered;
+}
+
+function valueHasReadableEscapes(value) {
+  if (typeof value === 'string') {
+    return value.includes('\n')
+      || value.includes('\r')
+      || value.includes('\t')
+      || /\\(?:r\\n|n|r|t|"|u[0-9a-fA-F]{4})/.test(value);
+  }
+  if (Array.isArray(value)) return value.some(valueHasReadableEscapes);
+  if (value && typeof value === 'object') return Object.values(value).some(valueHasReadableEscapes);
+  return false;
+}
+
+function decodeEscapedTextForView(value) {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"')
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => {
+      try { return String.fromCharCode(parseInt(hex, 16)); }
+      catch { return `\\u${hex}`; }
+    })
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+}
+
+function renderToolInput(input) {
+  const raw = JSON.stringify(input, null, 2) || '';
+  if (!valueHasReadableEscapes(input)) return `<pre>${esc(raw)}</pre>`;
+  const decoded = decodeEscapedTextForView(raw);
+  const copyIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`;
+  return `<div class="tool-input-readable">`
+    + `<span class="tool-input-actions">`
+    + `<button type="button" class="tool-input-btn tool-input-copy" title="${esc(t('copy'))}" aria-label="${esc(t('copy'))}">${copyIcon}</button>`
+    + `<button type="button" class="tool-input-btn tool-input-toggle" aria-expanded="false" title="${esc(t('string_expand_escapes'))}" aria-label="${esc(t('string_expand_escapes'))}">↵</button>`
+    + `</span>`
+    + `<pre class="tool-input-view" data-raw="${encodeCopyText(raw)}" data-decoded="${encodeCopyText(decoded)}">${esc(raw)}</pre>`
+    + `</div>`;
 }
 
 function renderTools(tools) {
@@ -828,4 +871,3 @@ function renderSSEEvents(events) {
     return `<div class="sse-event"><span class="sse-type">${esc(eventType)}</span><span class="sse-data">${esc(short)}</span></div>`;
   }).join('');
 }
-

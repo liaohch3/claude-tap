@@ -78,6 +78,9 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
         for (const assetName of [
           'state.js',
           'responses.js',
+          'lazy_loading.js',
+          'i18n_ui.js',
+          'live_bootstrap.js',
           'filters_search.js',
           'renderers.js',
           'diff.js',
@@ -174,6 +177,43 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           { role: 'developer', content: [{ type: 'text', text: 'Be concise' }] },
           { role: 'user', content: [{ type: 'input_text', text: 'Hi' }] },
         ]);
+
+        const compactBundle = {
+          __claude_tap_compact_trace__: { version: 1 },
+          blobs: {
+            hash_1: {
+              kind: 'json',
+              payload: {
+                method: 'POST',
+                path: '/v1/responses',
+                body: { input: [{ role: 'user', content: 'compact prompt' }] },
+              },
+            },
+          },
+          records: [{
+            __claude_tap_compact_record__: { version: 1 },
+            record: {
+              turn: 1,
+              request: {
+                __claude_tap_blob_ref__: { version: 1, kind: 'json', hash: 'hash_1' },
+              },
+              response: { status: 200, body: { output: [] } },
+            },
+          }],
+        };
+        assert.deepEqual(plain(context.materializeCompactTraceBundle(compactBundle)), [{
+          turn: 1,
+          request: {
+            method: 'POST',
+            path: '/v1/responses',
+            body: { input: [{ role: 'user', content: 'compact prompt' }] },
+          },
+          response: { status: 200, body: { output: [] } },
+        }]);
+        assert.deepEqual(
+          plain(context.parseTraceText(JSON.stringify(compactBundle))),
+          plain(context.materializeCompactTraceBundle(compactBundle)),
+        );
         """
     )
 

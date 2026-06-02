@@ -1,3 +1,4 @@
+
 /* ─── Model helpers ─── */
 function modelPriority(m) {
   const l = m.toLowerCase();
@@ -794,4 +795,3 @@ function selectEntry(idx, opts) {
   mobileShowDetail();
   updateMobileNav();
 }
-
