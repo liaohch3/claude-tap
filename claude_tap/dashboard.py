@@ -8,8 +8,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
+from claude_tap.bedrock import bedrock_model_from_path
 from claude_tap.trace_store import TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
 from claude_tap.viewer import _decode_bedrock_eventstream_events
@@ -441,9 +442,9 @@ def _record_model(record: dict[str, Any]) -> str:
                 return value
     path = request.get("path") if isinstance(request, dict) else ""
     if isinstance(path, str):
-        bedrock_match = re.search(r"/model/([^/?]+)/(?:invoke|invoke-with-response-stream|messages)(?:[?#].*)?$", path)
-        if bedrock_match:
-            return unquote(bedrock_match.group(1))
+        bedrock_model = bedrock_model_from_path(path)
+        if bedrock_model:
+            return bedrock_model
         match = re.search(r"/models?/([^:?/]+)", path)
         if match:
             return match.group(1)

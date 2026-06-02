@@ -17,6 +17,7 @@ import aiohttp
 from aiohttp import web
 from yarl import URL
 
+from claude_tap.bedrock import is_bedrock_eventstream_path
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
 from claude_tap.usage import normalize_usage
@@ -228,7 +229,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     is_streaming = False
     if isinstance(req_body, dict):
         is_streaming = req_body.get("stream", False)
-    if not is_streaming and "invoke-with-response-stream" in request.path:
+    if not is_streaming and is_bedrock_eventstream_path(request.raw_path):
         is_streaming = True
 
     ctx["turn_counter"] = ctx.get("turn_counter", 0) + 1
@@ -305,7 +306,7 @@ async def _handle_streaming(
     )
     await resp.prepare(request)
 
-    is_bedrock_stream = "invoke-with-response-stream" in request.path
+    is_bedrock_stream = is_bedrock_eventstream_path(request.raw_path)
     reassembler = SSEReassembler(store_events=store_stream_events)
     raw_chunks: list[bytes] = []
 

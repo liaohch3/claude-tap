@@ -106,3 +106,11 @@ class TestBedrockRecordModel:
             "response": {"body": ""},
         }
         assert _record_model(record) == "anthropic.claude-sonnet-4-20250514-v1:0"
+
+    def test_extracts_model_from_bedrock_converse_paths(self):
+        for suffix in ("converse", "converse-stream"):
+            record = {
+                "request": {"path": f"/model/anthropic.claude-sonnet-4-20250514-v1:0/{suffix}"},
+                "response": {"body": ""},
+            }
+            assert _record_model(record) == "anthropic.claude-sonnet-4-20250514-v1:0"

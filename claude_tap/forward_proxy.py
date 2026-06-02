@@ -33,6 +33,7 @@ from aiohttp import WSMessage, WSMsgType
 from aiohttp._websocket.reader import WebSocketDataQueue, WebSocketReader
 from aiohttp.http_websocket import WS_KEY, WebSocketWriter
 
+from claude_tap.bedrock import is_bedrock_eventstream_path
 from claude_tap.certs import CertificateAuthority
 from claude_tap.proxy import (
     HOP_BY_HOP,
@@ -489,7 +490,7 @@ class ForwardProxyServer:
         is_streaming = False
         if isinstance(req_body, dict):
             is_streaming = req_body.get("stream", False)
-        if not is_streaming and "invoke-with-response-stream" in path:
+        if not is_streaming and is_bedrock_eventstream_path(path):
             is_streaming = True
 
         model = req_body.get("model", "") if isinstance(req_body, dict) else ""
@@ -589,7 +590,7 @@ class ForwardProxyServer:
         client_writer.write(b"\r\n")
         await client_writer.drain()
 
-        is_bedrock_stream = "invoke-with-response-stream" in path
+        is_bedrock_stream = is_bedrock_eventstream_path(path)
         reassembler = SSEReassembler(store_events=self._store_stream_events)
         raw_chunks: list[bytes] = []
 

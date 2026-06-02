@@ -78,13 +78,20 @@ async def _start_reverse_proxy(
     return runner, port, session
 
 
+@pytest.mark.parametrize(
+    "bedrock_path",
+    [
+        "/model/arn:aws:bedrock:us-east-1:123456789012:provisioned-model%2Fabc/invoke-with-response-stream",
+        "/model/us.anthropic.claude-sonnet-4-6-v1:0/converse-stream",
+    ],
+)
 @pytest.mark.asyncio
 async def test_reverse_proxy_records_bedrock_eventstream_without_stream_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    bedrock_path: str,
 ) -> None:
     bedrock_bytes = _bedrock_body()
-    bedrock_path = "/model/arn:aws:bedrock:us-east-1:123456789012:provisioned-model%2Fabc/invoke-with-response-stream"
 
     async def upstream_handler(request: web.Request) -> web.StreamResponse:
         assert request.raw_path == bedrock_path
@@ -172,10 +179,18 @@ class _MemoryWriter:
         return None
 
 
+@pytest.mark.parametrize(
+    "bedrock_path",
+    [
+        "/model/global.anthropic.claude-sonnet-4-6-v1/invoke-with-response-stream",
+        "/model/global.anthropic.claude-sonnet-4-6-v1:0/converse-stream",
+    ],
+)
 @pytest.mark.asyncio
 async def test_forward_proxy_records_bedrock_eventstream_without_stream_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    bedrock_path: str,
 ) -> None:
     bedrock_bytes = _bedrock_body()
     store, session_id, writer = _make_writer(tmp_path, monkeypatch)
@@ -192,10 +207,10 @@ async def test_forward_proxy_records_bedrock_eventstream_without_stream_flag(
 
     await server._forward_and_record(
         "POST",
-        "/model/global.anthropic.claude-sonnet-4-6-v1/invoke-with-response-stream",
+        bedrock_path,
         {"Host": "bedrock-runtime.us-east-1.amazonaws.com", "Authorization": "Bearer test"},
         json.dumps({"messages": [{"role": "user", "content": [{"type": "text", "text": "ping"}]}]}).encode(),
-        "https://bedrock-runtime.us-east-1.amazonaws.com/model/global.anthropic.claude-sonnet-4-6-v1/invoke-with-response-stream",
+        f"https://bedrock-runtime.us-east-1.amazonaws.com{bedrock_path}",
         client_writer,
     )
 
