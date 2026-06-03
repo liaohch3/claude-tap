@@ -2310,6 +2310,30 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
 
         desktop_light = snapshot(1440, 1000, "light")
         desktop_dark = snapshot(1440, 1000, "dark")
+        page.set_viewport_size({"width": 320, "height": 760})
+        page.evaluate("document.documentElement.setAttribute('data-theme', 'light')")
+        page.evaluate("mobileShowSidebar()")
+        mobile_list = page.evaluate(
+            """() => {
+              const rect = selector => {
+                const el = document.querySelector(selector);
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return { width: r.width, height: r.height, left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+              };
+              return {
+                overflowX: document.documentElement.scrollWidth - window.innerWidth,
+                sidebar: rect('#sidebar-wrap'),
+                detail: rect('#detail'),
+                header: rect('.header'),
+                search: rect('#search-bar'),
+                sort: rect('#sidebar-sort'),
+                firstItem: rect('.sidebar-item'),
+                sidebarHidden: document.querySelector('#sidebar-wrap')?.classList.contains('mobile-hidden'),
+                detailHidden: getComputedStyle(document.querySelector('#detail')).display === 'none',
+              };
+            }"""
+        )
         page.evaluate(
             "requestId => renderDetail(entries.find(entry => entry.request_id === requestId))",
             "req_content_block_boundary_contract",
@@ -2330,6 +2354,7 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
             "requestId => renderDetail(entries.find(entry => entry.request_id === requestId))", "req_gemini_contract"
         )
         mobile_dark = snapshot(390, 900, "dark", mobile=True)
+        mobile_narrow_detail = snapshot(320, 760, "dark", mobile=True)
     finally:
         page.close()
 
@@ -2353,9 +2378,23 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
     assert dark_content_block["backgroundColor"] != "rgba(0, 0, 0, 0)"
     assert dark_content_block["borderLeftWidth"] == "1px"
 
+    assert mobile_list["overflowX"] <= 2
+    assert mobile_list["sidebar"]["width"] == 320
+    assert mobile_list["sidebar"]["left"] == 0
+    assert mobile_list["detailHidden"] is True
+    assert mobile_list["sidebarHidden"] is False
+    assert mobile_list["header"]["width"] == 320
+    assert mobile_list["search"]["width"] <= 320
+    assert mobile_list["sort"]["width"] <= 320
+    assert mobile_list["firstItem"]["right"] <= 320
+
     assert mobile_dark["sidebar"]["width"] == 0
     assert mobile_dark["detail"]["width"] == 390
     assert mobile_dark["detail"]["left"] == 0
+    assert mobile_narrow_detail["overflowX"] <= 2
+    assert mobile_narrow_detail["sidebar"]["width"] == 0
+    assert mobile_narrow_detail["detail"]["width"] == 320
+    assert mobile_narrow_detail["detail"]["left"] == 0
 
 
 def test_viewer_session_identical_prompts_image_tags_and_early_title_generation(
