@@ -1497,6 +1497,164 @@ def _codex_lazy_display_turn_records() -> tuple[dict[str, Any], ...]:
     return tuple(records)
 
 
+def _codex_direct_generate_false_records() -> tuple[dict[str, Any], ...]:
+    visible = json.loads(json.dumps(_responses_record()))
+    visible["request_id"] = "req_direct_visible"
+    visible["turn"] = 2
+    visible["request"]["body"]["model"] = "gpt-5.5"
+    visible["response"]["body"]["id"] = "resp_direct_visible"
+    visible["response"]["body"]["usage"] = {"input_tokens": 12, "output_tokens": 1}
+
+    return (
+        {
+            "timestamp": "2026-06-01T02:00:00.000000+00:00",
+            "request_id": "req_direct_prefetch",
+            "turn": 1,
+            "duration_ms": 20,
+            "request": {
+                "method": "POST",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {"model": "gpt-5.5", "generate": False, "input": []},
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "id": "resp_direct_prefetch",
+                    "model": "gpt-5.5",
+                    "generate": False,
+                    "output": [],
+                    "usage": {"input_tokens": 9, "output_tokens": 0},
+                },
+            },
+        },
+        visible,
+    )
+
+
+def _codex_lazy_event_generate_false_records() -> tuple[dict[str, Any], ...]:
+    records: list[dict[str, Any]] = [
+        {
+            "timestamp": "2026-06-01T02:10:00.000000+00:00",
+            "request_id": "req_event_prefetch",
+            "turn": 1,
+            "duration_ms": 20,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {"type": "response.create", "model": "gpt-5.5", "input": []},
+                "ws_events": [
+                    {
+                        "type": "response.create",
+                        "data": {"model": "gpt-5.5", "generate": False, "input": []},
+                    }
+                ],
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": None,
+                "ws_events": [
+                    {
+                        "type": "response.created",
+                        "data": {
+                            "response": {
+                                "id": "resp_event_prefetch",
+                                "model": "gpt-5.5",
+                                "generate": False,
+                            }
+                        },
+                    },
+                    {
+                        "type": "response.completed",
+                        "data": {
+                            "response": {
+                                "id": "resp_event_prefetch",
+                                "model": "gpt-5.5",
+                                "generate": False,
+                                "output": [],
+                                "usage": {"input_tokens": 11, "output_tokens": 0},
+                            }
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            "timestamp": "2026-06-01T02:10:01.000000+00:00",
+            "request_id": "req_event_visible",
+            "turn": 2,
+            "duration_ms": 50,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {"type": "response.create", "model": "gpt-5.5", "input": []},
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": None,
+                "ws_events": [
+                    {
+                        "type": "response.created",
+                        "data": {"response": {"id": "resp_event_visible", "model": "gpt-5.5"}},
+                    },
+                    {
+                        "type": "response.output_item.done",
+                        "data": {
+                            "output_index": 0,
+                            "item": {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "event visible"}],
+                            },
+                        },
+                    },
+                    {
+                        "type": "response.completed",
+                        "data": {
+                            "response": {
+                                "id": "resp_event_visible",
+                                "model": "gpt-5.5",
+                                "output": [
+                                    {
+                                        "type": "message",
+                                        "role": "assistant",
+                                        "content": [{"type": "output_text", "text": "event visible"}],
+                                    }
+                                ],
+                                "usage": {"input_tokens": 12, "output_tokens": 1},
+                            }
+                        },
+                    },
+                ],
+            },
+        },
+    ]
+    for idx in range(60):
+        records.append(
+            {
+                "timestamp": f"2026-06-01T02:11:{idx % 60:02d}.000000+00:00",
+                "request_id": f"req_event_model_{idx}",
+                "turn": 100 + idx,
+                "duration_ms": 10,
+                "request": {
+                    "method": "GET",
+                    "path": "/v1/models",
+                    "headers": {},
+                    "body": None,
+                },
+                "response": {"status": 200, "headers": {}, "body": {"data": []}},
+            }
+        )
+    return tuple(records)
+
+
 def _write_trace(trace_path: Path, records: tuple[dict[str, Any], ...]) -> None:
     trace_path.write_text(
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
@@ -2048,6 +2206,45 @@ def test_viewer_codex_display_turns_skip_capture_control_records(tmp_path: Path,
     assert state["resetTurns"] == [1, 2, 3, 4]
 
 
+def test_viewer_direct_responses_generate_false_is_not_navigable(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(
+        tmp_path,
+        "codex_direct_generate_false",
+        _codex_direct_generate_false_records(),
+    )
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              sidebarTurns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+              filteredRequestIds: filtered.map(entry => entry.request_id),
+              entriesById: Object.fromEntries(entries.map(entry => [entry.request_id, {
+                displayTurn: entry.display_turn ?? null,
+                captureTurn: entry.capture_turn ?? null,
+                navigable: isNavigableTraceEntry(entry),
+              }])),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["sidebarTurns"] == ["Turn 1"]
+    assert state["filteredRequestIds"] == ["req_direct_visible"]
+    assert state["entriesById"]["req_direct_prefetch"] == {
+        "displayTurn": None,
+        "captureTurn": 1,
+        "navigable": False,
+    }
+    assert state["entriesById"]["req_direct_visible"] == {
+        "displayTurn": 1,
+        "captureTurn": 2,
+        "navigable": True,
+    }
+
+
 def test_viewer_codex_lazy_display_turns_skip_capture_control_records(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "codex_lazy_display_turns", _codex_lazy_display_turn_records())
 
@@ -2085,6 +2282,66 @@ def test_viewer_codex_lazy_display_turns_skip_capture_control_records(tmp_path: 
     assert state["codexEntries"][1]["displayTurn"] == 1
     assert state["codexEntries"][2]["displayTurn"] == 2
     assert state["codexEntries"][3]["displayTurn"] == 3
+
+
+def test_viewer_codex_lazy_stubs_read_generate_from_websocket_events(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(
+        tmp_path,
+        "codex_lazy_event_generate_false",
+        _codex_lazy_event_generate_false_records(),
+    )
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              usesLazyMode: typeof EMBEDDED_TRACE_META !== 'undefined',
+              sidebarTurns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+              filteredRequestIds: filtered.map(entry => entry.request_id),
+              eventEntries: entries
+                .filter(entry => entry.request_id.startsWith('req_event_') && entry.request?.path === '/v1/responses')
+                .map(entry => ({
+                  requestId: entry.request_id,
+                  displayTurn: entry.display_turn ?? null,
+                  captureTurn: entry.capture_turn ?? null,
+                  requestGenerate: entry.request?.body?.generate ?? null,
+                  responseGenerate: entry.response?.body?.generate ?? null,
+                  responseOutputCount: entry.response?.body?.output?.length ?? 0,
+                  outputTokens: entry.response?.body?.usage?.output_tokens ?? 0,
+                  navigable: isNavigableTraceEntry(entry),
+                })),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["usesLazyMode"] is True
+    assert state["sidebarTurns"] == ["Turn 1"]
+    assert state["filteredRequestIds"] == ["req_event_visible"]
+    assert state["eventEntries"] == [
+        {
+            "requestId": "req_event_prefetch",
+            "displayTurn": None,
+            "captureTurn": 1,
+            "requestGenerate": False,
+            "responseGenerate": False,
+            "responseOutputCount": 0,
+            "outputTokens": 0,
+            "navigable": False,
+        },
+        {
+            "requestId": "req_event_visible",
+            "displayTurn": 1,
+            "captureTurn": 2,
+            "requestGenerate": None,
+            "responseGenerate": None,
+            "responseOutputCount": 1,
+            "outputTokens": 1,
+            "navigable": True,
+        },
+    ]
 
 
 def test_viewer_codex_lazy_trace_tab_preserves_display_turn_metadata(tmp_path: Path, chromium_browser) -> None:

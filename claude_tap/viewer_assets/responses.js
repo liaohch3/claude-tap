@@ -4,6 +4,10 @@ function isCodexResponsesWebSocketEntry(entry) {
   return path.endsWith('/backend-api/codex/responses') || path.endsWith('/v1/responses') || path === '/responses';
 }
 
+function isResponsesPath(path) {
+  return path === '/responses' || path === '/v1/responses' || path.endsWith('/backend-api/codex/responses');
+}
+
 function getResponseIdFromEvent(event) {
   const data = getEventData(event);
   return data?.response?.id || data?.item?.id || data?.item_id || '';
@@ -537,9 +541,9 @@ function isDisplayTurnCandidate(entry) {
   if (!entry || typeof entry !== 'object') return false;
   const path = displayTurnPath(entry);
   if (path.includes('/count_tokens') || path.endsWith('/models') || path.includes('/models?')) return false;
-  if (isCodexResponsesWebSocketEntry(entry) && !isDisplayableResponsesEntry(entry)) return false;
+  if (isResponsesPath(path) && !isDisplayableResponsesEntry(entry)) return false;
   if (entry.derived_from_websocket) return true;
-  if (path === '/responses' || path === '/v1/responses' || path.endsWith('/backend-api/codex/responses')) {
+  if (isResponsesPath(path)) {
     return true;
   }
   if (path.startsWith('/model/') && (path.endsWith('/invoke') || path.endsWith('/invoke-with-response-stream'))) {
@@ -576,6 +580,6 @@ function displayTurnLabel(entry) {
 }
 
 function isNavigableTraceEntry(entry) {
-  if (isCodexResponsesWebSocketEntry(entry) && !isDisplayableResponsesEntry(entry)) return false;
+  if (isResponsesPath(displayTurnPath(entry)) && !isDisplayableResponsesEntry(entry)) return false;
   return true;
 }
