@@ -13,6 +13,7 @@ import pytest
 from aiohttp import web
 from yarl import URL
 
+from claude_tap.cli_clients import _extend_no_proxy
 from claude_tap.proxy import proxy_handler
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_store import get_trace_store, reset_trace_store
@@ -22,9 +23,16 @@ from claude_tap.ws_proxy import _build_ws_record, _get_ws_proxy_settings
 @pytest.fixture
 def trace_dir():
     d = tempfile.mkdtemp(prefix="claude_tap_ws_test_")
+    saved_no_proxy = {key: os.environ.get(key) for key in ("NO_PROXY", "no_proxy")}
+    _extend_no_proxy(os.environ, ("localhost", "127.0.0.1", "::1"))
     os.environ["CLOUDTAP_DB"] = str(Path(d) / "ws-test.sqlite3")
     reset_trace_store()
     yield d
+    for key, value in saved_no_proxy.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
     shutil.rmtree(d, ignore_errors=True)
     reset_trace_store()
 

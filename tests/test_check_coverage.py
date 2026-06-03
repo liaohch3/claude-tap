@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
+import scripts.check_coverage as coverage_module
 from scripts.check_coverage import (
+    VIEWER_JS_SOURCES,
+    _filter_pure_viewer_asset_split,
     _is_function_covered,
+    _tag_content,
     _viewer_script_functions,
     changed_lines_from_diff,
     changed_viewer_css_selectors,
@@ -29,6 +34,61 @@ def test_changed_lines_from_diff_extracts_new_line_numbers() -> None:
 """
 
     assert changed_lines_from_diff(diff) == {"claude_tap/viewer.py": {11, 12, 22}}
+
+
+def test_filter_pure_viewer_asset_split_ignores_exact_extracted_assets(monkeypatch, tmp_path) -> None:
+    base_html = """<html><head><style>
+.x { color: red; }
+</style></head><body><script>
+function moved() { return true; }
+</script></body></html>
+"""
+    assets = tmp_path / "claude_tap" / "viewer_assets"
+    assets.mkdir(parents=True)
+    (assets / "viewer.css").write_text(".x { color: red; }\n", encoding="utf-8")
+    for source in VIEWER_JS_SOURCES:
+        path = tmp_path / source
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    (tmp_path / VIEWER_JS_SOURCES[0]).write_text("function moved() { return true; }\n", encoding="utf-8")
+    (tmp_path / "claude_tap" / "viewer.html").write_text(
+        """<html><head><!-- CLAUDE_TAP_VIEWER_STYLE --></head><body><!-- CLAUDE_TAP_VIEWER_SCRIPT --></body></html>
+""",
+        encoding="utf-8",
+    )
+
+    def fake_check_output(cmd, **kwargs):
+        assert cmd == ["git", "show", "origin/main:claude_tap/viewer.html"]
+        return base_html
+
+    monkeypatch.setattr(coverage_module, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(subprocess, "check_output", fake_check_output)
+
+    filtered = _filter_pure_viewer_asset_split(
+        {
+            "claude_tap/viewer_assets/viewer.css": {1},
+            VIEWER_JS_SOURCES[0]: {1},
+            "claude_tap/viewer.html": {1},
+            "claude_tap/viewer.py": {10},
+        },
+        "origin/main",
+    )
+
+    assert filtered == {"claude_tap/viewer.py": {10}}
+    assert _tag_content(base_html, "style") == ".x { color: red; }"
+
+
+def test_changed_viewer_functions_does_not_fallback_to_template_lines_for_split_asset(tmp_path) -> None:
+    viewer = tmp_path / "state.js"
+    viewer.write_text(
+        """function realAssetFunction() {
+  return true;
+}
+""",
+        encoding="utf-8",
+    )
+
+    assert changed_viewer_functions(viewer, {"claude_tap/viewer.html": {1, 2}}) == set()
 
 
 def test_check_python_coverage_counts_only_changed_executable_package_lines(tmp_path) -> None:
@@ -61,10 +121,9 @@ def test_check_python_coverage_counts_only_changed_executable_package_lines(tmp_
 
 
 def test_js_function_ranges_and_changed_viewer_functions_find_touched_functions(tmp_path) -> None:
-    viewer = tmp_path / "viewer.html"
+    viewer = tmp_path / "viewer.js"
     viewer.write_text(
-        """<script>
-function untouched() {
+        """function untouched() {
   return 1;
 }
 function changedOne() {
@@ -72,27 +131,25 @@ function changedOne() {
   return value;
 }
 function changedTwo() { return 3; }
-</script>
 """,
         encoding="utf-8",
     )
 
     assert js_function_ranges(viewer.read_text(encoding="utf-8")) == {
-        "untouched": (2, 4),
-        "changedOne": (5, 8),
-        "changedTwo": (9, 9),
+        "untouched": (1, 3),
+        "changedOne": (4, 7),
+        "changedTwo": (8, 8),
     }
     assert changed_viewer_functions(
         viewer,
-        {"claude_tap/viewer.html": {6, 9}},
+        {"claude_tap/viewer_assets/viewer.js": {5, 8}},
     ) == {"changedOne", "changedTwo"}
 
 
 def test_css_selector_ranges_and_changed_viewer_css_selectors_find_touched_rules(tmp_path) -> None:
-    viewer = tmp_path / "viewer.html"
+    viewer = tmp_path / "viewer.css"
     viewer.write_text(
-        """<style>
-.header, .toolbar {
+        """.header, .toolbar {
   display: flex;
 }
 .button:hover { color: blue; }
@@ -100,23 +157,22 @@ def test_css_selector_ranges_and_changed_viewer_css_selectors_find_touched_rules
   #detail.mobile-fullwidth { width: 100%; }
   .header { display: block; }
 }
-</style>
 """,
         encoding="utf-8",
     )
 
     assert css_selector_ranges(viewer.read_text(encoding="utf-8")) == {
-        ".header": [(2, 4), (8, 8)],
-        ".toolbar": [(2, 4)],
-        "#detail.mobile-fullwidth": [(7, 7)],
+        ".header": [(1, 3), (7, 7)],
+        ".toolbar": [(1, 3)],
+        "#detail.mobile-fullwidth": [(6, 6)],
     }
     assert changed_viewer_css_selectors(
         viewer,
-        {"claude_tap/viewer.html": {3, 7, 8}},
+        {"claude_tap/viewer_assets/viewer.css": {2, 6, 7}},
     ) == {".header", ".toolbar", "#detail.mobile-fullwidth"}
     assert changed_viewer_css_selectors(
         viewer,
-        {"claude_tap/viewer.html": {8}},
+        {"claude_tap/viewer_assets/viewer.css": {7}},
     ) == {".header"}
 
 

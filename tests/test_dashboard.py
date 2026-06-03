@@ -9,6 +9,7 @@ import pytest
 from aiohttp.test_utils import make_mocked_request
 
 from claude_tap.dashboard import (
+    DASHBOARD_SUMMARY_VERSION,
     _clean_user_prompt_text,
     _content_text,
     _event_payload,
@@ -225,6 +226,162 @@ def test_dashboard_first_message_uses_first_user_prompt(trace_db, tmp_path: Path
     assert summary["first_user"] == "What is this project?"
 
 
+def test_dashboard_first_message_skips_injected_user_content_blocks(trace_db, tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_101500.jsonl"
+    _write_jsonl(
+        trace_path,
+        [
+            {
+                "timestamp": "2026-05-20T10:15:00+00:00",
+                "turn": 1,
+                "request": {
+                    "method": "POST",
+                    "path": "/v1/messages",
+                    "body": {
+                        "model": "claude-sonnet-4-6",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "<system-reminder>\nInjected context\n</system-reminder>",
+                                    },
+                                    {"type": "text", "text": "Fix the failing dashboard prompt preview."},
+                                ],
+                            }
+                        ],
+                    },
+                },
+                "response": {"status": 200, "body": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 1}}},
+            }
+        ],
+    )
+
+    _seed_legacy(tmp_path)
+    summary = list_trace_sessions()[0]
+
+    assert summary["first_user"] == "Fix the failing dashboard prompt preview."
+
+
+def test_dashboard_recomputes_stale_first_message_summary_cache(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(
+        client="claude",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 5, 20, 10, 15, tzinfo=timezone.utc),
+    )
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-20T10:15:00+00:00",
+            "turn": 1,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "<system-reminder>\nInjected context\n</system-reminder>"},
+                                {"type": "tool_result", "content": "stale tool output"},
+                                {"type": "text", "text": "Fix the failing dashboard prompt preview."},
+                            ],
+                        }
+                    ],
+                },
+            },
+            "response": {"status": 200, "body": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 1}}},
+        },
+    )
+
+    stale_summary = {
+        "id": session_id,
+        "status": "complete",
+        "record_count": 1,
+        "updated_at": "2026-05-20T10:15:00+00:00",
+        "first_user": "stale tool output",
+    }
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (json.dumps(stale_summary, ensure_ascii=False, separators=(",", ":")), session_id),
+    )
+    conn.commit()
+
+    summary = list_trace_sessions()[0]
+    cached = json.loads(store.load_session_row(session_id)["summary_json"])
+
+    assert summary["first_user"] == "Fix the failing dashboard prompt preview."
+    assert cached["first_user"] == "Fix the failing dashboard prompt preview."
+    assert cached["summary_version"] == DASHBOARD_SUMMARY_VERSION
+
+
+def test_dashboard_recomputes_stale_active_summary_cache_on_append(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(
+        client="claude",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 5, 20, 10, 15, tzinfo=timezone.utc),
+    )
+    first_record = {
+        "timestamp": "2026-05-20T10:15:00+00:00",
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/v1/messages",
+            "body": {
+                "model": "claude-sonnet-4-6",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "<system-reminder>\nInjected context\n</system-reminder>"},
+                            {"type": "tool_result", "content": "stale tool output"},
+                            {"type": "text", "text": "Fix the active dashboard prompt preview."},
+                        ],
+                    }
+                ],
+            },
+        },
+        "response": {"status": 200, "body": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 1}}},
+    }
+    store.append_record(session_id, first_record)
+
+    stale_summary = {
+        "id": session_id,
+        "status": "active",
+        "record_count": 1,
+        "updated_at": "2026-05-20T10:15:00+00:00",
+        "first_user": "stale tool output",
+    }
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET status = 'active', summary_json = ? WHERE id = ?",
+        (json.dumps(stale_summary, ensure_ascii=False, separators=(",", ":")), session_id),
+    )
+    conn.commit()
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-20T10:16:00+00:00",
+            "turn": 2,
+            "request": {"method": "POST", "path": "/v1/messages", "body": {"model": "claude-sonnet-4-6"}},
+            "response": {"status": 200, "body": {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 1}}},
+        },
+    )
+
+    summary = list_trace_sessions(current_session_id=session_id)[0]
+    cached = json.loads(store.load_session_row(session_id)["summary_json"])
+
+    assert summary["first_user"] == "Fix the active dashboard prompt preview."
+    assert cached["first_user"] == "Fix the active dashboard prompt preview."
+    assert cached["summary_version"] == DASHBOARD_SUMMARY_VERSION
+    assert cached["record_count"] == 2
+
+
 def test_dashboard_loads_session_by_id(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
@@ -245,6 +402,8 @@ def test_dashboard_rejects_missing_session_ids(trace_db) -> None:
     assert "DASHBOARD_I18N" in template
     assert 'data-i18n="table_first_message"' in template
     assert "export_jsonl" in template
+    assert "export_html" in template
+    assert "export_menu" in template
     assert load_trace_session("not-a-valid-session-id") is None
 
 
@@ -268,6 +427,20 @@ def test_dashboard_detail_navigation_uses_standalone_viewer_route() -> None:
     assert "const limit = detailRecordFetchLimit(sessionId, preserveLoaded)" in template
     assert "state.detailRecordTotal = totalRecords" in template
     assert "state.detailFingerprint = sessionDetailFingerprint(session)" in template
+
+
+def test_dashboard_template_exposes_session_delete_controls() -> None:
+    template = read_dashboard_template()
+
+    assert 'data-i18n="table_actions"' in template
+    assert "delete-session-modal" in template
+    assert "data-delete-session" in template
+    assert "delete_active_session_title" in template
+    assert "session.active" in template
+    assert "function isSessionRowActionTarget(target)" in template
+    assert "event.target !== row" in template
+    assert "function confirmDeleteSession()" in template
+    assert 'method: "DELETE"' in template
 
 
 def test_dashboard_summarize_session_and_migration(trace_db, tmp_path: Path) -> None:
@@ -390,6 +563,22 @@ def test_dashboard_extracts_usage_models_errors_and_text() -> None:
         )
         == "--print-timeout"
     )
+    assert (
+        _request_user_text(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "<USER_REQUEST>\n--print-timeout\n</USER_REQUEST>"},
+                            {"type": "text", "text": "<ADDITIONAL_METADATA>time</ADDITIONAL_METADATA>"},
+                        ],
+                    }
+                ]
+            }
+        )
+        == "--print-timeout"
+    )
     assert _request_user_text({"input": [{"type": "message", "content": [{"text": "input text"}]}]}) == "input text"
     assert (
         _request_user_text(
@@ -403,14 +592,80 @@ def test_dashboard_extracts_usage_models_errors_and_text() -> None:
         )
         == "raw user prompt"
     )
+    assert (
+        _request_user_text(
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "<system-reminder>\nskip\n</system-reminder>"},
+                            {"type": "text", "text": "actual response prompt"},
+                        ],
+                    }
+                ]
+            }
+        )
+        == "actual response prompt"
+    )
     assert _request_user_text({"messages": [{"role": "user", "content": ["hello", {"text": "world"}]}]}) == (
         "hello\nworld"
+    )
+    assert (
+        _request_user_text(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "<system-reminder>\nskip\n</system-reminder>"},
+                            {"type": "text", "text": "actual message prompt"},
+                        ],
+                    }
+                ]
+            }
+        )
+        == "actual message prompt"
+    )
+    assert (
+        _request_user_text(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "<system-reminder>\nskip\n</system-reminder>"},
+                            {"type": "tool_result", "content": "tool output should not be first prompt"},
+                            {"type": "function_call_output", "output": "function output should not be first prompt"},
+                            {"type": "text", "text": "actual prompt after tools"},
+                        ],
+                    }
+                ]
+            }
+        )
+        == "actual prompt after tools"
     )
     assert (
         _request_user_text(
             {"contents": [{"role": "model", "parts": [{"text": "skip"}]}, {"role": "USER", "parts": [{"text": "use"}]}]}
         )
         == "use"
+    )
+    assert (
+        _request_user_text(
+            {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": "<session_context>\nskip\n</session_context>"},
+                            {"text": "actual gemini prompt"},
+                        ],
+                    }
+                ]
+            }
+        )
+        == "actual gemini prompt"
     )
 
     assert _response_text("raw response") == "raw response"
@@ -529,6 +784,8 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 html = await resp.text()
                 assert "session-list" in html
                 assert "export_jsonl" in html
+                assert "export_html" in html
+                assert "export_menu" in html
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
                 assert resp.status == 200
@@ -547,15 +804,17 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
             async with session.get(f"http://127.0.0.1:{port}/dashboard/session/{session_id}") as resp:
                 assert resp.status == 200
                 html = await resp.text()
-                assert "EMBEDDED_TRACE_DATA" in html
+                assert "EMBEDDED_TRACE_COMPACT_DATA" in html
                 assert "req_claude" in html
-                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/jsonl";' in html
+                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/compact";' in html
                 assert f'const __TRACE_HTML_PATH__ = "/dashboard/session/{session_id}";' in html
                 assert f"session-{session_id[:8]}.jsonl" not in html
                 assert f"session-{session_id[:8]}.html" not in html
                 assert "__TRACE_SESSION_EXPORTS__" in html
                 assert f"/api/sessions/{session_id}/export/jsonl" in html
+                assert f"/api/sessions/{session_id}/export/compact" in html
                 assert f"/api/sessions/{session_id}/export/log" in html
+                assert f"/api/sessions/{session_id}/export/html" in html
                 assert "session-list" not in html
                 assert "back-to-list" not in html
 
@@ -575,12 +834,13 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
             ) as resp:
                 assert resp.status == 200
                 html = await resp.text()
-                assert "EMBEDDED_TRACE_DATA" in html
+                assert "EMBEDDED_TRACE_COMPACT_DATA" in html
                 assert "req_claude" in html
-                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/jsonl";' in html
+                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/compact";' in html
                 assert f'const __TRACE_HTML_PATH__ = "/dashboard/session/{session_id}";' in html
                 assert f"session-{session_id[:8]}.jsonl" not in html
                 assert f"session-{session_id[:8]}.html" not in html
+                assert f"/api/sessions/{session_id}/export/html" in html
 
             async with session.get(
                 f"http://127.0.0.1:{port}/api/sessions/{second_session_id}/records?offset=1&limit=1"
@@ -595,12 +855,45 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 body = await resp.text()
                 assert "req_claude" in body
 
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/compact") as resp:
+                assert resp.status == 200
+                assert resp.content_type == "application/json"
+                body = await resp.text()
+                assert "__claude_tap_compact_trace__" in body
+                assert "req_claude" in body
+
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/log") as resp:
                 assert resp.status == 200
                 assert resp.content_type == "text/plain"
                 assert resp.charset == "utf-8"
                 body = await resp.text()
                 assert body == "10:00:00 proxy log\n"
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/html") as resp:
+                assert resp.status == 200
+                assert resp.content_type == "text/html"
+                assert resp.charset == "utf-8"
+                assert f'filename="trace_{session_id[:8]}.html"' in resp.headers["Content-Disposition"]
+                html = await resp.text()
+                assert "EMBEDDED_TRACE_DATA" in html
+                assert "req_claude" in html
+                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/jsonl";' in html
+                assert f'const __TRACE_HTML_PATH__ = "/api/sessions/{session_id}/export/html";' in html
+                assert f"session-{session_id[:8]}.jsonl" not in html
+
+            async with session.delete(f"http://127.0.0.1:{port}/api/sessions/{second_session_id}") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["deleted_sessions"] == 1
+                assert payload["deleted_records"] == 2
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{second_session_id}/records") as resp:
+                assert resp.status == 404
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert [item["id"] for item in payload["sessions"]] == [session_id]
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/bad/records") as resp:
                 assert resp.status == 404
@@ -655,7 +948,7 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
         async with playwright.async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
             try:
-                page = await browser.new_page()
+                page = await browser.new_page(accept_downloads=True)
                 await page.goto(
                     f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
                     wait_until="domcontentloaded",
@@ -666,13 +959,165 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert await page.locator("#back-to-list").count() == 0
                 assert await page.locator("#session-list").count() == 0
                 assert await page.locator(".sidebar-item").count() >= 10
-                export_links = page.locator("#viewer-actions .viewer-action")
-                assert await export_links.count() == 2
-                hrefs = await export_links.evaluate_all("(links) => links.map((link) => link.getAttribute('href'))")
+                export_button = page.locator("#viewer-actions .export-menu > summary")
+                assert await export_button.count() == 1
+                assert await export_button.inner_text() == "Export"
+                assert await page.locator("#viewer-actions > .viewer-action").count() == 0
+                assert await page.locator("#viewer-actions .export-menu-item").count() == 4
+                hrefs = await page.locator("#viewer-actions .export-menu-item").evaluate_all(
+                    "(links) => links.map((link) => link.getAttribute('href'))"
+                )
                 assert f"/api/sessions/{session_id}/export/jsonl" in hrefs
+                assert f"/api/sessions/{session_id}/export/compact" in hrefs
                 assert f"/api/sessions/{session_id}/export/log" in hrefs
+                assert f"/api/sessions/{session_id}/export/html" in hrefs
+
+                async with page.expect_download() as download_info:
+                    await export_button.click()
+                    await page.locator('#viewer-actions .export-menu-item[href$="/export/html"]').click()
+                download = await download_info.value
+                assert download.suggested_filename == f"trace_{session_id[:8]}.html"
+                download_path = await download.path()
+                assert download_path is not None
+                exported_html = Path(download_path).read_text(encoding="utf-8")
+                assert "EMBEDDED_TRACE_DATA" in exported_html
+                assert "req_claude" in exported_html
             finally:
                 await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    _write_jsonl(trace_path, [_anthropic_record()])
+    _seed_legacy(tmp_path)
+    session_id = list_trace_sessions()[0]["id"]
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 390, "height": 900})
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
+                    wait_until="domcontentloaded",
+                )
+                await page.wait_for_selector("#viewer-actions .export-menu > summary", timeout=5000)
+
+                await page.locator("#viewer-actions .export-menu > summary").click()
+                menu = page.locator("#viewer-actions .export-menu-list")
+                assert await menu.is_visible()
+                assert await page.locator("#viewer-actions .export-menu-item").count() == 4
+
+                layout = await page.evaluate(
+                    """() => {
+                      const actions = document.querySelector('#viewer-actions');
+                      const menu = document.querySelector('#viewer-actions .export-menu-list');
+                      const actionsBox = actions.getBoundingClientRect();
+                      const menuBox = menu.getBoundingClientRect();
+                      const actionStyles = getComputedStyle(actions);
+                      const menuStyles = getComputedStyle(menu);
+                      return {
+                        actionsBottom: actionsBox.bottom,
+                        menuBottom: menuBox.bottom,
+                        menuHeight: menuBox.height,
+                        overflowX: actionStyles.overflowX,
+                        menuPosition: menuStyles.position,
+                      };
+                    }"""
+                )
+                assert layout["overflowX"] == "visible"
+                assert layout["menuPosition"] == "static"
+                assert layout["menuHeight"] > 80
+                assert layout["menuBottom"] <= layout["actionsBottom"] + 1
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_delete_button_keyboard_focuses_confirmation_dialog(trace_db) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(session_id, _anthropic_record())
+    store.finalize_session(session_id, {"api_calls": 1})
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
+                delete_button = page.locator(f'[data-delete-session="{session_id}"]')
+                await delete_button.wait_for(state="visible", timeout=5000)
+
+                for key in ("Enter", "Space"):
+                    await delete_button.focus()
+                    await page.keyboard.press(key)
+                    await page.wait_for_selector("#delete-session-modal:not(.hidden)", timeout=5000)
+                    assert page.url == f"http://127.0.0.1:{port}/dashboard"
+                    assert await page.evaluate("document.activeElement && document.activeElement.id") == (
+                        "delete-session-cancel"
+                    )
+
+                    await page.keyboard.press("Enter")
+                    await page.wait_for_selector("#delete-session-modal.hidden", state="attached", timeout=5000)
+                    assert await page.locator(f'[data-session="{session_id}"]').count() == 1
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_delete_current_live_session_is_protected(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+
+    server = LiveViewerServer(port=0, session_id=session_id, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(f"http://127.0.0.1:{port}/api/sessions/{session_id}") as resp:
+                assert resp.status == 409
+                payload = await resp.json()
+                assert payload["error"] == "Live session cannot be deleted"
+        assert store.load_session_row(session_id) is not None
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_delete_active_session_is_protected(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(session_id, _anthropic_record())
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                active_session = next(item for item in payload["sessions"] if item["id"] == session_id)
+                assert active_session["active"] is True
+                assert active_session["status"] == "active"
+
+            async with session.delete(f"http://127.0.0.1:{port}/api/sessions/{session_id}") as resp:
+                assert resp.status == 409
+                payload = await resp.json()
+                assert payload["error"] == "Active session cannot be deleted"
+        assert store.load_session_row(session_id) is not None
     finally:
         await server.stop()
 

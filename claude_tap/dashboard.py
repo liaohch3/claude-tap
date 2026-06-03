@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from claude_tap.bedrock import bedrock_model_from_path
 from claude_tap.trace_store import TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
+from claude_tap.viewer import _decode_bedrock_eventstream_events
 
 DASHBOARD_TEMPLATE_PATH = Path(__file__).parent / "dashboard.html"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -29,6 +31,7 @@ CLIENT_LABELS = {
     "pi": "Pi",
     "qoder": "Qoder",
 }
+DASHBOARD_SUMMARY_VERSION = 2
 
 
 def read_dashboard_template() -> str:
@@ -142,6 +145,7 @@ def merge_record_into_summary(
         )
 
     summary = dict(summary)
+    summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
     usage = _record_usage(record)
     summary["record_count"] = record_count
     summary["turn_count"] = max(int(summary.get("turn_count") or 0), record_count)
@@ -181,6 +185,33 @@ def merge_record_into_summary(
     return summary
 
 
+def is_dashboard_summary_current(summary: Any, session_id: str) -> bool:
+    return (
+        isinstance(summary, dict)
+        and summary.get("id") == session_id
+        and summary.get("summary_version") == DASHBOARD_SUMMARY_VERSION
+    )
+
+
+def build_stored_session_summary(row: sqlite3.Row, records: list[dict[str, Any]]) -> dict[str, Any]:
+    manifest_entry = {
+        "client": row["client"] or "",
+        "proxy_mode": row["proxy_mode"] or "",
+    }
+    return _summarize_session(
+        session_id=row["id"],
+        date_key=row["date_key"] or "legacy",
+        legacy_rel_path=row["legacy_rel_path"],
+        records=records,
+        manifest_entry=manifest_entry,
+        status=row["status"] or "complete",
+        started_at=row["started_at"] or "",
+        updated_at=row["updated_at"] or "",
+        is_current=row["status"] == "active",
+        record_count=int(row["record_count"] or len(records)),
+    )
+
+
 def build_imported_session_summary(
     row: sqlite3.Row,
     records: list[dict[str, Any]],
@@ -208,10 +239,11 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
             cached = json.loads(summary_json)
         except json.JSONDecodeError:
             cached = None
-        if isinstance(cached, dict) and cached.get("id") == row["id"]:
+        if is_dashboard_summary_current(cached, row["id"]):
+            cached = dict(cached)
+            cached["active"] = row["status"] == "active"
             if row["status"] != "active":
                 return cached
-            cached = dict(cached)
             db_count = int(row["record_count"] or 0)
             cached["updated_at"] = row["updated_at"] or cached.get("updated_at") or ""
             cached["record_count"] = db_count
@@ -238,6 +270,7 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
             is_current=row["status"] == "active",
             record_count=0,
         )
+        summary["active"] = row["status"] == "active"
         if row["status"] != "active":
             store.store_summary(row["id"], summary)
         return summary
@@ -255,6 +288,7 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
         is_current=False,
         record_count=record_count,
     )
+    summary["active"] = row["status"] == "active"
     if row["status"] != "active":
         store.store_summary(row["id"], summary)
     return summary
@@ -269,6 +303,7 @@ def _apply_current_session_state(
     session = dict(session)
     is_current = bool(current_session_id and session.get("id") == current_session_id)
     session["live"] = is_current
+    session["active"] = bool(session.get("active")) or is_current
     if is_current:
         count = int(session.get("record_count") or 0)
         if live_record_count is not None:
@@ -335,10 +370,12 @@ def _summarize_session(
     count = record_count if record_count is not None else len(records)
     return {
         "id": session_id,
+        "summary_version": DASHBOARD_SUMMARY_VERSION,
         "date": date_key if _DATE_RE.match(date_key) else "legacy",
         "agent": agent,
         "agent_key": _agent_key(agent),
         "status": resolved_status,
+        "active": is_current or status == "active",
         "live": is_current,
         "legacy_rel_path": legacy_rel_path,
         "started_at": started_at,
@@ -392,6 +429,21 @@ def _record_usage(record: dict[str, Any]) -> dict[str, int]:
             if candidate:
                 usage = candidate
                 break
+    if not usage:
+        merged_usage: dict[str, int] = {}
+        for event in _bedrock_events(record):
+            payload = event.get("data", {}) if isinstance(event, dict) else {}
+            candidate = payload.get("usage", {}) if isinstance(payload, dict) else {}
+            for key, value in candidate.items():
+                if isinstance(value, int):
+                    merged_usage[key] = max(merged_usage.get(key, 0), value)
+            message = payload.get("message", {}) if isinstance(payload, dict) else {}
+            msg_usage = message.get("usage", {}) if isinstance(message, dict) else {}
+            for key, value in msg_usage.items():
+                if isinstance(value, int):
+                    merged_usage[key] = max(merged_usage.get(key, 0), value)
+        if merged_usage:
+            usage = merged_usage
     if not usage and isinstance(body, dict):
         usage = body
     return normalize_usage(usage)
@@ -416,9 +468,19 @@ def _record_model(record: dict[str, Any]) -> str:
         value = resp_body.get("model")
         if isinstance(value, str) and value:
             return value
+    for event in _bedrock_events(record)[:3]:
+        data = event.get("data", {}) if isinstance(event, dict) else {}
+        msg = data.get("message", {}) if isinstance(data, dict) else {}
+        if isinstance(msg, dict):
+            value = msg.get("model")
+            if isinstance(value, str) and value:
+                return value
     path = request.get("path") if isinstance(request, dict) else ""
     if isinstance(path, str):
-        match = re.search(r"/models/([^:?/]+)", path)
+        bedrock_model = bedrock_model_from_path(path)
+        if bedrock_model:
+            return bedrock_model
+        match = re.search(r"/models?/([^:?/]+)", path)
         if match:
             return match.group(1)
     return ""
@@ -636,6 +698,15 @@ def _response_events(record: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _bedrock_events(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Decode AWS Bedrock EventStream binary body into structured events."""
+    response = record.get("response")
+    if not isinstance(response, dict):
+        return []
+    body = response.get("body")
+    return _decode_bedrock_eventstream_events(body)
+
+
 def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     data = event.get("data", event)
     if isinstance(data, str):
@@ -662,8 +733,7 @@ def _request_user_text(body: Any) -> str:
         for message in messages:
             role = str(message.get("role") or "").lower() if isinstance(message, dict) else ""
             if isinstance(message, dict) and role == "user":
-                text = _content_text(message.get("content"))
-                prompt = _clean_user_prompt_text(text)
+                prompt = _clean_user_content_text(message.get("content"))
                 if prompt:
                     return prompt
 
@@ -683,8 +753,7 @@ def _request_user_text(body: Any) -> str:
             role = str(content.get("role") or "user").lower()
             if role != "user":
                 continue
-            text = _parts_text(content.get("parts"))
-            prompt = _clean_user_prompt_text(text)
+            prompt = _clean_user_content_text(content.get("parts"))
             if prompt:
                 return prompt
 
@@ -694,11 +763,11 @@ def _request_user_text(body: Any) -> str:
 
 def _input_user_text(value: Any) -> str:
     if isinstance(value, str):
-        return value
+        return _clean_user_prompt_text(value)
     if isinstance(value, dict):
         role = str(value.get("role") or "").lower()
         if role == "user":
-            return _clean_user_prompt_text(_content_text(value.get("content") or value.get("text")))
+            return _clean_user_content_text(value.get("content") or value.get("text"))
         return ""
     if not isinstance(value, list):
         return ""
@@ -708,8 +777,7 @@ def _input_user_text(value: Any) -> str:
             continue
         role = str(item.get("role") or "").lower()
         if role == "user":
-            text = _content_text(item.get("content") or item.get("text"))
-            prompt = _clean_user_prompt_text(text)
+            prompt = _clean_user_content_text(item.get("content") or item.get("text"))
             if prompt:
                 return prompt
 
@@ -721,11 +789,35 @@ def _input_user_text(value: Any) -> str:
         if role or item_type in ("function_call_output", "tool_result", "reasoning"):
             continue
         if item_type in ("message", "input_text") or "content" in item:
-            text = _content_text(item.get("content") or item.get("text"))
-            prompt = _clean_user_prompt_text(text)
+            prompt = _clean_user_content_text(item.get("content") or item.get("text"))
             if prompt:
                 return prompt
     return ""
+
+
+def _clean_user_content_text(value: Any) -> str:
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if _is_auxiliary_user_content_block(item):
+                continue
+            text = _content_text(item)
+            prompt = _clean_user_prompt_text(text)
+            if prompt:
+                if re.search(r"<USER_REQUEST>\s*.*?\s*</USER_REQUEST>", text, flags=re.DOTALL | re.IGNORECASE):
+                    return prompt
+                parts.append(prompt)
+        return "\n".join(parts).strip()
+    if _is_auxiliary_user_content_block(value):
+        return ""
+    return _clean_user_prompt_text(_content_text(value))
+
+
+def _is_auxiliary_user_content_block(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    block_type = str(value.get("type") or "").lower()
+    return block_type in {"function_call_output", "tool_result"}
 
 
 def _clean_user_prompt_text(text: str) -> str:
@@ -751,6 +843,7 @@ def _clean_user_prompt_text(text: str) -> str:
     first_tag = re.match(r"^<([A-Za-z_-]+)>", text)
     if first_tag and first_tag.group(1).lower() in {
         "artifacts",
+        "additional_metadata",
         "environment_context",
         "session_context",
         "skills",
@@ -804,6 +897,13 @@ def _response_text(body: Any) -> str:
             return text
 
     output = body.get("output")
+    if isinstance(output, dict):
+        message = output.get("message")
+        if isinstance(message, dict):
+            text = _content_text(message.get("content"))
+            if text:
+                return text
+
     text = _content_text(output)
     if text:
         return text

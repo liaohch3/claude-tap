@@ -11,6 +11,8 @@
 
 `claude-tap` 是给 AI 编程 agent 用的本地代理和 trace 查看器。把 CLI 通过它启动，就能看到真实 API 流量：system prompt、对话历史、工具 schema、工具调用、流式响应、token 用量和请求 diff。
 
+网站：[本地 AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · 指南：[如何本地查看 Agent traces](docs/guides/agent-trace-viewer.zh.md)
+
 它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli)、[Qoder CLI](https://qoder.com/cli)、[Antigravity CLI](https://antigravity.google/product/antigravity-cli) 和 [CodeBuddy CLI](https://www.codebuddy.ai)。
 
 <p align="center">
@@ -51,7 +53,7 @@
 
 | 客户端 | 典型用途 |
 |--------|----------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API，或 DeepSeek / GLM 等 Claude 兼容网关 |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API、AWS Bedrock，或 DeepSeek / GLM 等 Claude 兼容网关 |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist 的多 Google 端点流量 |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code 或 Moonshot Open Platform |
@@ -128,8 +130,8 @@ claude-tap -- --dangerously-skip-permissions
 claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
-`claude-tap` 会从环境变量或 Claude settings 中的 `ANTHROPIC_BASE_URL`
-自动识别自定义 Claude Code 上游；只有想手动覆盖时才需要传 `--tap-target`。
+`claude-tap` 会从环境变量或 Claude settings 中的 `ANTHROPIC_BASE_URL` 或
+`ANTHROPIC_BEDROCK_BASE_URL` 自动识别自定义 Claude Code 上游；只有想手动覆盖时才需要传 `--tap-target`。
 
 使用 Claude Code VS Code 插件时，把 `Claude Code: Claude Process Wrapper` 设置为 `claude-tap`；如果 Windows 上 VS Code 找不到它，请填写完整的 `claude-tap.exe` 路径。
 
@@ -158,6 +160,36 @@ claude-tap -- --permission-mode bypassPermissions
 ```
 
 `claude-tap` 会从 `ANTHROPIC_BASE_URL` 读取 DeepSeek 上游，再把 Claude Code 指向本地代理。只有手动覆盖时才需要 `--tap-target https://api.deepseek.com/anthropic`。
+
+</details>
+
+<details>
+<summary>Claude Code + AWS Bedrock</summary>
+
+`claude-tap` 支持两种 Bedrock 场景，并自动检测适用哪种：
+
+**自定义 Bedrock 网关（公司代理，无 SigV4）**
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_BEDROCK_BASE_URL="https://your-gateway.company.com/bedrock"
+claude-tap
+```
+
+`claude-tap` 检测到非 AWS 域名后，会将 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_BEDROCK_BASE_URL` 都重定向到本地代理，并解码 AWS EventStream 二进制响应格式以提取 token 用量和模型信息。
+
+**AWS 原生 Bedrock（SigV4 签名请求）**
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_BEDROCK_BASE_URL="https://bedrock-runtime.us-east-1.amazonaws.com"
+export AWS_REGION="us-east-1"
+claude-tap --tap-proxy-mode forward
+```
+
+当端点是真实 AWS 域名（`*.amazonaws.com`）时，`claude-tap` **不会**将 `ANTHROPIC_BEDROCK_BASE_URL` 重写为 localhost — 这样做会破坏 AWS SigV4 签名验证。请使用正向代理模式（`--tap-proxy-mode forward`）来捕获此流量，而不修改已签名的请求。
+
+只有手动覆盖时才需要 `--tap-target`。
 
 </details>
 
@@ -371,6 +403,10 @@ claude-tap dashboard
 # 从已有 JSONL trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
+# 导出可独立搬运的压缩 trace，再按需渲染
+claude-tap export <session-id> --format compact -o trace.ctap.json
+claude-tap export trace.ctap.json -o trace.html
+
 # 在 iframe 中嵌入导出的查看器，并减少外层 chrome
 # trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light
 
@@ -386,6 +422,8 @@ claude-tap --tap-no-open
 ```
 
 纯代理模式下，可以在另一个终端启动客户端，并把它的 base URL 或代理配置指向本地代理。具体接法见 [客户端支持矩阵](docs/support-matrix.md)。
+
+作为 VSCode Claude Code 的 `claudeProcessWrapper` 使用时，claude-tap 会识别扩展传入的 Claude binary 路径并用它启动 Claude。
 
 ### CLI 选项
 

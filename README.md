@@ -11,6 +11,8 @@
 
 `claude-tap` is a local proxy and trace viewer for AI coding agents. Run your CLI through it, then inspect the real API traffic: system prompts, conversation history, tool schemas, tool calls, streaming responses, token usage, and request diffs.
 
+Website: [Local AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · Guide: [How to view agent traces locally](docs/guides/agent-trace-viewer.md)
+
 It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
 
 <p align="center">
@@ -51,7 +53,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 
 | Client | Typical use |
 |--------|-------------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API or Claude-compatible gateways such as DeepSeek / GLM |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, or Claude-compatible gateways such as DeepSeek / GLM |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API key mode or ChatGPT subscription OAuth |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code or Moonshot Open Platform |
@@ -129,8 +131,8 @@ claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
 `claude-tap` auto-detects custom Claude Code upstreams from `ANTHROPIC_BASE_URL`
-in your environment or Claude settings. Use `--tap-target` only when you want to
-override that detected target.
+or `ANTHROPIC_BEDROCK_BASE_URL` in your environment or Claude settings. Use
+`--tap-target` only when you want to override that detected target.
 
 For the Claude Code VS Code extension, set `Claude Code: Claude Process Wrapper` to `claude-tap`; on Windows, use the full `claude-tap.exe` path if VS Code cannot find it.
 
@@ -159,6 +161,36 @@ claude-tap -- --permission-mode bypassPermissions
 ```
 
 `claude-tap` reads the DeepSeek upstream from `ANTHROPIC_BASE_URL`, then launches Claude Code against the local proxy. Use `--tap-target https://api.deepseek.com/anthropic` only as a manual override.
+
+</details>
+
+<details>
+<summary>Claude Code with AWS Bedrock</summary>
+
+`claude-tap` supports two Bedrock scenarios and auto-detects which applies:
+
+**Custom Bedrock gateway (company proxy, no SigV4)**
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_BEDROCK_BASE_URL="https://your-gateway.company.com/bedrock"
+claude-tap
+```
+
+`claude-tap` detects the non-AWS host, redirects both `ANTHROPIC_BASE_URL` and `ANTHROPIC_BEDROCK_BASE_URL` to the local proxy, and decodes the AWS EventStream binary response format to extract token usage and model info.
+
+**AWS native Bedrock (SigV4-signed requests)**
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_BEDROCK_BASE_URL="https://bedrock-runtime.us-east-1.amazonaws.com"
+export AWS_REGION="us-east-1"
+claude-tap --tap-proxy-mode forward
+```
+
+When the endpoint is a real AWS domain (`*.amazonaws.com`), `claude-tap` does **not** rewrite `ANTHROPIC_BEDROCK_BASE_URL` to localhost — doing so would break AWS SigV4 signature validation. Use forward proxy mode (`--tap-proxy-mode forward`) to capture this traffic without modifying the signed request.
+
+Use `--tap-target` only as a manual override when auto-detection does not apply.
 
 </details>
 
@@ -374,6 +406,10 @@ claude-tap dashboard
 # Regenerate a self-contained HTML viewer from JSONL
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
+# Export a portable compact trace bundle, then render it later
+claude-tap export <session-id> --format compact -o trace.ctap.json
+claude-tap export trace.ctap.json -o trace.html
+
 # Embed the exported viewer in an iframe with reduced chrome
 # trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light
 
@@ -389,6 +425,8 @@ claude-tap --tap-no-open
 ```
 
 In proxy-only mode, start your client in another terminal and point its base URL or proxy settings at the local proxy. Use the [client support matrix](docs/support-matrix.md) for exact wiring.
+
+When used as VSCode Claude Code's `claudeProcessWrapper`, claude-tap honors the Claude binary path passed by the extension.
 
 ### CLI Options
 

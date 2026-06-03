@@ -7,6 +7,7 @@ import json
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
+from claude_tap.compact_trace import COMPACT_TRACE_MARKER, is_compact_trace_bundle
 from claude_tap.sse import SSEReassembler
 from claude_tap.usage import normalize_usage
 
@@ -18,7 +19,25 @@ except Exception:
 # Threshold: traces with more entries than this use lazy mode
 LAZY_THRESHOLD = 50
 VIEWER_TEMPLATE_PATH = Path(__file__).parent / "viewer.html"
+VIEWER_ASSETS_DIR = Path(__file__).parent / "viewer_assets"
+VIEWER_CSS_PATH = VIEWER_ASSETS_DIR / "viewer.css"
+VIEWER_JS_PATHS = (
+    VIEWER_ASSETS_DIR / "state.js",
+    VIEWER_ASSETS_DIR / "responses.js",
+    VIEWER_ASSETS_DIR / "lazy_loading.js",
+    VIEWER_ASSETS_DIR / "i18n_ui.js",
+    VIEWER_ASSETS_DIR / "live_bootstrap.js",
+    VIEWER_ASSETS_DIR / "filters_search.js",
+    VIEWER_ASSETS_DIR / "sidebar.js",
+    VIEWER_ASSETS_DIR / "detail_trace.js",
+    VIEWER_ASSETS_DIR / "renderers.js",
+    VIEWER_ASSETS_DIR / "sections_json.js",
+    VIEWER_ASSETS_DIR / "diff.js",
+    VIEWER_ASSETS_DIR / "utilities_mobile.js",
+)
 VIEWER_I18N_PATH = Path(__file__).parent / "viewer_i18n.json"
+VIEWER_STYLE_TEMPLATE_ANCHOR = "<!-- CLAUDE_TAP_VIEWER_STYLE -->"
+VIEWER_SCRIPT_TEMPLATE_ANCHOR = "<!-- CLAUDE_TAP_VIEWER_SCRIPT -->"
 VIEWER_SCRIPT_ANCHOR = "<script>\nconst $ = s =>"
 
 
@@ -41,13 +60,21 @@ def _viewer_i18n_script() -> str:
 
 def _read_viewer_template() -> str:
     html = VIEWER_TEMPLATE_PATH.read_text(encoding="utf-8")
-    if VIEWER_SCRIPT_ANCHOR not in html:
-        raise ValueError("viewer.html is missing the main script anchor.")
-    return html.replace(
-        VIEWER_SCRIPT_ANCHOR,
-        f"<script>\n{_viewer_i18n_script()}</script>\n{VIEWER_SCRIPT_ANCHOR}",
+    if VIEWER_STYLE_TEMPLATE_ANCHOR not in html:
+        raise ValueError("viewer.html is missing the style asset anchor.")
+    if VIEWER_SCRIPT_TEMPLATE_ANCHOR not in html:
+        raise ValueError("viewer.html is missing the script asset anchor.")
+    css = VIEWER_CSS_PATH.read_text(encoding="utf-8").rstrip()
+    js = "".join(path.read_text(encoding="utf-8") for path in VIEWER_JS_PATHS).rstrip()
+    html = html.replace(VIEWER_STYLE_TEMPLATE_ANCHOR, f"<style>\n{css}\n</style>", 1)
+    html = html.replace(
+        VIEWER_SCRIPT_TEMPLATE_ANCHOR,
+        f"<script>\n{_viewer_i18n_script()}</script>\n<script>\n{js}\n</script>",
         1,
     )
+    if VIEWER_SCRIPT_ANCHOR not in html:
+        raise ValueError("viewer asset script is missing the main script anchor.")
+    return html
 
 
 def _iter_response_events(resp: dict) -> list[dict]:
@@ -83,14 +110,145 @@ def _event_payload(event: dict) -> dict | None:
 
 
 def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
-    """Extract Anthropic stream events from a decoded AWS EventStream body.
+    """Extract normalized stream events from a decoded AWS EventStream body.
 
-    Bedrock invoke-with-response-stream responses are binary AWS EventStream
-    frames. Legacy traces may contain those bytes decoded as text with invalid
-    frame bytes replaced, but the JSON payloads inside the frames remain intact.
+    Bedrock streaming responses are binary AWS EventStream frames. Legacy
+    traces may contain those bytes decoded as text with invalid frame bytes
+    replaced, but the JSON payloads inside the frames remain intact.
     """
-    if not isinstance(body, str) or '"bytes"' not in body:
+    error_event_keys = {
+        "internalServerException",
+        "modelStreamErrorException",
+        "modelTimeoutException",
+        "serviceUnavailableException",
+        "throttlingException",
+        "validationException",
+    }
+    if not isinstance(body, str):
         return []
+    stream_event_keys = (
+        "bytes",
+        "chunk",
+        "type",
+        "messageStart",
+        "contentBlockStart",
+        "contentBlockDelta",
+        "contentBlockStop",
+        "messageStop",
+        "metadata",
+        *error_event_keys,
+    )
+    if not any(f'"{key}"' in body for key in stream_event_keys):
+        return []
+
+    def _converse_event_payload(payload: dict) -> tuple[str | None, dict | None]:
+        message_start = payload.get("messageStart")
+        if isinstance(message_start, dict):
+            return "message_start", {
+                "message": {
+                    "type": "message",
+                    "role": message_start.get("role") or "assistant",
+                    "content": [],
+                }
+            }
+
+        block_start = payload.get("contentBlockStart")
+        if isinstance(block_start, dict):
+            start = block_start.get("start") if isinstance(block_start.get("start"), dict) else {}
+            tool_use = start.get("toolUse") if isinstance(start, dict) else None
+            block: dict = {}
+            if isinstance(tool_use, dict):
+                block = {
+                    "type": "tool_use",
+                    "id": tool_use.get("toolUseId", ""),
+                    "name": tool_use.get("name", ""),
+                    "input": {},
+                }
+            return "content_block_start", {
+                "index": block_start.get("contentBlockIndex", payload.get("contentBlockIndex", 0)),
+                "content_block": block,
+            }
+
+        block_delta = payload.get("contentBlockDelta")
+        if isinstance(block_delta, dict):
+            delta = block_delta.get("delta") if isinstance(block_delta.get("delta"), dict) else {}
+            normalized_delta: dict = {}
+            if isinstance(delta.get("text"), str):
+                normalized_delta = {"type": "text_delta", "text": delta["text"]}
+            elif isinstance(delta.get("reasoningContent"), dict):
+                reasoning = delta["reasoningContent"]
+                text = reasoning.get("text") if isinstance(reasoning.get("text"), str) else ""
+                normalized_delta = {"type": "thinking_delta", "thinking": text}
+                signature = reasoning.get("signature") if isinstance(reasoning.get("signature"), str) else ""
+                if signature:
+                    normalized_delta["signature"] = signature
+            elif isinstance(delta.get("toolUse"), dict):
+                tool_delta = delta["toolUse"]
+                partial = tool_delta.get("input") if isinstance(tool_delta.get("input"), str) else ""
+                normalized_delta = {"type": "input_json_delta", "partial_json": partial}
+            if normalized_delta:
+                return "content_block_delta", {
+                    "index": block_delta.get("contentBlockIndex", payload.get("contentBlockIndex", 0)),
+                    "delta": normalized_delta,
+                }
+
+        block_stop = payload.get("contentBlockStop")
+        if isinstance(block_stop, dict):
+            return "content_block_stop", {
+                "index": block_stop.get("contentBlockIndex", payload.get("contentBlockIndex", 0)),
+            }
+
+        message_stop = payload.get("messageStop")
+        if isinstance(message_stop, dict):
+            return "message_delta", {
+                "delta": {"stop_reason": message_stop.get("stopReason")},
+            }
+
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict) and isinstance(metadata.get("usage"), dict):
+            return "message_delta", {"usage": metadata["usage"]}
+
+        return None, None
+
+    def _event_payload_from_frame(frame: dict) -> tuple[str | None, dict | None]:
+        encoded = frame.get("bytes")
+        if not isinstance(encoded, str):
+            chunk = frame.get("chunk")
+            if isinstance(chunk, dict):
+                encoded = chunk.get("bytes")
+        if isinstance(encoded, str):
+            try:
+                payload_bytes = base64.b64decode(encoded, validate=True)
+                payload = json.loads(payload_bytes)
+            except (ValueError, json.JSONDecodeError):
+                return None, None
+            if not isinstance(payload, dict):
+                return None, None
+
+            event_type = payload.get("type")
+            if isinstance(event_type, str) and event_type:
+                return event_type, payload
+            event_type, event_payload = _converse_event_payload(payload)
+            if event_type and event_payload:
+                return event_type, event_payload
+            for event_type in error_event_keys:
+                event_payload = payload.get(event_type)
+                if isinstance(event_payload, dict):
+                    return event_type, event_payload
+            return None, None
+
+        event_type = frame.get("type")
+        if isinstance(event_type, str) and event_type:
+            return event_type, frame
+        event_type, event_payload = _converse_event_payload(frame)
+        if event_type and event_payload:
+            return event_type, event_payload
+
+        for event_type in error_event_keys:
+            payload = frame.get(event_type)
+            if isinstance(payload, dict):
+                return event_type, payload
+        return None, None
 
     events: list[dict] = []
     decoder = json.JSONDecoder()
@@ -108,19 +266,8 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
 
         if not isinstance(frame, dict):
             continue
-        encoded = frame.get("bytes")
-        if not isinstance(encoded, str):
-            continue
-        try:
-            payload_bytes = base64.b64decode(encoded, validate=True)
-            payload = json.loads(payload_bytes)
-        except (ValueError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-
-        event_type = payload.get("type")
-        if isinstance(event_type, str) and event_type:
+        event_type, payload = _event_payload_from_frame(frame)
+        if event_type and payload:
             events.append({"event": event_type, "data": payload})
 
     return events
@@ -694,10 +841,21 @@ def _generate_html_viewer(
     display_html_path: str | Path | None = None,
 ) -> None:
     """Read viewer.html template, embed JSONL data, write self-contained HTML."""
-    if not VIEWER_TEMPLATE_PATH.exists():
-        return
+    if trace_path.exists():
+        text = trace_path.read_text(encoding="utf-8")
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if is_compact_trace_bundle(parsed):
+            _generate_html_viewer_from_compact_bundle(
+                parsed,
+                html_path,
+                display_trace_path=display_trace_path if display_trace_path is not None else trace_path.absolute(),
+                display_html_path=display_html_path if display_html_path is not None else html_path.absolute(),
+            )
+            return
 
-    # Read JSONL records
     records: list[str] = []
     if trace_path.exists():
         with open(trace_path, "r", encoding="utf-8") as f:
@@ -705,6 +863,59 @@ def _generate_html_viewer(
                 line = line.strip()
                 if line:
                     records.append(_normalize_record_for_viewer(line))
+    _generate_html_viewer_from_records(
+        records,
+        html_path,
+        display_trace_path=display_trace_path if display_trace_path is not None else trace_path.absolute(),
+        display_html_path=display_html_path if display_html_path is not None else html_path.absolute(),
+    )
+
+
+def _generate_html_viewer_from_compact_bundle(
+    compact_bundle: dict,
+    html_path: Path,
+    *,
+    display_trace_path: str | Path,
+    display_html_path: str | Path,
+) -> None:
+    """Write a self-contained HTML viewer that embeds compact trace data."""
+    if not VIEWER_TEMPLATE_PATH.exists():
+        return
+    if not is_compact_trace_bundle(compact_bundle):
+        raise ValueError(f"Expected {COMPACT_TRACE_MARKER} compact trace bundle.")
+
+    trace_path_label = str(display_trace_path)
+    html_path_label = str(display_html_path)
+    compact_js = json.dumps(compact_bundle, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    jsonl_path_js = json.dumps(trace_path_label)
+    html_path_js = json.dumps(html_path_label)
+    version_js = json.dumps(CLAUDE_TAP_VERSION)
+    data_js = (
+        f"const EMBEDDED_TRACE_COMPACT_DATA = {compact_js};\n"
+        f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
+        f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
+        f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
+    )
+
+    html = _read_viewer_template()
+    html = html.replace(
+        VIEWER_SCRIPT_ANCHOR,
+        f"<script>\n{data_js}</script>\n{VIEWER_SCRIPT_ANCHOR}",
+        1,
+    )
+    html_path.write_text(html, encoding="utf-8")
+
+
+def _generate_html_viewer_from_records(
+    record_json_lines: list[str],
+    html_path: Path,
+    *,
+    display_trace_path: str | Path,
+    display_html_path: str | Path,
+) -> None:
+    """Write a self-contained HTML viewer from already-loaded JSON records."""
+    if not VIEWER_TEMPLATE_PATH.exists():
+        return
 
     # Escape </ sequences so embedded record JSON cannot prematurely close the
     # surrounding <script> / <script type="text/plain"> blocks. Forward-proxy
@@ -712,10 +923,10 @@ def _generate_html_viewer(
     # contain </script>; without this, the browser closes the data block early
     # and renders the captured HTML as page content. JSON's \/ is a valid
     # escape for /, so the parsed JSON value is unchanged.
-    records = [rec.replace("</", "<\\/") for rec in records]
+    records = [rec.replace("</", "<\\/") for rec in record_json_lines]
 
-    trace_path_label = str(display_trace_path) if display_trace_path is not None else str(trace_path.absolute())
-    html_path_label = str(display_html_path) if display_html_path is not None else str(html_path.absolute())
+    trace_path_label = str(display_trace_path)
+    html_path_label = str(display_html_path)
     jsonl_path_js = json.dumps(trace_path_label)
     html_path_js = json.dumps(html_path_label)
     version_js = json.dumps(CLAUDE_TAP_VERSION)

@@ -17,9 +17,11 @@ import aiohttp
 from aiohttp import web
 from yarl import URL
 
+from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
 from claude_tap.usage import normalize_usage
+from claude_tap.viewer import _decode_bedrock_eventstream_events
 
 log = logging.getLogger("claude-tap")
 
@@ -47,6 +49,7 @@ SENSITIVE_HEADER_KEYS = frozenset(
         "set-cookie",
         "set-cookie2",
         "x-api-key",
+        "x-amz-security-token",
         # Qoder/Cosy runtime headers can carry account, machine, or token-derived
         # identifiers and must not be persisted in trace evidence.
         "cosy-key",
@@ -86,6 +89,8 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     # Anthropic API (Claude Code)
     "/v1/messages",
     "/v1/complete",
+    # AWS Bedrock API (Claude Code via Bedrock)
+    "/model",
     # OpenAI API (Codex CLI)
     "/v1/responses",
     "/v1/chat/completions",
@@ -184,7 +189,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     # Strip path prefix (e.g. /v1) for codex client so that
     # /v1/responses -> target + /responses
     strip_prefix: str = ctx.get("strip_path_prefix", "")
-    fwd_path = request.path_qs
+    fwd_path = request.raw_path
     if strip_prefix and fwd_path.startswith(strip_prefix):
         fwd_path = fwd_path[len(strip_prefix) :] or "/"
     upstream_url = target.rstrip("/") + "/" + fwd_path.lstrip("/")
@@ -225,6 +230,8 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     is_streaming = False
     if isinstance(req_body, dict):
         is_streaming = req_body.get("stream", False)
+    if not is_streaming and is_bedrock_eventstream_path(request.raw_path):
+        is_streaming = True
 
     ctx["turn_counter"] = ctx.get("turn_counter", 0) + 1
     turn = ctx["turn_counter"]
@@ -300,12 +307,17 @@ async def _handle_streaming(
     )
     await resp.prepare(request)
 
+    is_bedrock_stream = is_bedrock_eventstream_path(request.raw_path)
     reassembler = SSEReassembler(store_events=store_stream_events)
+    raw_chunks: list[bytes] = []
 
     try:
         async for chunk in upstream_resp.content.iter_any():
             await resp.write(chunk)
-            reassembler.feed_bytes(chunk)
+            if is_bedrock_stream:
+                raw_chunks.append(chunk)
+            else:
+                reassembler.feed_bytes(chunk)
     except (ConnectionError, asyncio.CancelledError):
         pass
 
@@ -315,9 +327,20 @@ async def _handle_streaming(
         pass
 
     duration_ms = int((time.monotonic() - t0) * 1000)
-    reconstructed = reassembler.reconstruct()
 
-    usage = normalize_usage(reconstructed.get("usage", {}) if reconstructed else {})
+    if is_bedrock_stream:
+        raw_body = b"".join(raw_chunks).decode("utf-8", errors="replace")
+        bedrock_events = _decode_bedrock_eventstream_events(raw_body)
+        for event in bedrock_events:
+            reassembler.add_event(event["event"], event["data"])
+        reconstructed = reassembler.reconstruct()
+        if not reconstructed:
+            reconstructed = raw_body
+        reconstructed = attach_bedrock_errors(reconstructed, bedrock_events)
+    else:
+        reconstructed = reassembler.reconstruct()
+
+    usage = normalize_usage(reconstructed.get("usage", {}) if isinstance(reconstructed, dict) else {})
     in_tok = usage.get("input_tokens", 0)
     out_tok = usage.get("output_tokens", 0)
     cache_read = usage.get("cache_read_input_tokens", 0)
@@ -332,7 +355,7 @@ async def _handle_streaming(
         turn,
         duration_ms,
         request.method,
-        request.path_qs,
+        request.raw_path,
         request.headers,
         req_body,
         upstream_resp.status,
@@ -384,7 +407,7 @@ async def _handle_non_streaming(
         turn,
         duration_ms,
         request.method,
-        request.path_qs,
+        request.raw_path,
         request.headers,
         req_body,
         upstream_resp.status,

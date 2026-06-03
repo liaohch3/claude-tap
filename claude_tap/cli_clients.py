@@ -5,12 +5,62 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import signal
 import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+_BEDROCK_HOST_RE = re.compile(
+    r"(^|\.)("
+    r"(bedrock-runtime|bedrock-runtime-fips)"
+    r"\.[a-z0-9-]+\.(amazonaws\.com|amazonaws\.com\.cn|vpce\.amazonaws\.com)"
+    r"|bedrock-mantle\.[a-z0-9-]+\.(api\.aws|amazonaws\.com|amazonaws\.com\.cn)"
+    r")$"
+)
+
+
+def _is_aws_native_bedrock_url(url: str) -> bool:
+    """Return True if the URL points to a real AWS Bedrock endpoint (SigV4-signed).
+
+    AWS native Bedrock endpoints match patterns like:
+      - bedrock-runtime.us-east-1.amazonaws.com
+      - bedrock-runtime-fips.us-west-2.amazonaws.com
+      - vpce-xxx.bedrock-runtime.us-east-1.vpce.amazonaws.com
+      - bedrock-mantle.us-east-1.api.aws
+      - bedrock-mantle.us-east-1.amazonaws.com
+
+    Custom gateways on other AWS services (e.g. API Gateway *.execute-api.*)
+    or company proxies do NOT use SigV4, so rewriting their URL is safe.
+    """
+    try:
+        from urllib.parse import urlparse
+
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return False
+    return bool(_BEDROCK_HOST_RE.search(host))
+
+
+def _is_truthy_env_value(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_claude_bedrock_enabled() -> bool:
+    return _is_truthy_env_value(_resolve_env_value("CLAUDE_CODE_USE_BEDROCK"))
+
+
+def _should_rewrite_extra_base_url_env(env_key: str) -> bool:
+    if env_key != "ANTHROPIC_BEDROCK_BASE_URL":
+        return True
+    if not _is_claude_bedrock_enabled():
+        return False
+    current_value = _resolve_env_value(env_key)
+    if not current_value:
+        return False
+    return not (current_value and _is_aws_native_bedrock_url(current_value))
 
 
 @dataclass(frozen=True)
@@ -68,7 +118,12 @@ class ClientConfig:
 
     def reverse_base_url_env_map(self, port: int) -> dict[str, str]:
         base_url = self.reverse_base_url(port)
-        return {env_key: base_url for env_key in self.reverse_base_url_envs}
+        env_map: dict[str, str] = {}
+        for env_key in self.reverse_base_url_envs:
+            if env_key in self.extra_base_url_envs and not _should_rewrite_extra_base_url_env(env_key):
+                continue
+            env_map[env_key] = base_url
+        return env_map
 
     def reverse_strip_path_prefix(self, target: str) -> str:
         if not self.strip_path_prefix:
@@ -84,6 +139,7 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         label="Claude Code",
         install_url="https://docs.anthropic.com/en/docs/claude-code",
         base_url_env="ANTHROPIC_BASE_URL",
+        extra_base_url_envs=("ANTHROPIC_BEDROCK_BASE_URL",),
         base_url_suffix="",
         default_target="https://api.anthropic.com",
         nesting_env_keys=("CLAUDECODE", "CLAUDE_CODE_SSE_PORT"),
@@ -215,14 +271,19 @@ async def run_client(
     client: str = "claude",
     proxy_mode: str = "reverse",
     ca_cert_path: Path | None = None,
+    client_cmd: str | None = None,
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
 
     # asyncio.create_subprocess_exec uses CreateProcess on Windows, which only
     # auto-appends `.exe`; resolve here so npm `.cmd`/`.bat` shims also work.
-    resolved_cmd = shutil.which(cfg.cmd)
+    display_cmd = client_cmd or cfg.cmd
+    resolved_cmd = str(Path(client_cmd)) if client_cmd and Path(client_cmd).is_file() else shutil.which(display_cmd)
     if resolved_cmd is None:
-        print(cfg.missing_help)
+        if client_cmd:
+            print(f"\nError: '{client_cmd}' command not found.\nPlease check the wrapper-provided {cfg.label} path.\n")
+        else:
+            print(cfg.missing_help)
         return 1
 
     env = os.environ.copy()
@@ -301,7 +362,7 @@ async def run_client(
         env.pop(key, None)
 
     cmd = [resolved_cmd] + cmd_args
-    print(f"\n🚀 Starting {cfg.label}: {' '.join([cfg.cmd, *cmd_args])}")
+    print(f"\n🚀 Starting {cfg.label}: {' '.join([display_cmd, *cmd_args])}")
     if proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
         for env_key in cfg.forward_base_url_envs:
@@ -607,6 +668,23 @@ def _settings_arg(env_values: dict[str, str]) -> list[str]:
 _CODEX_CHATGPT_TARGET = "https://chatgpt.com/backend-api/codex"
 
 
+def _resolve_env_value(env_key: str) -> str:
+    """Resolve an env key from process env or Claude settings files."""
+    value = os.environ.get(env_key, "").strip()
+    if value:
+        return value
+    candidate_paths = (
+        Path.cwd() / ".claude" / "settings.local.json",
+        Path.cwd() / ".claude" / "settings.json",
+        Path.home() / ".claude" / "settings.json",
+    )
+    for path in candidate_paths:
+        found = _read_settings_env_base_url(path, env_key)
+        if found:
+            return found
+    return ""
+
+
 def _read_settings_env_base_url(path: Path, env_key: str) -> str | None:
     """Read a provider base URL from a Claude-style settings file."""
     try:
@@ -629,23 +707,21 @@ def _detect_claude_target() -> str:
     """Auto-detect the upstream target Claude Code would normally use.
 
     Claude Code can source ``ANTHROPIC_BASE_URL`` from settings files rather
-    than the process environment. Mirror that behavior so reverse proxy mode
-    captures custom gateways without forcing users to repeat ``--tap-target``.
+    than the process environment. When Bedrock mode is enabled, it can also
+    source ``ANTHROPIC_BEDROCK_BASE_URL``. Mirror that behavior for custom
+    gateways without forcing users to repeat ``--tap-target``.
     """
-    env_target = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    if _is_claude_bedrock_enabled():
+        bedrock_target = _resolve_env_value("ANTHROPIC_BEDROCK_BASE_URL")
+    else:
+        bedrock_target = ""
+    if bedrock_target and not _is_aws_native_bedrock_url(bedrock_target):
+        return bedrock_target
+
+    env_target = _resolve_env_value("ANTHROPIC_BASE_URL")
     if env_target:
         return env_target
 
-    env_key = CLIENT_CONFIGS["claude"].base_url_env
-    candidate_paths = (
-        Path.cwd() / ".claude" / "settings.local.json",
-        Path.cwd() / ".claude" / "settings.json",
-        Path.home() / ".claude" / "settings.json",
-    )
-    for path in candidate_paths:
-        target = _read_settings_env_base_url(path, env_key)
-        if target:
-            return target
     return CLIENT_CONFIGS["claude"].default_target
 
 
