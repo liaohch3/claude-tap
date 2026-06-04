@@ -13,7 +13,7 @@
 
 网站：[本地 AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · 指南：[如何本地查看 Agent traces](docs/guides/agent-trace-viewer.zh.md)
 
-它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli)、[Qoder CLI](https://qoder.com/cli)、[Antigravity CLI](https://antigravity.google/product/antigravity-cli) 和 [CodeBuddy CLI](https://www.codebuddy.ai)。
+它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli) / [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli)、[Qoder CLI](https://qoder.com/cli)、[Antigravity CLI](https://antigravity.google/product/antigravity-cli) 和 [CodeBuddy CLI](https://www.codebuddy.ai)。
 
 <p align="center">
   <img src="docs/demo_zh.gif" alt="claude-tap 演示：真实 Codex trace" width="100%">
@@ -56,7 +56,7 @@
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API、AWS Bedrock，或 DeepSeek / GLM 等 Claude 兼容网关 |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist 的多 Google 端点流量 |
-| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code 或 Moonshot Open Platform |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) / [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code) | Kimi Code 或 Moonshot Open Platform |
 | [OpenCode](https://opencode.ai) | 多提供方 OpenCode 会话 |
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi 会话，包括 OpenAI Codex OAuth 提供方 |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 多提供方 Hermes TUI 或 gateway 会话 |
@@ -230,14 +230,20 @@ claude-tap --tap-client codex -- --full-auto
 <details>
 <summary>Kimi CLI 示例</summary>
 
-Kimi CLI 默认通过 `KIMI_BASE_URL` 使用 reverse proxy。使用你已有的 Kimi CLI 认证和配置；默认上游目标是 Kimi Code API。
+**旧版 [kimi-cli](https://github.com/MoonshotAI/kimi-cli)**（`--tap-client kimi`）通过 shell 环境变量 `KIMI_BASE_URL` 做 reverse proxy。
 
 ```bash
 claude-tap --tap-client kimi
 claude-tap --tap-client kimi -- --thinking
-
-# 改用 Moonshot Open Platform，而不是 Kimi Code
 claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1
+```
+
+**[Kimi Code CLI](https://github.com/MoonshotAI/kimi-code)**（`--tap-client kimi-code`）通过临时 `KIMI_CODE_HOME` sandbox 补丁 `~/.kimi-code/config.toml`（含 `managed:kimi-code` 等 `type = "kimi"` 的 provider）；OAuth 目录以 symlink 复用。默认上游为 `https://api.kimi.com/coding/v1`。
+
+```bash
+claude-tap --tap-client kimi-code
+claude-tap --tap-client kimi-code -- --thinking
+claude-tap --tap-client kimi-code --tap-target https://api.moonshot.ai/v1
 ```
 
 </details>
@@ -430,7 +436,7 @@ claude-tap --tap-no-open
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动的客户端: claude（默认）/ agy / codex / gemini / kimi / opencode / pi / hermes / cursor / qoder / codebuddy
+--tap-client CLIENT      启动的客户端: claude（默认）/ agy / codex / gemini / kimi / kimi-code / opencode / pi / hermes / cursor / qoder / codebuddy
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               客户端运行时启动实时查看器（默认开启）
 --tap-no-live            关闭实时查看器（恢复 v0.1.75 之前的行为）
@@ -444,7 +450,7 @@ claude-tap --tap-no-open
 --tap-store-stream-events 捕获时把原始 SSE/WebSocket event 数组写入 trace 存储，以便查看器/导出结果展示（默认关闭）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
---tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi/codebuddy 用 reverse，agy/gemini/opencode/pi/hermes/cursor/qoder 用 forward）
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi/kimi-code/codebuddy 用 reverse，agy/gemini/opencode/pi/hermes/cursor/qoder 用 forward）
 --tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy 会自动执行）
 ```
 

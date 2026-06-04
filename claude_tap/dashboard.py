@@ -27,6 +27,7 @@ CLIENT_LABELS = {
     "gemini": "Gemini",
     "hermes": "Hermes",
     "kimi": "Kimi",
+    "kimi-code": "Kimi Code",
     "opencode": "OpenCode",
     "pi": "Pi",
     "qoder": "Qoder",

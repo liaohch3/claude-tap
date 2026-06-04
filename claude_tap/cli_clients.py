@@ -9,9 +9,11 @@ import re
 import shutil
 import signal
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 _BEDROCK_HOST_RE = re.compile(
     r"(^|\.)("
@@ -164,6 +166,14 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_suffix="",
         default_target="https://api.kimi.com/coding/v1",
     ),
+    "kimi-code": ClientConfig(
+        cmd="kimi",
+        label="Kimi Code CLI",
+        install_url="https://github.com/MoonshotAI/kimi-code",
+        base_url_env="KIMI_CODE_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.kimi.com/coding/v1",
+    ),
     "gemini": ClientConfig(
         cmd="gemini",
         label="Gemini CLI",
@@ -294,6 +304,8 @@ async def run_client(
         cfg.base_url_config_key and _has_config_override(cmd_args, cfg.base_url_config_key)
     )
 
+    kimi_code_sandbox: Path | None = None
+
     if proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
         # Set both upper/lower-case variants for tools that read one form only.
@@ -333,9 +345,15 @@ async def run_client(
                 cmd_args = _settings_arg(settings_payload["env"]) + cmd_args
         # Don't set reverse-mode provider-specific base URL in forward mode.
     else:
-        reverse_env = cfg.reverse_base_url_env_map(port)
-        env.update(reverse_env)
-        env["NO_PROXY"] = "127.0.0.1"
+        if client == "kimi-code":
+            kimi_code_sandbox, _patched_providers = _prepare_kimi_code_reverse_sandbox(port)
+            env["KIMI_CODE_HOME"] = str(kimi_code_sandbox)
+            env["KIMI_CODE_BASE_URL"] = cfg.reverse_base_url(port)
+            env["NO_PROXY"] = "127.0.0.1"
+        else:
+            reverse_env = cfg.reverse_base_url_env_map(port)
+            env.update(reverse_env)
+            env["NO_PROXY"] = "127.0.0.1"
         if cfg.inject_settings_env and not _has_settings_arg(cmd_args):
             cmd_args = _settings_arg(reverse_env) + cmd_args
         base_url_config_overrides: list[str] = []
@@ -369,6 +387,9 @@ async def run_client(
             print(f"   {env_key}={cfg.reverse_base_url(port)}")
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
+    elif client == "kimi-code":
+        print(f"   KIMI_CODE_HOME={env.get('KIMI_CODE_HOME', '')}")
+        print(f"   KIMI_CODE_BASE_URL={env.get('KIMI_CODE_BASE_URL', '')}")
     else:
         for env_key, base_url in cfg.reverse_base_url_env_map(port).items():
             print(f"   {env_key}={base_url}")
@@ -425,7 +446,11 @@ async def run_client(
     except (NotImplementedError, OSError):
         pass
 
-    code = await proc.wait()
+    try:
+        code = await proc.wait()
+    finally:
+        if client == "kimi-code" and proxy_mode == "reverse" and kimi_code_sandbox is not None:
+            shutil.rmtree(kimi_code_sandbox, ignore_errors=True)
 
     # Restore parent as foreground process group.
     # Ignore SIGTTOU first — the parent is still in the background group
@@ -818,8 +843,252 @@ def _read_codebuddy_endpoint_cache() -> str | None:
     return None
 
 
+_KIMI_CODE_MANAGED_PROVIDER = "managed:kimi-code"
+_KIMI_CODE_PROXY_HOST_MARKERS = ("kimi.com", "moonshot.ai", "moonshot.cn")
+_KIMI_CODE_SKIP_MIGRATION_MARKER = ".skip-migration-from-kimi-cli"
+_KIMI_CODE_MIGRATED_MARKER = ".migrated-to-kimi-code"
+_KIMI_CODE_SANDBOX_DIR_PREFIX = "claude_tap_kimi_code_"
+
+
+def _kimi_code_home() -> Path:
+    return _kimi_code_source_home()
+
+
+def _kimi_code_source_home() -> Path:
+    """Persistent kimi-code data dir used when building a tap sandbox."""
+    override = os.environ.get("KIMI_CODE_HOME", "").strip()
+    if override and _KIMI_CODE_SANDBOX_DIR_PREFIX not in override:
+        return Path(override).expanduser()
+    return Path.home() / ".kimi-code"
+
+
+def _kimi_code_migration_already_handled(real_home: Path) -> bool:
+    """Mirror kimi-code detectPendingMigration suppression for the real home."""
+    if (real_home / _KIMI_CODE_SKIP_MIGRATION_MARKER).is_file():
+        return True
+    marker = Path.home() / ".kimi" / _KIMI_CODE_MIGRATED_MARKER
+    if not marker.is_file():
+        return False
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        # Unreadable marker: kimi-code treats this as "already handled".
+        return True
+    target_path = data.get("target_path")
+    if not isinstance(target_path, str):
+        return True
+    return Path(target_path).expanduser().resolve() == real_home.resolve()
+
+
+def _sync_kimi_code_migration_suppression(source_home: Path, sandbox: Path) -> None:
+    """Copy or synthesize the skip marker so sandbox startups skip the migrate TUI."""
+    skip_source = source_home / _KIMI_CODE_SKIP_MIGRATION_MARKER
+    skip_target = sandbox / _KIMI_CODE_SKIP_MIGRATION_MARKER
+    if skip_source.is_file():
+        shutil.copy2(skip_source, skip_target)
+        return
+    if _kimi_code_migration_already_handled(source_home):
+        skip_target.write_text("", encoding="utf-8")
+
+
+def _read_kimi_code_config(home: Path | None = None) -> dict[str, object]:
+    config_path = (home or _kimi_code_home()) / "config.toml"
+    try:
+        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _kimi_code_provider_base_url(provider: dict[str, object]) -> str | None:
+    base_url = provider.get("base_url")
+    if isinstance(base_url, str) and base_url.strip():
+        return base_url.strip()
+    env_table = provider.get("env")
+    if isinstance(env_table, dict):
+        fallback = env_table.get("KIMI_BASE_URL")
+        if isinstance(fallback, str) and fallback.strip():
+            return fallback.strip()
+    return None
+
+
+def _should_proxy_kimi_code_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return any(marker in host for marker in _KIMI_CODE_PROXY_HOST_MARKERS)
+
+
+def _remap_kimi_code_service_base_url(original: str, proxy_base: str) -> str:
+    proxy_base = proxy_base.rstrip("/")
+    original = original.rstrip("/")
+    for prefix in (
+        "https://api.kimi.com/coding/v1",
+        "https://api.moonshot.ai/v1",
+        "https://api.moonshot.cn/v1",
+    ):
+        if original.startswith(prefix):
+            suffix = original[len(prefix) :]
+            return f"{proxy_base}{suffix}"
+    return proxy_base
+
+
+def _collect_kimi_code_base_urls(config: dict[str, object]) -> list[str]:
+    urls: list[str] = []
+    providers = config.get("providers")
+    if isinstance(providers, dict):
+        for provider in providers.values():
+            if not isinstance(provider, dict):
+                continue
+            if provider.get("type") != "kimi":
+                continue
+            base_url = _kimi_code_provider_base_url(provider)
+            if base_url:
+                urls.append(base_url)
+    services = config.get("services")
+    if isinstance(services, dict):
+        for service in services.values():
+            if not isinstance(service, dict):
+                continue
+            base_url = service.get("base_url")
+            if isinstance(base_url, str) and base_url.strip():
+                urls.append(base_url.strip())
+    return urls
+
+
+def _patch_kimi_code_config_dict(config: dict[str, object], proxy_base: str) -> tuple[dict[str, object], list[str]]:
+    patched = json.loads(json.dumps(config))
+    patched_providers: list[str] = []
+
+    providers = patched.get("providers")
+    if isinstance(providers, dict):
+        for name, provider in providers.items():
+            if not isinstance(provider, dict) or provider.get("type") != "kimi":
+                continue
+            provider["base_url"] = proxy_base
+            env_table = provider.get("env")
+            if isinstance(env_table, dict) and "KIMI_BASE_URL" in env_table:
+                env_table["KIMI_BASE_URL"] = proxy_base
+            patched_providers.append(str(name))
+
+    services = patched.get("services")
+    if isinstance(services, dict):
+        for service in services.values():
+            if not isinstance(service, dict):
+                continue
+            base_url = service.get("base_url")
+            if isinstance(base_url, str) and base_url.strip() and _should_proxy_kimi_code_url(base_url):
+                service["base_url"] = _remap_kimi_code_service_base_url(base_url, proxy_base)
+
+    return patched, patched_providers
+
+
+def _proxy_base_url_for_original(old_url: str, proxy_base: str) -> str:
+    if "/search" in old_url or "/fetch" in old_url:
+        return _remap_kimi_code_service_base_url(old_url, proxy_base)
+    return proxy_base
+
+
+def _patch_kimi_code_config_text(source_text: str, proxy_base: str) -> tuple[str, list[str]]:
+    if not source_text.strip():
+        return _minimal_kimi_code_config_toml(proxy_base), [_KIMI_CODE_MANAGED_PROVIDER]
+    try:
+        config = tomllib.loads(source_text)
+    except (tomllib.TOMLDecodeError, ValueError):
+        config = {}
+    if not isinstance(config, dict):
+        config = {}
+    _, patched_providers = _patch_kimi_code_config_dict(config, proxy_base)
+    result = source_text
+    for old_url in _collect_kimi_code_base_urls(config):
+        if not _should_proxy_kimi_code_url(old_url):
+            continue
+        new_url = _proxy_base_url_for_original(old_url, proxy_base)
+        result = result.replace(f'base_url = "{old_url}"', f'base_url = "{new_url}"')
+        result = result.replace(f"base_url = '{old_url}'", f'base_url = "{new_url}"')
+    return result, patched_providers
+
+
+def _minimal_kimi_code_config_toml(proxy_base: str) -> str:
+    return (
+        'default_model = "kimi-code/kimi-for-coding"\n'
+        "\n"
+        f'[providers."{_KIMI_CODE_MANAGED_PROVIDER}"]\n'
+        'type = "kimi"\n'
+        f'base_url = "{proxy_base}"\n'
+        'api_key = ""\n'
+        "\n"
+        '[models."kimi-code/kimi-for-coding"]\n'
+        f'provider = "{_KIMI_CODE_MANAGED_PROVIDER}"\n'
+        'model = "kimi-for-coding"\n'
+        "max_context_size = 262144\n"
+    )
+
+
+def _prepare_kimi_code_reverse_sandbox(port: int) -> tuple[Path, list[str]]:
+    source_home = _kimi_code_source_home()
+    proxy_base = f"http://127.0.0.1:{port}"
+    sandbox = Path(tempfile.mkdtemp(prefix=_KIMI_CODE_SANDBOX_DIR_PREFIX))
+    source_config = source_home / "config.toml"
+    target_config = sandbox / "config.toml"
+
+    if source_config.is_file():
+        source_text = source_config.read_text(encoding="utf-8")
+        patched_text, patched_providers = _patch_kimi_code_config_text(source_text, proxy_base)
+        target_config.write_text(patched_text, encoding="utf-8")
+        if not patched_providers:
+            patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
+    else:
+        target_config.write_text(_minimal_kimi_code_config_toml(proxy_base), encoding="utf-8")
+        patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
+
+    for subdir in ("oauth", "credentials"):
+        source_subdir = source_home / subdir
+        if source_subdir.exists():
+            (sandbox / subdir).symlink_to(source_subdir)
+
+    _sync_kimi_code_migration_suppression(source_home, sandbox)
+
+    return sandbox, patched_providers
+
+
+def _detect_kimi_code_target() -> str:
+    config = _read_kimi_code_config()
+    default_model = config.get("default_model")
+    models = config.get("models")
+    providers = config.get("providers")
+    if (
+        isinstance(default_model, str)
+        and default_model.strip()
+        and isinstance(models, dict)
+        and isinstance(providers, dict)
+    ):
+        alias = models.get(default_model.strip())
+        if isinstance(alias, dict):
+            provider_name = alias.get("provider")
+            if isinstance(provider_name, str):
+                provider = providers.get(provider_name)
+                if isinstance(provider, dict):
+                    base_url = _kimi_code_provider_base_url(provider)
+                    if base_url:
+                        return base_url
+
+    if isinstance(providers, dict):
+        managed = providers.get(_KIMI_CODE_MANAGED_PROVIDER)
+        if isinstance(managed, dict):
+            base_url = _kimi_code_provider_base_url(managed)
+            if base_url:
+                return base_url
+        for provider in providers.values():
+            if isinstance(provider, dict) and provider.get("type") == "kimi":
+                base_url = _kimi_code_provider_base_url(provider)
+                if base_url:
+                    return base_url
+
+    return CLIENT_CONFIGS["kimi-code"].default_target
+
+
 TARGET_DETECTORS = {
     "claude": _detect_claude_target,
     "codex": _detect_codex_target,
     "codebuddy": _detect_codebuddy_target,
+    "kimi-code": _detect_kimi_code_target,
 }
