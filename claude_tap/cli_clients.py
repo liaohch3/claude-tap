@@ -456,7 +456,9 @@ async def run_client(
             and kimi_code_sandbox is not None
             and kimi_code_source_home is not None
         ):
+            _merge_kimi_code_session_index(kimi_code_source_home, kimi_code_sandbox)
             _persist_kimi_code_sandbox(kimi_code_source_home, kimi_code_sandbox)
+            _remap_kimi_code_sandbox_paths(kimi_code_source_home, kimi_code_sandbox)
             shutil.rmtree(kimi_code_sandbox, ignore_errors=True)
 
     # Restore parent as foreground process group.
@@ -1062,7 +1064,6 @@ _KIMI_CODE_SANDBOX_LINKS: tuple[tuple[str, bool], ...] = (
     ("credentials", True),
     ("sessions", True),
     ("mcp.json", False),
-    ("session_index.jsonl", False),
 )
 
 
@@ -1101,6 +1102,140 @@ def _persist_kimi_code_sandbox(source_home: Path, sandbox: Path) -> None:
             shutil.copy2(path, dest)
 
 
+_KIMI_CODE_SESSION_TEXT_SUFFIXES = frozenset({".json", ".jsonl", ".md", ".log", ".txt"})
+
+
+def _normalize_kimi_code_fs_path(path: str) -> str:
+    """Keep macOS temp paths on /var so they match KIMI_CODE_HOME join() results."""
+    resolved = str(Path(path).expanduser().resolve())
+    if resolved.startswith("/private/var/"):
+        return "/var" + resolved[len("/private/var") :]
+    return resolved
+
+
+def _translate_kimi_code_home_path(path: str, old_prefix: str, new_prefix: str) -> str:
+    if not path:
+        return path
+    resolved = _normalize_kimi_code_fs_path(path)
+    old = _normalize_kimi_code_fs_path(old_prefix).rstrip("/")
+    new = _normalize_kimi_code_fs_path(new_prefix).rstrip("/")
+    if resolved == old:
+        return new
+    if resolved.startswith(old + "/"):
+        return new + resolved[len(old) :]
+    return path
+
+
+def _materialize_kimi_code_session_index(source_home: Path, sandbox: Path) -> None:
+    """Copy session_index into the sandbox with sessionDir paths under KIMI_CODE_HOME."""
+    source_index = source_home / "session_index.jsonl"
+    target_index = sandbox / "session_index.jsonl"
+    source_prefix = _normalize_kimi_code_fs_path(str(source_home))
+    sandbox_prefix = _normalize_kimi_code_fs_path(str(sandbox))
+    lines_out: list[str] = []
+    if source_index.is_file():
+        for line in source_index.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            entry = json.loads(stripped)
+            if not isinstance(entry, dict):
+                continue
+            session_dir = entry.get("sessionDir")
+            if isinstance(session_dir, str):
+                entry["sessionDir"] = _translate_kimi_code_home_path(session_dir, source_prefix, sandbox_prefix)
+            lines_out.append(json.dumps(entry, ensure_ascii=False))
+    target_index.parent.mkdir(parents=True, exist_ok=True)
+    if lines_out:
+        target_index.write_text("\n".join(lines_out) + "\n", encoding="utf-8")
+    else:
+        target_index.write_text("", encoding="utf-8")
+
+
+def _merge_kimi_code_session_index(source_home: Path, sandbox: Path) -> None:
+    """Merge sandbox session_index updates back into the real home."""
+    sandbox_index = sandbox / "session_index.jsonl"
+    if not sandbox_index.is_file():
+        return
+    source_index = source_home / "session_index.jsonl"
+    source_prefix = _normalize_kimi_code_fs_path(str(source_home))
+    sandbox_prefix = _normalize_kimi_code_fs_path(str(sandbox))
+    entries: dict[str, dict[str, object]] = {}
+
+    def ingest_index(path: Path, *, from_sandbox: bool) -> None:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            entry = json.loads(stripped)
+            if not isinstance(entry, dict):
+                continue
+            session_id = entry.get("sessionId")
+            if not isinstance(session_id, str) or not session_id:
+                continue
+            session_dir = entry.get("sessionDir")
+            if isinstance(session_dir, str) and from_sandbox:
+                entry["sessionDir"] = _translate_kimi_code_home_path(session_dir, sandbox_prefix, source_prefix)
+            entries[session_id] = entry
+
+    if source_index.is_file():
+        ingest_index(source_index, from_sandbox=False)
+    ingest_index(sandbox_index, from_sandbox=True)
+
+    source_index.parent.mkdir(parents=True, exist_ok=True)
+    merged = "\n".join(json.dumps(entries[session_id], ensure_ascii=False) for session_id in entries) + "\n"
+    source_index.write_text(merged, encoding="utf-8")
+
+
+def _kimi_code_path_prefix_variants(prefix: str) -> tuple[str, ...]:
+    normalized = _normalize_kimi_code_fs_path(prefix)
+    variants = [normalized]
+    if normalized.startswith("/var/"):
+        private_variant = "/private" + normalized
+        if private_variant not in variants:
+            variants.append(private_variant)
+    if prefix not in variants and prefix != normalized:
+        variants.append(prefix)
+    return tuple(sorted(variants, key=len, reverse=True))
+
+
+def _rewrite_kimi_code_text_paths(text: str, sandbox_prefix: str, source_prefix: str) -> str:
+    target_prefix = _normalize_kimi_code_fs_path(source_prefix)
+    rewritten = text
+    for old_prefix in _kimi_code_path_prefix_variants(sandbox_prefix):
+        rewritten = rewritten.replace(old_prefix, target_prefix)
+    return rewritten
+
+
+def _remap_kimi_code_sandbox_paths(source_home: Path, sandbox: Path) -> None:
+    """Rewrite kimi-code session metadata that still points at the temp sandbox."""
+    sandbox_prefix = _normalize_kimi_code_fs_path(str(sandbox))
+    source_prefix = _normalize_kimi_code_fs_path(str(source_home))
+    if sandbox_prefix == source_prefix:
+        return
+
+    index_path = source_home / "session_index.jsonl"
+    if index_path.is_file():
+        index_text = index_path.read_text(encoding="utf-8")
+        rewritten = _rewrite_kimi_code_text_paths(index_text, sandbox_prefix, source_prefix)
+        if rewritten != index_text:
+            index_path.write_text(rewritten, encoding="utf-8")
+
+    sessions_root = source_home / "sessions"
+    if not sessions_root.is_dir():
+        return
+    for path in sessions_root.rglob("*"):
+        if not path.is_file() or path.suffix not in _KIMI_CODE_SESSION_TEXT_SUFFIXES:
+            continue
+        try:
+            original = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        rewritten = _rewrite_kimi_code_text_paths(original, sandbox_prefix, source_prefix)
+        if rewritten != original:
+            path.write_text(rewritten, encoding="utf-8")
+
+
 def _prepare_kimi_code_reverse_sandbox(port: int) -> tuple[Path, list[str], Path]:
     source_home = _kimi_code_source_home()
     proxy_base = f"http://127.0.0.1:{port}"
@@ -1120,6 +1255,8 @@ def _prepare_kimi_code_reverse_sandbox(port: int) -> tuple[Path, list[str], Path
 
     for rel, is_dir in _KIMI_CODE_SANDBOX_LINKS:
         _link_kimi_code_sandbox_path(source_home, sandbox, rel, is_dir=is_dir)
+
+    _materialize_kimi_code_session_index(source_home, sandbox)
 
     _sync_kimi_code_migration_suppression(source_home, sandbox)
 

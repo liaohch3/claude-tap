@@ -14,8 +14,11 @@ from claude_tap.cli_clients import (
     CLIENT_CONFIGS,
     _detect_kimi_code_target,
     _kimi_code_migration_already_handled,
+    _materialize_kimi_code_session_index,
+    _normalize_kimi_code_fs_path,
     _patch_kimi_code_config_text,
     _prepare_kimi_code_reverse_sandbox,
+    _remap_kimi_code_sandbox_paths,
     _reverse_proxy_trace_options,
     run_client,
 )
@@ -277,7 +280,6 @@ def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
     sessions_dir.mkdir(parents=True)
     (sessions_dir / "abc.jsonl").write_text("{}", encoding="utf-8")
     (home / "mcp.json").write_text("{}", encoding="utf-8")
-    (home / "session_index.jsonl").write_text("{}\n", encoding="utf-8")
     (home / "config.toml").write_text(
         '[providers."managed:kimi-code"]\ntype = "kimi"\nbase_url = "https://api.kimi.com/coding/v1"\n',
         encoding="utf-8",
@@ -290,9 +292,65 @@ def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
         assert (sandbox / "sessions").resolve() == sessions_dir.resolve()
         assert (sandbox / "mcp.json").is_symlink()
         assert (sandbox / "mcp.json").resolve() == (home / "mcp.json").resolve()
-        assert (sandbox / "session_index.jsonl").is_symlink()
+        assert (sandbox / "session_index.jsonl").is_file()
+        assert not (sandbox / "session_index.jsonl").is_symlink()
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_materialize_kimi_code_session_index_rewrites_session_dir(tmp_path: Path) -> None:
+    source_home = tmp_path / "home"
+    sandbox = tmp_path / "sandbox"
+    source_home.mkdir()
+    sandbox.mkdir()
+    session_dir = source_home / "sessions" / "wd_demo_abcd1234" / "session_test-id"
+    session_dir.mkdir(parents=True)
+    entry = {
+        "sessionId": "session_test-id",
+        "sessionDir": str(session_dir),
+        "workDir": "/tmp/demo",
+    }
+    (source_home / "session_index.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    _materialize_kimi_code_session_index(source_home, sandbox)
+
+    index = json.loads((sandbox / "session_index.jsonl").read_text(encoding="utf-8").strip())
+    expected_dir = _normalize_kimi_code_fs_path(str(sandbox / "sessions" / "wd_demo_abcd1234" / "session_test-id"))
+    assert index["sessionDir"] == expected_dir
+    assert not index["sessionDir"].startswith("/private/")
+
+
+def test_remap_kimi_code_sandbox_paths_rewrites_session_index_and_state(tmp_path: Path) -> None:
+    source_home = tmp_path / "home"
+    sandbox = tmp_path / "claude_tap_kimi_code_test"
+    source_home.mkdir()
+    sandbox.mkdir()
+    session_dir = source_home / "sessions" / "wd_demo_abcd1234" / "session_test-id"
+    session_dir.mkdir(parents=True)
+    sandbox_session_dir = sandbox / "sessions" / "wd_demo_abcd1234" / "session_test-id"
+    state = {
+        "agents": {
+            "main": {
+                "homedir": str(sandbox_session_dir / "agents" / "main"),
+            }
+        }
+    }
+    (session_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    index_entry = {
+        "sessionId": "session_test-id",
+        "sessionDir": str(sandbox_session_dir),
+        "workDir": "/tmp/demo",
+    }
+    (source_home / "session_index.jsonl").write_text(json.dumps(index_entry) + "\n", encoding="utf-8")
+
+    _remap_kimi_code_sandbox_paths(source_home, sandbox)
+
+    index = json.loads((source_home / "session_index.jsonl").read_text(encoding="utf-8").strip())
+    assert index["sessionDir"] == _normalize_kimi_code_fs_path(str(session_dir))
+    updated_state = json.loads((session_dir / "state.json").read_text(encoding="utf-8"))
+    assert updated_state["agents"]["main"]["homedir"] == _normalize_kimi_code_fs_path(
+        str(session_dir / "agents" / "main")
+    )
 
 
 def test_kimi_code_reverse_trace_options_do_not_strip_path_prefix() -> None:
