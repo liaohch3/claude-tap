@@ -120,7 +120,7 @@ async def test_trace_writer_counts_responses_cached_tokens(trace_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_trace_writer_storage_errors_do_not_interrupt_proxy_flow() -> None:
+async def test_trace_writer_storage_errors_do_not_interrupt_proxy_flow(capsys: pytest.CaptureFixture[str]) -> None:
     class LockedStore:
         def append_record(self, session_id: str, record: dict) -> None:
             raise sqlite3.OperationalError("database is locked")
@@ -138,6 +138,10 @@ async def test_trace_writer_storage_errors_do_not_interrupt_proxy_flow() -> None
     )
     writer.close()
 
-    assert writer.get_summary()["api_calls"] == 1
-    assert writer.get_summary()["input_tokens"] == 3
-    assert writer.get_summary()["output_tokens"] == 2
+    summary = writer.get_summary()
+    assert summary["api_calls"] == 1
+    assert summary["input_tokens"] == 3
+    assert summary["output_tokens"] == 2
+    assert summary["dropped_trace_records"] == 1
+    assert summary["trace_storage_errors"] == 2
+    assert capsys.readouterr().err.count("trace storage failed") == 1
