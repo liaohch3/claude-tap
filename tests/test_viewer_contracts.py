@@ -3049,3 +3049,181 @@ def test_viewer_session_identical_prompts_image_tags_and_early_title_generation(
         "Session 3 - Analyze the flowchart",
     ]
     assert state["counts"] == ["2", "2", "1"]
+
+
+def test_viewer_codex_global_search_skips_non_navigable_and_orders_by_capture_turn(
+    tmp_path: Path, chromium_browser
+) -> None:
+    records = (
+        {
+            "timestamp": "2026-06-01T00:57:34.000Z",
+            "request_id": "req_models",
+            "turn": 1,
+            "duration_ms": 100,
+            "request": {
+                "method": "GET",
+                "path": "/v1/models",
+                "headers": {},
+                "body": None,
+            },
+            "response": {"status": 200, "headers": {}, "body": {"data": []}},
+        },
+        {
+            "timestamp": "2026-06-01T00:57:40.000Z",
+            "request_id": "req_prefetch",
+            "turn": 2,
+            "duration_ms": 100,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-hidden-model",
+                    "generate": False,
+                    "input": [],
+                },
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_prefetch",
+                    "model": "gpt-hidden-model",
+                    "generate": False,
+                    "output": [],
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:58:53.000Z",
+            "request_id": "req_response_2",
+            "turn": 2,
+            "duration_ms": 100,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": "hello",
+                        }
+                    ],
+                },
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_response_2",
+                    "model": "gpt-5.5",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": "hi",
+                        }
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 10},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:59:00.000Z",
+            "request_id": "req_mcp_between",
+            "turn": 3,
+            "duration_ms": 100,
+            "request": {
+                "method": "POST",
+                "path": "/v1/mcp/list",
+                "headers": {},
+                "body": {"query": "mcp-query"},
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {"tools": []},
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:59:02.000Z",
+            "request_id": "req_response_4",
+            "turn": 4,
+            "duration_ms": 100,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "previous_response_id": "resp_response_2",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": "then what",
+                        }
+                    ],
+                },
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_response_4",
+                    "model": "gpt-5.5",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": "that is it",
+                        }
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 10},
+                },
+            },
+        },
+    )
+
+    html_path = _generate_case_html(tmp_path, "codex_search_sort", records)
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        # Verify global search skips the hidden model
+        page.evaluate("() => openGlobalSearch()")
+        page.evaluate("() => { $('#global-search-input').value = 'gpt-hidden-model'; recalcGlobalSearchMatches(); }")
+        search_state = page.evaluate("() => ({ totalMatches: globalSearchState.totalMatches })")
+
+        # Expand paths and check sorting (should be chronological: turn 2 -> 3 -> 4)
+        page.evaluate("() => { closeGlobalSearch(); activePaths.add('/v1/mcp/list'); applyFilter(); }")
+        debug_state = page.evaluate(
+            """() => ({
+              entries: entries.map(e => ({
+                request_id: e.request_id,
+                turn: e.turn,
+                capture_turn: e.capture_turn,
+                display_turn: e.display_turn,
+                captureTurnValue: captureTurnValue(e),
+                displayTurnValue: displayTurnValue(e),
+                isNavigable: isNavigableTraceEntry(e),
+              })),
+              filtered: filtered.map(e => e.request_id),
+            })"""
+        )
+        sorted_ids = [rid for rid in debug_state["filtered"] if rid != "req_models"]
+    finally:
+        page.close()
+
+    assert errors == []
+    assert search_state["totalMatches"] == 0
+    assert sorted_ids == ["req_response_2", "req_mcp_between", "req_response_4"]

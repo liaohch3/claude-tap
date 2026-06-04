@@ -198,7 +198,7 @@ function applyFilter(preserveDetail) {
       return rc.some(b => b.type === 'tool_use' && activeTools.has(b.name));
     });
   }
-  filtered.sort((a, b) => compareTurns(displayTurnValue(a), displayTurnValue(b)));
+  filtered.sort((a, b) => compareTurns(captureTurnValue(a), captureTurnValue(b)));
   let totalTokens = 0, totalDuration = 0;
   let sumInput = 0, sumOutput = 0, sumCacheRead = 0, sumCacheCreate = 0;
   filtered.forEach(e => {
@@ -394,8 +394,11 @@ function closeGlobalSearch() {
 function normalizeFiltersForGlobalSearch() {
   // Global search must be able to move across all entries.
   let changed = false;
-  const allPaths = new Set(entries.map(getPath));
-  if (activePaths.size !== allPaths.size) { activePaths = allPaths; changed = true; }
+  const allPaths = new Set(entries.filter(isNavigableTraceEntry).map(getPath));
+  if (activePaths.size !== allPaths.size || [...allPaths].some(p => !activePaths.has(p))) {
+    activePaths = allPaths;
+    changed = true;
+  }
   if (activeTools) { activeTools = null; changed = true; }
   if (searchQuery) {
     searchQuery = '';
@@ -524,6 +527,7 @@ function recalcGlobalSearchMatches() {
   const counts = [];
   let total = 0;
   entries.forEach(entry => {
+    if (!isNavigableTraceEntry(entry)) return;
     const c = countMatchesInText(getEntrySearchText(entry), queries);
     if (c > 0) counts.push({ requestId: entry.request_id, count: c });
     total += c;

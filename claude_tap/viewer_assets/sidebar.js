@@ -14,7 +14,7 @@ function compareSidebarModelOrder(a, b) {
   if (pa !== pb) return pa - pb;
   const modelDiff = ma.localeCompare(mb);
   if (modelDiff) return modelDiff;
-  return compareTurns(displayTurnValue(a), displayTurnValue(b));
+  return compareTurns(captureTurnValue(a), captureTurnValue(b));
 }
 function modelColor(m) {
   const l = m.toLowerCase();
@@ -257,7 +257,7 @@ function isTitleGenerationEntry(entry) {
 }
 
 function sessionRootTurn(entry) {
-  const rootTurn = parseInt(String(displayTurnValue(entry) ?? '').split('.')[0], 10);
+  const rootTurn = parseInt(String(captureTurnValue(entry) ?? '').split('.')[0], 10);
   return isNaN(rootTurn) ? null : rootTurn;
 }
 
@@ -286,13 +286,13 @@ function sessionKeyForEntry(entry, currentGroup) {
     };
   }
   if (currentGroup) return { key: currentGroup.key, userText: '', userIndex: currentGroup.userIndex, metadataOnly, rootTurn };
-  const rootTurnText = String(displayTurnValue(entry) ?? '').split('.')[0];
+  const rootTurnText = String(captureTurnValue(entry) ?? '').split('.')[0];
   if (rootTurnText) return { key: 'turn:' + rootTurnText, userText: '', userIndex: -1, metadataOnly, rootTurn };
   return { key: 'request:' + (entry?.request_id || ''), userText: '', userIndex: -1, metadataOnly, rootTurn: null };
 }
 
 function sessionTurnDiscriminator(entry) {
-  const rootTurn = String(displayTurnValue(entry) ?? '').split('.')[0];
+  const rootTurn = String(captureTurnValue(entry) ?? '').split('.')[0];
   if (rootTurn) return 'turn:' + rootTurn;
   return 'request:' + (entry?.request_id || '');
 }

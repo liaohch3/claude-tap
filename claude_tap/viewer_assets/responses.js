@@ -583,3 +583,8 @@ function isNavigableTraceEntry(entry) {
   if (isResponsesPath(displayTurnPath(entry)) && !isDisplayableResponsesEntry(entry)) return false;
   return true;
 }
+
+function captureTurnValue(entry) {
+  return entry?.capture_turn ?? entry?.turn;
+}
+
