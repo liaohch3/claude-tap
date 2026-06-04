@@ -8,10 +8,11 @@ import re
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from claude_tap.compact_trace import (
     BLOB_KIND_JSON,
@@ -28,6 +29,9 @@ from claude_tap.compact_trace import (
 
 DB_FILENAME = "traces.sqlite3"
 SCHEMA_VERSION = 4
+SQLITE_BUSY_TIMEOUT_MS = 30000
+SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000
+SQLITE_MAINTENANCE_WRITES = 100
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 STALE_ACTIVE_SESSION_AFTER = timedelta(hours=24)
 
@@ -75,6 +79,7 @@ class TraceStore:
         self._schema_ready = False
         self._schema_lock = threading.Lock()
         self._write_lock = threading.Lock()
+        self._writes_since_maintenance = 0
         self._tls = threading.local()
 
     def create_session(
@@ -138,6 +143,7 @@ class TraceStore:
             record_count = int(count_row["record_count"]) if count_row is not None else next_index
             self._refresh_summary_after_append(conn, session_id, record, record_count)
             conn.commit()
+            self._after_write_commit(conn)
 
     def append_log(
         self,
@@ -171,6 +177,7 @@ class TraceStore:
                 (datetime.now(timezone.utc).isoformat(), session_id),
             )
             conn.commit()
+            self._after_write_commit(conn)
 
     def finalize_session(self, session_id: str, summary: dict[str, Any] | None = None) -> None:
         """Mark a session complete and persist its summary."""
@@ -220,21 +227,22 @@ class TraceStore:
                 ),
             )
             conn.commit()
+            self._after_write_commit(conn)
 
     def load_session_row(self, session_id: str) -> sqlite3.Row | None:
-        conn = self._connect()
-        return conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        with self._read_connect() as conn:
+            return conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
 
     def list_session_rows(self) -> list[sqlite3.Row]:
-        conn = self._connect()
-        return conn.execute(
-            """
-            SELECT * FROM sessions
-            ORDER BY COALESCE(julianday(updated_at), 0) DESC,
-                     COALESCE(julianday(started_at), 0) DESC,
-                     id DESC
-            """
-        ).fetchall()
+        with self._read_connect() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM sessions
+                ORDER BY COALESCE(julianday(updated_at), 0) DESC,
+                         COALESCE(julianday(started_at), 0) DESC,
+                         id DESC
+                """
+            ).fetchall()
 
     def load_records(
         self,
@@ -252,87 +260,87 @@ class TraceStore:
         elif offset:
             limit_sql = " LIMIT -1 OFFSET ?"
             params.append(offset)
-        conn = self._connect()
-        rows = conn.execute(
-            f"""
-            SELECT session_id, payload_json
-            FROM records
-            WHERE session_id = ?
-            ORDER BY record_index
-            {limit_sql}
-            """,
-            params,
-        ).fetchall()
-        return self._rows_to_records(rows)
+        with self._read_connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT session_id, payload_json
+                FROM records
+                WHERE session_id = ?
+                ORDER BY record_index
+                {limit_sql}
+                """,
+                params,
+            ).fetchall()
+            return self._rows_to_records(conn, rows)
 
     def load_boundary_records(self, session_id: str) -> list[dict[str, Any]]:
         """Load the first and last records for a session without reading everything."""
-        conn = self._connect()
-        first = conn.execute(
-            """
-            SELECT session_id, payload_json
-            FROM records
-            WHERE session_id = ?
-            ORDER BY record_index
-            LIMIT 1
-            """,
-            (session_id,),
-        ).fetchone()
-        last = conn.execute(
-            """
-            SELECT session_id, payload_json
-            FROM records
-            WHERE session_id = ?
-            ORDER BY record_index DESC
-            LIMIT 1
-            """,
-            (session_id,),
-        ).fetchone()
-        if first is None:
-            return []
-        if last is None or first["payload_json"] == last["payload_json"]:
-            return self._rows_to_records([first])
-        return self._rows_to_records([first, last])
+        with self._read_connect() as conn:
+            first = conn.execute(
+                """
+                SELECT session_id, payload_json
+                FROM records
+                WHERE session_id = ?
+                ORDER BY record_index
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if first is None:
+                return []
+            last = conn.execute(
+                """
+                SELECT session_id, payload_json
+                FROM records
+                WHERE session_id = ?
+                ORDER BY record_index DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if last is None or first["payload_json"] == last["payload_json"]:
+                return self._rows_to_records(conn, [first])
+            return self._rows_to_records(conn, [first, last])
 
     def load_records_for_date(self, date_key: str) -> list[dict[str, Any]]:
         """Load all records for sessions on a given date in one query."""
-        conn = self._connect()
-        if date_key == "legacy":
-            rows = conn.execute(
-                """
-                SELECT r.session_id, r.payload_json
-                FROM records r
-                INNER JOIN sessions s ON s.id = r.session_id
-                WHERE s.date_key = 'legacy' OR s.legacy_rel_path NOT LIKE '%/%'
-                ORDER BY s.started_at ASC, r.record_index ASC
-                """
-            ).fetchall()
-        elif _DATE_RE.match(date_key):
-            rows = conn.execute(
-                """
-                SELECT r.session_id, r.payload_json
-                FROM records r
-                INNER JOIN sessions s ON s.id = r.session_id
-                WHERE s.date_key = ?
-                ORDER BY s.started_at ASC, r.record_index ASC
-                """,
-                (date_key,),
-            ).fetchall()
-        else:
-            raise ValueError("Invalid date format")
-        return self._rows_to_records(rows)
+        with self._read_connect() as conn:
+            if date_key == "legacy":
+                rows = conn.execute(
+                    """
+                    SELECT r.session_id, r.payload_json
+                    FROM records r
+                    INNER JOIN sessions s ON s.id = r.session_id
+                    WHERE s.date_key = 'legacy' OR s.legacy_rel_path NOT LIKE '%/%'
+                    ORDER BY s.started_at ASC, r.record_index ASC
+                    """
+                ).fetchall()
+            elif _DATE_RE.match(date_key):
+                rows = conn.execute(
+                    """
+                    SELECT r.session_id, r.payload_json
+                    FROM records r
+                    INNER JOIN sessions s ON s.id = r.session_id
+                    WHERE s.date_key = ?
+                    ORDER BY s.started_at ASC, r.record_index ASC
+                    """,
+                    (date_key,),
+                ).fetchall()
+            else:
+                raise ValueError("Invalid date format")
+            return self._rows_to_records(conn, rows)
 
     def load_logs(self, session_id: str) -> list[dict[str, str]]:
-        conn = self._connect()
-        rows = conn.execute(
-            """
-                SELECT logged_at, level, message
-                FROM proxy_logs
-                WHERE session_id = ?
-                ORDER BY line_no
-                """,
-            (session_id,),
-        ).fetchall()
+        with self._read_connect() as conn:
+            rows = conn.execute(
+                """
+                    SELECT logged_at, level, message
+                    FROM proxy_logs
+                    WHERE session_id = ?
+                    ORDER BY line_no
+                    """,
+                (session_id,),
+            ).fetchall()
         return [
             {
                 "logged_at": row["logged_at"] or "",
@@ -380,6 +388,7 @@ class TraceStore:
                 ),
             )
             conn.commit()
+            self._after_write_commit(conn)
 
     def dashboard_snapshot(self) -> dict[str, tuple[str, int, str]]:
         """Return session_id -> (updated_at, record_count, status) for change detection."""
@@ -425,6 +434,7 @@ class TraceStore:
                 placeholders = ",".join("?" * len(to_delete))
                 conn.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", to_delete)
             conn.commit()
+            self._after_write_commit(conn)
         return {
             "date": date_key,
             "deleted_sessions": len(to_delete),
@@ -457,6 +467,7 @@ class TraceStore:
             deleted_logs = int(log_row["count"] or 0) if log_row is not None else 0
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             conn.commit()
+            self._after_write_commit(conn)
         return {
             "session_id": session_id,
             "deleted_sessions": 1,
@@ -497,6 +508,7 @@ class TraceStore:
             placeholders = ",".join("?" * len(to_remove))
             conn.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", to_remove)
             conn.commit()
+            self._after_write_commit(conn)
             return len(to_remove)
 
     def migrate_legacy_directory(self, output_dir: Path) -> int:
@@ -631,22 +643,23 @@ class TraceStore:
                     ),
                 )
             conn.commit()
+            self._after_write_commit(conn)
         return session_id
 
     def _legacy_session_exists(self, legacy_source_key: str, rel_path: str) -> bool:
-        conn = self._connect()
-        row = conn.execute(
-            "SELECT 1 FROM sessions WHERE legacy_source_key = ? AND legacy_rel_path = ? LIMIT 1",
-            (legacy_source_key, rel_path),
-        ).fetchone()
+        with self._read_connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM sessions WHERE legacy_source_key = ? AND legacy_rel_path = ? LIMIT 1",
+                (legacy_source_key, rel_path),
+            ).fetchone()
         return row is not None
 
     def _migration_done(self, marker: str) -> bool:
-        conn = self._connect()
-        row = conn.execute(
-            "SELECT value FROM migration_state WHERE key = ?",
-            (marker,),
-        ).fetchone()
+        with self._read_connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM migration_state WHERE key = ?",
+                (marker,),
+            ).fetchone()
         return row is not None
 
     def _mark_migration_done(self, marker: str) -> None:
@@ -661,6 +674,7 @@ class TraceStore:
                 (marker, datetime.now(timezone.utc).isoformat()),
             )
             conn.commit()
+            self._after_write_commit(conn)
 
     def _refresh_summary_after_append(
         self,
@@ -685,7 +699,7 @@ class TraceStore:
             except json.JSONDecodeError:
                 existing = None
         if existing is not None and not is_dashboard_summary_current(existing, session_id):
-            summary = build_stored_session_summary(row, self.load_records(session_id))
+            summary = build_stored_session_summary(row, self._load_records_from_conn(conn, session_id))
         else:
             summary = merge_record_into_summary(
                 existing,
@@ -705,12 +719,26 @@ class TraceStore:
             ),
         )
 
-    def _open_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+    def _load_records_from_conn(self, conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT session_id, payload_json
+            FROM records
+            WHERE session_id = ?
+            ORDER BY record_index
+            """,
+            (session_id,),
+        ).fetchall()
+        return self._rows_to_records(conn, rows)
+
+    def _open_connection(self, *, enable_wal: bool = True) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
+        if enable_wal:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute(f"PRAGMA wal_autocheckpoint = {SQLITE_WAL_AUTOCHECKPOINT_PAGES}")
         return conn
 
     def _connect(self) -> sqlite3.Connection:
@@ -721,12 +749,40 @@ class TraceStore:
             self._tls.conn = conn
         return conn
 
+    @contextmanager
+    def _read_connect(self) -> Iterator[sqlite3.Connection]:
+        self._ensure_schema_for_read()
+        conn = self._open_connection(enable_wal=False)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     def close(self) -> None:
         """Close the thread-local SQLite connection."""
         conn = getattr(self._tls, "conn", None)
         if conn is not None:
             conn.close()
             self._tls.conn = None
+
+    def _ensure_schema_for_read(self) -> None:
+        if self._schema_ready:
+            return
+        conn = self._open_connection()
+        try:
+            self._ensure_schema_once(conn)
+        finally:
+            conn.close()
+
+    def _after_write_commit(self, conn: sqlite3.Connection) -> None:
+        self._writes_since_maintenance += 1
+        if self._writes_since_maintenance < SQLITE_MAINTENANCE_WRITES:
+            return
+        self._writes_since_maintenance = 0
+        try:
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        except sqlite3.OperationalError:
+            pass
 
     def _ensure_schema_once(self, conn: sqlite3.Connection) -> None:
         with self._schema_lock:
@@ -948,10 +1004,9 @@ class TraceStore:
         )
         return make_blob_ref(hash_value, size_bytes)
 
-    def _rows_to_records(self, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    def _rows_to_records(self, conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         blob_cache: dict[tuple[str, str], Any] = {}
-        conn = self._connect()
         for row in rows:
             try:
                 record = self._decode_record_payload(conn, row["session_id"], row["payload_json"], blob_cache)

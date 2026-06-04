@@ -1,8 +1,10 @@
 import asyncio
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 
 import aiohttp
 import pytest
@@ -50,6 +52,20 @@ def test_record_limit_from_request_preserves_large_loaded_windows() -> None:
     request = make_mocked_request("GET", "/api/sessions/example/records?limit=1500")
 
     assert _record_limit_from_request(request) == 1500
+
+
+def test_sqlite_log_handler_storage_errors_do_not_emit_logging_traceback() -> None:
+    class LockedStore:
+        def append_log(self, session_id: str, message: str, *, level: str = "INFO", logged_at: str | None = None) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+    def fail_handle_error(record: logging.LogRecord) -> None:
+        pytest.fail("SQLite storage errors should not be routed through logging.handleError")
+
+    handler = SQLiteLogHandler("locked-session", store=cast(Any, LockedStore()))
+    handler.handleError = fail_handle_error
+
+    handler.emit(logging.LogRecord("test", logging.INFO, __file__, 1, "locked", (), None))
 
 
 def test_dashboard_lists_sessions_by_normalized_updated_at(trace_db) -> None:

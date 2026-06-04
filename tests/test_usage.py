@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
+from typing import Any, cast
+
 import pytest
 
 from claude_tap.trace import TraceWriter
@@ -114,3 +117,27 @@ async def test_trace_writer_counts_responses_cached_tokens(trace_db) -> None:
         assert summary["cache_read_tokens"] == 11648
     finally:
         writer.close()
+
+
+@pytest.mark.asyncio
+async def test_trace_writer_storage_errors_do_not_interrupt_proxy_flow() -> None:
+    class LockedStore:
+        def append_record(self, session_id: str, record: dict) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        def finalize_session(self, session_id: str, summary: dict) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+    writer = TraceWriter("locked-session", store=cast(Any, LockedStore()))
+
+    await writer.write(
+        {
+            "request": {"body": {"model": "gpt-5.4"}},
+            "response": {"status": 200, "body": {"usage": {"input_tokens": 3, "output_tokens": 2}}},
+        }
+    )
+    writer.close()
+
+    assert writer.get_summary()["api_calls"] == 1
+    assert writer.get_summary()["input_tokens"] == 3
+    assert writer.get_summary()["output_tokens"] == 2

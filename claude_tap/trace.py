@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from typing import TYPE_CHECKING
 
 from claude_tap.trace_store import TraceStore, get_trace_store
@@ -41,7 +42,10 @@ class TraceWriter:
             if self._metadata:
                 capture = record.get("capture") if isinstance(record.get("capture"), dict) else {}
                 record["capture"] = {**self._metadata, **capture}
-            self._store.append_record(self.session_id, record)
+            try:
+                self._store.append_record(self.session_id, record)
+            except sqlite3.Error:
+                pass
             self.count += 1
             self._update_stats(record)
 
@@ -51,7 +55,10 @@ class TraceWriter:
     def close(self) -> None:
         """Finalize the active session in SQLite."""
         summary = self.get_summary()
-        self._store.finalize_session(self.session_id, summary)
+        try:
+            self._store.finalize_session(self.session_id, summary)
+        except sqlite3.Error:
+            pass
 
     def _update_stats(self, record: dict) -> None:
         req_body = record.get("request", {}).get("body", {})

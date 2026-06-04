@@ -9,6 +9,7 @@ from copy import deepcopy
 from claude_tap.trace_store import (
     BLOB_REF_MARKER,
     COMPACT_RECORD_MARKER,
+    SQLITE_BUSY_TIMEOUT_MS,
     TraceStore,
     get_trace_store,
 )
@@ -256,3 +257,29 @@ def test_compact_storage_reduces_large_trace_payload_and_preserves_roundtrip(tra
     assert [json.loads(line) for line in store.export_jsonl(session_id).splitlines()] == records
     assert compact_total < len(raw_jsonl.encode("utf-8")) * 0.15
     assert conn.execute("SELECT COUNT(*) FROM record_blobs").fetchone()[0] == 2
+
+
+def test_dashboard_style_reads_do_not_keep_trace_store_connection_open(trace_db) -> None:
+    writer = TraceStore(trace_db)
+    session_id = writer.create_session(client="codex", proxy_mode="forward")
+    record = _large_codex_record(
+        1,
+        instructions="read connection regression instructions",
+        tools=[],
+    )
+    writer.append_record(session_id, deepcopy(record))
+    writer.close()
+
+    reader = TraceStore(trace_db)
+
+    assert reader.list_session_rows()[0]["id"] == session_id
+    assert getattr(reader._tls, "conn", None) is None
+
+    assert reader.load_records(session_id) == [record]
+    assert getattr(reader._tls, "conn", None) is None
+
+    conn = reader._open_connection()
+    try:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == SQLITE_BUSY_TIMEOUT_MS
+    finally:
+        conn.close()
