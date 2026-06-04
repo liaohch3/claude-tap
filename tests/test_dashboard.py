@@ -56,7 +56,9 @@ def test_record_limit_from_request_preserves_large_loaded_windows() -> None:
 
 def test_sqlite_log_handler_storage_errors_do_not_emit_logging_traceback() -> None:
     class LockedStore:
-        def append_log(self, session_id: str, message: str, *, level: str = "INFO", logged_at: str | None = None) -> None:
+        def append_log(
+            self, session_id: str, message: str, *, level: str = "INFO", logged_at: str | None = None
+        ) -> None:
             raise sqlite3.OperationalError("database is locked")
 
     def fail_handle_error(record: logging.LogRecord) -> None:
