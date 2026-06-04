@@ -305,6 +305,7 @@ async def run_client(
     )
 
     kimi_code_sandbox: Path | None = None
+    kimi_code_source_home: Path | None = None
 
     if proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
@@ -346,7 +347,7 @@ async def run_client(
         # Don't set reverse-mode provider-specific base URL in forward mode.
     else:
         if client == "kimi-code":
-            kimi_code_sandbox, _patched_providers = _prepare_kimi_code_reverse_sandbox(port)
+            kimi_code_sandbox, _patched_providers, kimi_code_source_home = _prepare_kimi_code_reverse_sandbox(port)
             env["KIMI_CODE_HOME"] = str(kimi_code_sandbox)
             env["KIMI_CODE_BASE_URL"] = cfg.reverse_base_url(port)
             env["NO_PROXY"] = "127.0.0.1"
@@ -449,7 +450,13 @@ async def run_client(
     try:
         code = await proc.wait()
     finally:
-        if client == "kimi-code" and proxy_mode == "reverse" and kimi_code_sandbox is not None:
+        if (
+            client == "kimi-code"
+            and proxy_mode == "reverse"
+            and kimi_code_sandbox is not None
+            and kimi_code_source_home is not None
+        ):
+            _persist_kimi_code_sandbox(kimi_code_source_home, kimi_code_sandbox)
             shutil.rmtree(kimi_code_sandbox, ignore_errors=True)
 
     # Restore parent as foreground process group.
@@ -931,27 +938,36 @@ def _remap_kimi_code_service_base_url(original: str, proxy_base: str) -> str:
     return proxy_base
 
 
-def _collect_kimi_code_base_urls(config: dict[str, object]) -> list[str]:
+def _collect_kimi_code_provider_urls(config: dict[str, object]) -> list[str]:
     urls: list[str] = []
     providers = config.get("providers")
-    if isinstance(providers, dict):
-        for provider in providers.values():
-            if not isinstance(provider, dict):
-                continue
-            if provider.get("type") != "kimi":
-                continue
-            base_url = _kimi_code_provider_base_url(provider)
-            if base_url:
-                urls.append(base_url)
-    services = config.get("services")
-    if isinstance(services, dict):
-        for service in services.values():
-            if not isinstance(service, dict):
-                continue
-            base_url = service.get("base_url")
-            if isinstance(base_url, str) and base_url.strip():
-                urls.append(base_url.strip())
+    if not isinstance(providers, dict):
+        return urls
+    for provider in providers.values():
+        if not isinstance(provider, dict) or provider.get("type") != "kimi":
+            continue
+        base_url = _kimi_code_provider_base_url(provider)
+        if base_url:
+            urls.append(base_url)
     return urls
+
+
+def _collect_kimi_code_service_urls(config: dict[str, object]) -> list[str]:
+    urls: list[str] = []
+    services = config.get("services")
+    if not isinstance(services, dict):
+        return urls
+    for service in services.values():
+        if not isinstance(service, dict):
+            continue
+        base_url = service.get("base_url")
+        if isinstance(base_url, str) and base_url.strip() and _should_proxy_kimi_code_url(base_url):
+            urls.append(base_url.strip())
+    return urls
+
+
+def _collect_kimi_code_base_urls(config: dict[str, object]) -> list[str]:
+    return _collect_kimi_code_provider_urls(config) + _collect_kimi_code_service_urls(config)
 
 
 def _patch_kimi_code_config_dict(config: dict[str, object], proxy_base: str) -> tuple[dict[str, object], list[str]]:
@@ -987,6 +1003,28 @@ def _proxy_base_url_for_original(old_url: str, proxy_base: str) -> str:
     return proxy_base
 
 
+def _kimi_code_config_url_replacements(config: dict[str, object], proxy_base: str) -> list[tuple[str, str]]:
+    replacements: list[tuple[str, str]] = []
+    for old_url in _collect_kimi_code_provider_urls(config):
+        replacements.append((old_url, proxy_base))
+    for old_url in _collect_kimi_code_service_urls(config):
+        replacements.append((old_url, _remap_kimi_code_service_base_url(old_url, proxy_base)))
+    seen: set[str] = set()
+    ordered: list[tuple[str, str]] = []
+    for old_url, new_url in sorted(replacements, key=lambda item: len(item[0]), reverse=True):
+        if old_url in seen:
+            continue
+        seen.add(old_url)
+        ordered.append((old_url, new_url))
+    return ordered
+
+
+def _replace_kimi_code_toml_url_assignments(text: str, old_url: str, new_url: str) -> str:
+    escaped = re.escape(old_url)
+    pattern = rf'(?m)^((?:base_url|KIMI_BASE_URL)\s*=\s*["\']){escaped}(["\']\s*)$'
+    return re.sub(pattern, rf"\1{new_url}\2", text)
+
+
 def _patch_kimi_code_config_text(source_text: str, proxy_base: str) -> tuple[str, list[str]]:
     if not source_text.strip():
         return _minimal_kimi_code_config_toml(proxy_base), [_KIMI_CODE_MANAGED_PROVIDER]
@@ -998,12 +1036,8 @@ def _patch_kimi_code_config_text(source_text: str, proxy_base: str) -> tuple[str
         config = {}
     _, patched_providers = _patch_kimi_code_config_dict(config, proxy_base)
     result = source_text
-    for old_url in _collect_kimi_code_base_urls(config):
-        if not _should_proxy_kimi_code_url(old_url):
-            continue
-        new_url = _proxy_base_url_for_original(old_url, proxy_base)
-        result = result.replace(f'base_url = "{old_url}"', f'base_url = "{new_url}"')
-        result = result.replace(f"base_url = '{old_url}'", f'base_url = "{new_url}"')
+    for old_url, new_url in _kimi_code_config_url_replacements(config, proxy_base):
+        result = _replace_kimi_code_toml_url_assignments(result, old_url, new_url)
     return result, patched_providers
 
 
@@ -1023,7 +1057,51 @@ def _minimal_kimi_code_config_toml(proxy_base: str) -> str:
     )
 
 
-def _prepare_kimi_code_reverse_sandbox(port: int) -> tuple[Path, list[str]]:
+_KIMI_CODE_SANDBOX_LINKS: tuple[tuple[str, bool], ...] = (
+    ("oauth", True),
+    ("credentials", True),
+    ("sessions", True),
+    ("mcp.json", False),
+    ("session_index.jsonl", False),
+)
+
+
+def _link_kimi_code_sandbox_path(source_home: Path, sandbox: Path, rel: str, *, is_dir: bool) -> None:
+    source = source_home / rel
+    target = sandbox / rel
+    if rel in ("oauth", "credentials") and not source.exists():
+        source.mkdir(parents=True, exist_ok=True)
+    if not source.exists():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if is_dir:
+            target.symlink_to(source, target_is_directory=True)
+        else:
+            target.symlink_to(source)
+    except OSError:
+        if is_dir:
+            shutil.copytree(source, target, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source, target)
+
+
+def _persist_kimi_code_sandbox(source_home: Path, sandbox: Path) -> None:
+    """Copy sandbox-only auth/session files back when symlinks were unavailable."""
+    for name, is_dir in _KIMI_CODE_SANDBOX_LINKS:
+        path = sandbox / name
+        if not path.exists() or path.is_symlink():
+            continue
+        dest = source_home / name
+        if is_dir:
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(path, dest, dirs_exist_ok=True)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, dest)
+
+
+def _prepare_kimi_code_reverse_sandbox(port: int) -> tuple[Path, list[str], Path]:
     source_home = _kimi_code_source_home()
     proxy_base = f"http://127.0.0.1:{port}"
     sandbox = Path(tempfile.mkdtemp(prefix=_KIMI_CODE_SANDBOX_DIR_PREFIX))
@@ -1040,14 +1118,12 @@ def _prepare_kimi_code_reverse_sandbox(port: int) -> tuple[Path, list[str]]:
         target_config.write_text(_minimal_kimi_code_config_toml(proxy_base), encoding="utf-8")
         patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
 
-    for subdir in ("oauth", "credentials"):
-        source_subdir = source_home / subdir
-        if source_subdir.exists():
-            (sandbox / subdir).symlink_to(source_subdir)
+    for rel, is_dir in _KIMI_CODE_SANDBOX_LINKS:
+        _link_kimi_code_sandbox_path(source_home, sandbox, rel, is_dir=is_dir)
 
     _sync_kimi_code_migration_suppression(source_home, sandbox)
 
-    return sandbox, patched_providers
+    return sandbox, patched_providers, source_home
 
 
 def _detect_kimi_code_target() -> str:

@@ -95,6 +95,31 @@ api_key = ""
     assert providers == ["managed:kimi-code"]
 
 
+def test_patch_kimi_code_config_text_rewrites_custom_gateway_provider() -> None:
+    source = """
+[providers."custom-gateway"]
+type = "kimi"
+base_url="https://gateway.example.com/v1"
+api_key = ""
+""".strip()
+    patched, providers = _patch_kimi_code_config_text(source, "http://127.0.0.1:43123")
+    assert 'base_url="http://127.0.0.1:43123"' in patched
+    assert providers == ["custom-gateway"]
+
+
+def test_patch_kimi_code_config_text_rewrites_env_kimi_base_url() -> None:
+    source = """
+[providers."env-only"]
+type = "kimi"
+
+[providers."env-only".env]
+KIMI_BASE_URL = "https://gateway.example.com/v1"
+""".strip()
+    patched, providers = _patch_kimi_code_config_text(source, "http://127.0.0.1:43123")
+    assert 'KIMI_BASE_URL = "http://127.0.0.1:43123"' in patched
+    assert providers == ["env-only"]
+
+
 @pytest.mark.asyncio
 async def test_run_client_kimi_code_reverse_sets_kimi_code_home(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -172,7 +197,7 @@ def test_prepare_kimi_code_reverse_sandbox_writes_skip_marker_when_migrated(
     monkeypatch.setattr("claude_tap.cli_clients.Path.home", lambda: tmp_path)
     monkeypatch.setenv("KIMI_CODE_HOME", str(real_home))
 
-    sandbox, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    sandbox, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
     try:
         assert (sandbox / _KIMI_CODE_SKIP_MIGRATION_MARKER).is_file()
     finally:
@@ -191,7 +216,7 @@ def test_prepare_kimi_code_reverse_sandbox_copies_existing_skip_marker(
     )
     monkeypatch.setenv("KIMI_CODE_HOME", str(real_home))
 
-    sandbox, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    sandbox, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
     try:
         assert (sandbox / _KIMI_CODE_SKIP_MIGRATION_MARKER).read_text(encoding="utf-8") == "keep"
     finally:
@@ -212,13 +237,60 @@ def test_prepare_kimi_code_reverse_sandbox_symlinks_auth_dirs(monkeypatch: pytes
     )
     monkeypatch.setenv("KIMI_CODE_HOME", str(home))
 
-    sandbox, providers = _prepare_kimi_code_reverse_sandbox(43123)
+    sandbox, providers, _ = _prepare_kimi_code_reverse_sandbox(43123)
     try:
         assert (sandbox / "oauth").is_symlink()
         assert (sandbox / "oauth").resolve() == oauth_dir.resolve()
         assert (sandbox / "credentials").is_symlink()
         assert (sandbox / "credentials").resolve() == credentials_dir.resolve()
         assert providers == ["managed:kimi-code"]
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_prepare_kimi_code_reverse_sandbox_creates_auth_dirs_for_first_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "source-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        '[providers."managed:kimi-code"]\ntype = "kimi"\nbase_url = "https://api.kimi.com/coding/v1"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+
+    sandbox, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    try:
+        assert (home / "oauth").is_dir()
+        assert (home / "credentials").is_dir()
+        assert (sandbox / "oauth").is_symlink()
+        assert (sandbox / "credentials").is_symlink()
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "source-home"
+    sessions_dir = home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    (sessions_dir / "abc.jsonl").write_text("{}", encoding="utf-8")
+    (home / "mcp.json").write_text("{}", encoding="utf-8")
+    (home / "session_index.jsonl").write_text("{}\n", encoding="utf-8")
+    (home / "config.toml").write_text(
+        '[providers."managed:kimi-code"]\ntype = "kimi"\nbase_url = "https://api.kimi.com/coding/v1"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+
+    sandbox, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    try:
+        assert (sandbox / "sessions").is_symlink()
+        assert (sandbox / "sessions").resolve() == sessions_dir.resolve()
+        assert (sandbox / "mcp.json").is_symlink()
+        assert (sandbox / "mcp.json").resolve() == (home / "mcp.json").resolve()
+        assert (sandbox / "session_index.jsonl").is_symlink()
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
