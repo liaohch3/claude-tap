@@ -54,20 +54,61 @@ def test_record_limit_from_request_preserves_large_loaded_windows() -> None:
     assert _record_limit_from_request(request) == 1500
 
 
-def test_sqlite_log_handler_storage_errors_do_not_emit_logging_traceback() -> None:
+def test_sqlite_log_handler_storage_errors_spool_fallback_without_logging_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     class LockedStore:
+        def __init__(self) -> None:
+            self.fallback_path = tmp_path / "traces.sqlite3.fallback.jsonl"
+
         def append_log(
             self, session_id: str, message: str, *, level: str = "INFO", logged_at: str | None = None
         ) -> None:
             raise sqlite3.OperationalError("database is locked")
 
+        def append_fallback_log(
+            self,
+            session_id: str,
+            message: str,
+            *,
+            level: str,
+            logged_at: str | None,
+            error: sqlite3.Error,
+        ) -> Path:
+            with self.fallback_path.open("a", encoding="utf-8") as file:
+                file.write(
+                    json.dumps(
+                        {
+                            "kind": "log",
+                            "session_id": session_id,
+                            "error": str(error),
+                            "payload": {"logged_at": logged_at, "level": level, "message": message},
+                        }
+                    )
+                )
+                file.write("\n")
+            return self.fallback_path
+
     def fail_handle_error(record: logging.LogRecord) -> None:
         pytest.fail("SQLite storage errors should not be routed through logging.handleError")
 
-    handler = SQLiteLogHandler("locked-session", store=cast(Any, LockedStore()))
+    locked_store = LockedStore()
+    handler = SQLiteLogHandler("locked-session", store=cast(Any, locked_store))
     handler.handleError = fail_handle_error
 
     handler.emit(logging.LogRecord("test", logging.INFO, __file__, 1, "locked", (), None))
+
+    assert "proxy log storage failed; spooled" in capsys.readouterr().err
+    fallback_entries = [
+        json.loads(line) for line in locked_store.fallback_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(fallback_entries) == 1
+    assert fallback_entries[0]["kind"] == "log"
+    assert fallback_entries[0]["session_id"] == "locked-session"
+    assert fallback_entries[0]["error"] == "database is locked"
+    assert fallback_entries[0]["payload"]["level"] == "INFO"
+    assert fallback_entries[0]["payload"]["message"] == "locked"
 
 
 def test_dashboard_lists_sessions_by_normalized_updated_at(trace_db) -> None:

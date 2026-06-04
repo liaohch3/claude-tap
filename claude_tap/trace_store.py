@@ -32,6 +32,7 @@ SCHEMA_VERSION = 4
 SQLITE_BUSY_TIMEOUT_MS = 30000
 SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000
 SQLITE_MAINTENANCE_WRITES = 100
+FALLBACK_TRACE_SUFFIX = ".fallback.jsonl"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 STALE_ACTIVE_SESSION_AFTER = timedelta(hours=24)
 
@@ -79,6 +80,7 @@ class TraceStore:
         self._schema_ready = False
         self._schema_lock = threading.Lock()
         self._write_lock = threading.Lock()
+        self._fallback_lock = threading.Lock()
         self._writes_since_maintenance = 0
         self._tls = threading.local()
 
@@ -370,6 +372,56 @@ class TraceStore:
             else:
                 lines.append(message)
         return "\n".join(lines) + ("\n" if lines else "")
+
+    @property
+    def fallback_path(self) -> Path:
+        """Return the emergency JSONL path used when SQLite writes fail."""
+        return self.db_path.with_name(f"{self.db_path.name}{FALLBACK_TRACE_SUFFIX}")
+
+    def append_fallback_record(self, session_id: str, record: dict[str, Any], exc: sqlite3.Error) -> Path:
+        """Persist a trace record outside SQLite when the primary store is locked."""
+        return self._append_fallback_entry(
+            {
+                "kind": "record",
+                "session_id": session_id,
+                "error": str(exc),
+                "payload": record,
+            }
+        )
+
+    def append_fallback_summary(self, session_id: str, summary: dict[str, Any], exc: sqlite3.Error) -> Path:
+        """Persist a final summary outside SQLite when the primary store is locked."""
+        return self._append_fallback_entry(
+            {
+                "kind": "summary",
+                "session_id": session_id,
+                "error": str(exc),
+                "payload": summary,
+            }
+        )
+
+    def append_fallback_log(
+        self,
+        session_id: str,
+        message: str,
+        *,
+        level: str,
+        logged_at: str | None,
+        error: sqlite3.Error,
+    ) -> Path:
+        """Persist a proxy log outside SQLite when the primary store is locked."""
+        return self._append_fallback_entry(
+            {
+                "kind": "log",
+                "session_id": session_id,
+                "error": str(error),
+                "payload": {
+                    "logged_at": logged_at,
+                    "level": level,
+                    "message": message,
+                },
+            }
+        )
 
     def store_summary(self, session_id: str, summary: dict[str, Any]) -> None:
         with self._write_lock:
@@ -783,6 +835,20 @@ class TraceStore:
             conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
         except sqlite3.OperationalError:
             pass
+
+    def _append_fallback_entry(self, entry: dict[str, Any]) -> Path:
+        fallback_path = self.fallback_path
+        fallback_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **entry,
+        }
+        line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        with self._fallback_lock:
+            with fallback_path.open("a", encoding="utf-8") as file:
+                file.write(line)
+                file.write("\n")
+        return fallback_path
 
     def _ensure_schema_once(self, conn: sqlite3.Connection) -> None:
         with self._schema_lock:
