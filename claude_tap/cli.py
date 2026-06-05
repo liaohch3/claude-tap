@@ -65,8 +65,8 @@ from claude_tap.shared_dashboard import (
     ensure_shared_dashboard,
     is_dashboard_healthy,
     is_legacy_dashboard_healthy,
-    quit_shared_dashboard,
     resolve_dashboard_port,
+    stop_shared_dashboard,
 )
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
@@ -393,6 +393,7 @@ async def async_main(args: argparse.Namespace):
         print(f"   Database: {resolve_db_path()}")
         if dashboard_url_value:
             print(f"   Dashboard: {dashboard_url_value}")
+            print("   Stop dashboard: claude-tap dashboard stop")
 
     return exit_code
 
@@ -495,7 +496,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "\n"
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
-            "  claude-tap dashboard quit                  Stop the shared dashboard\n"
+            "  claude-tap dashboard stop                  Stop the shared dashboard service\n"
             "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
             "\n"
             "trust local CA:\n"
@@ -668,8 +669,8 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["quit"],
-        help="Use 'quit' to stop a running dashboard instead of starting one",
+        choices=["stop", "quit"],
+        help="Use 'stop' to stop a running dashboard service instead of starting one; 'quit' is an alias",
     )
     parser.add_argument(
         "--tap-output-dir",
@@ -706,11 +707,11 @@ async def dashboard_main(args: argparse.Namespace) -> int:
 
     host = args.host
     port = resolve_dashboard_port(args.live_port)
-    if args.command == "quit":
+    if args.command in {"stop", "quit"}:
         if not await is_dashboard_healthy(host, port, require_current_db=False):
             print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
             return 1
-        if not await quit_shared_dashboard(host, port):
+        if not await stop_shared_dashboard(host, port):
             print(f"Unable to stop claude-tap dashboard on {dashboard_url(host, port)}")
             return 1
         print(f"Stopped claude-tap dashboard on {dashboard_url(host, port)}")

@@ -279,12 +279,14 @@ class LiveViewerServer:
             html = read_dashboard_template()
         except OSError:
             return web.Response(status=404, text="dashboard.html not found")
-        if self.dashboard_mode:
-            if not _is_trusted_dashboard_token_request(request):
-                return _untrusted_dashboard_token_response()
+        if self.dashboard_mode and _is_trusted_dashboard_token_request(request):
             html = html.replace(
                 'const DASHBOARD_QUIT_TOKEN = "";',
                 f"const DASHBOARD_QUIT_TOKEN = {json.dumps(self._dashboard_quit_token)};",
+                1,
+            ).replace(
+                "const DASHBOARD_CAN_STOP = false;",
+                "const DASHBOARD_CAN_STOP = true;",
                 1,
             )
         return web.Response(text=html, content_type="text/html")

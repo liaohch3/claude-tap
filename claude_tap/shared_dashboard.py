@@ -199,8 +199,8 @@ async def wait_for_dashboard_healthy(
     return False
 
 
-async def quit_shared_dashboard(host: str, port: int) -> bool:
-    """Ask a running shared dashboard to stop and wait until it is gone."""
+async def stop_shared_dashboard(host: str, port: int) -> bool:
+    """Ask a running shared dashboard service to stop and wait until it is gone."""
     base_url = dashboard_url(host, port)
     timeout = aiohttp.ClientTimeout(total=_DASHBOARD_QUIT_TIMEOUT)
     status, payload = await _dashboard_get_status_and_payload(
@@ -225,6 +225,11 @@ async def quit_shared_dashboard(host: str, port: int) -> bool:
         return False
 
     return await wait_for_dashboard_stopped(host, port)
+
+
+async def quit_shared_dashboard(host: str, port: int) -> bool:
+    """Backward-compatible alias for stop_shared_dashboard."""
+    return await stop_shared_dashboard(host, port)
 
 
 async def wait_for_dashboard_stopped(

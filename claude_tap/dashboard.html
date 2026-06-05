@@ -901,7 +901,7 @@ pre {
     <option value="en">English</option>
     <option value="zh-CN">简体中文</option>
   </select>
-  <button class="dashboard-quit" id="dashboard-quit" type="button" title="Quit dashboard" data-i18n-title="quit_dashboard">&#9211;</button>
+  <button class="dashboard-quit" id="dashboard-quit" type="button" title="Stop dashboard service" data-i18n-title="quit_dashboard">&#9211;</button>
 </div>
 
 <div class="trace-path-bar" id="trace-path-bar">
@@ -1014,6 +1014,7 @@ pre {
 <script>
 const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
 const DASHBOARD_QUIT_TOKEN = "";
+const DASHBOARD_CAN_STOP = false;
 
 const state = {
   sessions: [],
@@ -1064,13 +1065,13 @@ const DASHBOARD_I18N = {
     live_watching: "Watching",
     live_polling: "Polling",
     live_reconnecting: "Reconnecting",
-    dashboard_stopped: "Stopped",
+    dashboard_stopped: "Service stopped",
     theme_toggle: "Toggle dark mode",
     language: "Language",
-    quit_dashboard: "Quit dashboard",
+    quit_dashboard: "Stop dashboard service",
     quit_dashboard_confirm: "Stop the claude-tap dashboard service?",
     quitting_dashboard: "Stopping",
-    dashboard_quit_failed: "Unable to stop dashboard: {error}",
+    dashboard_quit_failed: "Unable to stop dashboard service: {error}",
     dashboard: "Dashboard",
     trace_history_sessions: "trace history sessions",
     dashboard_title: "Conversation Log",
@@ -1162,13 +1163,13 @@ const DASHBOARD_I18N = {
     live_watching: "监听中",
     live_polling: "轮询中",
     live_reconnecting: "重连中",
-    dashboard_stopped: "已退出",
+    dashboard_stopped: "服务已停止",
     theme_toggle: "切换深色模式",
     language: "语言",
-    quit_dashboard: "退出面板",
-    quit_dashboard_confirm: "退出 claude-tap dashboard 服务？",
-    quitting_dashboard: "正在退出",
-    dashboard_quit_failed: "无法退出面板：{error}",
+    quit_dashboard: "停止面板服务",
+    quit_dashboard_confirm: "停止 claude-tap dashboard 服务？",
+    quitting_dashboard: "正在停止",
+    dashboard_quit_failed: "无法停止面板服务：{error}",
     dashboard: "面板",
     trace_history_sessions: "trace 历史会话",
     dashboard_title: "对话日志",
@@ -1380,6 +1381,7 @@ async function fetchJSON(url, options = {}) {
 
 async function quitDashboard() {
   if (state.quittingDashboard) return;
+  if (!DASHBOARD_CAN_STOP) return;
   if (!window.confirm(t("quit_dashboard_confirm"))) return;
 
   const button = $("#dashboard-quit");
@@ -2113,7 +2115,11 @@ document.addEventListener("keydown", event => {
   }
 });
 $("#theme-toggle").addEventListener("click", toggleTheme);
-$("#dashboard-quit").addEventListener("click", () => quitDashboard().catch(console.error));
+const dashboardQuitButton = $("#dashboard-quit");
+if (dashboardQuitButton) {
+  dashboardQuitButton.hidden = !DASHBOARD_CAN_STOP;
+  dashboardQuitButton.addEventListener("click", () => quitDashboard().catch(console.error));
+}
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));
 
 applyI18n();

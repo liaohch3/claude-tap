@@ -448,8 +448,10 @@ def test_dashboard_template_exposes_quit_control() -> None:
 
     assert 'id="dashboard-quit"' in template
     assert "quit_dashboard_confirm" in template
+    assert "Stop dashboard service" in template
     assert "function quitDashboard()" in template
     assert 'const DASHBOARD_QUIT_TOKEN = "";' in template
+    assert "const DASHBOARD_CAN_STOP = false;" in template
     assert '"X-Claude-Tap-Dashboard-Token": DASHBOARD_QUIT_TOKEN' in template
 
 
@@ -955,7 +957,9 @@ async def test_dashboard_server_quit_route_stops_dashboard(trace_db) -> None:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(f"http://127.0.0.1:{port}/dashboard") as resp:
                 assert resp.status == 200
-                assert f'const DASHBOARD_QUIT_TOKEN = "{server._dashboard_quit_token}";' in await resp.text()
+                html = await resp.text()
+                assert f'const DASHBOARD_QUIT_TOKEN = "{server._dashboard_quit_token}";' in html
+                assert "const DASHBOARD_CAN_STOP = true;" in html
 
             async with session.post(f"http://127.0.0.1:{port}/dashboard/quit") as resp:
                 assert resp.status == 403
@@ -993,8 +997,11 @@ async def test_dashboard_quit_token_requires_trusted_host_and_origin(trace_db) -
                 f"http://127.0.0.1:{port}/dashboard",
                 headers={"Host": f"attacker.example:{port}", "Origin": f"http://attacker.example:{port}"},
             ) as resp:
-                assert resp.status == 403
-                assert "quit_token" not in await resp.text()
+                assert resp.status == 200
+                html = await resp.text()
+                assert 'const DASHBOARD_QUIT_TOKEN = "";' in html
+                assert "const DASHBOARD_CAN_STOP = false;" in html
+                assert "session-list" in html
 
             async with session.get(
                 f"http://127.0.0.1:{port}/dashboard/health",
