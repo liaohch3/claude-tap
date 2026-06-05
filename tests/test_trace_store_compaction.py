@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
+import types
 from copy import deepcopy
 
+import claude_tap.trace_store as trace_store_module
 from claude_tap.trace_store import (
     BLOB_REF_MARKER,
     COMPACT_RECORD_MARKER,
     SQLITE_BUSY_TIMEOUT_MS,
+    SQLITE_MAINTENANCE_WRITES,
     TraceStore,
     get_trace_store,
 )
@@ -153,6 +157,85 @@ def test_trace_store_reads_legacy_full_payload_rows(trace_db) -> None:
 
     assert store.load_records(session_id) == [legacy_record]
     assert json.loads(store.export_jsonl(session_id)) == legacy_record
+
+
+def test_trace_store_writes_fallback_jsonl_entries(trace_db) -> None:
+    store = TraceStore(trace_db)
+
+    record_path = store.append_fallback_record(
+        "fallback-session",
+        {"request": {"body": {"model": "gpt-5.5"}}},
+        sqlite3.OperationalError("database is locked"),
+    )
+    summary_path = store.append_fallback_summary(
+        "fallback-session",
+        {"api_calls": 1},
+        sqlite3.OperationalError("database is locked"),
+    )
+    log_path = store.append_fallback_log(
+        "fallback-session",
+        "proxy message",
+        level="INFO",
+        logged_at="10:00:00",
+        error=sqlite3.OperationalError("database is locked"),
+    )
+
+    assert record_path == summary_path == log_path == store.fallback_path
+    entries = [json.loads(line) for line in store.fallback_path.read_text(encoding="utf-8").splitlines()]
+    assert [entry["kind"] for entry in entries] == ["record", "summary", "log"]
+    assert {entry["session_id"] for entry in entries} == {"fallback-session"}
+    assert entries[0]["payload"]["request"]["body"]["model"] == "gpt-5.5"
+    assert entries[1]["payload"]["api_calls"] == 1
+    assert entries[2]["payload"] == {
+        "logged_at": "10:00:00",
+        "level": "INFO",
+        "message": "proxy message",
+    }
+    assert all(entry["error"] == "database is locked" for entry in entries)
+    assert all("timestamp" in entry for entry in entries)
+
+
+def test_trace_store_ignores_checkpoint_errors_after_maintenance_writes(trace_db) -> None:
+    class CheckpointLockedConnection:
+        def execute(self, statement: str):
+            assert statement == "PRAGMA wal_checkpoint(PASSIVE)"
+            raise sqlite3.OperationalError("database is locked")
+
+    store = TraceStore(trace_db)
+    store._writes_since_maintenance = SQLITE_MAINTENANCE_WRITES - 1
+
+    store._after_write_commit(CheckpointLockedConnection())
+
+    assert store._writes_since_maintenance == 0
+
+
+def test_windows_file_lock_helpers_use_msvcrt(monkeypatch) -> None:
+    calls: list[tuple[str, int, int]] = []
+    fake_msvcrt = types.SimpleNamespace(
+        LK_LOCK=1,
+        LK_UNLCK=2,
+        locking=lambda fileno, mode, size: calls.append(("locking", mode, size)),
+    )
+
+    class LockFile:
+        def __init__(self) -> None:
+            self.seek_offsets: list[int] = []
+
+        def seek(self, offset: int) -> None:
+            self.seek_offsets.append(offset)
+
+        def fileno(self) -> int:
+            return 7
+
+    lock_file = LockFile()
+    monkeypatch.setattr(trace_store_module.os, "name", "nt")
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+    trace_store_module._lock_file_exclusive(lock_file)
+    trace_store_module._unlock_file(lock_file)
+
+    assert lock_file.seek_offsets == [0, 0]
+    assert calls == [("locking", fake_msvcrt.LK_LOCK, 1), ("locking", fake_msvcrt.LK_UNLCK, 1)]
 
 
 def test_trace_store_migrates_v3_database_and_keeps_full_rows_readable(tmp_path) -> None:
