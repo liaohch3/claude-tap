@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
 import subprocess
@@ -36,8 +37,21 @@ def resolve_dashboard_port(explicit: int | None = None) -> int:
     return DEFAULT_DASHBOARD_PORT
 
 
-def dashboard_url(host: str, port: int) -> str:
+def dashboard_connect_host(host: str) -> str:
+    """Return the local address clients should use for a dashboard bind host."""
     normalized_host = host.strip()
+    bare_host = normalized_host.strip("[]")
+    try:
+        address = ipaddress.ip_address(bare_host)
+    except ValueError:
+        return normalized_host or "127.0.0.1"
+    if address.is_unspecified:
+        return "::1" if address.version == 6 else "127.0.0.1"
+    return bare_host
+
+
+def dashboard_url(host: str, port: int) -> str:
+    normalized_host = dashboard_connect_host(host)
     if ":" in normalized_host and not normalized_host.startswith("["):
         normalized_host = f"[{normalized_host}]"
     return f"http://{normalized_host}:{port}"

@@ -3879,6 +3879,50 @@ async def test_dashboard_main_serves_viewer(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_main_bind_all_opens_loopback_url(monkeypatch, tmp_path):
+    """A bind-all dashboard should open through loopback so token checks pass."""
+    import socket
+    from unittest.mock import AsyncMock
+
+    import aiohttp
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    opened_urls: list[str] = []
+    monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=False))
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        dashboard_port = sock.getsockname()[1]
+
+    args = parse_dashboard_args(
+        ["--tap-output-dir", str(tmp_path), "--tap-live-port", str(dashboard_port), "--tap-host", "0.0.0.0"]
+    )
+    task = asyncio.create_task(dashboard_main(args))
+    try:
+        for _ in range(50):
+            if opened_urls:
+                break
+            await asyncio.sleep(0.05)
+        assert opened_urls, "dashboard should open the browser"
+        assert opened_urls[0].startswith("http://127.0.0.1:")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(opened_urls[0]) as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert "session-list" in html
+                assert "DASHBOARD_QUIT_TOKEN" in html
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
 async def test_dashboard_main_opens_reused_dashboard(monkeypatch, tmp_path):
     """The standalone dashboard command should honor browser opens when reusing a server."""
     from unittest.mock import AsyncMock

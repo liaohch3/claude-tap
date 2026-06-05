@@ -24,6 +24,7 @@ from claude_tap.dashboard import (
     read_dashboard_template,
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
+from claude_tap.shared_dashboard import dashboard_url
 from claude_tap.trace_store import get_trace_store, resolve_db_path
 from claude_tap.viewer import (
     VIEWER_SCRIPT_ANCHOR,
@@ -268,7 +269,7 @@ class LiveViewerServer:
     @property
     def url(self) -> str:
         """Return the viewer URL."""
-        return f"http://{self.host}:{self._actual_port}"
+        return dashboard_url(self.host, self._actual_port)
 
     async def _handle_dashboard_index(self, request: web.Request) -> web.Response:
         """Serve the session-first dashboard."""
