@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import re
 import secrets
 import tempfile
 from datetime import date
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
@@ -34,6 +35,76 @@ from claude_tap.viewer import (
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DASHBOARD_QUIT_TOKEN_HEADER = "X-Claude-Tap-Dashboard-Token"
+
+
+def _split_host_port(value: str) -> tuple[str, int | None]:
+    host = value.strip()
+    if not host:
+        return "", None
+    if host.startswith("["):
+        end = host.find("]")
+        if end < 0:
+            return host, None
+        name = host[1:end]
+        rest = host[end + 1 :]
+        if rest.startswith(":") and rest[1:].isdigit():
+            return name, int(rest[1:])
+        return name, None
+    if host.count(":") == 1:
+        name, port = host.rsplit(":", 1)
+        if port.isdigit():
+            return name, int(port)
+    return host, None
+
+
+def _is_trusted_localhost(value: str | None) -> bool:
+    if value is None:
+        return False
+    host = value.strip().strip("[]").lower().rstrip(".")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _origin_port(origin) -> int | None:
+    if origin.port is not None:
+        return origin.port
+    if origin.scheme == "http":
+        return 80
+    if origin.scheme == "https":
+        return 443
+    return None
+
+
+def _is_trusted_dashboard_token_request(request: web.Request) -> bool:
+    host, host_port = _split_host_port(request.headers.get("Host", ""))
+    if not _is_trusted_localhost(host):
+        return False
+
+    origin_value = request.headers.get("Origin")
+    if not origin_value:
+        return True
+    try:
+        origin = urlsplit(origin_value)
+    except ValueError:
+        return False
+    if origin.scheme not in {"http", "https"} or not _is_trusted_localhost(origin.hostname):
+        return False
+    try:
+        origin_port = _origin_port(origin)
+    except ValueError:
+        return False
+    return host_port is None or origin_port == host_port
+
+
+def _untrusted_dashboard_token_response() -> web.Response:
+    return web.json_response(
+        {"ok": False, "error": "Dashboard quit requires a trusted localhost Host and Origin"},
+        status=403,
+    )
 
 
 def _record_limit_from_request(request: web.Request) -> int | None:
@@ -207,11 +278,14 @@ class LiveViewerServer:
             html = read_dashboard_template()
         except OSError:
             return web.Response(status=404, text="dashboard.html not found")
-        html = html.replace(
-            'const DASHBOARD_QUIT_TOKEN = "";',
-            f"const DASHBOARD_QUIT_TOKEN = {json.dumps(self._dashboard_quit_token)};",
-            1,
-        )
+        if self.dashboard_mode:
+            if not _is_trusted_dashboard_token_request(request):
+                return _untrusted_dashboard_token_response()
+            html = html.replace(
+                'const DASHBOARD_QUIT_TOKEN = "";',
+                f"const DASHBOARD_QUIT_TOKEN = {json.dumps(self._dashboard_quit_token)};",
+                1,
+            )
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_dashboard_session_detail(self, request: web.Request) -> web.Response:
@@ -221,6 +295,8 @@ class LiveViewerServer:
     async def _handle_dashboard_health(self, request: web.Request) -> web.Response:
         payload = {"ok": True, "db_path": str(resolve_db_path()), "dashboard_mode": self.dashboard_mode}
         if self.dashboard_mode:
+            if not _is_trusted_dashboard_token_request(request):
+                return _untrusted_dashboard_token_response()
             payload["quit_token"] = self._dashboard_quit_token
         return web.json_response(payload)
 
@@ -230,6 +306,8 @@ class LiveViewerServer:
                 {"ok": False, "error": "Dashboard quit is only available in dashboard mode"},
                 status=403,
             )
+        if not _is_trusted_dashboard_token_request(request):
+            return _untrusted_dashboard_token_response()
         token = request.headers.get(_DASHBOARD_QUIT_TOKEN_HEADER)
         if token != self._dashboard_quit_token:
             return web.json_response(

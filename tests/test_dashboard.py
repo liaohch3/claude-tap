@@ -981,6 +981,57 @@ async def test_dashboard_server_quit_route_stops_dashboard(trace_db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_dashboard_quit_token_requires_trusted_host_and_origin(trace_db) -> None:
+    from claude_tap.shared_dashboard import is_dashboard_healthy
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                f"http://127.0.0.1:{port}/dashboard",
+                headers={"Host": f"attacker.example:{port}", "Origin": f"http://attacker.example:{port}"},
+            ) as resp:
+                assert resp.status == 403
+                assert "quit_token" not in await resp.text()
+
+            async with session.get(
+                f"http://127.0.0.1:{port}/dashboard/health",
+                headers={"Host": f"attacker.example:{port}", "Origin": f"http://attacker.example:{port}"},
+            ) as resp:
+                assert resp.status == 403
+                payload = await resp.json()
+                assert payload["ok"] is False
+                assert "quit_token" not in payload
+
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
+                assert resp.status == 200
+                health = await resp.json()
+                token = health["quit_token"]
+
+            for headers in (
+                {"Host": f"attacker.example:{port}", "X-Claude-Tap-Dashboard-Token": token},
+                {
+                    "Origin": f"http://attacker.example:{port}",
+                    "X-Claude-Tap-Dashboard-Token": token,
+                },
+                {
+                    "Origin": f"http://127.0.0.1:{port + 1}",
+                    "X-Claude-Tap-Dashboard-Token": token,
+                },
+            ):
+                async with session.post(f"http://127.0.0.1:{port}/dashboard/quit", headers=headers) as resp:
+                    assert resp.status == 403
+                    payload = await resp.json()
+                    assert payload["ok"] is False
+
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is True
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_quit_route_rejects_non_dashboard_server(trace_db) -> None:
     server = LiveViewerServer(port=0, dashboard_mode=False)
     port = await server.start()
