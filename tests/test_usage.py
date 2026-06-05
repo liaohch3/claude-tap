@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import sqlite3
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -122,35 +120,15 @@ async def test_trace_writer_counts_responses_cached_tokens(trace_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_trace_writer_storage_errors_spool_fallback_without_interrupting_proxy_flow(
-    tmp_path: Path,
+async def test_trace_writer_storage_errors_drop_record_without_interrupting_proxy_flow(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     class LockedStore:
-        def __init__(self) -> None:
-            self.fallback_path = tmp_path / "traces.sqlite3.fallback.jsonl"
-
         def append_record(self, session_id: str, record: dict) -> None:
             raise sqlite3.OperationalError("database is locked")
 
         def finalize_session(self, session_id: str, summary: dict) -> None:
             raise sqlite3.OperationalError("database is locked")
-
-        def append_fallback_record(self, session_id: str, record: dict, exc: sqlite3.Error) -> Path:
-            return self._append_fallback("record", session_id, record, exc)
-
-        def append_fallback_summary(self, session_id: str, summary: dict, exc: sqlite3.Error) -> Path:
-            return self._append_fallback("summary", session_id, summary, exc)
-
-        def _append_fallback(self, kind: str, session_id: str, payload: dict, exc: sqlite3.Error) -> Path:
-            self.fallback_path.write_text(
-                self.fallback_path.read_text(encoding="utf-8") if self.fallback_path.exists() else "",
-                encoding="utf-8",
-            )
-            with self.fallback_path.open("a", encoding="utf-8") as file:
-                file.write(json.dumps({"kind": kind, "session_id": session_id, "error": str(exc), "payload": payload}))
-                file.write("\n")
-            return self.fallback_path
 
     locked_store = LockedStore()
     writer = TraceWriter("locked-session", store=cast(Any, locked_store))
@@ -167,44 +145,16 @@ async def test_trace_writer_storage_errors_spool_fallback_without_interrupting_p
     assert summary["api_calls"] == 1
     assert summary["input_tokens"] == 3
     assert summary["output_tokens"] == 2
-    assert summary["spooled_trace_records"] == 1
-    assert summary["spooled_trace_summaries"] == 1
-    assert summary["dropped_trace_records"] == 0
+    assert summary["dropped_trace_records"] == 1
     assert summary["trace_storage_errors"] == 2
-    assert capsys.readouterr().err.count("trace storage failed; spooled fallback data") == 1
-
-    fallback_entries = [
-        json.loads(line) for line in locked_store.fallback_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert [entry["kind"] for entry in fallback_entries] == ["record", "summary"]
-    assert fallback_entries[0]["payload"]["request"]["body"]["model"] == "gpt-5.4"
-    assert fallback_entries[1]["payload"]["spooled_trace_records"] == 1
-    assert fallback_entries[1]["payload"]["spooled_trace_summaries"] == 1
-    assert fallback_entries[1]["payload"]["trace_storage_errors"] == 2
+    assert capsys.readouterr().err.count("trace storage failed; continuing without blocking proxy") == 1
 
 
-def test_trace_writer_spools_final_summary_when_startup_session_create_failed(
-    tmp_path: Path,
+def test_trace_writer_records_startup_session_create_failure_without_fallback(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     class StartupLockedStore:
-        def __init__(self) -> None:
-            self.fallback_path = tmp_path / "traces.sqlite3.fallback.jsonl"
-
-        def append_fallback_summary(self, session_id: str, summary: dict, exc: sqlite3.Error) -> Path:
-            with self.fallback_path.open("a", encoding="utf-8") as file:
-                file.write(
-                    json.dumps(
-                        {
-                            "kind": "summary",
-                            "session_id": session_id,
-                            "error": str(exc),
-                            "payload": summary,
-                        }
-                    )
-                )
-                file.write("\n")
-            return self.fallback_path
+        pass
 
     locked_store = StartupLockedStore()
     writer = TraceWriter("startup-locked-session", store=cast(Any, locked_store))
@@ -212,11 +162,7 @@ def test_trace_writer_spools_final_summary_when_startup_session_create_failed(
 
     writer.close()
 
+    summary = writer.get_summary()
+    assert summary["trace_storage_errors"] == 1
+    assert summary["dropped_trace_records"] == 0
     assert capsys.readouterr().err.count("trace storage failed; continuing without blocking proxy") == 1
-    fallback_entries = [
-        json.loads(line) for line in locked_store.fallback_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert [entry["kind"] for entry in fallback_entries] == ["summary"]
-    assert fallback_entries[0]["session_id"] == "startup-locked-session"
-    assert fallback_entries[0]["payload"]["trace_storage_errors"] == 1
-    assert fallback_entries[0]["payload"]["spooled_trace_summaries"] == 1

@@ -34,29 +34,12 @@ class SQLiteLogHandler(logging.Handler):
                 logged_at=datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%H:%M:%S"),
             )
         except sqlite3.Error as exc:
-            self._spool_fallback_log(record, message, exc)
+            self._emit_storage_warning(exc)
         except Exception:
             self.handleError(record)
 
-    def _spool_fallback_log(self, record: logging.LogRecord, message: str, exc: sqlite3.Error) -> None:
-        logged_at = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%H:%M:%S")
-        fallback_path = None
-        method = getattr(self._store, "append_fallback_log", None)
-        if method is not None:
-            try:
-                fallback_path = method(
-                    self.session_id,
-                    message,
-                    level=record.levelname,
-                    logged_at=logged_at,
-                    error=exc,
-                )
-            except (OSError, sqlite3.Error):
-                fallback_path = None
+    def _emit_storage_warning(self, exc: sqlite3.Error) -> None:
         if self._storage_warning_emitted:
             return
         self._storage_warning_emitted = True
-        if fallback_path is None:
-            sys.stderr.write(f"claude-tap: proxy log storage failed ({exc})\n")
-        else:
-            sys.stderr.write(f"claude-tap: proxy log storage failed; spooled to {fallback_path} ({exc})\n")
+        sys.stderr.write(f"claude-tap: proxy log storage failed ({exc})\n")

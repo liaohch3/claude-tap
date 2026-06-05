@@ -54,41 +54,14 @@ def test_record_limit_from_request_preserves_large_loaded_windows() -> None:
     assert _record_limit_from_request(request) == 1500
 
 
-def test_sqlite_log_handler_storage_errors_spool_fallback_without_logging_traceback(
-    tmp_path: Path,
+def test_sqlite_log_handler_storage_errors_warn_without_logging_traceback(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     class LockedStore:
-        def __init__(self) -> None:
-            self.fallback_path = tmp_path / "traces.sqlite3.fallback.jsonl"
-
         def append_log(
             self, session_id: str, message: str, *, level: str = "INFO", logged_at: str | None = None
         ) -> None:
             raise sqlite3.OperationalError("database is locked")
-
-        def append_fallback_log(
-            self,
-            session_id: str,
-            message: str,
-            *,
-            level: str,
-            logged_at: str | None,
-            error: sqlite3.Error,
-        ) -> Path:
-            with self.fallback_path.open("a", encoding="utf-8") as file:
-                file.write(
-                    json.dumps(
-                        {
-                            "kind": "log",
-                            "session_id": session_id,
-                            "error": str(error),
-                            "payload": {"logged_at": logged_at, "level": level, "message": message},
-                        }
-                    )
-                )
-                file.write("\n")
-            return self.fallback_path
 
     def fail_handle_error(record: logging.LogRecord) -> None:
         pytest.fail("SQLite storage errors should not be routed through logging.handleError")
@@ -99,51 +72,28 @@ def test_sqlite_log_handler_storage_errors_spool_fallback_without_logging_traceb
 
     handler.emit(logging.LogRecord("test", logging.INFO, __file__, 1, "locked", (), None))
 
-    assert "proxy log storage failed; spooled" in capsys.readouterr().err
-    fallback_entries = [
-        json.loads(line) for line in locked_store.fallback_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert len(fallback_entries) == 1
-    assert fallback_entries[0]["kind"] == "log"
-    assert fallback_entries[0]["session_id"] == "locked-session"
-    assert fallback_entries[0]["error"] == "database is locked"
-    assert fallback_entries[0]["payload"]["level"] == "INFO"
-    assert fallback_entries[0]["payload"]["message"] == "locked"
+    assert "proxy log storage failed (database is locked)" in capsys.readouterr().err
 
 
-def test_sqlite_log_handler_suppresses_fallback_lock_errors(
-    tmp_path: Path,
+def test_sqlite_log_handler_suppresses_repeated_storage_errors(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     class LockedStore:
-        fallback_path = tmp_path / "traces.sqlite3.fallback.jsonl"
-
         def append_log(
             self, session_id: str, message: str, *, level: str = "INFO", logged_at: str | None = None
         ) -> None:
             raise sqlite3.OperationalError("database is locked")
 
-        def append_fallback_log(
-            self,
-            session_id: str,
-            message: str,
-            *,
-            level: str,
-            logged_at: str | None,
-            error: sqlite3.Error,
-        ) -> Path:
-            raise sqlite3.OperationalError("trace write lock unavailable")
-
     def fail_handle_error(record: logging.LogRecord) -> None:
-        pytest.fail("Fallback lock errors should not be routed through logging.handleError")
+        pytest.fail("SQLite storage errors should not be routed through logging.handleError")
 
     handler = SQLiteLogHandler("locked-session", store=cast(Any, LockedStore()))
     handler.handleError = fail_handle_error
 
     handler.emit(logging.LogRecord("test", logging.INFO, __file__, 1, "locked", (), None))
+    handler.emit(logging.LogRecord("test", logging.INFO, __file__, 1, "still locked", (), None))
 
-    assert "proxy log storage failed (database is locked)" in capsys.readouterr().err
-    assert not LockedStore.fallback_path.exists()
+    assert capsys.readouterr().err.count("proxy log storage failed (database is locked)") == 1
 
 
 def test_dashboard_lists_sessions_by_normalized_updated_at(trace_db) -> None:

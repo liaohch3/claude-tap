@@ -1416,9 +1416,6 @@ async def test_async_main_continues_when_startup_session_create_is_locked(monkey
     from claude_tap import async_main, parse_args
 
     class StartupLockedStore:
-        def __init__(self) -> None:
-            self.fallback_path = tmp_path / "traces.sqlite3.fallback.jsonl"
-
         def create_session(self, *, client: str = "", proxy_mode: str = "", started_at=None) -> str:
             raise sqlite3.OperationalError("database is locked")
 
@@ -1431,21 +1428,6 @@ async def test_async_main_continues_when_startup_session_create_is_locked(monkey
             logged_at: str | None = None,
         ) -> None:
             return None
-
-        def append_fallback_summary(self, session_id: str, summary: dict, exc: sqlite3.Error) -> Path:
-            with self.fallback_path.open("a", encoding="utf-8") as file:
-                file.write(
-                    json.dumps(
-                        {
-                            "kind": "summary",
-                            "session_id": session_id,
-                            "error": str(exc),
-                            "payload": summary,
-                        }
-                    )
-                )
-                file.write("\n")
-            return self.fallback_path
 
     async def fake_run_client(*args, **kwargs):
         return 0
@@ -1467,12 +1449,7 @@ async def test_async_main_continues_when_startup_session_create_is_locked(monkey
     stderr = capsys.readouterr().err
     assert "trace storage failed; continuing without blocking proxy" in stderr
     assert "trace cleanup skipped because storage is unavailable" in stderr
-    fallback_entries = [
-        json.loads(line) for line in locked_store.fallback_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert [entry["kind"] for entry in fallback_entries] == ["summary"]
-    assert fallback_entries[0]["payload"]["trace_storage_errors"] == 1
-    assert fallback_entries[0]["payload"]["spooled_trace_summaries"] == 1
+    assert not (tmp_path / "traces.sqlite3.fallback.jsonl").exists()
 
 
 @pytest.mark.asyncio

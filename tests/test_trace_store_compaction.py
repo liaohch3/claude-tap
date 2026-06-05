@@ -6,7 +6,6 @@ import json
 import sqlite3
 import sys
 import types
-from contextlib import contextmanager
 from copy import deepcopy
 
 import pytest
@@ -162,54 +161,6 @@ def test_trace_store_reads_legacy_full_payload_rows(trace_db) -> None:
     assert json.loads(store.export_jsonl(session_id)) == legacy_record
 
 
-def test_trace_store_writes_fallback_jsonl_entries(trace_db) -> None:
-    store = TraceStore(trace_db)
-    lock_events: list[str] = []
-
-    @contextmanager
-    def record_process_lock():
-        lock_events.append("lock")
-        try:
-            yield
-        finally:
-            lock_events.append("unlock")
-
-    store._process_write_lock = record_process_lock
-
-    record_path = store.append_fallback_record(
-        "fallback-session",
-        {"request": {"body": {"model": "gpt-5.5"}}},
-        sqlite3.OperationalError("database is locked"),
-    )
-    summary_path = store.append_fallback_summary(
-        "fallback-session",
-        {"api_calls": 1},
-        sqlite3.OperationalError("database is locked"),
-    )
-    log_path = store.append_fallback_log(
-        "fallback-session",
-        "proxy message",
-        level="INFO",
-        logged_at="10:00:00",
-        error=sqlite3.OperationalError("database is locked"),
-    )
-
-    assert record_path == summary_path == log_path == store.fallback_path
-    entries = [json.loads(line) for line in store.fallback_path.read_text(encoding="utf-8").splitlines()]
-    assert [entry["kind"] for entry in entries] == ["record", "summary", "log"]
-    assert {entry["session_id"] for entry in entries} == {"fallback-session"}
-    assert entries[0]["payload"]["request"]["body"]["model"] == "gpt-5.5"
-    assert entries[1]["payload"]["api_calls"] == 1
-    assert entries[2]["payload"] == {
-        "logged_at": "10:00:00",
-        "level": "INFO",
-        "message": "proxy message",
-    }
-    assert all(entry["error"] == "database is locked" for entry in entries)
-    assert all("timestamp" in entry for entry in entries)
-    assert lock_events == ["lock", "unlock", "lock", "unlock", "lock", "unlock"]
-
-
 def test_trace_store_rolls_back_failed_append_record_transaction(trace_db, monkeypatch) -> None:
     store = TraceStore(trace_db)
     session_id = store.create_session(client="codex", proxy_mode="reverse")
@@ -238,9 +189,7 @@ def test_finalize_session_merges_storage_error_counters_into_cached_summary(trac
         {
             "api_calls": 1,
             "trace_storage_errors": 2,
-            "spooled_trace_records": 1,
-            "spooled_trace_summaries": 1,
-            "dropped_trace_records": 0,
+            "dropped_trace_records": 1,
         },
     )
 
@@ -249,9 +198,7 @@ def test_finalize_session_merges_storage_error_counters_into_cached_summary(trac
     summary = json.loads(row["summary_json"])
     assert summary["api_calls"] == 1
     assert summary["trace_storage_errors"] == 2
-    assert summary["spooled_trace_records"] == 1
-    assert summary["spooled_trace_summaries"] == 1
-    assert summary["dropped_trace_records"] == 0
+    assert summary["dropped_trace_records"] == 1
 
 
 def test_process_write_lock_converts_os_lock_failures_to_sqlite_errors(trace_db, monkeypatch) -> None:
