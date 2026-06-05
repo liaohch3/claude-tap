@@ -107,6 +107,13 @@ def _dashboard_health_matches_current_db(payload: dict | None) -> bool:
     return bool(payload and payload.get("ok") is True and payload.get("db_path") == str(resolve_db_path()))
 
 
+def _dashboard_db_path_from_health(payload: dict | None) -> str | None:
+    if not payload or payload.get("ok") is not True:
+        return None
+    db_path = payload.get("db_path")
+    return db_path if isinstance(db_path, str) and db_path else None
+
+
 def _sync_dashboard_healthy_for_current_db(host: str, port: int) -> bool:
     url = f"{dashboard_url(host, port)}/dashboard/health"
     try:
@@ -183,6 +190,21 @@ async def wait_for_dashboard_healthy(
     return False
 
 
+async def _dashboard_start_failure_message(host: str, port: int, url: str) -> str:
+    status, payload = await _dashboard_get_status_and_payload(
+        f"{url}/dashboard/health",
+        timeout_seconds=_DASHBOARD_HEALTH_TIMEOUT,
+    )
+    existing_db_path = _dashboard_db_path_from_health(payload)
+    current_db_path = str(resolve_db_path())
+    if status == 200 and existing_db_path and existing_db_path != current_db_path:
+        return (
+            f"Failed to start shared dashboard on {url}: port is already used by a dashboard "
+            f"for a different trace database ({existing_db_path}); current trace database is {current_db_path}"
+        )
+    return f"Failed to start shared dashboard on {url}"
+
+
 def _spawn_dashboard_subprocess(host: str, port: int, output_dir: Path) -> subprocess.Popen[bytes]:
     cmd = [
         _dashboard_python_executable(),
@@ -241,7 +263,7 @@ async def ensure_shared_dashboard(
     spawned = await asyncio.to_thread(_spawn_dashboard_subprocess_if_needed, host, port, output_dir)
     if spawned:
         if not await wait_for_dashboard_healthy(host, port):
-            raise RuntimeError(f"Failed to start shared dashboard on {url}")
+            raise RuntimeError(await _dashboard_start_failure_message(host, port, url))
     else:
         _migrate_legacy_traces(output_dir)
 

@@ -381,3 +381,41 @@ async def test_ensure_shared_dashboard_timeout_raises_error(monkeypatch: pytest.
             open_browser=False,
             open_browser_fn=lambda u: None,
         )
+
+
+@pytest.mark.asyncio
+async def test_ensure_shared_dashboard_reports_different_database_on_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    current_db = tmp_path / "current.sqlite3"
+    other_db = tmp_path / "other.sqlite3"
+    monkeypatch.setenv("CLOUDTAP_DB", str(current_db))
+
+    async def mock_false(h: str, p: int) -> bool:
+        return False
+
+    async def mock_wait_false(h: str, p: int, **kw: object) -> bool:
+        return False
+
+    async def mock_status_and_payload(url: str, *, timeout_seconds: float):
+        return 200, {"ok": True, "db_path": str(other_db)}
+
+    monkeypatch.setattr("claude_tap.shared_dashboard.is_dashboard_healthy", mock_false)
+    monkeypatch.setattr("claude_tap.shared_dashboard.is_legacy_dashboard_healthy", mock_false)
+    monkeypatch.setattr("claude_tap.shared_dashboard.wait_for_dashboard_healthy", mock_wait_false)
+    monkeypatch.setattr("claude_tap.shared_dashboard._dashboard_get_status_and_payload", mock_status_and_payload)
+    monkeypatch.setattr("claude_tap.shared_dashboard._spawn_dashboard_subprocess", lambda h, p, d: None)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await ensure_shared_dashboard(
+            host="127.0.0.1",
+            port=19527,
+            output_dir=tmp_path,
+            open_browser=False,
+            open_browser_fn=lambda u: None,
+        )
+
+    message = str(exc_info.value)
+    assert "port is already used by a dashboard for a different trace database" in message
+    assert str(other_db) in message
+    assert str(current_db) in message
