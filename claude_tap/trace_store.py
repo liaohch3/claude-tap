@@ -33,6 +33,7 @@ SQLITE_BUSY_TIMEOUT_MS = 30000
 SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000
 SQLITE_MAINTENANCE_WRITES = 100
 FALLBACK_TRACE_SUFFIX = ".fallback.jsonl"
+WRITE_LOCK_SUFFIX = ".write.lock"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 STALE_ACTIVE_SESSION_AFTER = timedelta(hours=24)
 
@@ -77,6 +78,7 @@ class TraceStore:
     def __init__(self, db_path: Path):
         self.db_path = db_path.resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_lock_path = self.db_path.with_name(f"{self.db_path.name}{WRITE_LOCK_SUFFIX}")
         self._schema_ready = False
         self._schema_lock = threading.Lock()
         self._write_lock = threading.Lock()
@@ -96,7 +98,7 @@ class TraceStore:
         now = started_at or datetime.now(timezone.utc)
         started_at_iso = now.isoformat()
         date_key = now.astimezone().date().isoformat()
-        with self._write_lock:
+        with self._write_access():
             conn = self._connect()
             conn.execute(
                 """
@@ -112,7 +114,7 @@ class TraceStore:
 
     def append_record(self, session_id: str, record: dict[str, Any]) -> None:
         """Append one API trace record to a session."""
-        with self._write_lock:
+        with self._write_access():
             conn = self._connect()
             next_index = self._next_record_index(conn, session_id)
             updated_at = _str_or_none(record.get("timestamp")) or datetime.now(timezone.utc).isoformat()
@@ -156,7 +158,7 @@ class TraceStore:
         logged_at: str | None = None,
     ) -> None:
         """Append one proxy log line to a session."""
-        with self._write_lock:
+        with self._write_access():
             conn = self._connect()
             row = conn.execute(
                 "SELECT COALESCE(MAX(line_no), 0) + 1 AS next_line FROM proxy_logs WHERE session_id = ?",
@@ -183,7 +185,7 @@ class TraceStore:
 
     def finalize_session(self, session_id: str, summary: dict[str, Any] | None = None) -> None:
         """Mark a session complete and persist its summary."""
-        with self._write_lock:
+        with self._write_access():
             conn = self._connect()
             row = conn.execute(
                 "SELECT status, summary_json FROM sessions WHERE id = ?",
@@ -424,7 +426,7 @@ class TraceStore:
         )
 
     def store_summary(self, session_id: str, summary: dict[str, Any]) -> None:
-        with self._write_lock:
+        with self._write_access():
             conn = self._connect()
             conn.execute(
                 """
@@ -469,7 +471,7 @@ class TraceStore:
         self, date_key: str, *, protected_session_ids: set[str] | None = None
     ) -> dict[str, int | str]:
         protected = protected_session_ids or set()
-        with self._write_lock:
+        with self._write_access():
             conn = self._connect()
             if date_key == "legacy":
                 rows = conn.execute(
@@ -497,7 +499,7 @@ class TraceStore:
 
     def delete_session(self, session_id: str) -> dict[str, int | str]:
         """Delete one trace session and its dependent records/logs."""
-        with self._write_lock:
+        with self._write_access():
             conn = self._connect()
             row = conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone()
             if row is None:
@@ -531,7 +533,7 @@ class TraceStore:
         if max_sessions <= 0:
             return 0
         protected = {protected_session_id} if protected_session_id else set()
-        with self._write_lock:
+        with self._write_access():
             conn = self._connect()
             rows = conn.execute(
                 """
@@ -619,7 +621,7 @@ class TraceStore:
                 client = str(capture.get("client") or "")
                 proxy_mode = str(capture.get("proxy_mode") or "")
 
-        with self._write_lock:
+        with self._write_access():
             conn = self._connect()
             try:
                 conn.execute(
@@ -715,7 +717,7 @@ class TraceStore:
         return row is not None
 
     def _mark_migration_done(self, marker: str) -> None:
-        with self._write_lock:
+        with self._write_access():
             conn = self._connect()
             conn.execute(
                 """
@@ -800,6 +802,22 @@ class TraceStore:
             self._ensure_schema_once(conn)
             self._tls.conn = conn
         return conn
+
+    @contextmanager
+    def _write_access(self) -> Iterator[None]:
+        with self._write_lock:
+            with self._process_write_lock():
+                yield
+
+    @contextmanager
+    def _process_write_lock(self) -> Iterator[None]:
+        self._write_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._write_lock_path.open("a+b") as lock_file:
+            _lock_file_exclusive(lock_file)
+            try:
+                yield
+            finally:
+                _unlock_file(lock_file)
 
     @contextmanager
     def _read_connect(self) -> Iterator[sqlite3.Connection]:
@@ -1144,6 +1162,32 @@ def _replace_path(root: dict[str, Any], path: tuple[str, ...], replacement: Any)
 
 def _legacy_source_key(output_dir: Path) -> str:
     return sha256(str(output_dir.resolve()).encode("utf-8")).hexdigest()[:16]
+
+
+def _lock_file_exclusive(lock_file: Any) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_file(lock_file: Any) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _read_jsonl_file(path: Path) -> list[dict[str, Any]]:
