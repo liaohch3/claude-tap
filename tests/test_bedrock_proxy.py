@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import json
+import struct
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +14,14 @@ import pytest
 from aiohttp import web
 
 from claude_tap.forward_proxy import ForwardProxyServer
-from claude_tap.proxy import proxy_handler
+from claude_tap.proxy import (
+    capture_only_content_type,
+    capture_only_response,
+    capture_only_stream_bytes,
+    is_capture_only_request,
+    is_capture_only_streaming_request,
+    proxy_handler,
+)
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_store import get_trace_store, reset_trace_store
 
@@ -47,6 +56,49 @@ def _bedrock_body() -> bytes:
             _bedrock_frame({"type": "message_stop"}),
         ]
     )
+
+
+def _native_bedrock_eventstream_events(body: bytes) -> list[tuple[dict[str, str], dict[str, Any]]]:
+    events: list[tuple[dict[str, str], dict[str, Any]]] = []
+    offset = 0
+    while offset < len(body):
+        total_len, headers_len = struct.unpack("!II", body[offset : offset + 8])
+        prelude = body[offset : offset + 8]
+        prelude_crc = struct.unpack("!I", body[offset + 8 : offset + 12])[0]
+        assert zlib.crc32(prelude) & 0xFFFFFFFF == prelude_crc
+
+        message = body[offset : offset + total_len - 4]
+        message_crc = struct.unpack("!I", body[offset + total_len - 4 : offset + total_len])[0]
+        assert zlib.crc32(message) & 0xFFFFFFFF == message_crc
+
+        payload_start = offset + 12 + headers_len
+        payload_end = offset + total_len - 4
+        headers = _native_bedrock_eventstream_headers(body[offset + 12 : payload_start])
+        events.append((headers, json.loads(body[payload_start:payload_end])))
+        offset += total_len
+    return events
+
+
+def _native_bedrock_eventstream_headers(data: bytes) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    offset = 0
+    while offset < len(data):
+        name_len = data[offset]
+        offset += 1
+        name = data[offset : offset + name_len].decode()
+        offset += name_len
+        value_type = data[offset]
+        offset += 1
+        assert value_type == 7
+        value_len = struct.unpack("!H", data[offset : offset + 2])[0]
+        offset += 2
+        headers[name] = data[offset : offset + value_len].decode()
+        offset += value_len
+    return headers
+
+
+def _native_bedrock_eventstream_payloads(body: bytes) -> list[dict[str, Any]]:
+    return [payload for _headers, payload in _native_bedrock_eventstream_events(body)]
 
 
 def _bedrock_converse_body() -> bytes:
@@ -106,7 +158,7 @@ def _make_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, 
 
 
 async def _start_reverse_proxy(
-    target_url: str, writer: TraceWriter, *, store_stream_events: bool = True
+    target_url: str, writer: TraceWriter, *, store_stream_events: bool = True, capture_only: bool = False
 ) -> tuple[web.AppRunner, int, aiohttp.ClientSession]:
     session = aiohttp.ClientSession(auto_decompress=False)
     app = web.Application(client_max_size=0)
@@ -116,6 +168,7 @@ async def _start_reverse_proxy(
         "session": session,
         "turn_counter": 0,
         "store_stream_events": store_stream_events,
+        "capture_only": capture_only,
     }
     app.router.add_route("*", "/{path_info:.*}", proxy_handler)
     runner = web.AppRunner(app)
@@ -124,6 +177,201 @@ async def _start_reverse_proxy(
     await site.start()
     port = site._server.sockets[0].getsockname()[1]
     return runner, port, session
+
+
+@pytest.mark.asyncio
+async def test_reverse_proxy_capture_only_records_without_upstream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    async def upstream_handler(_request: web.Request) -> web.Response:
+        raise AssertionError("capture-only must not call upstream")
+
+    upstream_app = web.Application()
+    upstream_app.router.add_route("*", "/{path_info:.*}", upstream_handler)
+    upstream_runner = web.AppRunner(upstream_app)
+    await upstream_runner.setup()
+    upstream_site = web.TCPSite(upstream_runner, "127.0.0.1", 0)
+    await upstream_site.start()
+    upstream_port = upstream_site._server.sockets[0].getsockname()[1]
+
+    store, session_id, writer = _make_writer(tmp_path, monkeypatch)
+    runner, port, session = await _start_reverse_proxy(
+        f"http://127.0.0.1:{upstream_port}",
+        writer,
+        capture_only=True,
+    )
+
+    try:
+        async with aiohttp.ClientSession() as client:
+            response = await client.post(
+                f"http://127.0.0.1:{port}/v1/messages",
+                json={
+                    "model": "claude-opus",
+                    "system": "system prompt",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+            assert response.status == 200
+            assert (await response.json())["content"][0]["text"] == "captured"
+    finally:
+        writer.close()
+        await runner.cleanup()
+        await session.close()
+        await upstream_runner.cleanup()
+
+    records = store.load_records(session_id)
+    assert len(records) == 1
+    assert records[0]["request"]["body"]["system"] == "system prompt"
+
+
+@pytest.mark.asyncio
+async def test_reverse_proxy_capture_only_streams_when_requested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    async def upstream_handler(_request: web.Request) -> web.Response:
+        raise AssertionError("capture-only must not call upstream")
+
+    upstream_app = web.Application()
+    upstream_app.router.add_route("*", "/{path_info:.*}", upstream_handler)
+    upstream_runner = web.AppRunner(upstream_app)
+    await upstream_runner.setup()
+    upstream_site = web.TCPSite(upstream_runner, "127.0.0.1", 0)
+    await upstream_site.start()
+    upstream_port = upstream_site._server.sockets[0].getsockname()[1]
+
+    store, session_id, writer = _make_writer(tmp_path, monkeypatch)
+    runner, port, session = await _start_reverse_proxy(
+        f"http://127.0.0.1:{upstream_port}",
+        writer,
+        capture_only=True,
+    )
+
+    try:
+        async with aiohttp.ClientSession() as client:
+            response = await client.post(
+                f"http://127.0.0.1:{port}/v1/messages",
+                json={
+                    "model": "claude-opus",
+                    "stream": True,
+                    "system": "streaming system prompt",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+            assert response.status == 200
+            assert response.headers["Content-Type"].startswith("text/event-stream")
+            assert "event: message_stop" in await response.text()
+    finally:
+        writer.close()
+        await runner.cleanup()
+        await session.close()
+        await upstream_runner.cleanup()
+
+    records = store.load_records(session_id)
+    assert len(records) == 1
+    assert records[0]["response"]["headers"]["Content-Type"] == "text/event-stream"
+    assert records[0]["request"]["body"]["system"] == "streaming system prompt"
+
+
+def test_capture_only_response_shapes_model_probes_by_provider() -> None:
+    assert is_capture_only_request("/v1/models/gpt-5", None)
+    assert not is_capture_only_request("/oauth/token", {"refresh_token": "redacted"})
+    assert not is_capture_only_request("/v1/embeddings", {"input": "embed me", "model": "text-embedding-3-small"})
+    assert not is_capture_only_request("/v1internal:listExperiments", {"request": {"client": "agy"}})
+    assert is_capture_only_request("/v1internal:streamGenerateContent?alt=sse", {"request": {"contents": []}})
+
+    openai_model = capture_only_response("/v1/models/gpt-5", None)
+    assert openai_model == {"id": "gpt-5", "object": "model", "created": 0, "owned_by": "claude-tap"}
+
+    gemini = capture_only_response("/v1beta/models/gemini-pro:generateContent", None)
+    assert "candidates" in gemini
+    gemini_models = capture_only_response("/v1beta/models", {"model": "gemini-pro"})
+    assert gemini_models["models"][0]["name"] == "models/gemini-pro"
+    gemini_model = capture_only_response("/v1beta/models/gemini-pro", {"model": "gemini-pro"})
+    assert gemini_model["supportedGenerationMethods"] == ["generateContent", "streamGenerateContent"]
+    converse = capture_only_response("/model/us.anthropic.claude-sonnet-4-6-v1:0/converse", {"messages": []})
+    assert converse["output"]["message"]["content"][0]["text"] == "captured"
+    assert converse["stopReason"] == "end_turn"
+    anthropic_completion = capture_only_response("/v1/complete", {"model": "claude", "prompt": "hello"})
+    assert anthropic_completion["completion"] == "captured"
+    completion = capture_only_response("/v1/completions", {"model": "gpt", "prompt": "hello"})
+    assert completion["choices"][0]["text"] == "captured"
+    responses = capture_only_response("/v1/responses", {"model": "gpt", "input": "hello"})
+    assert responses["status"] == "completed"
+
+
+def test_capture_only_stream_bytes_are_provider_shaped() -> None:
+    anthropic = capture_only_stream_bytes("/v1/messages", {"model": "claude"})
+    assert b"event: message_start" in anthropic
+    assert b'"type":"message_start","message"' in anthropic
+    assert b"data: [DONE]" in capture_only_stream_bytes("/v1/chat/completions", {"model": "gpt"})
+    assert b"response.completed" in capture_only_stream_bytes("/v1/responses", {"model": "gpt"})
+    assert b'"object":"text_completion"' in capture_only_stream_bytes("/v1/completions", {"model": "gpt"})
+    gemini_path = "/v1beta/models/gemini-pro:streamGenerateContent?alt=sse"
+    assert is_capture_only_streaming_request(gemini_path, {"contents": []})
+    assert b"candidates" in capture_only_stream_bytes(gemini_path, {"contents": []})
+    code_assist_path = "/v1internal:streamGenerateContent?alt=sse"
+    assert b"candidates" in capture_only_stream_bytes(code_assist_path, {"request": {"contents": []}})
+    assert b"response.completed" not in capture_only_stream_bytes(code_assist_path, {"request": {"contents": []}})
+
+
+def test_capture_only_bedrock_stream_bytes_are_eventstream_shaped() -> None:
+    path = "/model/global.anthropic.claude-sonnet-4-6-v1/invoke-with-response-stream"
+
+    body = capture_only_stream_bytes(path, {"anthropic_version": "bedrock-2023-05-31"})
+
+    assert capture_only_content_type(path, True) == "application/vnd.amazon.eventstream"
+    payloads = _native_bedrock_eventstream_payloads(body)
+    assert payloads[0]["type"] == "message_start"
+    assert payloads[-1]["type"] == "message_stop"
+
+    converse_path = "/model/us.anthropic.claude-sonnet-4-6-v1:0/converse-stream"
+    converse_events = _native_bedrock_eventstream_events(capture_only_stream_bytes(converse_path, {}))
+    assert [headers[":event-type"] for headers, _payload in converse_events] == [
+        "messageStart",
+        "contentBlockDelta",
+        "contentBlockStop",
+        "messageStop",
+        "metadata",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reverse_proxy_capture_only_captures_nested_code_assist_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    async def upstream_handler(_request: web.Request) -> web.Response:
+        raise AssertionError("capture-only must not call upstream for Code Assist prompt requests")
+
+    upstream_app = web.Application()
+    upstream_app.router.add_route("*", "/{path_info:.*}", upstream_handler)
+    upstream_runner = web.AppRunner(upstream_app)
+    await upstream_runner.setup()
+    upstream_site = web.TCPSite(upstream_runner, "127.0.0.1", 0)
+    await upstream_site.start()
+    upstream_port = upstream_site._server.sockets[0].getsockname()[1]
+
+    store, session_id, writer = _make_writer(tmp_path, monkeypatch)
+    runner, port, session = await _start_reverse_proxy(
+        f"http://127.0.0.1:{upstream_port}",
+        writer,
+        capture_only=True,
+    )
+
+    try:
+        async with aiohttp.ClientSession() as client:
+            response = await client.post(
+                f"http://127.0.0.1:{port}/v1internal:streamGenerateContent?alt=sse",
+                json={"request": {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}},
+            )
+            assert response.status == 200
+            assert response.headers["Content-Type"].startswith("text/event-stream")
+            assert "candidates" in await response.text()
+    finally:
+        writer.close()
+        await runner.cleanup()
+        await session.close()
+        await upstream_runner.cleanup()
+
+    records = store.load_records(session_id)
+    assert len(records) == 1
+    assert records[0]["request"]["path"] == "/v1internal:streamGenerateContent?alt=sse"
+    assert records[0]["request"]["body"]["request"]["contents"][0]["role"] == "user"
 
 
 @pytest.mark.parametrize(

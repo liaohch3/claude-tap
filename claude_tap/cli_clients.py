@@ -9,9 +9,11 @@ import re
 import shutil
 import signal
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 _BEDROCK_HOST_RE = re.compile(
     r"(^|\.)("
@@ -248,6 +250,15 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         forward_base_url_envs=("CLOUD_CODE_URL",),
         forward_base_url_allowed_path_prefixes=("/v1internal",),
     ),
+    "openclaw": ClientConfig(
+        cmd="openclaw",
+        label="OpenClaw",
+        install_url="https://github.com/openclaw/openclaw",
+        base_url_env="OPENAI_BASE_URL",
+        extra_base_url_envs=("ANTHROPIC_BASE_URL", "GOOGLE_GEMINI_BASE_URL", "OPENROUTER_BASE_URL", "CUSTOM_BASE_URL"),
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+    ),
     "codebuddy": ClientConfig(
         cmd="codebuddy",
         label="CodeBuddy",
@@ -272,6 +283,7 @@ async def run_client(
     proxy_mode: str = "reverse",
     ca_cert_path: Path | None = None,
     client_cmd: str | None = None,
+    capture_only: bool = False,
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
 
@@ -287,6 +299,7 @@ async def run_client(
         return 1
 
     env = os.environ.copy()
+    cleanup_paths: list[Path] = []
 
     cmd_args = list(extra_args)
     cmd_args = _maybe_rewrite_hermes_gateway_start(client, cmd_args)
@@ -333,7 +346,17 @@ async def run_client(
                 cmd_args = _settings_arg(settings_payload["env"]) + cmd_args
         # Don't set reverse-mode provider-specific base URL in forward mode.
     else:
-        reverse_env = cfg.reverse_base_url_env_map(port)
+        if client == "openclaw":
+            reverse_env = _openclaw_reverse_env(port, cmd_args)
+        elif capture_only and client in {"hermes", "kimi"}:
+            reverse_env = _multi_provider_reverse_env(port)
+        elif capture_only and client == "opencode":
+            reverse_env = _opencode_reverse_env(port)
+        else:
+            reverse_env = cfg.reverse_base_url_env_map(port)
+        cleanup_path = reverse_env.pop(_OPENCLAW_CLEANUP_ENV, None)
+        if cleanup_path:
+            cleanup_paths.append(Path(cleanup_path))
         env.update(reverse_env)
         env["NO_PROXY"] = "127.0.0.1"
         if cfg.inject_settings_env and not _has_settings_arg(cmd_args):
@@ -370,22 +393,31 @@ async def run_client(
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     else:
-        for env_key, base_url in cfg.reverse_base_url_env_map(port).items():
-            print(f"   {env_key}={base_url}")
+        for env_key in reverse_env:
+            if env_key != _OPENCLAW_CLEANUP_ENV and env_key in env:
+                print(f"   {env_key}={env[env_key]}")
     print()
 
     # Give child its own process group and make it the foreground group
     # so the TUI app has full terminal control (e.g. Cmd+Delete, Ctrl+U).
     use_fg = hasattr(os, "tcsetpgrp") and sys.stdin.isatty()
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        env=env,
-        stdin=None,
-        stdout=None,
-        stderr=None,
-        **({"process_group": 0} if use_fg else {}),
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            env=env,
+            stdin=None,
+            stdout=None,
+            stderr=None,
+            **({"process_group": 0} if use_fg else {}),
+        )
+    except Exception:
+        for path in cleanup_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
 
     if use_fg:
         try:
@@ -425,7 +457,14 @@ async def run_client(
     except (NotImplementedError, OSError):
         pass
 
-    code = await proc.wait()
+    try:
+        code = await proc.wait()
+    finally:
+        for path in cleanup_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     # Restore parent as foreground process group.
     # Ignore SIGTTOU first — the parent is still in the background group
@@ -818,8 +857,194 @@ def _read_codebuddy_endpoint_cache() -> str | None:
     return None
 
 
+_OPENCLAW_CLEANUP_ENV = "__CLAUDE_TAP_OPENCLAW_CONFIG__"
+
+
+def _read_openclaw_config(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _openclaw_config_path() -> Path:
+    explicit = os.environ.get("OPENCLAW_CONFIG_PATH", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    state_dir = os.environ.get("OPENCLAW_STATE_DIR", "").strip()
+    if state_dir:
+        return Path(state_dir).expanduser() / "openclaw.json"
+    return Path.home() / ".openclaw" / "openclaw.json"
+
+
+def _openclaw_model_arg(cmd_args: Sequence[str]) -> str | None:
+    for idx, arg in enumerate(cmd_args):
+        if arg in {"--model", "-m"} and idx + 1 < len(cmd_args):
+            value = cmd_args[idx + 1].strip()
+            if value:
+                return value
+        if arg.startswith("--model="):
+            value = arg.split("=", 1)[1].strip()
+            if value:
+                return value
+    return None
+
+
+def _openclaw_primary_model(cfg: dict, cmd_args: Sequence[str] = ()) -> str | None:
+    if model_arg := _openclaw_model_arg(cmd_args):
+        return model_arg
+    agents = cfg.get("agents")
+    if not isinstance(agents, dict):
+        return None
+    defaults = agents.get("defaults")
+    if not isinstance(defaults, dict):
+        return None
+    model = defaults.get("model")
+    if isinstance(model, str):
+        return model
+    if isinstance(model, dict):
+        primary = model.get("primary")
+        if isinstance(primary, str):
+            return primary
+    models = defaults.get("models")
+    if isinstance(models, dict):
+        for key in models:
+            if isinstance(key, str):
+                return key
+    return None
+
+
+def _openclaw_provider_proxy_url(provider: dict, proxy_url: str) -> str:
+    api = provider.get("api")
+    if not isinstance(api, str):
+        return f"{proxy_url}/v1"
+    if api.startswith("openai-"):
+        return f"{proxy_url}/v1"
+    return proxy_url
+
+
+def _openclaw_provider_target_url(provider: dict, base_url: str) -> str:
+    target = base_url.strip().rstrip("/")
+    if _openclaw_provider_proxy_url(provider, "http://127.0.0.1:0").endswith("/v1") and target.endswith("/v1"):
+        return target[:-3].rstrip("/") or target
+    return target
+
+
+def _openclaw_config_with_proxy(cfg: dict, proxy_url: str, cmd_args: Sequence[str] = ()) -> dict | None:
+    model = _openclaw_primary_model(cfg, cmd_args)
+    if not model or "/" not in model:
+        return None
+    provider_id = model.split("/", 1)[0]
+    models = cfg.get("models")
+    if not isinstance(models, dict):
+        return None
+    providers = models.get("providers")
+    if not isinstance(providers, dict):
+        return None
+    provider = providers.get(provider_id)
+    if not isinstance(provider, dict):
+        return None
+    patched = json.loads(json.dumps(cfg))
+    patched_provider = patched["models"]["providers"][provider_id]
+    patched_provider["baseUrl"] = _openclaw_provider_proxy_url(provider, proxy_url)
+    patched_provider.pop("base_url", None)
+    return patched
+
+
+def _openclaw_reverse_env(port: int, cmd_args: Sequence[str] = ()) -> dict[str, str]:
+    proxy_url = f"http://127.0.0.1:{port}"
+    cfg = _read_openclaw_config(_openclaw_config_path())
+    if cfg:
+        patched = _openclaw_config_with_proxy(cfg, proxy_url, cmd_args)
+        if patched:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".openclaw.json", delete=False) as f:
+                json.dump(patched, f, indent=2)
+                f.write("\n")
+                tmp_path = f.name
+            return {"OPENCLAW_CONFIG_PATH": tmp_path, _OPENCLAW_CLEANUP_ENV: tmp_path}
+    return _openclaw_fallback_reverse_env(proxy_url, cmd_args)
+
+
+def _openclaw_fallback_reverse_env(proxy_url: str, cmd_args: Sequence[str] = ()) -> dict[str, str]:
+    provider = _openclaw_fallback_provider(cmd_args)
+    if provider == "anthropic":
+        return {"ANTHROPIC_BASE_URL": proxy_url}
+    if provider in {"gemini", "google"}:
+        return {"GOOGLE_GEMINI_BASE_URL": proxy_url}
+    if provider == "openrouter":
+        return {"OPENROUTER_BASE_URL": proxy_url}
+    return {"OPENAI_BASE_URL": f"{proxy_url}/v1"}
+
+
+def _openclaw_fallback_provider(cmd_args: Sequence[str] = ()) -> str:
+    model = _openclaw_primary_model({}, cmd_args)
+    if model and "/" in model:
+        return model.split("/", 1)[0]
+    for env_key, provider in (
+        ("OPENAI_API_KEY", "openai"),
+        ("ANTHROPIC_API_KEY", "anthropic"),
+        ("GEMINI_API_KEY", "gemini"),
+        ("GOOGLE_API_KEY", "gemini"),
+        ("OPENROUTER_API_KEY", "openrouter"),
+    ):
+        if os.environ.get(env_key):
+            return provider
+    return "openai"
+
+
+def _opencode_reverse_env(port: int) -> dict[str, str]:
+    proxy_url = f"http://127.0.0.1:{port}"
+    return {
+        "ANTHROPIC_BASE_URL": proxy_url,
+        "OPENAI_BASE_URL": f"{proxy_url}/v1",
+        "GOOGLE_GEMINI_BASE_URL": proxy_url,
+    }
+
+
+def _multi_provider_reverse_env(port: int) -> dict[str, str]:
+    proxy_url = f"http://127.0.0.1:{port}"
+    return {
+        "KIMI_BASE_URL": proxy_url,
+        "MOONSHOT_BASE_URL": f"{proxy_url}/v1",
+        "OPENAI_BASE_URL": f"{proxy_url}/v1",
+        "ANTHROPIC_BASE_URL": proxy_url,
+        "GOOGLE_GEMINI_BASE_URL": proxy_url,
+        "OPENROUTER_BASE_URL": f"{proxy_url}/v1",
+        "CUSTOM_BASE_URL": f"{proxy_url}/v1",
+    }
+
+
+def _detect_openclaw_target(cmd_args: Sequence[str] = ()) -> str:
+    cfg = _read_openclaw_config(_openclaw_config_path())
+    if cfg:
+        model = _openclaw_primary_model(cfg, cmd_args)
+        if model and "/" in model:
+            provider_id = model.split("/", 1)[0]
+            models = cfg.get("models")
+            providers = models.get("providers") if isinstance(models, dict) else None
+            provider = providers.get(provider_id) if isinstance(providers, dict) else None
+            if isinstance(provider, dict):
+                base = provider.get("baseUrl") or provider.get("base_url")
+                if isinstance(base, str) and base.strip():
+                    return _openclaw_provider_target_url(provider, base)
+    for env_key, target in (
+        ("OPENAI_API_KEY", "https://api.openai.com"),
+        ("ANTHROPIC_API_KEY", "https://api.anthropic.com"),
+        ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com"),
+        ("GOOGLE_API_KEY", "https://generativelanguage.googleapis.com"),
+        ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+    ):
+        if os.environ.get(env_key):
+            return target
+    return CLIENT_CONFIGS["openclaw"].default_target
+
+
 TARGET_DETECTORS = {
     "claude": _detect_claude_target,
     "codex": _detect_codex_target,
     "codebuddy": _detect_codebuddy_target,
+    "openclaw": _detect_openclaw_target,
 }

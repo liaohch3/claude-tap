@@ -97,6 +97,33 @@ async def test_run_client_opencode_reverse_sets_anthropic_base_url(monkeypatch) 
     code = await run_client(43123, ["run", "hello"], client="opencode", proxy_mode="reverse")
 
     assert code == 0
-    assert captured["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:43123"
+    env = captured["env"]
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:43123"
+    assert "OPENAI_BASE_URL" not in env
+    assert "GOOGLE_GEMINI_BASE_URL" not in env
+    # Reverse mode for opencode must not inject a codex-only -c flag
+    assert captured["cmd"] == ("/tmp/opencode", "run", "hello")
+
+
+@pytest.mark.asyncio
+async def test_run_client_opencode_capture_only_reverse_sets_multi_provider_urls(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/opencode")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["run", "hello"], client="opencode", proxy_mode="reverse", capture_only=True)
+
+    assert code == 0
+    env = captured["env"]
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:43123"
+    assert env["OPENAI_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    assert env["GOOGLE_GEMINI_BASE_URL"] == "http://127.0.0.1:43123"
     # Reverse mode for opencode must not inject a codex-only -c flag
     assert captured["cmd"] == ("/tmp/opencode", "run", "hello")

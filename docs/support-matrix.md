@@ -23,14 +23,13 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy (Google endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Gemini CLI | API key / Vertex-compatible config (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE | Unit-tested |
-| Kimi CLI | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested |
-| Kimi CLI | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
+| Kimi CLI | Kimi CLI auth/config (`--tap-proxy-mode reverse`) | Kimi Code via `KIMI_BASE_URL`; prompt export capture-only also probes common provider env vars | none for Kimi Code | HTTP/SSE Chat Completions | Unit-tested |
 | OpenCode | Provider creds via `opencode providers` (OpenAI OAuth and OpenCode free provider verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Real E2E verified |
-| OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
+| OpenCode | Anthropic provider (`--tap-proxy-mode reverse`) | `ANTHROPIC_BASE_URL`; prompt export capture-only also probes OpenAI/Gemini env vars | none | HTTP/SSE | Unit-tested |
 | Pi | Provider creds via Pi `/login` or `PI_CODING_AGENT_DIR` auth file (`openai-codex` OAuth verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE + WebSocket | Real E2E verified |
 | Pi | Custom OpenAI-compatible setup (`--tap-proxy-mode reverse`) | `https://api.openai.com` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
-| Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
+| Hermes Agent | OpenAI-compatible env config (`--tap-proxy-mode reverse`) | `OPENAI_BASE_URL`; prompt export capture-only also probes common provider env vars | none | HTTP/SSE | Unit-tested |
 | Cursor CLI | Cursor login (`cursor-agent login`) | Forward proxy to `https://api2.cursor.sh` | n/a | HTTPS/protobuf + local transcript import | Real E2E verified |
 | Qoder CLI | Qoder login / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy (Qoder endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Antigravity CLI | Antigravity login | Forward proxy + `CLOUD_CODE_URL` bridge to `https://daily-cloudcode-pa.googleapis.com` | `CLOUD_CODE_URL` | HTTP/SSE | Manual E2E verified; launch env, Code Assist bridge, and automatic macOS user-keychain CA trust are unit-tested |

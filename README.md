@@ -231,7 +231,7 @@ claude-tap --tap-client codex -- --full-auto
 <details>
 <summary>Kimi CLI examples</summary>
 
-Kimi CLI uses reverse proxy mode by default through `KIMI_BASE_URL`. Use your existing Kimi CLI auth/config; the default upstream target is the Kimi Code API.
+Kimi CLI uses reverse proxy mode by default through `KIMI_BASE_URL`. Prompt export mode also sets common provider base URL env vars so capture-only runs can catch whichever provider the local Kimi config selects without routing a real upstream request.
 
 ```bash
 claude-tap --tap-client kimi
@@ -273,7 +273,7 @@ claude-tap --tap-client opencode
 # Live viewer is enabled by default
 claude-tap --tap-client opencode
 
-# Reverse mode — only works when using Anthropic provider (single ANTHROPIC_BASE_URL)
+# Reverse mode — single Anthropic provider via ANTHROPIC_BASE_URL
 claude-tap --tap-client opencode --tap-proxy-mode reverse
 ```
 
@@ -315,8 +315,8 @@ claude-tap --tap-client hermes
 # would not go through the proxy and no traces would be recorded.
 claude-tap --tap-client hermes -- gateway start
 
-# Reverse mode is opt-in and only useful when ~/.hermes is configured with an
-# OpenAI-compatible provider that reads OPENAI_BASE_URL.
+# Reverse mode is opt-in for OpenAI-compatible Hermes env config via OPENAI_BASE_URL.
+# Prompt export mode also probes common provider env vars without routing real upstream.
 claude-tap --tap-client hermes --tap-proxy-mode reverse
 ```
 
@@ -409,6 +409,9 @@ claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 # Export a portable compact trace bundle, then render it later
 claude-tap export <session-id> --format compact -o trace.ctap.json
 claude-tap export trace.ctap.json -o trace.html
+
+# Capture only the prompt surface for automation; also writes trace.jsonl next to prompt.md
+claude-tap --tap-export-prompt prompt.md -- -p "hello"
 
 # Embed the exported viewer in an iframe with reduced chrome
 # trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light

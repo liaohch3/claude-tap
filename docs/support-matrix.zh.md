@@ -23,14 +23,13 @@ English version: [Support Matrix](support-matrix.md).
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | 已验证 |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy（Google 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | Gemini CLI | API key / Vertex 兼容配置（`--tap-proxy-mode reverse`） | `https://generativelanguage.googleapis.com` | 无 | HTTP/SSE | 单测覆盖 |
-| Kimi CLI | Kimi CLI 认证/配置 | `https://api.kimi.com/coding/v1` | 无 | HTTP/SSE Chat Completions | 单测覆盖 |
-| Kimi CLI | Kimi CLI 认证/配置 | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 配置支持 |
+| Kimi CLI | Kimi CLI 认证/配置（`--tap-proxy-mode reverse`） | 通过 `KIMI_BASE_URL` 连接 Kimi Code；prompt 导出 capture-only 还会探测常见 provider 环境变量 | Kimi Code 无 | HTTP/SSE Chat Completions | 单测覆盖 |
 | OpenCode | 通过 `opencode providers` 配置 provider 凭据（OpenAI OAuth 与 OpenCode free provider 均已验证） | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 真实 E2E 已验证 |
-| OpenCode | 仅 Anthropic provider（`--tap-proxy-mode reverse`） | `https://api.anthropic.com` | 无 | HTTP/SSE | 单测覆盖 |
+| OpenCode | Anthropic provider（`--tap-proxy-mode reverse`） | `ANTHROPIC_BASE_URL`；prompt 导出 capture-only 还会探测 OpenAI/Gemini 环境变量 | 无 | HTTP/SSE | 单测覆盖 |
 | Pi | 通过 Pi `/login` 或 `PI_CODING_AGENT_DIR` auth 文件配置 provider 凭据（`openai-codex` OAuth 已验证） | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE + WebSocket | 真实 E2E 已验证 |
 | Pi | 自定义 OpenAI 兼容配置（`--tap-proxy-mode reverse`） | `https://api.openai.com` | 无 | HTTP/SSE | 单测覆盖 |
 | Hermes Agent | 通过 `~/.hermes/` 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
-| Hermes Agent | 自定义 OpenAI 兼容 provider（`--tap-proxy-mode reverse`） | `https://api.openai.com` | `/v1` | HTTP/SSE | 单测覆盖 |
+| Hermes Agent | OpenAI 兼容环境变量配置（`--tap-proxy-mode reverse`） | `OPENAI_BASE_URL`；prompt 导出 capture-only 还会探测常见 provider 环境变量 | 无 | HTTP/SSE | 单测覆盖 |
 | Cursor CLI | Cursor 登录（`cursor-agent login`） | Forward proxy 到 `https://api2.cursor.sh` | n/a | HTTPS/protobuf + 本地 transcript import | 真实 E2E 已验证 |
 | Qoder CLI | Qoder 登录 / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy（Qoder 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | Antigravity CLI | Antigravity 登录 | Forward proxy + `CLOUD_CODE_URL` bridge 到 `https://daily-cloudcode-pa.googleapis.com` | `CLOUD_CODE_URL` | HTTP/SSE | 手动 E2E 已验证；启动环境、Code Assist bridge 和 macOS 用户 keychain CA 自动信任已由单测覆盖 |
