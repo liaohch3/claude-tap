@@ -1628,7 +1628,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); widt
     min-height: 0 !important;
     border-bottom: 0;
   }
-  #sidebar-wrap:not(.mobile-hidden) {
+  #sidebar-wrap.has-trace-list:not(.mobile-hidden) {
     display: flex !important;
   }
   #detail:not(.mobile-fullwidth) {
@@ -1760,7 +1760,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); widt
   }
   .action-bar {
     position: sticky;
-    top: 0;
+    top: 52px;
+    z-index: 7;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;

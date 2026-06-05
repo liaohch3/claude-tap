@@ -2001,6 +2001,7 @@ def test_viewer_empty_embedded_trace_renders_explicit_no_api_calls_state(tmp_pat
     page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
     page.on("console", lambda msg: errors.append(f"console.error: {msg.text}") if msg.type == "error" else None)
     try:
+        page.set_viewport_size({"width": 320, "height": 760})
         page.goto(html_path.resolve().as_uri(), timeout=10000)
         page.wait_for_selector(".empty-trace-state", timeout=5000)
         state = page.evaluate(
@@ -2011,6 +2012,7 @@ def test_viewer_empty_embedded_trace_renders_explicit_no_api_calls_state(tmp_pat
               hint: document.querySelector('#empty-trace-hint')?.textContent || '',
               sidebarItemCount: document.querySelectorAll('.sidebar-item').length,
               sidebarDisplay: getComputedStyle(document.querySelector('#sidebar-wrap')).display,
+              sidebarHasListState: document.querySelector('#sidebar-wrap')?.classList.contains('has-trace-list'),
               detailDisplay: getComputedStyle(document.querySelector('#detail')).display,
               pathText: document.querySelector('#trace-path-bar')?.innerText || '',
               oldDropTitlePresent: Boolean(document.querySelector('#drop-title')),
@@ -2027,6 +2029,7 @@ def test_viewer_empty_embedded_trace_renders_explicit_no_api_calls_state(tmp_pat
     assert "real empty run" in state["hint"]
     assert state["sidebarItemCount"] == 0
     assert state["sidebarDisplay"] == "none"
+    assert state["sidebarHasListState"] is False
     assert state["detailDisplay"] == "none"
     assert "empty_trace.jsonl" in state["pathText"]
     assert "empty_trace.html" in state["pathText"]
@@ -2282,7 +2285,13 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
             page.set_viewport_size({"width": width, "height": height})
             page.evaluate("theme => document.documentElement.setAttribute('data-theme', theme)", theme)
             if mobile:
-                page.evaluate("mobileShowDetail()")
+                page.evaluate(
+                    """() => {
+                      mobileShowDetail();
+                      const detail = document.querySelector('#detail');
+                      if (detail) detail.scrollTop = 180;
+                    }"""
+                )
             return page.evaluate(
                 """() => {
                   const rect = selector => {
@@ -2305,6 +2314,7 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
                     toolBlock: rect('.tool-block'),
                     response: rect('.section-body.open .content-block'),
                     sectionCount: document.querySelectorAll('#detail .section').length,
+                    inspector: rect('.detail-inspector-bar'),
                     actionBar: rect('.action-bar'),
                     actionBarOverflow: actionBar ? actionBar.scrollWidth - actionBar.clientWidth : null,
                     actionButtons: actionBar ? Array.from(actionBar.querySelectorAll('.act-btn')).map(el => {
@@ -2408,6 +2418,7 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
     assert mobile_narrow_detail["detail"]["width"] == 320
     assert mobile_narrow_detail["detail"]["left"] == 0
     assert mobile_narrow_detail["actionBarOverflow"] <= 2
+    assert mobile_narrow_detail["actionBar"]["top"] >= mobile_narrow_detail["inspector"]["bottom"] - 1
     assert mobile_narrow_detail["actionButtons"]
     assert any(button["text"] == "Diff with Prev" for button in mobile_narrow_detail["actionButtons"])
     for button in mobile_narrow_detail["actionButtons"]:

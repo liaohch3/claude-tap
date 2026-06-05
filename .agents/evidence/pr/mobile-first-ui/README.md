@@ -2,8 +2,8 @@ Mobile-first UI evidence captured from a real Claude Code trace.
 
 Source trace data:
 
-- Temporary capture database: `/tmp/ct-mobile-evidence/traces.sqlite3`
-- Session id: `86f7471f-4089-42a2-ac03-0f58a75de45f`
+- Local trace database: `.traces/mobile-first-ui/traces.sqlite3`
+- Session id: `600fd026-dbab-4d44-b19f-8df27536398d`
 - Session model: `claude-sonnet-4-6`
 - Session prompt: `Reply exactly: mobile-layout-real-trace-ok`
 - API records: 2
@@ -11,12 +11,12 @@ Source trace data:
 Trace capture:
 
 ```bash
-CLOUDTAP_DB=/tmp/ct-mobile-evidence/traces.sqlite3 \
+CLOUDTAP_DB=.traces/mobile-first-ui/traces.sqlite3 \
   timeout 45s uv run python -m claude_tap \
   --tap-no-live \
   --tap-no-open \
   --tap-no-update-check \
-  --tap-output-dir /tmp/ct-mobile-evidence/out \
+  --tap-output-dir .traces/mobile-first-ui/out \
   -- -p --tools '' --no-session-persistence --max-budget-usd 0.03 \
   'Reply exactly: mobile-layout-real-trace-ok'
 ```
@@ -24,9 +24,9 @@ CLOUDTAP_DB=/tmp/ct-mobile-evidence/traces.sqlite3 \
 Local dashboard server:
 
 ```bash
-CLOUDTAP_DB=/tmp/ct-mobile-evidence/traces.sqlite3 \
+CLOUDTAP_DB=.traces/mobile-first-ui/traces.sqlite3 \
   uv run claude-tap dashboard \
-  --tap-output-dir /tmp/ct-mobile-evidence/out \
+  --tap-output-dir .traces/mobile-first-ui/out \
   --tap-live-port 33117 \
   --tap-no-open
 ```
@@ -50,10 +50,13 @@ Capture assertions:
 - Every captured viewport reported page-level `overflowX <= 2`.
 - Dashboard mobile refresh control renders as an icon with `aria-label="Refresh"`, not a literal `R`.
 - Viewer mobile detail action buttons stay inside the action bar, including `Diff with Prev`.
+- Viewer mobile detail action bar stays below the sticky detail inspector tabs after scrolling.
+- Empty embedded traces keep the sidebar hidden at mobile width.
 - Viewer detail evidence keeps long `System Prompt` and `Messages` sections collapsed to avoid exposing local paths or private prompt context in public PR screenshots.
 
 Manual screenshot review:
 
 - No mobile screenshot shows clipped primary actions.
+- No mobile detail screenshot shows action buttons hidden under the detail inspector tabs.
 - No screenshot shows synthetic or mock trace data.
 - No screenshot exposes secrets, tokens, local email addresses, or expanded long prompt context.
