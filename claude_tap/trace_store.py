@@ -29,7 +29,7 @@ from claude_tap.compact_trace import (
 
 DB_FILENAME = "traces.sqlite3"
 SCHEMA_VERSION = 4
-SQLITE_BUSY_TIMEOUT_MS = 30000
+SQLITE_BUSY_TIMEOUT_MS = 1000
 SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000
 SQLITE_MAINTENANCE_WRITES = 100
 FALLBACK_TRACE_SUFFIX = ".fallback.jsonl"
@@ -210,10 +210,14 @@ class TraceStore:
 
             updated_at = datetime.now(timezone.utc).isoformat()
             if isinstance(existing_summary, dict):
-                existing_summary["status"] = status
-                existing_summary["id"] = session_id
-                existing_summary["updated_at"] = updated_at
-                summary_json_str = json.dumps(existing_summary, ensure_ascii=False, separators=(",", ":"))
+                final_summary = {
+                    **existing_summary,
+                    **(summary or {}),
+                    "status": status,
+                    "id": session_id,
+                    "updated_at": updated_at,
+                }
+                summary_json_str = json.dumps(final_summary, ensure_ascii=False, separators=(",", ":"))
             else:
                 summary_json_str = json.dumps(summary, ensure_ascii=False, separators=(",", ":")) if summary else None
 
@@ -807,13 +811,22 @@ class TraceStore:
     def _write_access(self) -> Iterator[None]:
         with self._write_lock:
             with self._process_write_lock():
-                yield
+                try:
+                    yield
+                except sqlite3.Error:
+                    conn = getattr(self._tls, "conn", None)
+                    if conn is not None:
+                        _rollback_if_needed(conn)
+                    raise
 
     @contextmanager
     def _process_write_lock(self) -> Iterator[None]:
         self._write_lock_path.parent.mkdir(parents=True, exist_ok=True)
         with self._write_lock_path.open("a+b") as lock_file:
-            _lock_file_exclusive(lock_file)
+            try:
+                _lock_file_exclusive(lock_file)
+            except OSError as exc:
+                raise sqlite3.OperationalError(f"trace write lock unavailable: {exc}") from exc
             try:
                 yield
             finally:
@@ -863,9 +876,9 @@ class TraceStore:
         }
         line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         with self._fallback_lock:
-            with fallback_path.open("a", encoding="utf-8") as file:
-                file.write(line)
-                file.write("\n")
+            with self._process_write_lock():
+                with fallback_path.open("ab") as file:
+                    file.write(f"{line}\n".encode("utf-8"))
         return fallback_path
 
     def _ensure_schema_once(self, conn: sqlite3.Connection) -> None:
@@ -1188,6 +1201,14 @@ def _unlock_file(lock_file: Any) -> None:
     import fcntl
 
     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _rollback_if_needed(conn: sqlite3.Connection) -> None:
+    try:
+        if conn.in_transaction:
+            conn.rollback()
+    except sqlite3.Error:
+        pass
 
 
 def _read_jsonl_file(path: Path) -> list[dict[str, Any]]:

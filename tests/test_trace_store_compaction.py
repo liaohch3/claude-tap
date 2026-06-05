@@ -6,7 +6,10 @@ import json
 import sqlite3
 import sys
 import types
+from contextlib import contextmanager
 from copy import deepcopy
+
+import pytest
 
 import claude_tap.trace_store as trace_store_module
 from claude_tap.trace_store import (
@@ -161,6 +164,17 @@ def test_trace_store_reads_legacy_full_payload_rows(trace_db) -> None:
 
 def test_trace_store_writes_fallback_jsonl_entries(trace_db) -> None:
     store = TraceStore(trace_db)
+    lock_events: list[str] = []
+
+    @contextmanager
+    def record_process_lock():
+        lock_events.append("lock")
+        try:
+            yield
+        finally:
+            lock_events.append("unlock")
+
+    store._process_write_lock = record_process_lock
 
     record_path = store.append_fallback_record(
         "fallback-session",
@@ -193,6 +207,63 @@ def test_trace_store_writes_fallback_jsonl_entries(trace_db) -> None:
     }
     assert all(entry["error"] == "database is locked" for entry in entries)
     assert all("timestamp" in entry for entry in entries)
+    assert lock_events == ["lock", "unlock", "lock", "unlock", "lock", "unlock"]
+
+
+def test_trace_store_rolls_back_failed_append_record_transaction(trace_db, monkeypatch) -> None:
+    store = TraceStore(trace_db)
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+
+    def fail_refresh_summary(*args, **kwargs) -> None:
+        raise sqlite3.OperationalError("summary update failed")
+
+    monkeypatch.setattr(store, "_refresh_summary_after_append", fail_refresh_summary)
+
+    with pytest.raises(sqlite3.OperationalError, match="summary update failed"):
+        store.append_record(session_id, _large_codex_record(1, instructions="rollback", tools=[]))
+
+    conn = store._connect()
+    assert not conn.in_transaction
+    assert conn.execute("SELECT COUNT(*) FROM records WHERE session_id = ?", (session_id,)).fetchone()[0] == 0
+    assert conn.execute("SELECT record_count FROM sessions WHERE id = ?", (session_id,)).fetchone()[0] == 0
+
+
+def test_finalize_session_merges_storage_error_counters_into_cached_summary(trace_db) -> None:
+    store = TraceStore(trace_db)
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(session_id, _large_codex_record(1, instructions="summary", tools=[]))
+
+    store.finalize_session(
+        session_id,
+        {
+            "api_calls": 1,
+            "trace_storage_errors": 2,
+            "spooled_trace_records": 1,
+            "spooled_trace_summaries": 1,
+            "dropped_trace_records": 0,
+        },
+    )
+
+    row = store.load_session_row(session_id)
+    assert row is not None
+    summary = json.loads(row["summary_json"])
+    assert summary["api_calls"] == 1
+    assert summary["trace_storage_errors"] == 2
+    assert summary["spooled_trace_records"] == 1
+    assert summary["spooled_trace_summaries"] == 1
+    assert summary["dropped_trace_records"] == 0
+
+
+def test_process_write_lock_converts_os_lock_failures_to_sqlite_errors(trace_db, monkeypatch) -> None:
+    store = TraceStore(trace_db)
+
+    def fail_lock(lock_file) -> None:
+        raise OSError("lock denied")
+
+    monkeypatch.setattr(trace_store_module, "_lock_file_exclusive", fail_lock)
+
+    with pytest.raises(sqlite3.OperationalError, match="trace write lock unavailable"):
+        store.create_session(client="codex", proxy_mode="reverse")
 
 
 def test_trace_store_ignores_checkpoint_errors_after_maintenance_writes(trace_db) -> None:

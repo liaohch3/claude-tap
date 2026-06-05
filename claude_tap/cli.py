@@ -9,9 +9,11 @@ import logging
 # Keep the stdlib module object available as claude_tap.cli.shutil for
 # existing tests and private integrations that monkeypatch shutil.which there.
 import shutil
+import sqlite3
 import sys
 import threading
 import time
+import uuid
 import webbrowser
 from pathlib import Path
 
@@ -212,7 +214,12 @@ async def async_main(args: argparse.Namespace):
         if trust_result != 0:
             return trust_result
 
-    session_id = store.create_session(client=args.client, proxy_mode=args.proxy_mode)
+    session_create_error: sqlite3.Error | None = None
+    try:
+        session_id = store.create_session(client=args.client, proxy_mode=args.proxy_mode)
+    except sqlite3.Error as exc:
+        session_id = str(uuid.uuid4())
+        session_create_error = exc
 
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
@@ -235,6 +242,8 @@ async def async_main(args: argparse.Namespace):
             print(f"⚠️  {exc}", file=sys.stderr)
 
     writer = TraceWriter(session_id, live_server=None, metadata=trace_metadata, store=store)
+    if session_create_error is not None:
+        writer.record_startup_storage_error(session_create_error)
 
     # Proxy logs go to SQLite, not terminal (avoids polluting Claude TUI)
     sqlite_handler = SQLiteLogHandler(session_id, store=store)
@@ -369,9 +378,13 @@ async def async_main(args: argparse.Namespace):
         writer.close()
 
         if args.max_traces > 0:
-            cleaned = cleanup_trace_sessions(args.max_traces, protected_session_id=session_id)
-            if cleaned:
-                print(f"\n🧹 Cleaned up {cleaned} old trace session(s)")
+            try:
+                cleaned = cleanup_trace_sessions(args.max_traces, protected_session_id=session_id)
+            except sqlite3.Error as exc:
+                print(f"\nclaude-tap: trace cleanup skipped because storage is unavailable ({exc})", file=sys.stderr)
+            else:
+                if cleaned:
+                    print(f"\n🧹 Cleaned up {cleaned} old trace session(s)")
 
         # Print summary with cost estimation
         stats = writer.get_summary()

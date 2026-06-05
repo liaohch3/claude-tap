@@ -179,3 +179,44 @@ async def test_trace_writer_storage_errors_spool_fallback_without_interrupting_p
     assert [entry["kind"] for entry in fallback_entries] == ["record", "summary"]
     assert fallback_entries[0]["payload"]["request"]["body"]["model"] == "gpt-5.4"
     assert fallback_entries[1]["payload"]["spooled_trace_records"] == 1
+    assert fallback_entries[1]["payload"]["spooled_trace_summaries"] == 1
+    assert fallback_entries[1]["payload"]["trace_storage_errors"] == 2
+
+
+def test_trace_writer_spools_final_summary_when_startup_session_create_failed(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class StartupLockedStore:
+        def __init__(self) -> None:
+            self.fallback_path = tmp_path / "traces.sqlite3.fallback.jsonl"
+
+        def append_fallback_summary(self, session_id: str, summary: dict, exc: sqlite3.Error) -> Path:
+            with self.fallback_path.open("a", encoding="utf-8") as file:
+                file.write(
+                    json.dumps(
+                        {
+                            "kind": "summary",
+                            "session_id": session_id,
+                            "error": str(exc),
+                            "payload": summary,
+                        }
+                    )
+                )
+                file.write("\n")
+            return self.fallback_path
+
+    locked_store = StartupLockedStore()
+    writer = TraceWriter("startup-locked-session", store=cast(Any, locked_store))
+    writer.record_startup_storage_error(sqlite3.OperationalError("database is locked"))
+
+    writer.close()
+
+    assert capsys.readouterr().err.count("trace storage failed; continuing without blocking proxy") == 1
+    fallback_entries = [
+        json.loads(line) for line in locked_store.fallback_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [entry["kind"] for entry in fallback_entries] == ["summary"]
+    assert fallback_entries[0]["session_id"] == "startup-locked-session"
+    assert fallback_entries[0]["payload"]["trace_storage_errors"] == 1
+    assert fallback_entries[0]["payload"]["spooled_trace_summaries"] == 1

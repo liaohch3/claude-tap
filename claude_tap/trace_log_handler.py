@@ -51,7 +51,7 @@ class SQLiteLogHandler(logging.Handler):
                     logged_at=logged_at,
                     error=exc,
                 )
-            except OSError:
+            except (OSError, sqlite3.Error):
                 fallback_path = None
         if self._storage_warning_emitted:
             return

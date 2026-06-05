@@ -42,6 +42,7 @@ class TraceWriter:
         self.spooled_trace_summaries = 0
         self.dropped_trace_records = 0
         self._storage_warning_emitted = False
+        self._startup_storage_error: sqlite3.Error | None = None
 
     async def write(self, record: dict) -> None:
         """Write a record and update statistics."""
@@ -66,14 +67,33 @@ class TraceWriter:
 
     def close(self) -> None:
         """Finalize the active session in SQLite."""
+        if self._startup_storage_error is not None:
+            self.spooled_trace_summaries += 1
+            fallback_path = self._spool_fallback(
+                "append_fallback_summary",
+                self.get_summary(),
+                self._startup_storage_error,
+            )
+            if fallback_path is None:
+                self.spooled_trace_summaries -= 1
+            return
+
         summary = self.get_summary()
         try:
             self._store.finalize_session(self.session_id, summary)
         except sqlite3.Error as exc:
-            fallback_path = self._spool_fallback("append_fallback_summary", summary, exc)
-            if fallback_path is not None:
-                self.spooled_trace_summaries += 1
-            self._record_storage_error(exc, fallback_path)
+            self.storage_error_count += 1
+            self.spooled_trace_summaries += 1
+            fallback_path = self._spool_fallback("append_fallback_summary", self.get_summary(), exc)
+            if fallback_path is None:
+                self.spooled_trace_summaries -= 1
+            if not self._storage_warning_emitted:
+                self._emit_storage_warning(exc, fallback_path)
+
+    def record_startup_storage_error(self, exc: sqlite3.Error) -> None:
+        """Record that the initial SQLite session row could not be created."""
+        self._startup_storage_error = exc
+        self._record_storage_error(exc, None)
 
     def _update_stats(self, record: dict) -> None:
         req_body = record.get("request", {}).get("body", {})
@@ -105,7 +125,7 @@ class TraceWriter:
             return None
         try:
             result = method(self.session_id, payload, exc)
-        except OSError:
+        except (OSError, sqlite3.Error):
             return None
         return result if isinstance(result, Path) else None
 
@@ -113,6 +133,9 @@ class TraceWriter:
         self.storage_error_count += 1
         if self._storage_warning_emitted:
             return
+        self._emit_storage_warning(exc, fallback_path)
+
+    def _emit_storage_warning(self, exc: sqlite3.Error, fallback_path: Path | None) -> None:
         self._storage_warning_emitted = True
         if fallback_path is None:
             sys.stderr.write(f"claude-tap: trace storage failed; continuing without blocking proxy ({exc})\n")

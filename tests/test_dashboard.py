@@ -111,6 +111,41 @@ def test_sqlite_log_handler_storage_errors_spool_fallback_without_logging_traceb
     assert fallback_entries[0]["payload"]["message"] == "locked"
 
 
+def test_sqlite_log_handler_suppresses_fallback_lock_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class LockedStore:
+        fallback_path = tmp_path / "traces.sqlite3.fallback.jsonl"
+
+        def append_log(
+            self, session_id: str, message: str, *, level: str = "INFO", logged_at: str | None = None
+        ) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        def append_fallback_log(
+            self,
+            session_id: str,
+            message: str,
+            *,
+            level: str,
+            logged_at: str | None,
+            error: sqlite3.Error,
+        ) -> Path:
+            raise sqlite3.OperationalError("trace write lock unavailable")
+
+    def fail_handle_error(record: logging.LogRecord) -> None:
+        pytest.fail("Fallback lock errors should not be routed through logging.handleError")
+
+    handler = SQLiteLogHandler("locked-session", store=cast(Any, LockedStore()))
+    handler.handleError = fail_handle_error
+
+    handler.emit(logging.LogRecord("test", logging.INFO, __file__, 1, "locked", (), None))
+
+    assert "proxy log storage failed (database is locked)" in capsys.readouterr().err
+    assert not LockedStore.fallback_path.exists()
+
+
 def test_dashboard_lists_sessions_by_normalized_updated_at(trace_db) -> None:
     store = get_trace_store()
     older = store.create_session(started_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc))
