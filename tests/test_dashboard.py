@@ -449,7 +449,8 @@ def test_dashboard_template_exposes_quit_control() -> None:
     assert 'id="dashboard-quit"' in template
     assert "quit_dashboard_confirm" in template
     assert "function quitDashboard()" in template
-    assert 'fetchJSON("/dashboard/quit", {method: "POST"})' in template
+    assert 'const DASHBOARD_QUIT_TOKEN = "";' in template
+    assert '"X-Claude-Tap-Dashboard-Token": DASHBOARD_QUIT_TOKEN' in template
 
 
 def test_dashboard_summarize_session_and_migration(trace_db, tmp_path: Path) -> None:
@@ -952,7 +953,24 @@ async def test_dashboard_server_quit_route_stops_dashboard(trace_db) -> None:
     try:
         timeout = aiohttp.ClientTimeout(total=3)
         async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"http://127.0.0.1:{port}/dashboard") as resp:
+                assert resp.status == 200
+                assert f'const DASHBOARD_QUIT_TOKEN = "{server._dashboard_quit_token}";' in await resp.text()
+
             async with session.post(f"http://127.0.0.1:{port}/dashboard/quit") as resp:
+                assert resp.status == 403
+                payload = await resp.json()
+                assert payload["ok"] is False
+
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
+                assert resp.status == 200
+                health = await resp.json()
+                assert health["quit_token"] == server._dashboard_quit_token
+
+            async with session.post(
+                f"http://127.0.0.1:{port}/dashboard/quit",
+                headers={"X-Claude-Tap-Dashboard-Token": health["quit_token"]},
+            ) as resp:
                 assert resp.status == 200
                 assert await resp.json() == {"ok": True}
 

@@ -1013,6 +1013,7 @@ pre {
 
 <script>
 const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
+const DASHBOARD_QUIT_TOKEN = "";
 
 const state = {
   sessions: [],
@@ -1387,7 +1388,10 @@ async function quitDashboard() {
   $("#live-label").textContent = t("quitting_dashboard");
 
   try {
-    await fetchJSON("/dashboard/quit", {method: "POST"});
+    await fetchJSON("/dashboard/quit", {
+      method: "POST",
+      headers: {"X-Claude-Tap-Dashboard-Token": DASHBOARD_QUIT_TOKEN},
+    });
     $("#live-label").textContent = t("dashboard_stopped");
   } catch (error) {
     state.quittingDashboard = false;

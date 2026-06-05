@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import secrets
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -32,6 +33,7 @@ from claude_tap.viewer import (
 )
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DASHBOARD_QUIT_TOKEN_HEADER = "X-Claude-Tap-Dashboard-Token"
 
 
 def _record_limit_from_request(request: web.Request) -> int | None:
@@ -83,6 +85,7 @@ class LiveViewerServer:
         self._stop_lock = asyncio.Lock()
         self._dashboard_watch_task: asyncio.Task | None = None
         self._dashboard_snapshot: dict[str, tuple[str, int, str]] = {}
+        self._dashboard_quit_token = secrets.token_urlsafe(32)
 
     async def start(self) -> int:
         """Start the viewer server and return the actual port."""
@@ -204,6 +207,11 @@ class LiveViewerServer:
             html = read_dashboard_template()
         except OSError:
             return web.Response(status=404, text="dashboard.html not found")
+        html = html.replace(
+            'const DASHBOARD_QUIT_TOKEN = "";',
+            f"const DASHBOARD_QUIT_TOKEN = {json.dumps(self._dashboard_quit_token)};",
+            1,
+        )
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_dashboard_session_detail(self, request: web.Request) -> web.Response:
@@ -211,12 +219,21 @@ class LiveViewerServer:
         return await self._session_html_response(request.match_info["session_id"])
 
     async def _handle_dashboard_health(self, request: web.Request) -> web.Response:
-        return web.json_response({"ok": True, "db_path": str(resolve_db_path()), "dashboard_mode": self.dashboard_mode})
+        payload = {"ok": True, "db_path": str(resolve_db_path()), "dashboard_mode": self.dashboard_mode}
+        if self.dashboard_mode:
+            payload["quit_token"] = self._dashboard_quit_token
+        return web.json_response(payload)
 
     async def _handle_dashboard_quit(self, request: web.Request) -> web.Response:
         if not self.dashboard_mode:
             return web.json_response(
                 {"ok": False, "error": "Dashboard quit is only available in dashboard mode"},
+                status=403,
+            )
+        token = request.headers.get(_DASHBOARD_QUIT_TOKEN_HEADER)
+        if token != self._dashboard_quit_token:
+            return web.json_response(
+                {"ok": False, "error": "Dashboard quit requires a same-origin token"},
                 status=403,
             )
 

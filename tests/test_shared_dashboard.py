@@ -194,11 +194,12 @@ async def test_is_dashboard_healthy_real_server(monkeypatch: pytest.MonkeyPatch,
         async with aiohttp.ClientSession() as session:
             async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
                 assert resp.status == 200
-                assert await resp.json() == {
-                    "ok": True,
-                    "db_path": str(resolve_db_path()),
-                    "dashboard_mode": True,
-                }
+                payload = await resp.json()
+                assert payload["ok"] is True
+                assert payload["db_path"] == str(resolve_db_path())
+                assert payload["dashboard_mode"] is True
+                assert isinstance(payload["quit_token"], str)
+                assert payload["quit_token"]
         assert await is_dashboard_healthy("127.0.0.1", port) is True
         assert await wait_for_dashboard_healthy("127.0.0.1", port, timeout=1.0) is True
     finally:
@@ -218,6 +219,59 @@ async def test_quit_shared_dashboard_stops_real_server(monkeypatch: pytest.Monke
         assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is False
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_quit_shared_dashboard_requires_health_token() -> None:
+    quit_called = False
+
+    async def health(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True})
+
+    async def quit_dashboard(request: web.Request) -> web.Response:
+        nonlocal quit_called
+        quit_called = True
+        return web.json_response({"ok": True})
+
+    app = web.Application()
+    app.router.add_get("/dashboard/health", health)
+    app.router.add_post("/dashboard/quit", quit_dashboard)
+    runner, port = await _start_test_app(app)
+    try:
+        assert await quit_shared_dashboard("127.0.0.1", port) is False
+        assert quit_called is False
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_quit_shared_dashboard_rejects_unhealthy_or_forbidden_server() -> None:
+    async def unhealthy(request: web.Request) -> web.Response:
+        return web.json_response({"ok": False}, status=500)
+
+    unhealthy_app = web.Application()
+    unhealthy_app.router.add_get("/dashboard/health", unhealthy)
+    unhealthy_runner, unhealthy_port = await _start_test_app(unhealthy_app)
+    try:
+        assert await quit_shared_dashboard("127.0.0.1", unhealthy_port) is False
+    finally:
+        await unhealthy_runner.cleanup()
+
+    async def health(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True, "quit_token": "test-token"})
+
+    async def forbidden_quit(request: web.Request) -> web.Response:
+        assert request.headers["X-Claude-Tap-Dashboard-Token"] == "test-token"
+        return web.json_response({"ok": False}, status=403)
+
+    forbidden_app = web.Application()
+    forbidden_app.router.add_get("/dashboard/health", health)
+    forbidden_app.router.add_post("/dashboard/quit", forbidden_quit)
+    forbidden_runner, forbidden_port = await _start_test_app(forbidden_app)
+    try:
+        assert await quit_shared_dashboard("127.0.0.1", forbidden_port) is False
+    finally:
+        await forbidden_runner.cleanup()
 
 
 @pytest.mark.asyncio

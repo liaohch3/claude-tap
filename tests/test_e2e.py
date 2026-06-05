@@ -3915,3 +3915,39 @@ async def test_dashboard_main_quits_running_dashboard(monkeypatch, tmp_path):
 
     assert await dashboard_main(args) == 0
     quit_dashboard.assert_awaited_once_with("127.0.0.1", 23456)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_quit_reports_missing_dashboard(monkeypatch, tmp_path):
+    """The dashboard quit command should fail clearly when no dashboard is running."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=False))
+    quit_dashboard = AsyncMock(return_value=True)
+    monkeypatch.setattr("claude_tap.cli.quit_shared_dashboard", quit_dashboard)
+
+    args = parse_dashboard_args(["quit", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 1
+    quit_dashboard.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_quit_reports_stop_failure(monkeypatch, tmp_path):
+    """The dashboard quit command should report stop failures after health succeeds."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+    quit_dashboard = AsyncMock(return_value=False)
+    monkeypatch.setattr("claude_tap.cli.quit_shared_dashboard", quit_dashboard)
+
+    args = parse_dashboard_args(["quit", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 1
+    quit_dashboard.assert_awaited_once_with("127.0.0.1", 23456)

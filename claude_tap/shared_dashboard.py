@@ -23,6 +23,7 @@ _DASHBOARD_HEALTH_TIMEOUT = 1.5
 _DASHBOARD_SESSIONS_HEALTH_TIMEOUT = 3.0
 _DASHBOARD_QUIT_TIMEOUT = 2.0
 _DASHBOARD_LOCK_NAME = "dashboard.lock"
+_DASHBOARD_QUIT_TOKEN_HEADER = "X-Claude-Tap-Dashboard-Token"
 
 
 def resolve_dashboard_port(explicit: int | None = None) -> int:
@@ -188,9 +189,22 @@ async def quit_shared_dashboard(host: str, port: int) -> bool:
     """Ask a running shared dashboard to stop and wait until it is gone."""
     base_url = dashboard_url(host, port)
     timeout = aiohttp.ClientTimeout(total=_DASHBOARD_QUIT_TIMEOUT)
+    status, payload = await _dashboard_get_status_and_payload(
+        f"{base_url}/dashboard/health",
+        timeout_seconds=_DASHBOARD_HEALTH_TIMEOUT,
+    )
+    if status != 200 or not isinstance(payload, dict):
+        return False
+    quit_token = payload.get("quit_token")
+    if not isinstance(quit_token, str) or not quit_token:
+        return False
+
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(f"{base_url}/dashboard/quit") as resp:
+            async with session.post(
+                f"{base_url}/dashboard/quit",
+                headers={_DASHBOARD_QUIT_TOKEN_HEADER: quit_token},
+            ) as resp:
                 if resp.status != 200:
                     return False
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
