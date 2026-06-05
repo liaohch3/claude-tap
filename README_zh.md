@@ -400,7 +400,7 @@ claude-tap --tap-no-live
 # 不启动客户端，直接浏览历史 trace
 claude-tap dashboard
 
-# 停止共享 dashboard 服务（也兼容 quit）
+# 停止共享 dashboard 服务
 claude-tap dashboard stop
 
 # 从已有 JSONL trace 重新生成自包含 HTML 查看器

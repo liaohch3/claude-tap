@@ -227,11 +227,6 @@ async def stop_shared_dashboard(host: str, port: int) -> bool:
     return await wait_for_dashboard_stopped(host, port)
 
 
-async def quit_shared_dashboard(host: str, port: int) -> bool:
-    """Backward-compatible alias for stop_shared_dashboard."""
-    return await stop_shared_dashboard(host, port)
-
-
 async def wait_for_dashboard_stopped(
     host: str,
     port: int,

@@ -17,7 +17,6 @@ from claude_tap.shared_dashboard import (
     ensure_shared_dashboard,
     is_dashboard_healthy,
     is_legacy_dashboard_healthy,
-    quit_shared_dashboard,
     resolve_dashboard_port,
     stop_shared_dashboard,
 )
@@ -225,21 +224,6 @@ async def test_stop_shared_dashboard_stops_real_server(monkeypatch: pytest.Monke
     port = await server.start()
     try:
         assert await stop_shared_dashboard("127.0.0.1", port) is True
-        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is False
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_quit_shared_dashboard_alias_stops_real_server(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from claude_tap.live import LiveViewerServer
-
-    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
-
-    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
-    port = await server.start()
-    try:
-        assert await quit_shared_dashboard("127.0.0.1", port) is True
         assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is False
     finally:
         await server.stop()

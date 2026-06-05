@@ -669,8 +669,8 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["stop", "quit"],
-        help="Use 'stop' to stop a running dashboard service instead of starting one; 'quit' is an alias",
+        choices=["stop"],
+        help="Use 'stop' to stop a running dashboard service instead of starting one",
     )
     parser.add_argument(
         "--tap-output-dir",
@@ -707,7 +707,7 @@ async def dashboard_main(args: argparse.Namespace) -> int:
 
     host = args.host
     port = resolve_dashboard_port(args.live_port)
-    if args.command in {"stop", "quit"}:
+    if args.command == "stop":
         if not await is_dashboard_healthy(host, port, require_current_db=False):
             print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
             return 1

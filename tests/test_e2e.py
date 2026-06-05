@@ -2662,9 +2662,12 @@ def test_parse_dashboard_args():
     assert a.host == "0.0.0.0"
     assert a.open_viewer is False
 
-    a = parse_dashboard_args(["quit", "--tap-live-port", "3000"])
-    assert a.command == "quit"
+    a = parse_dashboard_args(["stop", "--tap-live-port", "3000"])
+    assert a.command == "stop"
     assert a.live_port == 3000
+
+    with pytest.raises(SystemExit):
+        parse_dashboard_args(["quit"])
 
     print("  test_parse_dashboard_args PASSED")
 
@@ -3958,24 +3961,6 @@ async def test_dashboard_main_stops_running_dashboard(monkeypatch, tmp_path):
     monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
 
     args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
-
-    assert await dashboard_main(args) == 0
-    stop_dashboard.assert_awaited_once_with("127.0.0.1", 23456)
-
-
-@pytest.mark.asyncio
-async def test_dashboard_main_quit_alias_stops_running_dashboard(monkeypatch, tmp_path):
-    """The dashboard quit alias should keep working for existing users."""
-    from unittest.mock import AsyncMock
-
-    from claude_tap import dashboard_main, parse_dashboard_args
-
-    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
-    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
-    stop_dashboard = AsyncMock(return_value=True)
-    monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
-
-    args = parse_dashboard_args(["quit", "--tap-live-port", "23456"])
 
     assert await dashboard_main(args) == 0
     stop_dashboard.assert_awaited_once_with("127.0.0.1", 23456)
