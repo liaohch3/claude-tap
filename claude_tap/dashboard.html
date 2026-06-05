@@ -133,6 +133,21 @@ button { cursor: pointer; }
   font-size: 12px; line-height: 1; min-width: 72px;
 }
 .lang-select:hover { border-color: var(--blue); color: var(--blue); }
+.dashboard-quit {
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-card); color: var(--text-tertiary);
+  font-size: 15px; line-height: 1; transition: all .15s;
+}
+.dashboard-quit:hover {
+  border-color: var(--red);
+  background: var(--red-bg);
+  color: var(--red);
+}
+.dashboard-quit:disabled {
+  cursor: progress;
+  opacity: .65;
+}
 
 .trace-path-bar {
   display: flex; align-items: center; gap: 6px; padding: 4px 12px;
@@ -886,6 +901,7 @@ pre {
     <option value="en">English</option>
     <option value="zh-CN">简体中文</option>
   </select>
+  <button class="dashboard-quit" id="dashboard-quit" type="button" title="Quit dashboard" data-i18n-title="quit_dashboard">&#9211;</button>
 </div>
 
 <div class="trace-path-bar" id="trace-path-bar">
@@ -1013,6 +1029,7 @@ const state = {
   sessionRequestId: 0,
   pendingDeleteSessionId: null,
   deletingSessionId: null,
+  quittingDashboard: false,
   detailSessionId: null,
   detailRecordsLoaded: 0,
   detailRecordTotal: 0,
@@ -1046,8 +1063,13 @@ const DASHBOARD_I18N = {
     live_watching: "Watching",
     live_polling: "Polling",
     live_reconnecting: "Reconnecting",
+    dashboard_stopped: "Stopped",
     theme_toggle: "Toggle dark mode",
     language: "Language",
+    quit_dashboard: "Quit dashboard",
+    quit_dashboard_confirm: "Stop the claude-tap dashboard service?",
+    quitting_dashboard: "Stopping",
+    dashboard_quit_failed: "Unable to stop dashboard: {error}",
     dashboard: "Dashboard",
     trace_history_sessions: "trace history sessions",
     dashboard_title: "Conversation Log",
@@ -1139,8 +1161,13 @@ const DASHBOARD_I18N = {
     live_watching: "监听中",
     live_polling: "轮询中",
     live_reconnecting: "重连中",
+    dashboard_stopped: "已退出",
     theme_toggle: "切换深色模式",
     language: "语言",
+    quit_dashboard: "退出面板",
+    quit_dashboard_confirm: "退出 claude-tap dashboard 服务？",
+    quitting_dashboard: "正在退出",
+    dashboard_quit_failed: "无法退出面板：{error}",
     dashboard: "面板",
     trace_history_sessions: "trace 历史会话",
     dashboard_title: "对话日志",
@@ -1348,6 +1375,26 @@ async function fetchJSON(url, options = {}) {
     throw new Error(message);
   }
   return await response.json();
+}
+
+async function quitDashboard() {
+  if (state.quittingDashboard) return;
+  if (!window.confirm(t("quit_dashboard_confirm"))) return;
+
+  const button = $("#dashboard-quit");
+  state.quittingDashboard = true;
+  if (button) button.disabled = true;
+  $("#live-label").textContent = t("quitting_dashboard");
+
+  try {
+    await fetchJSON("/dashboard/quit", {method: "POST"});
+    $("#live-label").textContent = t("dashboard_stopped");
+  } catch (error) {
+    state.quittingDashboard = false;
+    if (button) button.disabled = false;
+    $("#live-label").textContent = t("live_reconnecting");
+    window.alert(t("dashboard_quit_failed", {error: error.message}));
+  }
 }
 
 function filteredSessions() {
@@ -2062,6 +2109,7 @@ document.addEventListener("keydown", event => {
   }
 });
 $("#theme-toggle").addEventListener("click", toggleTheme);
+$("#dashboard-quit").addEventListener("click", () => quitDashboard().catch(console.error));
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));
 
 applyI18n();

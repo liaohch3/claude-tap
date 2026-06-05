@@ -65,6 +65,7 @@ from claude_tap.shared_dashboard import (
     ensure_shared_dashboard,
     is_dashboard_healthy,
     is_legacy_dashboard_healthy,
+    quit_shared_dashboard,
     resolve_dashboard_port,
 )
 from claude_tap.trace import TraceWriter
@@ -494,6 +495,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "\n"
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
+            "  claude-tap dashboard quit                  Stop the shared dashboard\n"
             "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
             "\n"
             "trust local CA:\n"
@@ -664,6 +666,12 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Open a local claude-tap dashboard for browsing trace history.",
     )
     parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["quit"],
+        help="Use 'quit' to stop a running dashboard instead of starting one",
+    )
+    parser.add_argument(
         "--tap-output-dir",
         default="./.traces",
         dest="output_dir",
@@ -695,10 +703,21 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def dashboard_main(args: argparse.Namespace) -> int:
     """Run the standalone dashboard until interrupted."""
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     host = args.host
     port = resolve_dashboard_port(args.live_port)
+    if args.command == "quit":
+        if not await is_dashboard_healthy(host, port, require_current_db=False):
+            print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
+            return 1
+        if not await quit_shared_dashboard(host, port):
+            print(f"Unable to stop claude-tap dashboard on {dashboard_url(host, port)}")
+            return 1
+        print(f"Stopped claude-tap dashboard on {dashboard_url(host, port)}")
+        return 0
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     if await _is_dashboard_reusable(host, port):
         migrate_legacy_traces(output_dir)
         url = dashboard_url(host, port)
@@ -734,8 +753,7 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         _open_browser(server.url)
 
     try:
-        while True:
-            await asyncio.sleep(3600)
+        await server.wait_stopped()
     except asyncio.CancelledError:
         pass
     finally:

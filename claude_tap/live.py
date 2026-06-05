@@ -80,6 +80,7 @@ class LiveViewerServer:
         self._runner: web.AppRunner | None = None
         self._actual_port: int = 0
         self._shutdown_event = asyncio.Event()
+        self._stop_lock = asyncio.Lock()
         self._dashboard_watch_task: asyncio.Task | None = None
         self._dashboard_snapshot: dict[str, tuple[str, int, str]] = {}
 
@@ -98,6 +99,7 @@ class LiveViewerServer:
         app.router.add_get("/dashboard/session/{session_id}", self._handle_dashboard_session_detail)
         app.router.add_get("/dashboard/health", self._handle_dashboard_health)
         app.router.add_get("/dashboard/events", self._handle_dashboard_sse)
+        app.router.add_post("/dashboard/quit", self._handle_dashboard_quit)
         app.router.add_get("/events", self._handle_sse)
         app.router.add_get("/records", self._handle_records)
         app.router.add_get("/api/dates", self._handle_dates)
@@ -131,28 +133,39 @@ class LiveViewerServer:
 
     async def stop(self) -> None:
         """Stop the viewer server."""
-        self._shutdown_event.set()
-        if self._dashboard_watch_task:
-            self._dashboard_watch_task.cancel()
-            try:
-                await self._dashboard_watch_task
-            except asyncio.CancelledError:
-                pass
-        for client in self._sse_clients:
-            try:
-                await client.write_eof()
-            except Exception:
-                pass
-        self._sse_clients.clear()
-        for client in self._dashboard_clients:
-            try:
-                await client.write_eof()
-            except Exception:
-                pass
-        self._dashboard_clients.clear()
+        async with self._stop_lock:
+            if self._shutdown_event.is_set() and self._runner is None:
+                return
 
-        if self._runner:
-            await self._runner.cleanup()
+            self._shutdown_event.set()
+            if self._dashboard_watch_task:
+                self._dashboard_watch_task.cancel()
+                try:
+                    await self._dashboard_watch_task
+                except asyncio.CancelledError:
+                    pass
+                self._dashboard_watch_task = None
+            for client in self._sse_clients:
+                try:
+                    await client.write_eof()
+                except Exception:
+                    pass
+            self._sse_clients.clear()
+            for client in self._dashboard_clients:
+                try:
+                    await client.write_eof()
+                except Exception:
+                    pass
+            self._dashboard_clients.clear()
+
+            if self._runner:
+                runner = self._runner
+                self._runner = None
+                await runner.cleanup()
+
+    async def wait_stopped(self) -> None:
+        """Wait until the server shutdown event is set."""
+        await self._shutdown_event.wait()
 
     async def broadcast(self, record: dict) -> None:
         """Broadcast a new record to all connected SSE clients."""
@@ -198,7 +211,21 @@ class LiveViewerServer:
         return await self._session_html_response(request.match_info["session_id"])
 
     async def _handle_dashboard_health(self, request: web.Request) -> web.Response:
-        return web.json_response({"ok": True, "db_path": str(resolve_db_path())})
+        return web.json_response({"ok": True, "db_path": str(resolve_db_path()), "dashboard_mode": self.dashboard_mode})
+
+    async def _handle_dashboard_quit(self, request: web.Request) -> web.Response:
+        if not self.dashboard_mode:
+            return web.json_response(
+                {"ok": False, "error": "Dashboard quit is only available in dashboard mode"},
+                status=403,
+            )
+
+        async def stop_soon() -> None:
+            await asyncio.sleep(0.05)
+            await self.stop()
+
+        asyncio.create_task(stop_soon())
+        return web.json_response({"ok": True})
 
     async def _handle_index(self, request: web.Request) -> web.Response:
         """Serve the viewer HTML with live mode enabled."""

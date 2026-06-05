@@ -2646,6 +2646,7 @@ def test_parse_dashboard_args():
     from claude_tap import parse_dashboard_args
 
     a = parse_dashboard_args([])
+    assert a.command is None
     assert a.output_dir == "./.traces"
     assert a.live_port == 0
     assert a.host == "127.0.0.1"
@@ -2658,6 +2659,10 @@ def test_parse_dashboard_args():
     assert a.live_port == 3000
     assert a.host == "0.0.0.0"
     assert a.open_viewer is False
+
+    a = parse_dashboard_args(["quit", "--tap-live-port", "3000"])
+    assert a.command == "quit"
+    assert a.live_port == 3000
 
     print("  test_parse_dashboard_args PASSED")
 
@@ -3892,3 +3897,21 @@ async def test_dashboard_main_opens_reused_dashboard(monkeypatch, tmp_path):
     assert await dashboard_main(args) == 0
     assert opened_urls == ["http://127.0.0.1:23456"]
     assert migration_calls == [tmp_path]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_quits_running_dashboard(monkeypatch, tmp_path):
+    """The dashboard quit command should stop an existing dashboard."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+    quit_dashboard = AsyncMock(return_value=True)
+    monkeypatch.setattr("claude_tap.cli.quit_shared_dashboard", quit_dashboard)
+
+    args = parse_dashboard_args(["quit", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 0
+    quit_dashboard.assert_awaited_once_with("127.0.0.1", 23456)

@@ -16,6 +16,7 @@ from claude_tap.shared_dashboard import (
     ensure_shared_dashboard,
     is_dashboard_healthy,
     is_legacy_dashboard_healthy,
+    quit_shared_dashboard,
     resolve_dashboard_port,
 )
 from claude_tap.trace_store import resolve_db_path
@@ -193,9 +194,28 @@ async def test_is_dashboard_healthy_real_server(monkeypatch: pytest.MonkeyPatch,
         async with aiohttp.ClientSession() as session:
             async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
                 assert resp.status == 200
-                assert await resp.json() == {"ok": True, "db_path": str(resolve_db_path())}
+                assert await resp.json() == {
+                    "ok": True,
+                    "db_path": str(resolve_db_path()),
+                    "dashboard_mode": True,
+                }
         assert await is_dashboard_healthy("127.0.0.1", port) is True
         assert await wait_for_dashboard_healthy("127.0.0.1", port, timeout=1.0) is True
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_quit_shared_dashboard_stops_real_server(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from claude_tap.live import LiveViewerServer
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        assert await quit_shared_dashboard("127.0.0.1", port) is True
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is False
     finally:
         await server.stop()
 

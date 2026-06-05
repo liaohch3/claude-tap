@@ -443,6 +443,15 @@ def test_dashboard_template_exposes_session_delete_controls() -> None:
     assert 'method: "DELETE"' in template
 
 
+def test_dashboard_template_exposes_quit_control() -> None:
+    template = read_dashboard_template()
+
+    assert 'id="dashboard-quit"' in template
+    assert "quit_dashboard_confirm" in template
+    assert "function quitDashboard()" in template
+    assert 'fetchJSON("/dashboard/quit", {method: "POST"})' in template
+
+
 def test_dashboard_summarize_session_and_migration(trace_db, tmp_path: Path) -> None:
     assert dashboard_trace_snapshot() == {}
 
@@ -930,6 +939,40 @@ async def test_dashboard_server_sse_events(trace_db) -> None:
                 assert await asyncio.wait_for(resp.content.readline(), timeout=1) == b"event: refresh\n"
                 refresh_data = await asyncio.wait_for(resp.content.readline(), timeout=1)
                 assert b'"type":"refresh"' in refresh_data
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_server_quit_route_stops_dashboard(trace_db) -> None:
+    from claude_tap.shared_dashboard import is_dashboard_healthy, wait_for_dashboard_stopped
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"http://127.0.0.1:{port}/dashboard/quit") as resp:
+                assert resp.status == 200
+                assert await resp.json() == {"ok": True}
+
+        assert await wait_for_dashboard_stopped("127.0.0.1", port, timeout=2.0) is True
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is False
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_quit_route_rejects_non_dashboard_server(trace_db) -> None:
+    server = LiveViewerServer(port=0, dashboard_mode=False)
+    port = await server.start()
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"http://127.0.0.1:{port}/dashboard/quit") as resp:
+                assert resp.status == 403
+                payload = await resp.json()
+                assert payload["ok"] is False
     finally:
         await server.stop()
 

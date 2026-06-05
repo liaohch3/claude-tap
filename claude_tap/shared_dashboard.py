@@ -21,6 +21,7 @@ from claude_tap.trace_store import resolve_db_path
 DEFAULT_DASHBOARD_PORT = 19527
 _DASHBOARD_HEALTH_TIMEOUT = 1.5
 _DASHBOARD_SESSIONS_HEALTH_TIMEOUT = 3.0
+_DASHBOARD_QUIT_TIMEOUT = 2.0
 _DASHBOARD_LOCK_NAME = "dashboard.lock"
 
 
@@ -178,6 +179,37 @@ async def wait_for_dashboard_healthy(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if await is_dashboard_healthy(host, port):
+            return True
+        await asyncio.sleep(interval)
+    return False
+
+
+async def quit_shared_dashboard(host: str, port: int) -> bool:
+    """Ask a running shared dashboard to stop and wait until it is gone."""
+    base_url = dashboard_url(host, port)
+    timeout = aiohttp.ClientTimeout(total=_DASHBOARD_QUIT_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"{base_url}/dashboard/quit") as resp:
+                if resp.status != 200:
+                    return False
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+        return False
+
+    return await wait_for_dashboard_stopped(host, port)
+
+
+async def wait_for_dashboard_stopped(
+    host: str,
+    port: int,
+    *,
+    timeout: float = 5.0,
+    interval: float = 0.1,
+) -> bool:
+    """Return True once no dashboard responds on the configured endpoint."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not await is_dashboard_healthy(host, port, require_current_db=False):
             return True
         await asyncio.sleep(interval)
     return False
