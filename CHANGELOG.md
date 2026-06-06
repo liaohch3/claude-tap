@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.102] - 2026-06-06
+
+### Changed
+- Add capture-only prompt snapshot export
 ## [0.1.101] - 2026-06-03
 
 ### Changed
