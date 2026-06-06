@@ -689,6 +689,28 @@ body.detail-route .detail-inspector-bar {
   color: var(--blue);
   background: var(--blue-bg);
 }
+button.export-menu-item {
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.export-menu-label {
+  padding: 6px 9px 2px;
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  opacity: 0.65;
+}
+.export-menu-label:not(:first-child) {
+  margin-top: 3px;
+  border-top: 1px solid var(--border);
+  padding-top: 7px;
+}
 .badge {
   display: inline-flex; align-items: center;
   font-size: 11px; padding: 2px 8px; border-radius: 10px;
@@ -1109,9 +1131,11 @@ const DASHBOARD_I18N = {
     export_compact: "Export Compact",
     export_log: "Export Log",
     export_html: "Export HTML",
-    export_claude_resume: "Download resume session (Claude Code)",
+    export_claude_resume: "Download resume session",
     export_menu: "Export",
-    install_resume: "Resume in Claude Code",
+    export_group: "Export",
+    resume_group: "Resume in Claude Code",
+    install_resume: "Install to this machine",
     install_resume_working: "Installing…",
     install_resume_prompt: "Target project directory to resume in (must match on this machine):",
     install_resume_done: "Installed as a resumable session ({count} messages). Copied to clipboard:\n\n{command}",
@@ -1208,9 +1232,11 @@ const DASHBOARD_I18N = {
     export_compact: "导出压缩文件",
     export_log: "导出日志",
     export_html: "导出 HTML",
-    export_claude_resume: "下载续聊会话（Claude Code）",
+    export_claude_resume: "下载续聊会话文件",
     export_menu: "导出",
-    install_resume: "在 Claude Code 中续聊",
+    export_group: "导出",
+    resume_group: "在 Claude Code 中续聊",
+    install_resume: "装入本机",
     install_resume_working: "安装中…",
     install_resume_prompt: "要续聊的目标项目目录（需与本机一致）：",
     install_resume_done: "已装为可续聊会话（{count} 条消息）。已复制到剪贴板：\n\n{command}",
@@ -1809,6 +1835,9 @@ function renderDetail(session, records) {
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
+  // Resume is only offered for Claude Code (Anthropic protocol) sessions; other
+  // agents (Codex, Gemini, Antigravity) have no Claude-resume target yet.
+  const canResume = session.agent === "Claude Code";
   $("#detail").innerHTML = `
     <div class="detail-inspector-bar">
       <div class="detail-tabs">
@@ -1818,14 +1847,17 @@ function renderDetail(session, records) {
         <details class="export-menu">
           <summary class="act-btn" data-detail-i18n="export_menu">${esc(t("export_menu"))}</summary>
           <div class="export-menu-list">
+            <div class="export-menu-label" data-detail-i18n="export_group">${esc(t("export_group"))}</div>
             <a class="export-menu-item" data-detail-i18n="export_jsonl" href="/api/sessions/${encodeURIComponent(session.id)}/export/jsonl" download>${esc(t("export_jsonl"))}</a>
             <a class="export-menu-item" data-detail-i18n="export_compact" href="/api/sessions/${encodeURIComponent(session.id)}/export/compact" download>${esc(t("export_compact"))}</a>
             <a class="export-menu-item" data-detail-i18n="export_log" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
             <a class="export-menu-item" data-detail-i18n="export_html" href="/api/sessions/${encodeURIComponent(session.id)}/export/html" download>${esc(t("export_html"))}</a>
-            <a class="export-menu-item" data-detail-i18n="export_claude_resume" href="/api/sessions/${encodeURIComponent(session.id)}/export/claude-resume" download>${esc(t("export_claude_resume"))}</a>
+            ${canResume ? `
+            <div class="export-menu-label" data-detail-i18n="resume_group">${esc(t("resume_group"))}</div>
+            <button class="export-menu-item" data-detail-i18n="install_resume" data-install-resume="${esc(session.id)}">${esc(t("install_resume"))}</button>
+            <a class="export-menu-item" data-detail-i18n="export_claude_resume" href="/api/sessions/${encodeURIComponent(session.id)}/export/claude-resume" download>${esc(t("export_claude_resume"))}</a>` : ""}
           </div>
         </details>
-        <button class="act-btn" data-detail-i18n="install_resume" data-install-resume="${esc(session.id)}">${esc(t("install_resume"))}</button>
         <button class="act-btn" data-detail-i18n="copy_path" data-copy-path="${esc(session.id)}">${esc(t("copy_path"))}</button>
       </div>
     </div>

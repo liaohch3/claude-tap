@@ -103,6 +103,17 @@ def _strip_unsigned_thinking(content: list) -> list:
     return kept
 
 
+def has_transplantable_conversation(records: Iterable[dict]) -> bool:
+    """True when a session carries Anthropic traffic that can be resumed."""
+
+    for record in records:
+        if isinstance(record, dict) and _is_anthropic(record):
+            messages = _request_body(record).get("messages")
+            if isinstance(messages, list) and messages:
+                return True
+    return False
+
+
 def extract_conversation(records: Iterable[dict]) -> list[dict]:
     """Pick the fullest request and return the complete linear conversation.
 

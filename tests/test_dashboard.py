@@ -945,6 +945,29 @@ async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp
 
 
 @pytest.mark.asyncio
+async def test_dashboard_viewer_guards_resume_link_by_provider(trace_db, tmp_path: Path) -> None:
+    _write_jsonl(tmp_path / "2026-05-20" / "trace_080000.jsonl", [_anthropic_record()])
+    _write_jsonl(tmp_path / "2026-05-20" / "trace_090000.jsonl", [_antigravity_record()])
+    _seed_legacy(tmp_path)
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                sessions = (await resp.json())["sessions"]
+            by_agent = {item["agent"]: item["id"] for item in sessions}
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{by_agent['Claude Code']}/html") as resp:
+                assert "export/claude-resume" in await resp.text()
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{by_agent['Antigravity']}/html") as resp:
+                assert "export/claude-resume" not in await resp.text()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_server_sse_events(trace_db) -> None:
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()

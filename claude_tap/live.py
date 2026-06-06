@@ -342,6 +342,8 @@ class LiveViewerServer:
         return await self._session_html_response(request.match_info["session_id"])
 
     async def _session_html_response(self, session_id: str) -> web.Response:
+        from claude_tap.session_transplant import has_transplantable_conversation
+
         store = ensure_trace_store()
         if store.load_session_row(session_id) is None:
             return web.Response(status=404, text="Session not found")
@@ -353,8 +355,10 @@ class LiveViewerServer:
                 "compact": f"/api/sessions/{quote(session_id)}/export/compact",
                 "log": f"/api/sessions/{quote(session_id)}/export/log",
                 "html": f"/api/sessions/{quote(session_id)}/export/html",
-                "claudeResume": f"/api/sessions/{quote(session_id)}/export/claude-resume",
             }
+            # Resume export only applies to Anthropic-protocol (Claude Code) traffic.
+            if has_transplantable_conversation(store.load_records(session_id)):
+                export_urls["claudeResume"] = f"/api/sessions/{quote(session_id)}/export/claude-resume"
             _generate_html_viewer_from_compact_bundle(
                 build_compact_trace_bundle(store.load_records(session_id)),
                 html_path,

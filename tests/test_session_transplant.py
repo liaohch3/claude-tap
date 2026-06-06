@@ -16,6 +16,7 @@ from claude_tap.session_transplant import (
     conversation_to_events,
     extract_conversation,
     get_resume_target,
+    has_transplantable_conversation,
     install_resume_session,
     parse_jsonl_conversation,
     project_slug,
@@ -101,6 +102,17 @@ def test_extract_conversation_picks_fullest_and_appends_response() -> None:
 def test_extract_conversation_raises_without_anthropic_traffic() -> None:
     with pytest.raises(ValueError, match="no Anthropic conversation"):
         extract_conversation([{"turn": 1, "request": {"path": "/v1/responses", "body": {"input": "x"}}}])
+
+
+def test_has_transplantable_conversation_guards_by_provider() -> None:
+    anthropic = {"request": {"path": "/v1/messages", "body": {"messages": [{"role": "user", "content": "hi"}]}}}
+    gemini = {"request": {"path": "/v1internal:streamGenerateContent", "body": {"contents": []}}}
+    count_only = {"request": {"path": "/v1/messages/count_tokens", "body": {"messages": [{"role": "user"}]}}}
+
+    assert has_transplantable_conversation([anthropic]) is True
+    assert has_transplantable_conversation([gemini]) is False
+    assert has_transplantable_conversation([count_only]) is False
+    assert has_transplantable_conversation([]) is False
 
 
 def test_extract_conversation_ignores_count_tokens_probe() -> None:
