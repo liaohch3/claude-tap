@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from claude_tap.session_transplant import (
+    RESUME_TARGETS,
     detect_claude_version,
     install_resume_session,
     parse_jsonl_conversation,
@@ -40,7 +41,18 @@ def import_resume_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=None, help="Target project directory to resume in (default: current dir)")
     parser.add_argument("--git-branch", default="", help="Git branch to stamp on the session")
     parser.add_argument("--session-id", default=None, help="Force a specific session id (default: new random uuid)")
-    parser.add_argument("--home", type=Path, default=None, help="Override the Claude home dir (default: ~/.claude)")
+    parser.add_argument(
+        "--target",
+        default="claude",
+        choices=sorted(RESUME_TARGETS),
+        help="Destination agent CLI to install for (default: claude)",
+    )
+    parser.add_argument(
+        "--home",
+        type=Path,
+        default=None,
+        help="Home directory that contains the .claude store (default: your home directory)",
+    )
     args = parser.parse_args(argv)
 
     if not args.source.exists():
@@ -65,14 +77,19 @@ def import_resume_main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    installed = install_resume_session(
-        messages,
-        target_cwd,
-        home=args.home,
-        version=detect_claude_version(),
-        git_branch=args.git_branch,
-        session_id=args.session_id,
-    )
+    try:
+        installed = install_resume_session(
+            messages,
+            target_cwd,
+            target=args.target,
+            home=args.home,
+            version=detect_claude_version(),
+            git_branch=args.git_branch,
+            session_id=args.session_id,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     print(f"Installed {installed.message_count} messages -> {installed.path}")
     print(f"Resume with:\n  cd {target_cwd} && {installed.resume_command}")

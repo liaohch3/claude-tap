@@ -10,10 +10,12 @@ import pytest
 from claude_tap.export import export_main
 from claude_tap.import_resume import import_resume_main
 from claude_tap.session_transplant import (
+    RESUME_TARGETS,
     TransplantEnv,
     build_session_jsonl,
     conversation_to_events,
     extract_conversation,
+    get_resume_target,
     install_resume_session,
     parse_jsonl_conversation,
     project_slug,
@@ -99,6 +101,95 @@ def test_extract_conversation_picks_fullest_and_appends_response() -> None:
 def test_extract_conversation_raises_without_anthropic_traffic() -> None:
     with pytest.raises(ValueError, match="no Anthropic conversation"):
         extract_conversation([{"turn": 1, "request": {"path": "/v1/responses", "body": {"input": "x"}}}])
+
+
+def test_extract_conversation_ignores_count_tokens_probe() -> None:
+    # a later count_tokens probe has a longer messages[] but no assistant turn;
+    # it must not win selection and drop the real final response.
+    records = [
+        {
+            "turn": 1,
+            "request": {
+                "path": "/v1/messages",
+                "body": {"messages": [{"role": "user", "content": "do it"}]},
+            },
+            "response": {"body": {"content": [{"type": "text", "text": "final answer"}]}},
+        },
+        {
+            "turn": 2,
+            "request": {
+                "path": "/v1/messages/count_tokens?beta=true",
+                "body": {
+                    "messages": [
+                        {"role": "user", "content": "do it"},
+                        {"role": "assistant", "content": [{"type": "text", "text": "final answer"}]},
+                    ]
+                },
+            },
+            "response": {"body": {}},
+        },
+    ]
+
+    convo = extract_conversation(records)
+
+    assert convo[-1] == {"role": "assistant", "content": [{"type": "text", "text": "final answer"}]}
+
+
+def test_extract_conversation_drops_unsigned_thinking_in_appended_tail() -> None:
+    record = {
+        "turn": 1,
+        "request": {"path": "/v1/messages", "body": {"messages": [{"role": "user", "content": "go"}]}},
+        "response": {
+            "body": {
+                "content": [
+                    {"type": "thinking", "thinking": "unsigned musings"},
+                    {"type": "text", "text": "answer"},
+                ]
+            }
+        },
+    }
+
+    tail = extract_conversation([record])[-1]["content"]
+
+    assert {b["type"] for b in tail} == {"text"}
+
+
+def test_extract_conversation_keeps_signed_thinking_in_appended_tail() -> None:
+    record = {
+        "turn": 1,
+        "request": {"path": "/v1/messages", "body": {"messages": [{"role": "user", "content": "go"}]}},
+        "response": {
+            "body": {
+                "content": [
+                    {"type": "thinking", "thinking": "signed musings", "signature": "abc"},
+                    {"type": "text", "text": "answer"},
+                ]
+            }
+        },
+    }
+
+    tail = extract_conversation([record])[-1]["content"]
+
+    assert {b["type"] for b in tail} == {"thinking", "text"}
+
+
+def test_resume_target_registry_has_claude_and_rejects_unknown() -> None:
+    assert "claude" in RESUME_TARGETS
+    assert get_resume_target("claude").label == "Claude Code"
+    with pytest.raises(ValueError, match="unknown resume target"):
+        get_resume_target("codex")
+
+
+def test_install_resume_session_rejects_unknown_target(tmp_path) -> None:
+    with pytest.raises(ValueError, match="unknown resume target"):
+        install_resume_session([{"role": "user", "content": "x"}], r"C:\p", target="codex", home=tmp_path)
+
+
+def test_install_resume_session_rejects_traversal_session_id(tmp_path) -> None:
+    with pytest.raises(ValueError, match="invalid session id"):
+        install_resume_session([{"role": "user", "content": "x"}], r"C:\p", home=tmp_path, session_id="../escape")
+    # nothing should have been written outside the project store
+    assert not list(tmp_path.rglob("*.jsonl"))
 
 
 def test_tool_results_thread_to_their_tool_use() -> None:

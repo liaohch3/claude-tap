@@ -74,11 +74,33 @@ def _response_body(record: dict) -> dict:
 
 
 def _is_anthropic(record: dict) -> bool:
-    path = str(_as_dict(record.get("request")).get("path") or "")
+    path = str(_as_dict(record.get("request")).get("path") or "").split("?", 1)[0]
     body = _request_body(record)
+    # count_tokens shares the /v1/messages prefix but never produces an
+    # assistant turn, so it must not win the "fullest request" selection.
+    if "count_tokens" in path:
+        return False
     if path.startswith(("/v1/messages", "/model/")):
         return True
     return "messages" in body and ("system" in body or "anthropic_version" in body)
+
+
+def _strip_unsigned_thinking(content: list) -> list:
+    """Drop thinking blocks that lack a signature.
+
+    Anthropic streams the signature as a separate ``signature_delta`` and
+    rejects later turns that resend a thinking block with a missing or modified
+    signature. Thinking blocks inside a captured request body were already
+    accepted (signed); only a freshly reconstructed response tail is at risk, so
+    we drop any unsigned thinking rather than ship a log the API will reject.
+    """
+
+    kept: list = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "thinking" and not block.get("signature"):
+            continue
+        kept.append(block)
+    return kept
 
 
 def extract_conversation(records: Iterable[dict]) -> list[dict]:
@@ -109,7 +131,9 @@ def extract_conversation(records: Iterable[dict]) -> list[dict]:
     conversation = [dict(msg) for msg in _request_body(best).get("messages", []) if isinstance(msg, dict)]
     response_content = _response_body(best).get("content")
     if isinstance(response_content, list) and response_content:
-        conversation.append({"role": _ASSISTANT, "content": response_content})
+        tail = _strip_unsigned_thinking(response_content)
+        if tail:
+            conversation.append({"role": _ASSISTANT, "content": tail})
     return conversation
 
 
@@ -260,7 +284,36 @@ def project_slug(cwd: str) -> str:
 
 
 def claude_home(home: Path | None = None) -> Path:
-    return (home or Path.home()) / ".claude"
+    """Resolve the ``.claude`` store directory.
+
+    An explicit ``home`` is treated as the directory *containing* ``.claude``.
+    Otherwise honor ``CLAUDE_CONFIG_DIR`` (which Claude Code itself reads as the
+    config dir) before falling back to ``~/.claude``.
+    """
+
+    if home is not None:
+        return home / ".claude"
+    import os
+
+    configured = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".claude"
+
+
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def validate_session_id(session_id: str) -> str:
+    """Reject session ids that could escape the project directory.
+
+    The id becomes a filename (``<id>.jsonl``); separators or ``..`` would let
+    an explicit ``--session-id`` write outside the Claude project store.
+    """
+
+    if not session_id or not _SESSION_ID_RE.match(session_id):
+        raise ValueError(f"invalid session id (allowed: letters, digits, '-', '_'): {session_id!r}")
+    return session_id
 
 
 @dataclass
@@ -270,12 +323,60 @@ class InstalledSession:
     project_dir: Path
     resume_command: str
     message_count: int
+    target: str = "claude"
+
+
+@dataclass(frozen=True)
+class ResumeTarget:
+    """A pluggable destination CLI for a transplanted conversation.
+
+    Extension point: other agent CLIs (Codex, Gemini, ...) store resumable
+    sessions in their own layout. Register one here to support a new
+    ``--target`` without touching the export/import plumbing. Each target owns
+    how a conversation is serialized, where it lives, and how the user resumes
+    it; the conversation extraction stays provider-aware in
+    ``extract_conversation``.
+    """
+
+    name: str
+    label: str
+    build: Callable[[list[dict], TransplantEnv, str], str]
+    project_dir: Callable[[Path | None, str], Path]
+    filename: Callable[[str], str]
+    resume_command: Callable[[str], str]
+
+
+def _claude_project_dir(home: Path | None, cwd: str) -> Path:
+    return claude_home(home) / "projects" / project_slug(cwd)
+
+
+RESUME_TARGETS: dict[str, ResumeTarget] = {
+    "claude": ResumeTarget(
+        name="claude",
+        label="Claude Code",
+        build=lambda messages, env, last_prompt: build_session_jsonl(messages, env, last_prompt=last_prompt),
+        project_dir=_claude_project_dir,
+        filename=lambda sid: f"{sid}.jsonl",
+        resume_command=lambda sid: f"claude --resume {sid}",
+    ),
+}
+
+DEFAULT_TARGET = "claude"
+
+
+def get_resume_target(name: str) -> ResumeTarget:
+    try:
+        return RESUME_TARGETS[name]
+    except KeyError:
+        supported = ", ".join(sorted(RESUME_TARGETS))
+        raise ValueError(f"unknown resume target {name!r}; supported: {supported}") from None
 
 
 def install_resume_session(
     messages: list[dict],
     target_cwd: str,
     *,
+    target: str = DEFAULT_TARGET,
     home: Path | None = None,
     version: str = DEFAULT_VERSION,
     git_branch: str = "",
@@ -283,9 +384,10 @@ def install_resume_session(
     timestamp: str = "1970-01-01T00:00:00.000Z",
     last_prompt: str = "",
 ) -> InstalledSession:
-    """Write a resumable session into Claude Code's project store for ``target_cwd``."""
+    """Write a resumable session into the target CLI's store for ``target_cwd``."""
 
-    sid = session_id or str(uuid.uuid4())
+    resume_target = get_resume_target(target)
+    sid = validate_session_id(session_id) if session_id else str(uuid.uuid4())
     env = TransplantEnv(
         cwd=target_cwd,
         session_id=sid,
@@ -293,17 +395,18 @@ def install_resume_session(
         git_branch=git_branch,
         timestamp=timestamp,
     )
-    document = build_session_jsonl(messages, env, last_prompt=last_prompt)
-    project_dir = claude_home(home) / "projects" / project_slug(target_cwd)
+    document = resume_target.build(messages, env, last_prompt)
+    project_dir = resume_target.project_dir(home, target_cwd)
     project_dir.mkdir(parents=True, exist_ok=True)
-    path = project_dir / f"{sid}.jsonl"
+    path = project_dir / resume_target.filename(sid)
     path.write_text(document, encoding="utf-8")
     return InstalledSession(
         session_id=sid,
         path=path,
         project_dir=project_dir,
-        resume_command=f"claude --resume {sid}",
+        resume_command=resume_target.resume_command(sid),
         message_count=len(messages),
+        target=resume_target.name,
     )
 
 
