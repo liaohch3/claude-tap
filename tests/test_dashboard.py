@@ -902,6 +902,49 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp_path: Path, monkeypatch) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    _write_jsonl(trace_path, [_anthropic_record()])
+    # keep install off the real ~/.claude store
+    config_dir = tmp_path / "cfg" / ".claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                session_id = (await resp.json())["sessions"][0]["id"]
+
+            # A-side download: a resumable Claude Code session log
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/claude-resume") as resp:
+                assert resp.status == 200
+                assert resp.content_type == "application/x-ndjson"
+                assert f'filename="resume_{session_id[:8]}.jsonl"' in resp.headers["Content-Disposition"]
+                lines = [json.loads(line) for line in (await resp.text()).splitlines() if line.strip()]
+                types = [line.get("type") for line in lines]
+                assert "user" in types and "assistant" in types
+                assert types[-1] == "last-prompt"
+
+            # B-side install: writes a fresh resumable session into the local store
+            target = tmp_path / "proj"
+            target.mkdir()
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/sessions/{session_id}/install-resume",
+                json={"cwd": str(target)},
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["resume_command"].startswith("claude --resume ")
+                assert data["message_count"] == 2
+                installed = Path(data["path"])
+                assert installed.exists()
+                assert installed.parent.parent == config_dir / "projects"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_server_sse_events(trace_db) -> None:
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()

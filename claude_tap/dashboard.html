@@ -1109,7 +1109,13 @@ const DASHBOARD_I18N = {
     export_compact: "Export Compact",
     export_log: "Export Log",
     export_html: "Export HTML",
+    export_claude_resume: "Download resume session (Claude Code)",
     export_menu: "Export",
+    install_resume: "Resume in Claude Code",
+    install_resume_working: "Installing…",
+    install_resume_prompt: "Target project directory to resume in (must match on this machine):",
+    install_resume_done: "Installed as a resumable session ({count} messages). Copied to clipboard:\n\n{command}",
+    install_resume_failed: "Could not install resume session: {error}",
     copy_session_id: "Copy session id",
     unable_load_session: "Unable to load session: {error}",
     unable_load_dashboard: "Unable to load dashboard: {error}",
@@ -1202,7 +1208,13 @@ const DASHBOARD_I18N = {
     export_compact: "导出压缩文件",
     export_log: "导出日志",
     export_html: "导出 HTML",
+    export_claude_resume: "下载续聊会话（Claude Code）",
     export_menu: "导出",
+    install_resume: "在 Claude Code 中续聊",
+    install_resume_working: "安装中…",
+    install_resume_prompt: "要续聊的目标项目目录（需与本机一致）：",
+    install_resume_done: "已装为可续聊会话（{count} 条消息）。已复制到剪贴板：\n\n{command}",
+    install_resume_failed: "安装续聊会话失败：{error}",
     copy_session_id: "复制会话 ID",
     unable_load_session: "无法加载会话：{error}",
     unable_load_dashboard: "无法加载面板：{error}",
@@ -1810,8 +1822,10 @@ function renderDetail(session, records) {
             <a class="export-menu-item" data-detail-i18n="export_compact" href="/api/sessions/${encodeURIComponent(session.id)}/export/compact" download>${esc(t("export_compact"))}</a>
             <a class="export-menu-item" data-detail-i18n="export_log" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
             <a class="export-menu-item" data-detail-i18n="export_html" href="/api/sessions/${encodeURIComponent(session.id)}/export/html" download>${esc(t("export_html"))}</a>
+            <a class="export-menu-item" data-detail-i18n="export_claude_resume" href="/api/sessions/${encodeURIComponent(session.id)}/export/claude-resume" download>${esc(t("export_claude_resume"))}</a>
           </div>
         </details>
+        <button class="act-btn" data-detail-i18n="install_resume" data-install-resume="${esc(session.id)}">${esc(t("install_resume"))}</button>
         <button class="act-btn" data-detail-i18n="copy_path" data-copy-path="${esc(session.id)}">${esc(t("copy_path"))}</button>
       </div>
     </div>
@@ -1861,6 +1875,39 @@ function renderDetail(session, records) {
   document.querySelectorAll("[data-copy-path]").forEach(button => {
     button.addEventListener("click", () => navigator.clipboard?.writeText(button.dataset.copyPath || ""));
   });
+  document.querySelectorAll("[data-install-resume]").forEach(button => {
+    button.addEventListener("click", () => installResumeSession(button.dataset.installResume || "", button));
+  });
+}
+
+async function installResumeSession(sessionId, button) {
+  if (!sessionId) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = t("install_resume_working");
+  try {
+    const cwd = window.prompt(t("install_resume_prompt"), "");
+    if (cwd === null) {
+      return;
+    }
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/install-resume`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({cwd: cwd.trim()}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      window.alert(t("install_resume_failed", {error: data.error || res.status}));
+      return;
+    }
+    await navigator.clipboard?.writeText(data.resume_command || "").catch(() => {});
+    window.alert(t("install_resume_done", {command: data.resume_command, count: data.message_count}));
+  } catch (err) {
+    window.alert(t("install_resume_failed", {error: String(err)}));
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 function updateDetailI18n(session) {

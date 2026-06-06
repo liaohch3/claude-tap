@@ -112,6 +112,8 @@ class LiveViewerServer:
         app.router.add_get("/api/sessions/{session_id}/export/compact", self._handle_export_compact)
         app.router.add_get("/api/sessions/{session_id}/export/log", self._handle_export_log)
         app.router.add_get("/api/sessions/{session_id}/export/html", self._handle_export_html)
+        app.router.add_get("/api/sessions/{session_id}/export/claude-resume", self._handle_export_claude_resume)
+        app.router.add_post("/api/sessions/{session_id}/install-resume", self._handle_install_resume)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -351,6 +353,7 @@ class LiveViewerServer:
                 "compact": f"/api/sessions/{quote(session_id)}/export/compact",
                 "log": f"/api/sessions/{quote(session_id)}/export/log",
                 "html": f"/api/sessions/{quote(session_id)}/export/html",
+                "claudeResume": f"/api/sessions/{quote(session_id)}/export/claude-resume",
             }
             _generate_html_viewer_from_compact_bundle(
                 build_compact_trace_bundle(store.load_records(session_id)),
@@ -412,6 +415,66 @@ class LiveViewerServer:
             content_type="text/plain",
             charset="utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    async def _handle_export_claude_resume(self, request: web.Request) -> web.Response:
+        """Download the session rebuilt as a Claude Code resumable log."""
+        from claude_tap.session_transplant import (
+            TransplantEnv,
+            build_session_jsonl,
+            detect_claude_version,
+            extract_conversation,
+        )
+
+        session_id = request.match_info["session_id"]
+        store = ensure_trace_store()
+        if store.load_session_row(session_id) is None:
+            return web.Response(status=404, text="Session not found")
+        try:
+            messages = extract_conversation(store.load_records(session_id))
+        except ValueError as exc:
+            return web.Response(status=422, text=str(exc))
+        cwd = request.query.get("cwd") or "."
+        env = TransplantEnv(cwd=cwd, session_id=session_id, version=detect_claude_version())
+        body = build_session_jsonl(messages, env)
+        filename = f"resume_{session_id[:8]}.jsonl"
+        return web.Response(
+            text=body,
+            content_type="application/x-ndjson",
+            charset="utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    async def _handle_install_resume(self, request: web.Request) -> web.Response:
+        """Install the session into the local Claude Code store as a fresh resumable copy."""
+        from claude_tap.session_transplant import (
+            detect_claude_version,
+            extract_conversation,
+            install_resume_session,
+        )
+
+        session_id = request.match_info["session_id"]
+        store = ensure_trace_store()
+        if store.load_session_row(session_id) is None:
+            return web.json_response({"error": "Session not found"}, status=404)
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            payload = {}
+        cwd = str(payload.get("cwd") or "").strip() or str(Path.cwd())
+        try:
+            messages = extract_conversation(store.load_records(session_id))
+            installed = install_resume_session(messages, cwd, version=detect_claude_version())
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=422)
+        return web.json_response(
+            {
+                "session_id": installed.session_id,
+                "path": str(installed.path),
+                "cwd": cwd,
+                "resume_command": installed.resume_command,
+                "message_count": installed.message_count,
+            }
         )
 
     async def _handle_delete_session(self, request: web.Request) -> web.Response:
