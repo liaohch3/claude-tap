@@ -230,7 +230,7 @@ claude-tap --tap-client codex -- --full-auto
 <details>
 <summary>Kimi CLI 示例</summary>
 
-Kimi CLI 默认通过 `KIMI_BASE_URL` 使用 reverse proxy。使用你已有的 Kimi CLI 认证和配置；默认上游目标是 Kimi Code API。
+Kimi CLI 默认通过 `KIMI_BASE_URL` 使用 reverse proxy。使用你已有的 Kimi CLI 认证和配置；默认上游目标是 Kimi Code API。Prompt 导出模式还会设置常见 provider 的 base URL 环境变量，让 capture-only 运行能捕获本地 Kimi 配置实际选中的 provider 请求，而不会把请求转发到真实上游。
 
 ```bash
 claude-tap --tap-client kimi
@@ -406,6 +406,9 @@ claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 # 导出可独立搬运的压缩 trace，再按需渲染
 claude-tap export <session-id> --format compact -o trace.ctap.json
 claude-tap export trace.ctap.json -o trace.html
+
+# 只捕获 prompt 表面用于自动化；同时在 prompt.md 旁写入 trace.jsonl
+claude-tap --tap-export-prompt prompt.md -- -p "hello"
 
 # 在 iframe 中嵌入导出的查看器，并减少外层 chrome
 # trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from claude_tap.compact_trace import build_compact_trace_bundle, dump_compact_trace, is_compact_trace_bundle
+from claude_tap.prompt_snapshot import render_prompt_markdown, snapshot_from_records
 from claude_tap.usage import normalize_usage
 from claude_tap.viewer import (
     _generate_html_viewer_from_compact_bundle,
@@ -105,7 +106,7 @@ def export_main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--format",
-        choices=["markdown", "json", "html", "compact"],
+        choices=["markdown", "json", "html", "compact", "prompt-md"],
         default=None,
         help="Output format (default: inferred from -o extension, or markdown)",
     )
@@ -161,6 +162,8 @@ def export_main(argv: list[str] | None = None) -> int:
                 fmt = "html"
             elif _compact_output_suffix(args.output):
                 fmt = "compact"
+            elif _is_prompt_markdown_output(args.output):
+                fmt = "prompt-md"
             else:
                 fmt = "markdown"
         else:
@@ -213,6 +216,12 @@ def export_main(argv: list[str] | None = None) -> int:
             output = store.export_compact(source_session_id)
         else:
             output = dump_compact_trace(records)
+    elif fmt == "prompt-md":
+        try:
+            output = render_prompt_markdown(snapshot_from_records(records))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
     elif fmt == "json":
         output = _export_json(_normalize_records_for_export(records))
     else:
@@ -225,6 +234,11 @@ def export_main(argv: list[str] | None = None) -> int:
         print(output)
 
     return 0
+
+
+def _is_prompt_markdown_output(path: Path) -> bool:
+    name = path.name.lower()
+    return name.endswith((".prompt.md", ".prompt.markdown", ".system.md", ".system.markdown"))
 
 
 def _export_markdown(records: list[dict]) -> str:
