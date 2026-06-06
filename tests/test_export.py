@@ -110,7 +110,7 @@ def test_export_help_mentions_html(capsys) -> None:
 
     assert exc_info.value.code == 0
     help_text = capsys.readouterr().out
-    assert "{markdown,json,html,compact,prompt-md}" in help_text
+    assert "{markdown,json,html,compact,prompt-md,claude-resume}" in help_text
     assert "for HTML" in help_text
 
 

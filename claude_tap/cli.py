@@ -831,6 +831,11 @@ def main_entry() -> None:
 
         sys.exit(export_main(sys.argv[2:]))
 
+    if len(sys.argv) > 1 and sys.argv[1] == "import-resume":
+        from claude_tap.import_resume import import_resume_main
+
+        sys.exit(import_resume_main(sys.argv[2:]))
+
     if len(sys.argv) > 1 and sys.argv[1] == "update":
         sys.exit(update_main(sys.argv[2:]))
 
