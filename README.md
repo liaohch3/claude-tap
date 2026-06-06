@@ -410,6 +410,13 @@ claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 claude-tap export <session-id> --format compact -o trace.ctap.json
 claude-tap export trace.ctap.json -o trace.html
 
+# Move an in-progress Claude Code session to another machine.
+# On machine A: rebuild the conversation as a resumable session log.
+claude-tap export <session-id> --format claude-resume -o transplant.jsonl
+# On machine B: install it into Claude Code's store, then resume.
+claude-tap import-resume transplant.jsonl --cwd /path/to/project
+claude --resume <printed-session-id>
+
 # Capture only the prompt surface for automation; also writes trace.jsonl next to prompt.md
 claude-tap --tap-export-prompt prompt.md -- -p "hello"
 
