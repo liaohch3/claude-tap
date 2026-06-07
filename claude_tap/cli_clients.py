@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -361,12 +362,17 @@ async def run_client(
             kimi_code_sandbox, _patched_providers, kimi_code_source_home, cmd_args = _prepare_kimi_code_reverse_sandbox(
                 port, cmd_args
             )
+            if _kimi_code_model_arg(cmd_args):
+                env.pop("KIMI_MODEL_NAME", None)
+                env.pop("KIMI_MODEL_BASE_URL", None)
             reverse_env = {
                 "KIMI_CODE_HOME": str(kimi_code_sandbox),
                 "KIMI_CODE_BASE_URL": cfg.reverse_base_url(port),
                 "KIMI_BASE_URL": cfg.reverse_base_url(port),
             }
-            if os.environ.get("KIMI_MODEL_NAME") or os.environ.get("KIMI_MODEL_BASE_URL"):
+            if not _kimi_code_model_arg(cmd_args) and (
+                os.environ.get("KIMI_MODEL_NAME") or os.environ.get("KIMI_MODEL_BASE_URL")
+            ):
                 reverse_env["KIMI_MODEL_BASE_URL"] = cfg.reverse_base_url(port)
         elif client == "openclaw":
             reverse_env = _openclaw_reverse_env(port, cmd_args)
@@ -1191,12 +1197,84 @@ def _minimal_kimi_code_config_toml(proxy_base: str) -> str:
     )
 
 
+def _kimi_code_config_has_launch_state(source_text: str) -> bool:
+    if not source_text.strip():
+        return False
+    try:
+        config = tomllib.loads(source_text)
+    except (tomllib.TOMLDecodeError, ValueError):
+        return True
+    if not isinstance(config, dict):
+        return False
+    return any(key in config for key in ("default_model", "models", "providers"))
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _write_kimi_code_config_metadata(
+    sandbox: Path,
+    *,
+    source_config: Path | None,
+    sandbox_config: Path,
+    patched_text: str,
+    proxy_base: str,
+    upstream_base: str,
+) -> None:
+    if source_config is None:
+        return
+    metadata = {
+        "source_config": str(source_config.expanduser().resolve()),
+        "sandbox_config": str(sandbox_config),
+        "patched_sha256": _sha256_text(patched_text),
+        "proxy_base": proxy_base,
+        "upstream_base": upstream_base,
+    }
+    (sandbox / _KIMI_CODE_CONFIG_METADATA).write_text(json.dumps(metadata), encoding="utf-8")
+
+
+def _persist_kimi_code_config_edits(sandbox: Path) -> None:
+    metadata_path = sandbox / _KIMI_CODE_CONFIG_METADATA
+    if not metadata_path.is_file():
+        return
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if not isinstance(metadata, dict):
+        return
+    source_config_raw = metadata.get("source_config")
+    sandbox_config_raw = metadata.get("sandbox_config")
+    patched_sha256 = metadata.get("patched_sha256")
+    proxy_base = metadata.get("proxy_base")
+    upstream_base = metadata.get("upstream_base")
+    if not all(isinstance(value, str) and value for value in (source_config_raw, sandbox_config_raw, patched_sha256)):
+        return
+    sandbox_config = Path(sandbox_config_raw)
+    if not sandbox_config.is_file():
+        return
+    try:
+        final_text = sandbox_config.read_text(encoding="utf-8")
+    except OSError:
+        return
+    if _sha256_text(final_text) == patched_sha256:
+        return
+    if isinstance(proxy_base, str) and isinstance(upstream_base, str) and proxy_base and upstream_base:
+        final_text = final_text.replace(proxy_base, upstream_base)
+    source_config = Path(source_config_raw)
+    source_config.parent.mkdir(parents=True, exist_ok=True)
+    source_config.write_text(final_text, encoding="utf-8")
+
+
 _KIMI_CODE_SANDBOX_LINKS: tuple[tuple[str, bool], ...] = (
     ("oauth", True),
     ("credentials", True),
     ("sessions", True),
     ("mcp.json", False),
+    ("tui.toml", False),
 )
+_KIMI_CODE_CONFIG_METADATA = ".claude-tap-config-metadata.json"
 
 
 def _link_kimi_code_sandbox_path(source_home: Path, sandbox: Path, rel: str, *, is_dir: bool) -> None:
@@ -1221,6 +1299,7 @@ def _link_kimi_code_sandbox_path(source_home: Path, sandbox: Path, rel: str, *, 
 
 def _persist_kimi_code_sandbox(source_home: Path, sandbox: Path) -> None:
     """Copy sandbox-only auth/session files back when symlinks were unavailable."""
+    _persist_kimi_code_config_edits(sandbox)
     for name, is_dir in _KIMI_CODE_SANDBOX_LINKS:
         path = sandbox / name
         if not path.exists() or path.is_symlink():
@@ -1368,11 +1447,34 @@ def _remap_kimi_code_sandbox_paths(source_home: Path, sandbox: Path) -> None:
             path.write_text(rewritten, encoding="utf-8")
 
 
+def _kimi_code_config_model_target(config: dict[str, object], model_name: str) -> str | None:
+    models = config.get("models")
+    providers = config.get("providers")
+    if not model_name.strip() or not isinstance(models, dict) or not isinstance(providers, dict):
+        return None
+    alias = models.get(model_name.strip())
+    if not isinstance(alias, dict):
+        return None
+    provider_name = alias.get("provider")
+    if not isinstance(provider_name, str):
+        return None
+    provider = providers.get(provider_name)
+    if not isinstance(provider, dict):
+        return None
+    base_url = _kimi_code_provider_base_url(provider)
+    if base_url:
+        return base_url
+    if provider.get("type") == "kimi":
+        return CLIENT_CONFIGS["kimi-code"].default_target
+    return None
+
+
 def _prepare_kimi_code_reverse_sandbox(
     port: int, cmd_args: Sequence[str] = ()
 ) -> tuple[Path, list[str], Path, list[str]]:
     source_home = _kimi_code_source_home()
     proxy_base = f"http://127.0.0.1:{port}"
+    upstream_base = _detect_kimi_code_target(cmd_args)
     sandbox = Path(tempfile.mkdtemp(prefix=_KIMI_CODE_SANDBOX_DIR_PREFIX))
     patched_cmd_args = list(cmd_args)
     inline_config = _kimi_code_inline_config_arg(cmd_args)
@@ -1397,9 +1499,20 @@ def _prepare_kimi_code_reverse_sandbox(
         else:
             patched_text, patched_providers = _patch_kimi_code_config_text(source_text, proxy_base, cmd_args)
             if not patched_providers:
-                patched_text = _minimal_kimi_code_config_toml(proxy_base)
-                patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
+                if _kimi_code_config_has_launch_state(source_text):
+                    patched_text = source_text
+                else:
+                    patched_text = _minimal_kimi_code_config_toml(proxy_base)
+                    patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
             target_config.write_text(patched_text, encoding="utf-8")
+        _write_kimi_code_config_metadata(
+            sandbox,
+            source_config=source_config,
+            sandbox_config=target_config,
+            patched_text=target_config.read_text(encoding="utf-8"),
+            proxy_base=proxy_base,
+            upstream_base=upstream_base,
+        )
         patched_cmd_args = _replace_kimi_code_option_value(cmd_args, {"--config-file"}, str(target_config))
     else:
         source_config = source_home / "config.toml"
@@ -1408,12 +1521,23 @@ def _prepare_kimi_code_reverse_sandbox(
             source_text = source_config.read_text(encoding="utf-8")
             patched_text, patched_providers = _patch_kimi_code_config_text(source_text, proxy_base, cmd_args)
             if not patched_providers:
-                patched_text = _minimal_kimi_code_config_toml(proxy_base)
-                patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
+                if _kimi_code_config_has_launch_state(source_text):
+                    patched_text = source_text
+                else:
+                    patched_text = _minimal_kimi_code_config_toml(proxy_base)
+                    patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
             target_config.write_text(patched_text, encoding="utf-8")
         else:
             target_config.write_text(_minimal_kimi_code_config_toml(proxy_base), encoding="utf-8")
             patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
+        _write_kimi_code_config_metadata(
+            sandbox,
+            source_config=source_config,
+            sandbox_config=target_config,
+            patched_text=target_config.read_text(encoding="utf-8"),
+            proxy_base=proxy_base,
+            upstream_base=upstream_base,
+        )
 
     for rel, is_dir in _KIMI_CODE_SANDBOX_LINKS:
         _link_kimi_code_sandbox_path(source_home, sandbox, rel, is_dir=is_dir)
@@ -1426,35 +1550,29 @@ def _prepare_kimi_code_reverse_sandbox(
 
 
 def _detect_kimi_code_target(cmd_args: Sequence[str] = ()) -> str:
-    for env_key in ("KIMI_MODEL_BASE_URL", "KIMI_BASE_URL"):
+    config = _kimi_code_config_for_args(cmd_args)
+    model_arg = _kimi_code_model_arg(cmd_args)
+    if model_arg:
+        base_url = _kimi_code_config_model_target(config, model_arg)
+        if base_url:
+            return base_url
+
+    for env_key in ("KIMI_MODEL_BASE_URL", "KIMI_BASE_URL", "KIMI_CODE_BASE_URL"):
         base_url = os.environ.get(env_key, "").strip()
         if base_url:
             return base_url
 
-    config = _kimi_code_config_for_args(cmd_args)
-    selected_model = _kimi_code_model_arg(cmd_args)
+    selected_model = model_arg
     if not selected_model:
         default_model = config.get("default_model")
         if isinstance(default_model, str) and default_model.strip():
             selected_model = default_model.strip()
-    models = config.get("models")
-    providers = config.get("providers")
-    if (
-        isinstance(selected_model, str)
-        and selected_model.strip()
-        and isinstance(models, dict)
-        and isinstance(providers, dict)
-    ):
-        alias = models.get(selected_model.strip())
-        if isinstance(alias, dict):
-            provider_name = alias.get("provider")
-            if isinstance(provider_name, str):
-                provider = providers.get(provider_name)
-                if isinstance(provider, dict):
-                    base_url = _kimi_code_provider_base_url(provider)
-                    if base_url:
-                        return base_url
+    if isinstance(selected_model, str) and selected_model.strip():
+        base_url = _kimi_code_config_model_target(config, selected_model.strip())
+        if base_url:
+            return base_url
 
+    providers = config.get("providers")
     if isinstance(providers, dict):
         managed = providers.get(_KIMI_CODE_MANAGED_PROVIDER)
         if isinstance(managed, dict):

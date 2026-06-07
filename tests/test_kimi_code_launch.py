@@ -93,6 +93,56 @@ def test_detect_kimi_code_target_uses_shell_base_url(monkeypatch: pytest.MonkeyP
     assert _detect_kimi_code_target() == "https://gateway.example.com/v1"
 
 
+def test_detect_kimi_code_target_uses_kimi_code_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("KIMI_CODE_BASE_URL", "https://managed.example.com/coding/v1")
+
+    assert _detect_kimi_code_target() == "https://managed.example.com/coding/v1"
+
+
+def test_detect_kimi_code_target_model_arg_overrides_stale_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    home = tmp_path / "kimi-code-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        """
+[models.selected]
+provider = "managed:kimi-code"
+model = "kimi-for-coding"
+
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://selected.example.com/coding/v1"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+    monkeypatch.setenv("KIMI_MODEL_NAME", "stale")
+    monkeypatch.setenv("KIMI_MODEL_BASE_URL", "https://stale.example.com/v1")
+
+    assert _detect_kimi_code_target(["-m", "selected"]) == "https://selected.example.com/coding/v1"
+
+
+def test_detect_kimi_code_target_model_arg_without_base_url_uses_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "kimi-code-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        """
+[models.selected]
+provider = "managed:kimi-code"
+model = "kimi-for-coding"
+
+[providers."managed:kimi-code"]
+type = "kimi"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+    monkeypatch.setenv("KIMI_MODEL_BASE_URL", "https://stale.example.com/v1")
+
+    assert _detect_kimi_code_target(["-m", "selected"]) == "https://api.kimi.com/coding/v1"
+
+
 def test_detect_kimi_code_target_reads_config_file_arg(tmp_path: Path) -> None:
     override_config = tmp_path / "override.toml"
     override_config.write_text(
@@ -315,6 +365,46 @@ async def test_run_client_kimi_code_reverse_rewrites_model_env_override(
     assert env["KIMI_BASE_URL"] == "http://127.0.0.1:43123"
 
 
+@pytest.mark.asyncio
+async def test_run_client_kimi_code_model_arg_clears_model_env_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+    home = tmp_path / "source-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        """
+[models.selected]
+provider = "managed:kimi-code"
+model = "kimi-for-coding"
+
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://selected.example.com/coding/v1"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+    monkeypatch.setenv("KIMI_MODEL_NAME", "stale")
+    monkeypatch.setenv("KIMI_MODEL_BASE_URL", "https://stale.example.com/v1")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/kimi")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["-m", "selected", "--prompt", "hi"], client="kimi-code", proxy_mode="reverse")
+
+    assert code == 0
+    env = captured["env"]
+    assert "KIMI_MODEL_NAME" not in env
+    assert "KIMI_MODEL_BASE_URL" not in env
+    assert env["KIMI_BASE_URL"] == "http://127.0.0.1:43123"
+
+
 def test_kimi_code_migration_already_handled_reads_legacy_marker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -442,6 +532,39 @@ def test_prepare_kimi_code_reverse_sandbox_creates_auth_dirs_for_first_login(
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def test_prepare_kimi_code_reverse_sandbox_preserves_non_kimi_provider_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "source-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        """
+default_model = "gpt/test"
+
+[models."gpt/test"]
+provider = "openai"
+model = "gpt-test"
+
+[providers.openai]
+type = "openai"
+base_url = "https://openai.example.com/v1"
+api_key = "sk-test"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+
+    sandbox, providers, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    try:
+        config = (sandbox / "config.toml").read_text(encoding="utf-8")
+        assert providers == []
+        assert 'type = "openai"' in config
+        assert 'base_url = "https://openai.example.com/v1"' in config
+        assert "managed:kimi-code" not in config
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -450,6 +573,7 @@ def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
     sessions_dir.mkdir(parents=True)
     (sessions_dir / "abc.jsonl").write_text("{}", encoding="utf-8")
     (home / "mcp.json").write_text("{}", encoding="utf-8")
+    (home / "tui.toml").write_text('theme = "dark"\n', encoding="utf-8")
     (home / "config.toml").write_text(
         '[providers."managed:kimi-code"]\ntype = "kimi"\nbase_url = "https://api.kimi.com/coding/v1"\n',
         encoding="utf-8",
@@ -462,6 +586,8 @@ def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
         assert (sandbox / "sessions").resolve() == sessions_dir.resolve()
         assert (sandbox / "mcp.json").is_symlink()
         assert (sandbox / "mcp.json").resolve() == (home / "mcp.json").resolve()
+        assert (sandbox / "tui.toml").is_symlink()
+        assert (sandbox / "tui.toml").resolve() == (home / "tui.toml").resolve()
         assert (sandbox / "session_index.jsonl").is_file()
         assert not (sandbox / "session_index.jsonl").is_symlink()
     finally:
@@ -482,6 +608,7 @@ def test_prepare_kimi_code_reverse_sandbox_copies_when_symlinks_fail(
     sessions_dir.mkdir()
     (sessions_dir / "abc.jsonl").write_text("{}", encoding="utf-8")
     (home / "mcp.json").write_text("{}", encoding="utf-8")
+    (home / "tui.toml").write_text('theme = "dark"\n', encoding="utf-8")
     (home / "config.toml").write_text(
         '[providers."managed:kimi-code"]\ntype = "kimi"\nbase_url = "https://api.kimi.com/coding/v1"\n',
         encoding="utf-8",
@@ -500,11 +627,47 @@ def test_prepare_kimi_code_reverse_sandbox_copies_when_symlinks_fail(
         assert (sandbox / "credentials" / "kimi-code.json").is_file()
         assert (sandbox / "sessions" / "abc.jsonl").is_file()
         assert (sandbox / "mcp.json").is_file()
+        assert (sandbox / "tui.toml").is_file()
 
         (sandbox / "oauth" / "new-login").write_text("persisted", encoding="utf-8")
+        (sandbox / "tui.toml").write_text('theme = "light"\n', encoding="utf-8")
         _persist_kimi_code_sandbox(home, sandbox)
 
         assert (home / "oauth" / "new-login").read_text(encoding="utf-8") == "persisted"
+        assert (home / "tui.toml").read_text(encoding="utf-8") == 'theme = "light"\n'
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_persist_kimi_code_sandbox_writes_config_edits_without_proxy_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "source-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        """
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://api.kimi.com/coding/v1"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+
+    sandbox, _, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    try:
+        sandbox_config = sandbox / "config.toml"
+        sandbox_config.write_text(
+            sandbox_config.read_text(encoding="utf-8") + '\n[ui]\ntheme = "dark"\n',
+            encoding="utf-8",
+        )
+
+        _persist_kimi_code_sandbox(home, sandbox)
+
+        persisted = (home / "config.toml").read_text(encoding="utf-8")
+        assert "http://127.0.0.1:43123" not in persisted
+        assert 'base_url = "https://api.kimi.com/coding/v1"' in persisted
+        assert 'theme = "dark"' in persisted
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
