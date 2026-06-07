@@ -225,16 +225,75 @@ class TraceStore:
         conn = self._connect()
         return conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
 
-    def list_session_rows(self) -> list[sqlite3.Row]:
+    def list_session_rows(self, *, limit: int | None = None, offset: int = 0) -> list[sqlite3.Row]:
         conn = self._connect()
+        offset = max(0, offset)
+        limit_sql = ""
+        params: list[object] = []
+        if limit is not None:
+            limit_sql = " LIMIT ? OFFSET ?"
+            params.extend([max(0, limit), offset])
         return conn.execute(
-            """
+            f"""
             SELECT * FROM sessions
             ORDER BY COALESCE(julianday(updated_at), 0) DESC,
                      COALESCE(julianday(started_at), 0) DESC,
                      id DESC
-            """
+            {limit_sql}
+            """,
+            params,
         ).fetchall()
+
+    def count_session_rows(self) -> int:
+        conn = self._connect()
+        row = conn.execute("SELECT COUNT(*) AS count FROM sessions").fetchone()
+        return int(row["count"] or 0) if row is not None else 0
+
+    def delete_sessions(self, session_ids: list[str]) -> dict[str, int | list[str]]:
+        """Delete multiple trace sessions and their dependent records/logs."""
+        unique_ids = list(dict.fromkeys(session_id for session_id in session_ids if session_id))
+        if not unique_ids:
+            return {
+                "deleted_sessions": 0,
+                "deleted_records": 0,
+                "deleted_logs": 0,
+                "missing_sessions": [],
+            }
+        placeholders = ",".join("?" * len(unique_ids))
+        with self._write_lock:
+            conn = self._connect()
+            rows = conn.execute(
+                f"SELECT id FROM sessions WHERE id IN ({placeholders})",
+                unique_ids,
+            ).fetchall()
+            existing_ids = [row["id"] for row in rows]
+            missing_ids = [session_id for session_id in unique_ids if session_id not in set(existing_ids)]
+            if not existing_ids:
+                return {
+                    "deleted_sessions": 0,
+                    "deleted_records": 0,
+                    "deleted_logs": 0,
+                    "missing_sessions": missing_ids,
+                }
+            existing_placeholders = ",".join("?" * len(existing_ids))
+            record_row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM records WHERE session_id IN ({existing_placeholders})",
+                existing_ids,
+            ).fetchone()
+            log_row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM proxy_logs WHERE session_id IN ({existing_placeholders})",
+                existing_ids,
+            ).fetchone()
+            deleted_records = int(record_row["count"] or 0) if record_row is not None else 0
+            deleted_logs = int(log_row["count"] or 0) if log_row is not None else 0
+            conn.execute(f"DELETE FROM sessions WHERE id IN ({existing_placeholders})", existing_ids)
+            conn.commit()
+        return {
+            "deleted_sessions": len(existing_ids),
+            "deleted_records": deleted_records,
+            "deleted_logs": deleted_logs,
+            "missing_sessions": missing_ids,
+        }
 
     def load_records(
         self,

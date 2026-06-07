@@ -205,13 +205,13 @@ body.detail-route .main {
   letter-spacing: .18em;
   white-space: nowrap;
 }
-.control-panel {
-  display: grid;
-  grid-template-columns: minmax(190px, 260px) minmax(160px, 210px) minmax(260px, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  margin-bottom: 12px;
-}
+	.control-panel {
+	  display: grid;
+	  grid-template-columns: minmax(190px, 260px) minmax(160px, 210px) minmax(260px, 1fr) auto;
+	  gap: 10px;
+	  align-items: center;
+	  margin-bottom: 12px;
+	}
 .control-field {
   display: flex;
   align-items: center;
@@ -238,20 +238,45 @@ body.detail-route .main {
 .session-search input:hover,
 .session-search input:focus { border-color: var(--blue); }
 .session-search { display: flex; align-items: center; min-width: 0; }
-.history-refresh {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-height: 32px; min-width: 38px; padding: 5px 12px;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--bg-card); color: var(--text-secondary);
-  font-family: var(--mono); font-size: 12px; line-height: 1;
-  transition: color .15s, border-color .15s, background .15s;
-}
-.history-refresh:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
-.history-refresh.loading,
-.history-refresh:disabled {
-  cursor: progress;
-  opacity: .68;
-}
+	.history-actions {
+	  display: inline-flex;
+	  align-items: center;
+	  justify-content: flex-end;
+	  gap: 8px;
+	  white-space: nowrap;
+	}
+	.history-refresh,
+	.history-edit,
+	.bulk-action {
+	  display: inline-flex; align-items: center; justify-content: center;
+	  min-height: 32px; min-width: 38px; padding: 5px 12px;
+	  border: 1px solid var(--border); border-radius: 6px;
+	  background: var(--bg-card); color: var(--text-secondary);
+	  font-family: var(--mono); font-size: 12px; line-height: 1;
+	  transition: color .15s, border-color .15s, background .15s;
+	}
+	.history-refresh:hover,
+	.history-edit:hover,
+	.bulk-action:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-bg); }
+	.history-refresh.loading,
+	.history-refresh:disabled,
+	.history-edit:disabled,
+	.bulk-action:disabled {
+	  cursor: progress;
+	  opacity: .68;
+	}
+	.bulk-action.danger {
+	  color: var(--red);
+	  border-color: color-mix(in srgb, var(--red) 35%, var(--border));
+	}
+	.bulk-action.danger:hover:not(:disabled) {
+	  color: var(--red);
+	  border-color: var(--red);
+	  background: var(--red-bg);
+	}
+	.bulk-action:disabled {
+	  cursor: not-allowed;
+	}
 .overview-card {
   display: grid;
   grid-template-columns: repeat(4, max-content);
@@ -282,16 +307,74 @@ body.detail-route .main {
   font-weight: 700;
   line-height: 1;
 }
-.table-panel {
+	.table-panel {
   border: 1px solid #cfd8e7;
   border-radius: 8px;
   background: var(--bg-card);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
-  flex-shrink: 0;
-}
-[data-theme="dark"] .table-panel { border-color: var(--border); }
-.table-scroll {
+	  flex-shrink: 0;
+	}
+	[data-theme="dark"] .table-panel { border-color: var(--border); }
+	.bulk-edit-bar,
+	.session-pagination {
+	  display: flex;
+	  align-items: center;
+	  gap: 10px;
+	  padding: 10px 14px;
+	  border-bottom: 1px solid var(--border-light);
+	  background: var(--bg-card);
+	  color: var(--text-secondary);
+	  font-size: 12px;
+	}
+	.bulk-edit-bar {
+	  justify-content: flex-start;
+	}
+	.session-pagination {
+	  justify-content: center;
+	  border-top: 1px solid var(--border-light);
+	  border-bottom: 0;
+	}
+	.bulk-select-all {
+	  display: inline-flex;
+	  align-items: center;
+	  gap: 7px;
+	  font-weight: 600;
+	}
+	.bulk-selected-count,
+	.session-page-count {
+	  color: var(--text-tertiary);
+	  font-family: var(--mono);
+	}
+	.bulk-spacer {
+	  flex: 1 1 auto;
+	}
+	.session-select-col {
+	  display: none;
+	  width: 44px;
+	  min-width: 44px;
+	  padding-right: 6px !important;
+	  text-align: center !important;
+	}
+	body.edit-sessions .session-select-col {
+	  display: table-cell;
+	}
+	.session-checkbox {
+	  width: 16px;
+	  height: 16px;
+	  accent-color: var(--blue);
+	}
+	.session-row.selected {
+	  background: var(--blue-bg);
+	}
+	.session-row.select-disabled {
+	  cursor: default;
+	}
+	.session-row.select-disabled .session-checkbox {
+	  cursor: not-allowed;
+	  opacity: .45;
+	}
+	.table-scroll {
   max-height: min(55vh, 620px);
   overflow: auto;
 }
@@ -335,8 +418,10 @@ body.detail-route .main {
   transition: background .12s;
 }
 .session-row:hover { background: var(--bg-hover); }
-.session-row.active { background: var(--blue-bg); }
-.session-row.active td:first-child { box-shadow: inset 3px 0 0 var(--blue); }
+	.session-row.active { background: var(--blue-bg); }
+	.session-row.active td:first-child,
+	body.edit-sessions .session-row.active td:nth-child(2) { box-shadow: inset 3px 0 0 var(--blue); }
+	body.edit-sessions .session-row.active td:first-child { box-shadow: none; }
 .mono-cell {
   color: var(--text-secondary);
   font-family: var(--mono);
@@ -856,7 +941,9 @@ pre {
   .main { overflow: visible; padding: 12px; }
   .dashboard-title-row { flex-wrap: wrap; }
   .dashboard-clock { width: 100%; margin-left: 0; }
-  .control-panel { grid-template-columns: 1fr; }
+	  .control-panel { grid-template-columns: 1fr; }
+	  .history-actions { justify-content: flex-start; }
+	  .bulk-edit-bar { flex-wrap: wrap; }
   .overview-card { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .table-scroll { max-height: none; }
   .detail-page-head { align-items: flex-start; }
@@ -916,11 +1003,14 @@ pre {
           <option value="empty">Empty</option>
         </select>
       </label>
-      <div class="session-search" role="search">
-        <input id="search" type="search" placeholder="Search messages, agents, models, paths..." data-i18n-placeholder="search_placeholder">
-      </div>
-      <button id="refresh" class="history-refresh" title="Refresh" data-i18n-title="refresh">R</button>
-    </div>
+	      <div class="session-search" role="search">
+	        <input id="search" type="search" placeholder="Search messages, agents, models, paths..." data-i18n-placeholder="search_placeholder">
+	      </div>
+	      <div class="history-actions">
+	        <button id="edit-sessions" class="history-edit" type="button" data-i18n="edit_sessions">Edit</button>
+	        <button id="refresh" class="history-refresh" title="Refresh" data-i18n-title="refresh">R</button>
+	      </div>
+	    </div>
 
     <section class="overview-card" aria-label="Dashboard summary">
       <div class="metric">
@@ -941,14 +1031,25 @@ pre {
       </div>
     </section>
 
-    <section class="table-panel" aria-label="Trace sessions">
-      <div class="table-scroll">
-        <table class="session-table">
-          <thead>
-            <tr>
-              <th data-i18n="table_start_time">Start Time</th>
-              <th data-i18n="table_first_message">First Message</th>
-              <th data-i18n="table_traces">Traces</th>
+	    <section class="table-panel" aria-label="Trace sessions">
+	      <div id="bulk-edit-bar" class="bulk-edit-bar hidden">
+	        <label class="bulk-select-all">
+	          <input id="select-all-sessions" class="session-checkbox" type="checkbox">
+	          <span data-i18n="select_all_sessions">Select all</span>
+	        </label>
+	        <span id="bulk-selected-count" class="bulk-selected-count">0 selected</span>
+	        <span class="bulk-spacer"></span>
+	        <button id="delete-selected-sessions" class="bulk-action danger" type="button" data-i18n="delete_selected">Delete selected</button>
+	        <button id="done-edit-sessions" class="bulk-action" type="button" data-i18n="done">Done</button>
+	      </div>
+	      <div class="table-scroll">
+	        <table class="session-table">
+	          <thead>
+	            <tr>
+	              <th class="session-select-col" aria-label="Select"></th>
+	              <th data-i18n="table_start_time">Start Time</th>
+	              <th data-i18n="table_first_message">First Message</th>
+	              <th data-i18n="table_traces">Traces</th>
               <th data-i18n="table_tokens">Tokens</th>
               <th data-i18n="table_model">Model</th>
               <th data-i18n="table_agent">Agent</th>
@@ -956,10 +1057,11 @@ pre {
               <th data-i18n="table_actions">Actions</th>
             </tr>
           </thead>
-          <tbody id="session-list"></tbody>
-        </table>
-      </div>
-    </section>
+	          <tbody id="session-list"></tbody>
+	        </table>
+	      </div>
+	      <div id="session-pagination" class="session-pagination hidden"></div>
+	    </section>
   </section>
 
   <section id="detail-view" class="detail-view hidden">
@@ -1000,29 +1102,36 @@ const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
 
 const state = {
   sessions: [],
+  agents: [],
   selectedAgent: "all",
   selectedSessionId: null,
   pendingSessionId: initialSessionId(),
   view: "list",
-  activeTab: "conversation",
+	  activeTab: "raw",
   search: "",
   date: "all",
-  status: "all",
-  loadingSessions: false,
-  loadingSessionId: null,
-  sessionRequestId: 0,
-  pendingDeleteSessionId: null,
-  deletingSessionId: null,
-  detailSessionId: null,
-  detailRecordsLoaded: 0,
-  detailRecordTotal: 0,
-  detailFingerprint: "",
-  detailSession: null,
-};
+	  status: "all",
+	  loadingSessions: false,
+	  loadingMoreSessions: false,
+	  sessionPageSize: 100,
+	  sessionTotal: 0,
+	  sessionsHasMore: false,
+	  loadingSessionId: null,
+	  sessionRequestId: 0,
+	  editMode: false,
+	  selectedSessionIds: new Set(),
+	  pendingDeleteSessionIds: [],
+	  deletingSessionIds: new Set(),
+	  detailSessionId: null,
+	  detailRecordsLoaded: 0,
+	  detailRecordTotal: 0,
+	  detailFingerprint: "",
+	  detailSession: null,
+	};
 
 const $ = selector => document.querySelector(selector);
-const MAX_INLINE_DETAIL_RECORDS = 10;
-let deleteSessionReturnFocusEl = null;
+	const MAX_INLINE_DETAIL_RECORDS = 10;
+	let deleteSessionReturnFocusEl = null;
 
 function initialSessionId() {
   const routeMatch = window.location.pathname.match(SESSION_DETAIL_ROUTE);
@@ -1059,9 +1168,17 @@ const DASHBOARD_I18N = {
     status_error: "Error",
     status_empty: "Empty",
     status_empty_short: "EMPTY",
-    search_placeholder: "Search messages, agents, models, paths...",
-    refresh: "Refresh",
-    metric_threads: "Threads",
+	    search_placeholder: "Search messages, agents, models, paths...",
+	    refresh: "Refresh",
+	    edit_sessions: "Edit",
+	    done: "Done",
+	    select_all_sessions: "Select all",
+	    selected_sessions: "{count} selected",
+	    delete_selected: "Delete selected",
+	    load_more_sessions: "Load more sessions",
+	    loading_more_sessions: "Loading more sessions...",
+	    sessions_loaded: "Showing {shown} of {total} sessions.",
+	    metric_threads: "Threads",
     metric_traces: "Traces",
     metric_error_rate: "Error Rate",
     metric_total_tokens: "Total Tokens",
@@ -1088,15 +1205,17 @@ const DASHBOARD_I18N = {
     view_details: "View session details",
     details: "Details",
     delete_session: "Delete",
-    delete_session_title: "Delete session?",
-    delete_session_message: "This removes the captured records and logs for this trace session.",
-    delete_session_warning: "This action cannot be undone.",
-    delete_live_session_title: "Live session cannot be deleted",
-    delete_active_session_title: "Active trace is still being written",
-    cancel: "Cancel",
-    confirm_delete: "Delete",
-    deleting_session: "Deleting...",
-    unable_delete_session: "Unable to delete session: {error}",
+	    delete_session_title: "Delete selected sessions?",
+	    delete_session_message: "This removes captured records and logs for the selected trace sessions.",
+	    delete_session_warning: "This action cannot be undone.",
+	    delete_live_session_title: "Live session cannot be deleted",
+	    delete_active_session_title: "Active trace is still being written",
+	    cancel: "Cancel",
+	    confirm_delete: "Delete",
+	    deleting_session: "Deleting...",
+	    deleting_sessions: "Deleting...",
+	    selected_delete_summary: "{count} sessions selected",
+	    unable_delete_session: "Unable to delete session: {error}",
     back_to_sessions: "Back to sessions",
     session_detail: "Session detail",
     session_details: "{agent} details",
@@ -1122,8 +1241,9 @@ const DASHBOARD_I18N = {
     cache_read: "Cache R",
     cache_write: "Cache W",
     total: "Total",
-    tab_default: "Default",
-    tab_trace: "Trace",
+	    tab_default: "Default",
+	    tab_trace: "Trace",
+	    full_viewer: "Full viewer",
     request_empty: "Request body has no user-facing message.",
     response_empty: "Response body has no assistant text.",
     request: "Request",
@@ -1152,9 +1272,17 @@ const DASHBOARD_I18N = {
     status_error: "错误",
     status_empty: "空会话",
     status_empty_short: "空",
-    search_placeholder: "搜索消息、Agent、模型、路径...",
-    refresh: "刷新",
-    metric_threads: "会话数",
+	    search_placeholder: "搜索消息、Agent、模型、路径...",
+	    refresh: "刷新",
+	    edit_sessions: "编辑",
+	    done: "完成",
+	    select_all_sessions: "全选",
+	    selected_sessions: "已选择 {count} 个",
+	    delete_selected: "删除所选",
+	    load_more_sessions: "加载更多会话",
+	    loading_more_sessions: "正在加载更多会话...",
+	    sessions_loaded: "正在展示 {shown} / {total} 个会话。",
+	    metric_threads: "会话数",
     metric_traces: "Trace 数",
     metric_error_rate: "错误率",
     metric_total_tokens: "总 Token",
@@ -1181,15 +1309,17 @@ const DASHBOARD_I18N = {
     view_details: "查看会话详情",
     details: "详情",
     delete_session: "删除",
-    delete_session_title: "删除这个会话？",
-    delete_session_message: "这会删除该 trace 会话已捕获的记录和日志。",
-    delete_session_warning: "此操作不可撤销。",
+	    delete_session_title: "删除所选会话？",
+	    delete_session_message: "这会删除所选 trace 会话已捕获的记录和日志。",
+	    delete_session_warning: "此操作不可撤销。",
     delete_live_session_title: "实时会话不能删除",
     delete_active_session_title: "这个 trace 仍在写入",
     cancel: "取消",
-    confirm_delete: "删除",
-    deleting_session: "正在删除...",
-    unable_delete_session: "无法删除会话：{error}",
+	    confirm_delete: "删除",
+	    deleting_session: "正在删除...",
+	    deleting_sessions: "正在删除...",
+	    selected_delete_summary: "已选择 {count} 个会话",
+	    unable_delete_session: "无法删除会话：{error}",
     back_to_sessions: "返回会话列表",
     session_detail: "会话详情",
     session_details: "{agent} 详情",
@@ -1215,8 +1345,9 @@ const DASHBOARD_I18N = {
     cache_read: "缓存读",
     cache_write: "缓存写",
     total: "总计",
-    tab_default: "默认",
-    tab_trace: "Trace",
+	    tab_default: "默认",
+	    tab_trace: "Trace",
+	    full_viewer: "完整 Viewer",
     request_empty: "请求体里没有面向用户的消息。",
     response_empty: "响应体里没有 assistant 文本。",
     request: "请求",
@@ -1270,10 +1401,10 @@ function setLang(lang) {
   if (state.view === "detail" && state.detailSession) {
     updateDetailI18n(state.detailSession);
   }
-  if (state.pendingDeleteSessionId) {
-    renderDeleteSessionDialog();
-  }
-}
+	  if (state.pendingDeleteSessionIds.length) {
+	    renderDeleteSessionDialog();
+	  }
+	}
 
 function fmtNumber(value) {
   return Number(value || 0).toLocaleString();
@@ -1350,9 +1481,9 @@ async function fetchJSON(url, options = {}) {
   return await response.json();
 }
 
-function filteredSessions() {
-  const needle = state.search.trim().toLowerCase();
-  return state.sessions.filter(session => {
+	function filteredSessions() {
+	  const needle = state.search.trim().toLowerCase();
+	  return state.sessions.filter(session => {
     if (state.selectedAgent !== "all" && session.agent_key !== state.selectedAgent) return false;
     if (state.date !== "all" && session.date !== state.date) return false;
     if (state.status !== "all" && session.status !== state.status) return false;
@@ -1367,8 +1498,48 @@ function filteredSessions() {
       session.status,
     ].join(" ").toLowerCase();
     return haystack.includes(needle);
-  });
-}
+	  });
+	}
+
+	function sessionsPageUrl(offset, limit) {
+	  const params = new URLSearchParams({
+	    offset: String(Math.max(0, offset)),
+	    limit: String(Math.max(1, limit)),
+	  });
+	  return `/api/sessions?${params.toString()}`;
+	}
+
+	function mergeSessionPages(existing, incoming, offset) {
+	  if (offset === 0) return incoming;
+	  const byId = new Map(existing.map(session => [session.id, session]));
+	  for (const session of incoming) {
+	    byId.set(session.id, session);
+	  }
+	  return Array.from(byId.values()).sort((a, b) => {
+	    const byTime = timestampSortValue(b.updated_at) - timestampSortValue(a.updated_at);
+	    if (byTime) return byTime;
+	    return String(b.id || "").localeCompare(String(a.id || ""));
+	  });
+	}
+
+	function timestampSortValue(value) {
+	  const time = Date.parse(value || "");
+	  return Number.isFinite(time) ? time : 0;
+	}
+
+	function applySessionsPayload(payload, offset) {
+	  const incoming = payload.sessions || [];
+	  state.sessions = mergeSessionPages(state.sessions, incoming, offset);
+	  state.sessionTotal = Number(payload.total || state.sessions.length);
+	  state.sessionsHasMore = Boolean(payload.has_more);
+	}
+
+	function applyAgentsPayload(payload) {
+	  state.agents = Array.isArray(payload.agents) ? payload.agents : [];
+	  if (state.selectedAgent !== "all" && !state.agents.some(agent => agent.key === state.selectedAgent)) {
+	    state.selectedAgent = "all";
+	  }
+	}
 
 function renderStatusOptions() {
   const statusFilter = $("#status-filter");
@@ -1401,29 +1572,33 @@ function updateTracePathBar(session = null) {
   `;
 }
 
-async function refreshSessions({preserveSelection = true, refreshDetail = false} = {}) {
-  const requestId = state.sessionRequestId + 1;
-  state.sessionRequestId = requestId;
-  setDashboardLoading(true);
+	async function refreshSessions({preserveSelection = true, refreshDetail = false} = {}) {
+	  const requestId = state.sessionRequestId + 1;
+	  state.sessionRequestId = requestId;
+	  setDashboardLoading(true);
   if (!state.sessions.length) {
     renderSessions();
-  }
-  try {
-    const payload = await fetchJSON("/api/sessions");
-    if (requestId !== state.sessionRequestId) return;
-    state.sessions = payload.sessions || [];
-    renderFilters();
-    renderAgents();
+	  }
+	  try {
+	    const [payload, agentsPayload] = await Promise.all([
+	      fetchJSON(sessionsPageUrl(0, state.sessionPageSize)),
+	      fetchJSON("/api/agents"),
+	    ]);
+	    if (requestId !== state.sessionRequestId) return;
+	    applySessionsPayload(payload, 0);
+	    applyAgentsPayload(agentsPayload);
+	    pruneSelectedSessions();
+	    renderFilters();
+	    renderAgents();
 
-    const visible = filteredSessions();
-    const pendingSessionId = state.pendingSessionId;
-    if (pendingSessionId && visible.some(session => session.id === pendingSessionId)) {
-      state.pendingSessionId = null;
-      state.selectedSessionId = pendingSessionId;
-      state.view = "detail";
-    } else {
-      if (pendingSessionId) state.pendingSessionId = null;
-      const stillVisible = visible.some(session => session.id === state.selectedSessionId);
+	    const visible = filteredSessions();
+	    const pendingSessionId = state.pendingSessionId;
+	    if (pendingSessionId) {
+	      state.pendingSessionId = null;
+	      state.selectedSessionId = pendingSessionId;
+	      state.view = "detail";
+	    } else {
+	      const stillVisible = visible.some(session => session.id === state.selectedSessionId);
       if (!preserveSelection || !stillVisible) {
         state.selectedSessionId = null;
         state.view = "list";
@@ -1448,11 +1623,29 @@ async function refreshSessions({preserveSelection = true, refreshDetail = false}
     }
   } finally {
     if (requestId === state.sessionRequestId) {
-      setDashboardLoading(false);
-      renderSessions();
-    }
-  }
-}
+	      setDashboardLoading(false);
+	      renderSessions();
+	    }
+	  }
+	}
+
+	async function loadMoreSessions() {
+	  if (state.loadingMoreSessions || !state.sessionsHasMore) return;
+	  state.loadingMoreSessions = true;
+	  renderSessionPagination();
+	  const offset = state.sessions.length;
+	  try {
+	    const payload = await fetchJSON(sessionsPageUrl(offset, state.sessionPageSize));
+	    applySessionsPayload(payload, offset);
+	    pruneSelectedSessions();
+	    renderFilters();
+	    renderAgents();
+	    renderSessions();
+	  } finally {
+	    state.loadingMoreSessions = false;
+	    renderSessionPagination();
+	  }
+	}
 
 function renderFilters() {
   const dates = Array.from(new Set(state.sessions.map(session => session.date))).sort().reverse();
@@ -1463,22 +1656,16 @@ function renderFilters() {
     .join("");
   state.date = dates.includes(current) ? current : "all";
   dateFilter.value = state.date;
-  renderStatusOptions();
+	  renderStatusOptions();
 
-  const totalRecords = state.sessions.reduce((sum, session) => sum + session.record_count, 0);
-  $("#stat-sessions").textContent = fmtNumber(state.sessions.length);
-  $("#stat-records").textContent = fmtNumber(totalRecords);
-}
+	  const totalRecords = state.sessions.reduce((sum, session) => sum + session.record_count, 0);
+	  $("#stat-sessions").textContent = fmtNumber(state.sessionTotal || state.sessions.length);
+	  $("#stat-records").textContent = fmtNumber(totalRecords);
+	}
 
 function renderAgents() {
-  const buckets = new Map();
-  for (const session of state.sessions) {
-    const bucket = buckets.get(session.agent_key) || {key: session.agent_key, label: session.agent, sessions: 0};
-    bucket.sessions += 1;
-    buckets.set(session.agent_key, bucket);
-  }
-  const agents = [{key: "all", label: t("all_agents"), sessions: state.sessions.length}]
-    .concat(Array.from(buckets.values()).sort((a, b) => a.label.localeCompare(b.label)));
+  const agents = [{key: "all", label: t("all_agents"), sessions: state.sessionTotal || state.sessions.length}]
+    .concat(state.agents.map(agent => ({...agent})));
   $("#agent-list").innerHTML = agents.map(agent => `
     <button class="filter-chip ${state.selectedAgent === agent.key ? "active" : ""}" data-agent="${esc(agent.key)}">
       <span>${esc(agent.label)}</span>
@@ -1497,85 +1684,93 @@ function renderAgents() {
   });
 }
 
-function renderSessions() {
-  const sessions = filteredSessions();
-  renderOverview(sessions);
-  if (state.loadingSessions && !state.sessions.length) {
-    $("#session-list").innerHTML = `<tr><td class="loading-cell" colspan="8">${loadingMarkup(t("loading_sessions"))}</td></tr>`;
-    return;
-  }
-  if (!sessions.length) {
-    $("#session-list").innerHTML = `<tr><td class="table-empty" colspan="8">${esc(t("no_matching_sessions"))}</td></tr>`;
-    return;
-  }
+	function renderSessions() {
+	  const sessions = filteredSessions();
+	  renderOverview(sessions);
+	  renderBulkEditControls(sessions);
+	  renderSessionPagination();
+	  if (state.loadingSessions && !state.sessions.length) {
+	    $("#session-list").innerHTML = `<tr><td class="loading-cell" colspan="9">${loadingMarkup(t("loading_sessions"))}</td></tr>`;
+	    return;
+	  }
+	  if (!sessions.length) {
+	    $("#session-list").innerHTML = `<tr><td class="table-empty" colspan="9">${esc(t("no_matching_sessions"))}</td></tr>`;
+	    return;
+	  }
 
-  $("#session-list").innerHTML = sessions.map(session => sessionRow(session)).join("");
-  document.querySelectorAll("[data-session]").forEach(row => {
-    row.addEventListener("click", event => {
-      if (isSessionRowActionTarget(event.target)) return;
-      event.preventDefault();
-      openSession(row.dataset.session);
-    });
-    row.addEventListener("keydown", event => {
-      if (event.target !== row || isSessionRowActionTarget(event.target)) return;
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        openSession(row.dataset.session);
-      }
-    });
-  });
-  document.querySelectorAll("[data-open-session]").forEach(button => {
-    button.addEventListener("click", event => {
-      event.preventDefault();
-      event.stopPropagation();
-      openSession(button.dataset.openSession);
-    });
-  });
-  document.querySelectorAll("[data-delete-session]").forEach(button => {
-    button.addEventListener("keydown", event => {
-      if (event.key === "Enter" || event.key === " ") event.stopPropagation();
-    });
-    button.addEventListener("click", event => {
-      event.preventDefault();
-      event.stopPropagation();
-      showDeleteSessionDialog(button.dataset.deleteSession);
-    });
-  });
-}
+	  $("#session-list").innerHTML = sessions.map(session => sessionRow(session)).join("");
+	  document.querySelectorAll("[data-session]").forEach(row => {
+	    row.addEventListener("click", event => {
+	      if (isSessionRowActionTarget(event.target)) return;
+	      event.preventDefault();
+	      if (state.editMode) {
+	        toggleSessionSelected(row.dataset.session);
+	        return;
+	      }
+	      openSession(row.dataset.session);
+	    });
+	    row.addEventListener("keydown", event => {
+	      if (event.target !== row || isSessionRowActionTarget(event.target)) return;
+	      if (event.key === "Enter" || event.key === " ") {
+	        event.preventDefault();
+	        if (state.editMode) {
+	          toggleSessionSelected(row.dataset.session);
+	          return;
+	        }
+	        openSession(row.dataset.session);
+	      }
+	    });
+	  });
+	  document.querySelectorAll("[data-select-session]").forEach(input => {
+	    input.addEventListener("click", event => {
+	      event.stopPropagation();
+	    });
+	    input.addEventListener("change", () => toggleSessionSelected(input.dataset.selectSession, input.checked));
+	  });
+	  document.querySelectorAll("[data-open-session]").forEach(button => {
+	    button.addEventListener("click", event => {
+	      event.preventDefault();
+	      event.stopPropagation();
+	      openSession(button.dataset.openSession);
+	    });
+	  });
+	}
 
 function isSessionRowActionTarget(target) {
   return target instanceof Element && Boolean(target.closest("button, a, input, select, textarea"));
 }
 
-function sessionRow(session) {
-  const preview = session.first_user || "";
-  const firstMessage = preview || t("no_user_prompt");
-  const status = statusInfo(session);
-  const isLoading = state.loadingSessionId === session.id;
-  const isDeleting = state.deletingSessionId === session.id;
-  const isActive = session.live || session.active || session.status === "active";
-  const deleteDisabled = isActive || isDeleting;
-  const deleteTitle = isActive
-    ? (session.live ? t("delete_live_session_title") : t("delete_active_session_title"))
-    : t("delete_session");
-  return `
-    <tr class="session-row ${state.selectedSessionId === session.id ? "active" : ""}" data-session="${esc(session.id)}" tabindex="0">
-      <td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
-      <td><div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></td>
-      <td><span class="trace-count">${fmtNumber(session.record_count)}</span></td>
+	function sessionRow(session) {
+	  const preview = session.first_user || "";
+	  const firstMessage = preview || t("no_user_prompt");
+	  const status = statusInfo(session);
+	  const isLoading = state.loadingSessionId === session.id;
+	  const isDeleting = state.deletingSessionIds.has(session.id);
+	  const canSelect = canDeleteSession(session);
+	  const isSelected = state.selectedSessionIds.has(session.id);
+	  const selectTitle = canSelect
+	    ? t("select_all_sessions")
+	    : (session.live ? t("delete_live_session_title") : t("delete_active_session_title"));
+	  return `
+	    <tr class="session-row ${state.selectedSessionId === session.id ? "active" : ""} ${isSelected ? "selected" : ""} ${!canSelect ? "select-disabled" : ""}" data-session="${esc(session.id)}" tabindex="0">
+	      <td class="session-select-col">
+	        <input class="session-checkbox" type="checkbox" data-select-session="${esc(session.id)}" aria-label="${esc(selectTitle)}" ${isSelected ? "checked" : ""} ${!canSelect || isDeleting ? "disabled" : ""}>
+	      </td>
+	      <td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
+	      <td><div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></td>
+	      <td><span class="trace-count">${fmtNumber(session.record_count)}</span></td>
       <td><span class="token-pill">${fmtNumber(session.total_tokens)}</span></td>
       <td><span class="model-pill" title="${esc(session.model || t("unknown"))}">${esc(session.model || t("unknown"))}</span></td>
       <td><span class="agent-pill">${esc(session.agent || t("unknown"))}</span></td>
       <td><span class="status-pill ${status.className}">${esc(status.label)}</span></td>
-      <td>
-        <div class="row-actions">
-          <button class="row-action" type="button" data-open-session="${esc(session.id)}" aria-label="${esc(t("view_details"))}" aria-busy="${isLoading ? "true" : "false"}" ${isLoading ? "disabled" : ""}>${esc(isLoading ? t("loading_session") : t("details"))}</button>
-          <button class="row-action danger" type="button" data-delete-session="${esc(session.id)}" aria-label="${esc(deleteTitle)}" title="${esc(deleteTitle)}" aria-busy="${isDeleting ? "true" : "false"}" ${deleteDisabled ? "disabled" : ""}>${esc(isDeleting ? t("deleting_session") : t("delete_session"))}</button>
-        </div>
-      </td>
-    </tr>
-  `;
-}
+	      <td>
+	        <div class="row-actions">
+	          <button class="row-action" type="button" data-open-session="${esc(session.id)}" aria-label="${esc(t("view_details"))}" aria-busy="${isLoading ? "true" : "false"}" ${isLoading ? "disabled" : ""}>${esc(isLoading ? t("loading_session") : t("details"))}</button>
+	        </div>
+	      </td>
+	    </tr>
+	  `;
+	}
 
 function renderOverview(sessions) {
   const traces = sessions.reduce((sum, session) => sum + session.record_count, 0);
@@ -1588,41 +1783,141 @@ function renderOverview(sessions) {
   $("#overview-tokens").textContent = fmtNumber(tokens);
 }
 
-function statusInfo(session) {
-  if (session.status === "error") return {label: "ERR", className: "err"};
-  if (session.status === "empty") return {label: t("status_empty_short"), className: "empty-status"};
-  if (session.live || session.status === "active") return {label: "LIVE", className: "live"};
-  return {label: "OK", className: "ok"};
-}
+	function statusInfo(session) {
+	  if (session.status === "error") return {label: "ERR", className: "err"};
+	  if (session.status === "empty") return {label: t("status_empty_short"), className: "empty-status"};
+	  if (session.live || session.status === "active") return {label: "LIVE", className: "live"};
+	  return {label: "OK", className: "ok"};
+	}
 
-function deleteSessionMeta(session) {
-  return [
-    session.agent || t("unknown"),
-    fmtTableTime(session.started_at || session.updated_at),
-    `${fmtNumber(session.record_count)} ${t("records")}`,
-  ].filter(Boolean).join(" · ");
-}
+	function canDeleteSession(session) {
+	  return Boolean(session) && !session.live && !session.active && session.status !== "active";
+	}
 
-function renderDeleteSessionDialog() {
-  const session = state.sessions.find(item => item.id === state.pendingDeleteSessionId);
-  if (!session) return;
-  const firstMessage = session.first_user || t("no_user_prompt");
-  $("#delete-session-summary").textContent = firstMessage;
-  $("#delete-session-summary").setAttribute("title", firstMessage);
-  $("#delete-session-meta").textContent = deleteSessionMeta(session);
-  const isDeleting = state.deletingSessionId === session.id;
-  $("#delete-session-confirm").disabled = isDeleting;
-  $("#delete-session-confirm").textContent = isDeleting ? t("deleting_session") : t("confirm_delete");
-  $("#delete-session-cancel").disabled = isDeleting;
-}
+	function selectedDeletableSessions() {
+	  const byId = new Map(state.sessions.map(session => [session.id, session]));
+	  return Array.from(state.selectedSessionIds)
+	    .map(id => byId.get(id))
+	    .filter(canDeleteSession);
+	}
 
-function showDeleteSessionDialog(sessionId) {
-  const session = state.sessions.find(item => item.id === sessionId);
-  if (!session || session.live || session.active || session.status === "active") return;
-  state.pendingDeleteSessionId = sessionId;
-  deleteSessionReturnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const error = $("#delete-session-error");
-  error.hidden = true;
+	function pruneSelectedSessions() {
+	  const available = new Set(state.sessions.filter(canDeleteSession).map(session => session.id));
+	  for (const id of Array.from(state.selectedSessionIds)) {
+	    if (!available.has(id)) state.selectedSessionIds.delete(id);
+	  }
+	}
+
+	function setEditMode(enabled) {
+	  state.editMode = enabled;
+	  document.body.classList.toggle("edit-sessions", enabled);
+	  if (!enabled) state.selectedSessionIds.clear();
+	  renderSessions();
+	}
+
+	function toggleSessionSelected(sessionId, checked = null) {
+	  const session = state.sessions.find(item => item.id === sessionId);
+	  if (!canDeleteSession(session) || state.deletingSessionIds.has(sessionId)) return;
+	  const shouldSelect = checked === null ? !state.selectedSessionIds.has(sessionId) : Boolean(checked);
+	  if (shouldSelect) {
+	    state.selectedSessionIds.add(sessionId);
+	  } else {
+	    state.selectedSessionIds.delete(sessionId);
+	  }
+	  renderSessions();
+	}
+
+	function visibleDeletableSessions(sessions) {
+	  return sessions.filter(canDeleteSession);
+	}
+
+	function renderBulkEditControls(sessions) {
+	  const bar = $("#bulk-edit-bar");
+	  if (!bar) return;
+	  bar.classList.toggle("hidden", !state.editMode);
+	  $("#edit-sessions").textContent = state.editMode ? t("done") : t("edit_sessions");
+	  if (!state.editMode) return;
+	  const visibleDeletable = visibleDeletableSessions(sessions);
+	  const selected = selectedDeletableSessions();
+	  const allSelected = visibleDeletable.length > 0 && visibleDeletable.every(session => state.selectedSessionIds.has(session.id));
+	  const anySelected = visibleDeletable.some(session => state.selectedSessionIds.has(session.id));
+	  const selectAll = $("#select-all-sessions");
+	  selectAll.checked = allSelected;
+	  selectAll.indeterminate = anySelected && !allSelected;
+	  selectAll.disabled = visibleDeletable.length === 0;
+	  $("#bulk-selected-count").textContent = t("selected_sessions", {count: selected.length});
+	  const deleteButton = $("#delete-selected-sessions");
+	  deleteButton.disabled = selected.length === 0 || state.deletingSessionIds.size > 0;
+	  deleteButton.textContent = state.deletingSessionIds.size > 0 ? t("deleting_sessions") : t("delete_selected");
+	}
+
+	function toggleSelectAllVisible(checked) {
+	  const sessions = visibleDeletableSessions(filteredSessions());
+	  for (const session of sessions) {
+	    if (checked) {
+	      state.selectedSessionIds.add(session.id);
+	    } else {
+	      state.selectedSessionIds.delete(session.id);
+	    }
+	  }
+	  renderSessions();
+	}
+
+	function renderSessionPagination() {
+	  const pagination = $("#session-pagination");
+	  if (!pagination) return;
+	  const total = Math.max(state.sessionTotal, state.sessions.length);
+	  const shouldShow = state.sessionsHasMore || total > state.sessions.length;
+	  pagination.classList.toggle("hidden", !shouldShow);
+	  if (!shouldShow) {
+	    pagination.innerHTML = "";
+	    return;
+	  }
+	  pagination.innerHTML = `
+	    <span class="session-page-count">${esc(t("sessions_loaded", {shown: state.sessions.length, total}))}</span>
+	    <button id="load-more-sessions" class="bulk-action" type="button" ${state.loadingMoreSessions ? "disabled" : ""}>${esc(state.loadingMoreSessions ? t("loading_more_sessions") : t("load_more_sessions"))}</button>
+	  `;
+	  $("#load-more-sessions")?.addEventListener("click", () => loadMoreSessions().catch(console.error));
+	}
+
+	function deleteSessionMeta(session) {
+	  return [
+	    session.agent || t("unknown"),
+	    fmtTableTime(session.started_at || session.updated_at),
+	    `${fmtNumber(session.record_count)} ${t("records")}`,
+	  ].filter(Boolean).join(" · ");
+	}
+
+	function renderDeleteSessionDialog() {
+	  const ids = state.pendingDeleteSessionIds;
+	  const sessions = ids.map(id => state.sessions.find(item => item.id === id)).filter(Boolean);
+	  if (!sessions.length) return;
+	  const totalRecords = sessions.reduce((sum, session) => sum + Number(session.record_count || 0), 0);
+	  const summary = sessions.length === 1
+	    ? (sessions[0].first_user || t("no_user_prompt"))
+	    : t("selected_delete_summary", {count: sessions.length});
+	  $("#delete-session-summary").textContent = summary;
+	  $("#delete-session-summary").setAttribute("title", summary);
+	  $("#delete-session-meta").textContent = sessions.length === 1
+	    ? deleteSessionMeta(sessions[0])
+	    : `${fmtNumber(totalRecords)} ${t("records")}`;
+	  const isDeleting = state.deletingSessionIds.size > 0;
+	  $("#delete-session-confirm").disabled = isDeleting;
+	  $("#delete-session-confirm").textContent = isDeleting ? t("deleting_sessions") : t("confirm_delete");
+	  $("#delete-session-cancel").disabled = isDeleting;
+	}
+
+	function showDeleteSessionDialog(sessionIds) {
+	  const ids = Array.isArray(sessionIds) ? sessionIds : [sessionIds];
+	  const deletableIds = ids
+	    .map(id => state.sessions.find(item => item.id === id))
+	    .filter(canDeleteSession)
+	    .map(session => session.id);
+	  if (!deletableIds.length) return;
+	  state.pendingDeleteSessionIds = deletableIds;
+	  deleteSessionReturnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+	  const error = $("#delete-session-error");
+	  error.hidden = true;
   error.textContent = "";
   renderDeleteSessionDialog();
   const modal = $("#delete-session-modal");
@@ -1631,47 +1926,52 @@ function showDeleteSessionDialog(sessionId) {
   $("#delete-session-cancel").focus();
 }
 
-function hideDeleteSessionDialog({force = false} = {}) {
-  if (state.deletingSessionId && !force) return;
-  state.pendingDeleteSessionId = null;
-  const modal = $("#delete-session-modal");
-  modal.classList.add("hidden");
-  modal.setAttribute("aria-hidden", "true");
+	function hideDeleteSessionDialog({force = false} = {}) {
+	  if (state.deletingSessionIds.size && !force) return;
+	  state.pendingDeleteSessionIds = [];
+	  const modal = $("#delete-session-modal");
+	  modal.classList.add("hidden");
+	  modal.setAttribute("aria-hidden", "true");
   if (deleteSessionReturnFocusEl?.isConnected) deleteSessionReturnFocusEl.focus();
   deleteSessionReturnFocusEl = null;
 }
 
-async function confirmDeleteSession() {
-  const sessionId = state.pendingDeleteSessionId;
-  if (!sessionId || state.deletingSessionId) return;
-  state.deletingSessionId = sessionId;
-  renderDeleteSessionDialog();
-  renderSessions();
-  try {
-    await fetchJSON(`/api/sessions/${encodeURIComponent(sessionId)}`, {method: "DELETE"});
-    state.sessions = state.sessions.filter(session => session.id !== sessionId);
-    if (state.selectedSessionId === sessionId) {
-      state.selectedSessionId = null;
-      state.view = "list";
-      showListView();
-    }
-    hideDeleteSessionDialog({force: true});
-    renderFilters();
-    renderAgents();
+	async function confirmDeleteSession() {
+	  const sessionIds = [...state.pendingDeleteSessionIds];
+	  if (!sessionIds.length || state.deletingSessionIds.size) return;
+	  state.deletingSessionIds = new Set(sessionIds);
+	  renderDeleteSessionDialog();
+	  renderSessions();
+	  try {
+	    await fetchJSON("/api/sessions", {
+	      method: "DELETE",
+	      headers: {"Content-Type": "application/json"},
+	      body: JSON.stringify({session_ids: sessionIds}),
+	    });
+	    const deleted = new Set(sessionIds);
+	    state.sessions = state.sessions.filter(session => !deleted.has(session.id));
+	    for (const id of deleted) state.selectedSessionIds.delete(id);
+	    if (deleted.has(state.selectedSessionId)) {
+	      state.selectedSessionId = null;
+	      state.view = "list";
+	      showListView();
+	    }
+	    state.sessionTotal = Math.max(0, state.sessionTotal - deleted.size);
+	    hideDeleteSessionDialog({force: true});
+	    renderFilters();
+	    renderAgents();
     renderSessions();
     await refreshSessions({preserveSelection: true});
   } catch (error) {
     const errorBox = $("#delete-session-error");
     errorBox.textContent = t("unable_delete_session", {error: error.message});
-    errorBox.hidden = false;
-  } finally {
-    if (state.deletingSessionId === sessionId) {
-      state.deletingSessionId = null;
-      if (state.pendingDeleteSessionId) renderDeleteSessionDialog();
-      renderSessions();
-    }
-  }
-}
+	    errorBox.hidden = false;
+	  } finally {
+	    state.deletingSessionIds.clear();
+	    if (state.pendingDeleteSessionIds.length) renderDeleteSessionDialog();
+	    renderSessions();
+	  }
+	}
 
 function openSession(sessionId) {
   window.location.assign(sessionDetailUrl(sessionId));
@@ -1784,12 +2084,23 @@ async function loadMoreSessionRecords(session, records, button) {
   }
 }
 
-function renderDetail(session, records) {
-  const totalRecords = Number(session.record_count || records.length);
-  const hasHiddenRecords = totalRecords > records.length;
-  const alternateTab = state.activeTab === "conversation" ? "raw" : "conversation";
-  const alternateLabel = alternateTab === "conversation" ? t("tab_default") : t("tab_trace");
-  state.detailSessionId = session.id;
+	function renderDetail(session, records) {
+	  const totalRecords = Number(session.record_count || records.length);
+	  const hasHiddenRecords = totalRecords > records.length;
+	  const alternateTab = state.activeTab === "conversation" ? "raw" : "conversation";
+	  const alternateLabel = alternateTab === "conversation" ? t("full_viewer") : t("tab_trace");
+	  const viewerHtml = state.activeTab === "conversation" ? `
+	      <div class="viewer-frame-wrap">
+	        <div class="viewer-loading" data-viewer-loading>${loadingMarkup(t("loading_viewer"))}</div>
+	        <iframe
+	          class="viewer-frame"
+	          data-viewer-frame
+	          src="/api/sessions/${encodeURIComponent(session.id)}/html"
+	          title="${esc(t("session_details", {agent: session.agent || t("session_detail")}))}"
+	        ></iframe>
+	      </div>
+	    ` : "";
+	  state.detailSessionId = session.id;
   state.detailRecordsLoaded = records.length;
   state.detailRecordTotal = totalRecords;
   state.detailFingerprint = sessionDetailFingerprint(session);
@@ -1815,17 +2126,9 @@ function renderDetail(session, records) {
         <button class="act-btn" data-detail-i18n="copy_path" data-copy-path="${esc(session.id)}">${esc(t("copy_path"))}</button>
       </div>
     </div>
-    <div id="conversation-tab" class="${state.activeTab === "conversation" ? "" : "hidden"}">
-      <div class="viewer-frame-wrap">
-        <div class="viewer-loading" data-viewer-loading>${loadingMarkup(t("loading_viewer"))}</div>
-        <iframe
-          class="viewer-frame"
-          data-viewer-frame
-          src="/api/sessions/${encodeURIComponent(session.id)}/html"
-          title="${esc(t("session_details", {agent: session.agent || t("session_detail")}))}"
-        ></iframe>
-      </div>
-    </div>
+	    <div id="conversation-tab" class="${state.activeTab === "conversation" ? "" : "hidden"}">
+	      ${viewerHtml}
+	    </div>
     <div id="raw-tab" class="${state.activeTab === "raw" ? "" : "hidden"}">
       ${hasHiddenRecords ? `<div class="detail-fallback-note">${esc(t("limited_records", {shown: records.length, total: totalRecords}))}</div>` : ""}
       <div class="records">${records.map((record, index) => renderRecord(record, index)).join("") || emptyRecord()}</div>
@@ -1867,9 +2170,9 @@ function updateDetailI18n(session) {
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
-  document.querySelectorAll("[data-tab]").forEach(button => {
-    button.textContent = button.dataset.tab === "conversation" ? t("tab_default") : t("tab_trace");
-  });
+	  document.querySelectorAll("[data-tab]").forEach(button => {
+	    button.textContent = button.dataset.tab === "conversation" ? t("full_viewer") : t("tab_trace");
+	  });
   document.querySelectorAll("[data-detail-i18n]").forEach(element => {
     element.textContent = t(element.dataset.detailI18n);
   });
@@ -1981,12 +2284,12 @@ function partsText(parts) {
   return parts.map(part => typeof part?.text === "string" ? part.text : "").filter(Boolean).join("\\n");
 }
 
-function connectEvents() {
-  if (!window.EventSource) {
-    $("#live-label").textContent = t("live_polling");
-    return;
-  }
-  const events = new EventSource("/dashboard/events");
+	function connectEvents() {
+	  if (!window.EventSource) {
+	    $("#live-label").textContent = t("live_polling");
+	    return false;
+	  }
+	  const events = new EventSource("/dashboard/events");
   events.addEventListener("open", () => {
     $("#live-label").textContent = t("live_watching");
   });
@@ -1996,10 +2299,11 @@ function connectEvents() {
   events.addEventListener("record", () => {
     refreshSessions({preserveSelection: true}).catch(console.error);
   });
-  events.addEventListener("error", () => {
-    $("#live-label").textContent = t("live_reconnecting");
-  });
-}
+	  events.addEventListener("error", () => {
+	    $("#live-label").textContent = t("live_reconnecting");
+	  });
+	  return true;
+	}
 
 function initTheme() {
   const saved = localStorage.getItem("claude-tap-theme");
@@ -2047,9 +2351,15 @@ $("#status-filter").addEventListener("change", event => {
   showListView();
 });
 
-$("#refresh").addEventListener("click", () => refreshSessions({preserveSelection: true, refreshDetail: true}).catch(console.error));
-$("#back-to-list").addEventListener("click", () => {
-  window.location.assign(dashboardListUrl());
+	$("#refresh").addEventListener("click", () => refreshSessions({preserveSelection: true, refreshDetail: true}).catch(console.error));
+	$("#edit-sessions").addEventListener("click", () => setEditMode(!state.editMode));
+	$("#done-edit-sessions").addEventListener("click", () => setEditMode(false));
+	$("#select-all-sessions").addEventListener("change", event => toggleSelectAllVisible(event.target.checked));
+	$("#delete-selected-sessions").addEventListener("click", () => {
+	  showDeleteSessionDialog(selectedDeletableSessions().map(session => session.id));
+	});
+	$("#back-to-list").addEventListener("click", () => {
+	  window.location.assign(dashboardListUrl());
 });
 $("#delete-session-cancel").addEventListener("click", () => hideDeleteSessionDialog());
 $("#delete-session-confirm").addEventListener("click", () => confirmDeleteSession().catch(console.error));
@@ -2064,15 +2374,17 @@ document.addEventListener("keydown", event => {
 $("#theme-toggle").addEventListener("click", toggleTheme);
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));
 
-applyI18n();
-initTheme();
-updateClock();
-setInterval(updateClock, 1000);
-connectEvents();
-refreshSessions({preserveSelection: false}).catch(error => {
-  $("#detail").innerHTML = `<div class="empty">${esc(t("unable_load_dashboard", {error: error.message}))}</div>`;
-});
-setInterval(() => refreshSessions({preserveSelection: true}).catch(console.error), 5000);
+	applyI18n();
+	initTheme();
+	updateClock();
+	setInterval(updateClock, 1000);
+	const hasDashboardEvents = connectEvents();
+	refreshSessions({preserveSelection: false}).catch(error => {
+	  $("#detail").innerHTML = `<div class="empty">${esc(t("unable_load_dashboard", {error: error.message}))}</div>`;
+	});
+	if (!hasDashboardEvents) {
+	  setInterval(() => refreshSessions({preserveSelection: true}).catch(console.error), 5000);
+	}
 </script>
 </body>
 </html>

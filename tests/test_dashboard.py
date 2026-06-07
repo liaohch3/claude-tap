@@ -179,6 +179,70 @@ def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path
     assert [record["turn"] for record in payload["records"]] == [2]
 
 
+def test_dashboard_lists_stale_cached_summary_without_record_scan(trace_db, monkeypatch) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn = store._connect()
+    conn.execute(
+        """
+        UPDATE sessions
+        SET status = 'active',
+            record_count = 25,
+            summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "agent": "Claude Code",
+                    "agent_key": "claude-code",
+                    "record_count": 25,
+                    "total_tokens": 500,
+                    "first_user": "Cached prompt",
+                },
+                separators=(",", ":"),
+            ),
+            session_id,
+        ),
+    )
+    conn.commit()
+
+    def fail_load_records(*_args, **_kwargs):
+        raise AssertionError("list view must not load full records")
+
+    monkeypatch.setattr(store, "load_records", fail_load_records)
+
+    summary = list_trace_sessions()[0]
+
+    assert summary["id"] == session_id
+    assert summary["record_count"] == 25
+    assert summary["status"] == "active"
+    assert summary["first_user"] == "Cached prompt"
+
+
+def test_dashboard_lists_uncached_session_without_record_scan(trace_db, monkeypatch) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', record_count = 7, summary_json = NULL WHERE id = ?",
+        (session_id,),
+    )
+    conn.commit()
+
+    def fail_load_records(*_args, **_kwargs):
+        raise AssertionError("list view must not load full records")
+
+    monkeypatch.setattr(store, "load_records", fail_load_records)
+
+    summary = list_trace_sessions()[0]
+
+    assert summary["id"] == session_id
+    assert summary["record_count"] == 7
+    assert summary["agent"] == "Codex"
+    assert summary["status"] == "complete"
+
+
 def test_dashboard_detail_reads_from_sqlite(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record()])
@@ -407,7 +471,7 @@ def test_dashboard_rejects_missing_session_ids(trace_db) -> None:
     assert load_trace_session("not-a-valid-session-id") is None
 
 
-def test_dashboard_detail_navigation_uses_standalone_viewer_route() -> None:
+def test_dashboard_detail_navigation_uses_lazy_shell_route() -> None:
     template = read_dashboard_template()
 
     assert "function sessionDetailUrl(sessionId)" in template
@@ -416,6 +480,7 @@ def test_dashboard_detail_navigation_uses_standalone_viewer_route() -> None:
     assert "detailRecordTotal: 0" in template
     assert 'detailFingerprint: ""' in template
     assert "detailSession: null" in template
+    assert 'activeTab: "raw"' in template
     assert "function detailRecordFetchLimit(sessionId, preserveLoaded)" in template
     assert "function sessionDetailFingerprint(session)" in template
     assert "function updateDetailSessionSummary(session)" in template
@@ -427,19 +492,25 @@ def test_dashboard_detail_navigation_uses_standalone_viewer_route() -> None:
     assert "const limit = detailRecordFetchLimit(sessionId, preserveLoaded)" in template
     assert "state.detailRecordTotal = totalRecords" in template
     assert "state.detailFingerprint = sessionDetailFingerprint(session)" in template
+    assert 'state.activeTab === "conversation" ? `' in template
 
 
 def test_dashboard_template_exposes_session_delete_controls() -> None:
     template = read_dashboard_template()
 
     assert 'data-i18n="table_actions"' in template
+    assert 'id="edit-sessions"' in template
+    assert 'id="select-all-sessions"' in template
+    assert 'id="delete-selected-sessions"' in template
+    assert "data-select-session" in template
     assert "delete-session-modal" in template
-    assert "data-delete-session" in template
+    assert "data-delete-session" not in template
     assert "delete_active_session_title" in template
     assert "session.active" in template
     assert "function isSessionRowActionTarget(target)" in template
     assert "event.target !== row" in template
     assert "function confirmDeleteSession()" in template
+    assert "body: JSON.stringify({session_ids: sessionIds})" in template
     assert 'method: "DELETE"' in template
 
 
@@ -804,19 +875,11 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
             async with session.get(f"http://127.0.0.1:{port}/dashboard/session/{session_id}") as resp:
                 assert resp.status == 200
                 html = await resp.text()
-                assert "EMBEDDED_TRACE_COMPACT_DATA" in html
-                assert "req_claude" in html
-                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/compact";' in html
-                assert f'const __TRACE_HTML_PATH__ = "/dashboard/session/{session_id}";' in html
-                assert f"session-{session_id[:8]}.jsonl" not in html
-                assert f"session-{session_id[:8]}.html" not in html
-                assert "__TRACE_SESSION_EXPORTS__" in html
-                assert f"/api/sessions/{session_id}/export/jsonl" in html
-                assert f"/api/sessions/{session_id}/export/compact" in html
-                assert f"/api/sessions/{session_id}/export/log" in html
-                assert f"/api/sessions/{session_id}/export/html" in html
-                assert "session-list" not in html
-                assert "back-to-list" not in html
+                assert "session-list" in html
+                assert "back-to-list" in html
+                assert "EMBEDDED_TRACE_COMPACT_DATA" not in html
+                assert "req_claude" not in html
+                assert "/api/sessions/${encodeURIComponent(session.id)}/html" in html
 
             async with session.get(f"http://127.0.0.1:{port}/api/agents") as resp:
                 assert resp.status == 200
@@ -914,7 +977,9 @@ async def test_dashboard_server_sse_events(trace_db) -> None:
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
                 assert resp.status == 200
-                assert await resp.json() == {"sessions": []}
+                payload = await resp.json()
+                assert payload["sessions"] == []
+                assert payload["total"] == 0
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/anything/records") as resp:
                 assert resp.status == 404
@@ -935,7 +1000,7 @@ async def test_dashboard_server_sse_events(trace_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_path: Path) -> None:
+async def test_dashboard_session_route_serves_lazy_detail_shell(trace_db, tmp_path: Path) -> None:
     playwright = pytest.importorskip("playwright.async_api")
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(turn=turn) for turn in range(1, 13)])
@@ -953,18 +1018,19 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                     f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
                     wait_until="domcontentloaded",
                 )
-                await page.wait_for_selector(".sidebar-item", timeout=5000)
+                await page.wait_for_selector("#raw-tab .section", timeout=5000)
                 assert await page.locator(".header").count() == 1
                 assert await page.locator(".viewer-frame").count() == 0
-                assert await page.locator("#back-to-list").count() == 0
-                assert await page.locator("#session-list").count() == 0
-                assert await page.locator(".sidebar-item").count() >= 10
-                export_button = page.locator("#viewer-actions .export-menu > summary")
+                assert await page.locator("#back-to-list").is_visible()
+                assert await page.locator("#list-view.hidden").count() == 1
+                assert await page.locator("#raw-tab .section").count() == 10
+                assert await page.locator("[data-load-more]").count() == 1
+
+                export_button = page.locator(".detail-inspector-bar .export-menu > summary")
                 assert await export_button.count() == 1
                 assert await export_button.inner_text() == "Export"
-                assert await page.locator("#viewer-actions > .viewer-action").count() == 0
-                assert await page.locator("#viewer-actions .export-menu-item").count() == 4
-                hrefs = await page.locator("#viewer-actions .export-menu-item").evaluate_all(
+                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 4
+                hrefs = await page.locator(".detail-inspector-bar .export-menu-item").evaluate_all(
                     "(links) => links.map((link) => link.getAttribute('href'))"
                 )
                 assert f"/api/sessions/{session_id}/export/jsonl" in hrefs
@@ -974,7 +1040,7 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
 
                 async with page.expect_download() as download_info:
                     await export_button.click()
-                    await page.locator('#viewer-actions .export-menu-item[href$="/export/html"]').click()
+                    await page.locator('.detail-inspector-bar .export-menu-item[href$="/export/html"]').click()
                 download = await download_info.value
                 assert download.suggested_filename == f"trace_{session_id[:8]}.html"
                 download_path = await download.path()
@@ -1007,17 +1073,17 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                     f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
                     wait_until="domcontentloaded",
                 )
-                await page.wait_for_selector("#viewer-actions .export-menu > summary", timeout=5000)
+                await page.wait_for_selector(".detail-inspector-bar .export-menu > summary", timeout=5000)
 
-                await page.locator("#viewer-actions .export-menu > summary").click()
-                menu = page.locator("#viewer-actions .export-menu-list")
+                await page.locator(".detail-inspector-bar .export-menu > summary").click()
+                menu = page.locator(".detail-inspector-bar .export-menu-list")
                 assert await menu.is_visible()
-                assert await page.locator("#viewer-actions .export-menu-item").count() == 4
+                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 4
 
                 layout = await page.evaluate(
                     """() => {
-                      const actions = document.querySelector('#viewer-actions');
-                      const menu = document.querySelector('#viewer-actions .export-menu-list');
+                      const actions = document.querySelector('.detail-inspector-bar .action-bar');
+                      const menu = document.querySelector('.detail-inspector-bar .export-menu-list');
                       const actionsBox = actions.getBoundingClientRect();
                       const menuBox = menu.getBoundingClientRect();
                       const actionStyles = getComputedStyle(actions);
@@ -1025,6 +1091,8 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                       return {
                         actionsBottom: actionsBox.bottom,
                         menuBottom: menuBox.bottom,
+                        menuRight: menuBox.right,
+                        viewportWidth: window.innerWidth,
                         menuHeight: menuBox.height,
                         overflowX: actionStyles.overflowX,
                         menuPosition: menuStyles.position,
@@ -1032,9 +1100,9 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                     }"""
                 )
                 assert layout["overflowX"] == "visible"
-                assert layout["menuPosition"] == "static"
                 assert layout["menuHeight"] > 80
-                assert layout["menuBottom"] <= layout["actionsBottom"] + 1
+                assert layout["menuRight"] <= layout["viewportWidth"]
+                assert layout["menuBottom"] > layout["actionsBottom"]
             finally:
                 await browser.close()
     finally:
@@ -1042,7 +1110,7 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
 
 
 @pytest.mark.asyncio
-async def test_dashboard_delete_button_keyboard_focuses_confirmation_dialog(trace_db) -> None:
+async def test_dashboard_bulk_delete_edit_mode_focuses_confirmation_dialog(trace_db) -> None:
     playwright = pytest.importorskip("playwright.async_api")
     store = get_trace_store()
     session_id = store.create_session(client="claude", proxy_mode="reverse")
@@ -1057,21 +1125,24 @@ async def test_dashboard_delete_button_keyboard_focuses_confirmation_dialog(trac
             try:
                 page = await browser.new_page()
                 await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
-                delete_button = page.locator(f'[data-delete-session="{session_id}"]')
-                await delete_button.wait_for(state="visible", timeout=5000)
+                assert await page.locator("[data-delete-session]").count() == 0
 
-                for key in ("Enter", "Space"):
-                    await delete_button.focus()
-                    await page.keyboard.press(key)
-                    await page.wait_for_selector("#delete-session-modal:not(.hidden)", timeout=5000)
-                    assert page.url == f"http://127.0.0.1:{port}/dashboard"
-                    assert await page.evaluate("document.activeElement && document.activeElement.id") == (
-                        "delete-session-cancel"
-                    )
+                await page.locator("#edit-sessions").click()
+                checkbox = page.locator(f'[data-select-session="{session_id}"]')
+                await checkbox.wait_for(state="visible", timeout=5000)
+                await checkbox.check()
+                assert await page.locator("#bulk-selected-count").inner_text() == "1 selected"
 
-                    await page.keyboard.press("Enter")
-                    await page.wait_for_selector("#delete-session-modal.hidden", state="attached", timeout=5000)
-                    assert await page.locator(f'[data-session="{session_id}"]').count() == 1
+                await page.locator("#delete-selected-sessions").click()
+                await page.wait_for_selector("#delete-session-modal:not(.hidden)", timeout=5000)
+                assert page.url == f"http://127.0.0.1:{port}/dashboard"
+                assert await page.evaluate("document.activeElement && document.activeElement.id") == (
+                    "delete-session-cancel"
+                )
+
+                await page.locator("#delete-session-confirm").click()
+                await page.wait_for_selector("#delete-session-modal.hidden", state="attached", timeout=5000)
+                await page.wait_for_selector(f'[data-session="{session_id}"]', state="detached", timeout=5000)
             finally:
                 await browser.close()
     finally:
@@ -1118,6 +1189,40 @@ async def test_dashboard_delete_active_session_is_protected(trace_db) -> None:
                 payload = await resp.json()
                 assert payload["error"] == "Active session cannot be deleted"
         assert store.load_session_row(session_id) is not None
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_bulk_delete_skips_active_sessions(trace_db) -> None:
+    store = get_trace_store()
+    first_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(first_id, _anthropic_record())
+    store.finalize_session(first_id, {"api_calls": 1})
+    second_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(second_id, _anthropic_record(turn=2))
+    store.finalize_session(second_id, {"api_calls": 1})
+    active_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(active_id, _anthropic_record(turn=3))
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(
+                f"http://127.0.0.1:{port}/api/sessions",
+                json={"session_ids": [first_id, second_id, active_id, "missing"]},
+            ) as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["deleted_sessions"] == 2
+                assert payload["deleted_records"] == 2
+                assert payload["skipped_active_sessions"] == [active_id]
+                assert payload["missing_sessions"] == ["missing"]
+
+        assert store.load_session_row(first_id) is None
+        assert store.load_session_row(second_id) is None
+        assert store.load_session_row(active_id) is not None
     finally:
         await server.stop()
 
