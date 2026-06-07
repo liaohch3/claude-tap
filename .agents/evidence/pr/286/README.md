@@ -55,6 +55,12 @@ Results:
 - Focused legacy Kimi suite: `9 passed`
 - OpenCode launch suite: `8 passed`
 
+Local real trace viewer evidence:
+
+![Kimi real trace viewer](kimi-viewer-real-trace.png)
+
+This screenshot was generated from the local claude-tap SQLite session `0bb44d26-a814-4e59-a65d-9bf16b41c8aa`, a real Kimi CLI reverse-proxy capture with two `/chat/completions` records. It validates that the existing Kimi capture/export path still renders real Kimi request details after the Kimi Code client changes. The real Kimi Code upstream capture remains the contributor-side session documented above.
+
 Latest published Kimi Code CLI smoke check:
 
 ```bash
