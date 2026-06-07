@@ -54,6 +54,7 @@ from claude_tap.cli_update import (
     parse_update_args,
     update_main,
 )
+from claude_tap.codex_app_transcript import codex_app_sessions_dir, watch_codex_app_transcripts
 from claude_tap.cursor_transcript import import_cursor_transcripts
 from claude_tap.forward_proxy import ForwardProxyServer
 from claude_tap.history import cleanup_trace_sessions, migrate_legacy_traces
@@ -203,10 +204,12 @@ async def async_main(args: argparse.Namespace):
 
     store = get_trace_store()
     trace_metadata = {"client": args.client, "proxy_mode": args.proxy_mode}
+    cfg = CLIENT_CONFIGS[args.client]
+    transcript_only = cfg.transcript_only
 
     ca_cert_path: Path | None = None
     ca_key_path: Path | None = None
-    if args.proxy_mode == "forward":
+    if args.proxy_mode == "forward" and not transcript_only:
         ca_cert_path, ca_key_path = ensure_ca()
         trust_result = _ensure_ca_trust_for_forward_proxy(args, ca_cert_path)
         if trust_result != 0:
@@ -249,10 +252,9 @@ async def async_main(args: argparse.Namespace):
     asyncio_log.addHandler(sqlite_handler)
     asyncio_log.propagate = False
 
-    # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY) for
-    # outbound upstream requests. This is important when users route traffic
-    # through tools like Clash/VPN.
-    session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
+    # Proxy clients create this lazily; transcript-only clients do not need an
+    # outbound upstream session.
+    session: aiohttp.ClientSession | None = None
 
     # Forward proxy mode: raw TCP server with CONNECT/TLS termination
     # Reverse proxy mode: aiohttp web app (current behavior)
@@ -264,9 +266,27 @@ async def async_main(args: argparse.Namespace):
     if capture_only:
         print("📝 Prompt export mode: upstream calls are skipped after capture.")
     try:
-        if args.proxy_mode == "forward":
+        if transcript_only:
+            sessions_dir = codex_app_sessions_dir()
+            print(f"🔍 claude-tap v{__version__} listening for {cfg.label} sessions in {sessions_dir}")
+            print("   Keep Codex App running and use the shared dashboard to inspect imported turns.")
+        else:
+            # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY) for
+            # outbound upstream requests. This is important when users route traffic
+            # through tools like Clash/VPN.
+            session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
+
+        if transcript_only:
+            print(f"📁 Trace session: {session_id}")
+            print(f"🗄️  Trace database: {resolve_db_path()}")
+            try:
+                await watch_codex_app_transcripts(writer, since=client_started_at)
+            except asyncio.CancelledError:
+                pass
+        elif args.proxy_mode == "forward":
             assert ca_cert_path is not None
             assert ca_key_path is not None
+            assert session is not None
             ca = CertificateAuthority(ca_cert_path, ca_key_path)
             forward_server = ForwardProxyServer(
                 host=args.host,
@@ -283,6 +303,7 @@ async def async_main(args: argparse.Namespace):
             print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
             print(f"   CA cert: {ca_cert_path}")
         else:
+            assert session is not None
             app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
             app["trace_ctx"] = {
                 "target_url": args.target,
@@ -308,43 +329,44 @@ async def async_main(args: argparse.Namespace):
                 actual_port = args.port
             print(f"🔍 claude-tap v{__version__} listening on http://{args.host}:{actual_port}")
 
-        print(f"📁 Trace session: {session_id}")
-        print(f"🗄️  Trace database: {resolve_db_path()}")
+        if not transcript_only:
+            print(f"📁 Trace session: {session_id}")
+            print(f"🗄️  Trace database: {resolve_db_path()}")
 
-        # Background update check
-        if not args.no_update_check:
-            try:
-                latest = await _check_pypi_version()
-                if latest and _version_tuple(latest) > _version_tuple(__version__):
-                    print(f"⬆️  Update available: {__version__} → {latest}")
-                    if not args.no_auto_update:
-                        installer = _detect_installer()
-                        _start_background_update(installer)
-                        print(f"   Downloading update in background ({installer})...")
-            except Exception:
-                pass
+            # Background update check
+            if not args.no_update_check:
+                try:
+                    latest = await _check_pypi_version()
+                    if latest and _version_tuple(latest) > _version_tuple(__version__):
+                        print(f"⬆️  Update available: {__version__} → {latest}")
+                        if not args.no_auto_update:
+                            installer = _detect_installer()
+                            _start_background_update(installer)
+                            print(f"   Downloading update in background ({installer})...")
+                except Exception:
+                    pass
 
-        if not args.no_launch:
-            client_started_at = time.time()
-            try:
-                exit_code = await run_client(
-                    actual_port,
-                    args.claude_args,
-                    client=args.client,
-                    proxy_mode=args.proxy_mode,
-                    ca_cert_path=ca_cert_path,
-                    client_cmd=getattr(args, "client_cmd", None),
-                    capture_only=capture_only,
-                )
-            except asyncio.CancelledError:
-                pass
-        else:
-            print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
-            try:
-                while True:
-                    await asyncio.sleep(3600)
-            except asyncio.CancelledError:
-                pass
+            if not args.no_launch:
+                client_started_at = time.time()
+                try:
+                    exit_code = await run_client(
+                        actual_port,
+                        args.claude_args,
+                        client=args.client,
+                        proxy_mode=args.proxy_mode,
+                        ca_cert_path=ca_cert_path,
+                        client_cmd=getattr(args, "client_cmd", None),
+                        capture_only=capture_only,
+                    )
+                except asyncio.CancelledError:
+                    pass
+            else:
+                print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
+                try:
+                    while True:
+                        await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    pass
     finally:
         if forward_server:
             try:
@@ -360,12 +382,13 @@ async def async_main(args: argparse.Namespace):
                 pass
 
         # Shared dashboard runs in a detached process; nothing to stop here.
-        try:
-            await asyncio.wait_for(session.close(), timeout=5)
-        except asyncio.TimeoutError:
-            log.warning("Timed out closing upstream HTTP session")
-        except Exception:
-            pass
+        if session is not None:
+            try:
+                await asyncio.wait_for(session.close(), timeout=5)
+            except asyncio.TimeoutError:
+                log.warning("Timed out closing upstream HTTP session")
+            except Exception:
+                pass
 
         if args.client == "cursor" and not args.no_launch:
             imported = await import_cursor_transcripts(writer, since=client_started_at)
@@ -449,8 +472,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
         description=(
-            "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, OpenClaw, Pi, Hermes Agent, "
-            "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy. "
+            "Trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, OpenCode, OpenClaw, Pi, Hermes Agent, "
+            "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy or transcript import. "
             "All flags not listed below are forwarded to the selected client."
         ),
         epilog=(
@@ -470,6 +493,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client codex --tap-target https://chatgpt.com/backend-api/codex\n"
             "  # With model and full auto-approval\n"
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
+            "\n"
+            "codex app:\n"
+            "  # Listen to local Codex App session JSONL files under CODEX_HOME / ~/.codex\n"
+            "  claude-tap --tap-client codexapp\n"
             "\n"
             "kimi cli:\n"
             "  # Uses KIMI_BASE_URL and forwards to Kimi Code by default\n"
@@ -583,7 +610,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
             "Default depends on the client: 'reverse' for claude/codex/kimi/codebuddy, "
-            "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder."
+            "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder. "
+            "codexapp is transcript-only and does not use this option."
         ),
     )
     proxy_group.add_argument(
@@ -698,8 +726,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         else:
             detector = TARGET_DETECTORS.get(args.client)
             args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
-    if args.proxy_mode is None:
+    if CLIENT_CONFIGS[args.client].transcript_only:
+        if args.proxy_mode is not None:
+            tap_parser.error("--tap-proxy-mode does not apply to transcript-only clients")
         args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
+    elif args.proxy_mode is None:
+        args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
+    if args.trust_ca and CLIENT_CONFIGS[args.client].transcript_only:
+        tap_parser.error("--tap-trust-ca does not apply to transcript-only clients")
     if args.trust_ca and args.proxy_mode != "forward":
         tap_parser.error("--tap-trust-ca only applies to forward proxy mode")
 

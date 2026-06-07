@@ -9,11 +9,11 @@
 
 [中文文档](README_zh.md)
 
-`claude-tap` is a local proxy and trace viewer for AI coding agents. Run your CLI through it, then inspect the real API traffic: system prompts, conversation history, tool schemas, tool calls, streaming responses, token usage, and request diffs.
+`claude-tap` is a local proxy and trace viewer for AI coding agents. Run your CLI through it, or listen to local app transcripts, then inspect the real API traffic and agent context: system prompts, conversation history, tool schemas, tool calls, streaming responses, token usage, and request diffs.
 
 Website: [Local AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · Guide: [How to view agent traces locally](docs/guides/agent-trace-viewer.md)
 
-It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
+It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Codex App](https://openai.com/codex/), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
 
 <p align="center">
   <img src="docs/demo.gif" alt="claude-tap demo showing a real Codex trace" width="100%">
@@ -47,7 +47,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 - 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
 - 📦 **Share one portable artifact**: each run writes a local trace session that can be exported to a self-contained HTML viewer for review or archiving.
 - 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
-- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
+- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
 
 ## Supported Clients
 
@@ -55,6 +55,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 |--------|-------------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, or Claude-compatible gateways such as DeepSeek / GLM |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API key mode or ChatGPT subscription OAuth |
+| [Codex App](https://openai.com/codex/) | Local Codex App sessions imported from `CODEX_HOME` or `~/.codex` |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code or Moonshot Open Platform |
 | [OpenCode](https://opencode.ai) | Multi-provider OpenCode sessions |
@@ -92,6 +93,9 @@ claude-tap --tap-no-live
 
 # Codex CLI
 claude-tap --tap-client codex
+
+# Codex App local session listener
+claude-tap --tap-client codexapp
 
 # Gemini CLI
 claude-tap --tap-client gemini -- -p "hello"
@@ -224,6 +228,21 @@ claude-tap --tap-client codex -- --full-auto
 
 # OAuth + full auto; live viewer is enabled by default
 claude-tap --tap-client codex -- --full-auto
+```
+
+</details>
+
+<details>
+<summary>Codex App listener examples</summary>
+
+Codex App sessions are imported from local JSONL files under `CODEX_HOME/sessions` or `~/.codex/sessions`. This mode does not launch Codex or create a network proxy; it keeps a claude-tap dashboard session open and appends completed Codex App turns as they appear.
+
+```bash
+# Listen to local Codex App sessions and inspect them in the dashboard
+claude-tap --tap-client codexapp
+
+# Use a custom Codex home directory
+CODEX_HOME=/path/to/codex-home claude-tap --tap-client codexapp
 ```
 
 </details>
@@ -436,7 +455,7 @@ When used as VSCode Claude Code's `claudeProcessWrapper`, claude-tap honors the 
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default), agy, codex, gemini, kimi, opencode, pi, hermes, cursor, qoder, or codebuddy
+--tap-client CLIENT      Client to launch/listen to: claude (default), agy, codex, codexapp, gemini, kimi, opencode, pi, hermes, cursor, qoder, or codebuddy
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer while the client runs (default: on)
 --tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)
@@ -450,7 +469,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/codebuddy, forward for agy/gemini/opencode/pi/hermes/cursor/qoder)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/codebuddy, forward for agy/gemini/opencode/pi/hermes/cursor/qoder; codexapp is transcript-only)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 

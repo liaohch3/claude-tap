@@ -9,11 +9,11 @@
 
 [English](README.md)
 
-`claude-tap` 是给 AI 编程 agent 用的本地代理和 trace 查看器。把 CLI 通过它启动，就能看到真实 API 流量：system prompt、对话历史、工具 schema、工具调用、流式响应、token 用量和请求 diff。
+`claude-tap` 是给 AI 编程 agent 用的本地代理和 trace 查看器。把 CLI 通过它启动，或监听本地 app transcript，就能看到真实 API 流量和 agent 上下文：system prompt、对话历史、工具 schema、工具调用、流式响应、token 用量和请求 diff。
 
 网站：[本地 AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · 指南：[如何本地查看 Agent traces](docs/guides/agent-trace-viewer.zh.md)
 
-它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli)、[Qoder CLI](https://qoder.com/cli)、[Antigravity CLI](https://antigravity.google/product/antigravity-cli) 和 [CodeBuddy CLI](https://www.codebuddy.ai)。
+它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Codex App](https://openai.com/codex/)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[OpenCode](https://opencode.ai)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli)、[Qoder CLI](https://qoder.com/cli)、[Antigravity CLI](https://antigravity.google/product/antigravity-cli) 和 [CodeBuddy CLI](https://www.codebuddy.ai)。
 
 <p align="center">
   <img src="docs/demo_zh.gif" alt="claude-tap 演示：真实 Codex trace" width="100%">
@@ -47,7 +47,7 @@
 - 🔎 **用证据定位问题**：对比相邻请求，明确是哪段 prompt、消息、工具或参数发生了变化。
 - 📦 **留下可分享证据**：每次运行都会写入 JSONL trace，并生成自包含 HTML 查看器，方便 review 或归档。
 - 🔒 **数据留在本机**：不依赖云端 dashboard；常见认证 header 会在记录前自动脱敏。
-- 🧩 **覆盖主流编码 CLI**：同一套流程可用于 Claude Code、Codex CLI、Gemini CLI、Kimi CLI、OpenCode、Pi、Hermes Agent、Cursor CLI、Qoder CLI、Antigravity CLI 和 CodeBuddy CLI。
+- 🧩 **覆盖主流编码客户端**：同一套流程可用于 Claude Code、Codex CLI、Codex App、Gemini CLI、Kimi CLI、OpenCode、Pi、Hermes Agent、Cursor CLI、Qoder CLI、Antigravity CLI 和 CodeBuddy CLI。
 
 ## 支持的客户端
 
@@ -55,6 +55,7 @@
 |--------|----------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API、AWS Bedrock，或 DeepSeek / GLM 等 Claude 兼容网关 |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
+| [Codex App](https://openai.com/codex/) | 从 `CODEX_HOME` 或 `~/.codex` 导入本地 Codex App 会话 |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist 的多 Google 端点流量 |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code 或 Moonshot Open Platform |
 | [OpenCode](https://opencode.ai) | 多提供方 OpenCode 会话 |
@@ -92,6 +93,9 @@ claude-tap --tap-no-live
 
 # Codex CLI
 claude-tap --tap-client codex
+
+# Codex App 本地会话监听
+claude-tap --tap-client codexapp
 
 # Gemini CLI
 claude-tap --tap-client gemini -- -p "hello"
@@ -223,6 +227,21 @@ claude-tap --tap-client codex -- --full-auto
 
 # OAuth + 全自动；实时查看器默认开启
 claude-tap --tap-client codex -- --full-auto
+```
+
+</details>
+
+<details>
+<summary>Codex App 监听示例</summary>
+
+Codex App 会话会从 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 下的本地 JSONL 文件导入。这个模式不会启动 Codex，也不会创建网络代理；它会保持一个 claude-tap dashboard session，并在 Codex App 完成一轮后追加可查看的记录。
+
+```bash
+# 监听本地 Codex App 会话，并在 dashboard 中查看
+claude-tap --tap-client codexapp
+
+# 使用自定义 Codex home 目录
+CODEX_HOME=/path/to/codex-home claude-tap --tap-client codexapp
 ```
 
 </details>
@@ -433,7 +452,7 @@ claude-tap --tap-no-open
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动的客户端: claude（默认）/ agy / codex / gemini / kimi / opencode / pi / hermes / cursor / qoder / codebuddy
+--tap-client CLIENT      启动或监听的客户端: claude（默认）/ agy / codex / codexapp / gemini / kimi / opencode / pi / hermes / cursor / qoder / codebuddy
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               客户端运行时启动实时查看器（默认开启）
 --tap-no-live            关闭实时查看器（恢复 v0.1.75 之前的行为）
@@ -447,7 +466,7 @@ claude-tap --tap-no-open
 --tap-store-stream-events 捕获时把原始 SSE/WebSocket event 数组写入 trace 存储，以便查看器/导出结果展示（默认关闭）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
---tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi/codebuddy 用 reverse，agy/gemini/opencode/pi/hermes/cursor/qoder 用 forward）
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi/codebuddy 用 reverse，agy/gemini/opencode/pi/hermes/cursor/qoder 用 forward；codexapp 是 transcript-only）
 --tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy 会自动执行）
 ```
 

@@ -411,6 +411,7 @@
           <ul>
             <li>Claude Code</li>
             <li>Codex CLI</li>
+            <li>Codex App</li>
             <li>Gemini CLI</li>
             <li>Cursor CLI</li>
             <li>OpenCode</li>
@@ -436,6 +437,9 @@ claude-tap
 # Codex CLI
 claude-tap --tap-client codex
 
+# Codex App local session listener
+claude-tap --tap-client codexapp
+
 # Gemini CLI
 claude-tap --tap-client gemini -- -p "hello"</code></pre>
           <p>Open the local dashboard or export a standalone HTML file:</p>
@@ -458,9 +462,10 @@ claude-tap --tap-client gemini -- -p "hello"</code></pre>
 
           <h2>Codex trace viewer</h2>
           <p>
-            For Codex CLI, claude-tap supports OpenAI API key mode and ChatGPT subscription OAuth mode. It can inspect
-            OpenAI Responses API traffic, WebSocket records, tool calls, reasoning/output sections, token usage, and
-            request diffs.
+            For Codex CLI, claude-tap supports OpenAI API key mode and ChatGPT subscription OAuth mode. For Codex App,
+            it listens to local session JSONL files under CODEX_HOME or ~/.codex. It can inspect OpenAI Responses API
+            traffic, WebSocket records, local transcript records, tool calls, reasoning/output sections, token usage,
+            and request diffs.
           </p>
 
           <h2 id="export">Export traces to HTML</h2>

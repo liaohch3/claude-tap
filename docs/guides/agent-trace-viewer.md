@@ -28,6 +28,7 @@ Many observability products are useful for production systems, but local debuggi
 
 - Claude Code
 - Codex CLI
+- Codex App
 - Gemini CLI
 - Cursor CLI
 - OpenCode
@@ -57,6 +58,9 @@ claude-tap
 # Codex CLI
 claude-tap --tap-client codex
 
+# Codex App local session listener
+claude-tap --tap-client codexapp
+
 # Gemini CLI
 claude-tap --tap-client gemini -- -p "hello"
 ```
@@ -85,7 +89,7 @@ For Claude Code and Anthropic-compatible traffic, `claude-tap` shows Anthropic M
 
 ## Codex trace viewer
 
-For Codex CLI, `claude-tap` supports OpenAI API key mode and ChatGPT subscription OAuth mode. It can inspect OpenAI Responses API traffic, WebSocket records, tool calls, reasoning/output sections, token usage, and request diffs.
+For Codex CLI, `claude-tap` supports OpenAI API key mode and ChatGPT subscription OAuth mode. For Codex App, it listens to local session JSONL files under `CODEX_HOME` or `~/.codex`. It can inspect OpenAI Responses API traffic, WebSocket records, local transcript records, tool calls, reasoning/output sections, token usage, and request diffs.
 
 ## Export traces to HTML
 

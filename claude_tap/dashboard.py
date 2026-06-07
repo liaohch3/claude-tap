@@ -23,6 +23,7 @@ CLIENT_LABELS = {
     "antigravity": "Antigravity",
     "claude": "Claude Code",
     "codex": "Codex",
+    "codexapp": "Codex App",
     "cursor": "Cursor",
     "gemini": "Gemini",
     "hermes": "Hermes",

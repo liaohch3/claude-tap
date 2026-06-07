@@ -277,6 +277,9 @@ async def test_run_client_hermes_reverse_sets_openai_base_url(monkeypatch) -> No
     monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/hermes")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
+    monkeypatch.delenv("CUSTOM_BASE_URL", raising=False)
 
     code = await run_client(43123, ["chat"], client="hermes", proxy_mode="reverse")
 
