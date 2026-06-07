@@ -17,6 +17,7 @@ from claude_tap.cli_clients import (
     _materialize_kimi_code_session_index,
     _normalize_kimi_code_fs_path,
     _patch_kimi_code_config_text,
+    _persist_kimi_code_sandbox,
     _prepare_kimi_code_reverse_sandbox,
     _remap_kimi_code_sandbox_paths,
     _reverse_proxy_trace_options,
@@ -463,6 +464,47 @@ def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
         assert (sandbox / "mcp.json").resolve() == (home / "mcp.json").resolve()
         assert (sandbox / "session_index.jsonl").is_file()
         assert not (sandbox / "session_index.jsonl").is_symlink()
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_prepare_kimi_code_reverse_sandbox_copies_when_symlinks_fail(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "source-home"
+    oauth_dir = home / "oauth"
+    oauth_dir.mkdir(parents=True)
+    (oauth_dir / "kimi-code").write_text("oauth-token", encoding="utf-8")
+    credentials_dir = home / "credentials"
+    credentials_dir.mkdir()
+    (credentials_dir / "kimi-code.json").write_text('{"access_token":"test"}', encoding="utf-8")
+    sessions_dir = home / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "abc.jsonl").write_text("{}", encoding="utf-8")
+    (home / "mcp.json").write_text("{}", encoding="utf-8")
+    (home / "config.toml").write_text(
+        '[providers."managed:kimi-code"]\ntype = "kimi"\nbase_url = "https://api.kimi.com/coding/v1"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+
+    def fail_symlink(self: Path, target: Path, target_is_directory: bool = False) -> None:
+        raise OSError("symlink unavailable")
+
+    monkeypatch.setattr(Path, "symlink_to", fail_symlink)
+
+    sandbox, _, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    try:
+        assert not (sandbox / "oauth").is_symlink()
+        assert (sandbox / "oauth" / "kimi-code").read_text(encoding="utf-8") == "oauth-token"
+        assert (sandbox / "credentials" / "kimi-code.json").is_file()
+        assert (sandbox / "sessions" / "abc.jsonl").is_file()
+        assert (sandbox / "mcp.json").is_file()
+
+        (sandbox / "oauth" / "new-login").write_text("persisted", encoding="utf-8")
+        _persist_kimi_code_sandbox(home, sandbox)
+
+        assert (home / "oauth" / "new-login").read_text(encoding="utf-8") == "persisted"
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
