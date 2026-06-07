@@ -260,6 +260,9 @@ async def async_main(args: argparse.Namespace):
     runner: web.AppRunner | None = None
     exit_code = 0
     client_started_at = time.time()
+    capture_only = bool(getattr(args, "export_prompt", None))
+    if capture_only:
+        print("📝 Prompt export mode: upstream calls are skipped after capture.")
     try:
         if args.proxy_mode == "forward":
             assert ca_cert_path is not None
@@ -274,6 +277,7 @@ async def async_main(args: argparse.Namespace):
                 local_reverse_target=args.target,
                 local_reverse_allowed_path_prefixes=CLIENT_CONFIGS[args.client].forward_base_url_allowed_path_prefixes,
                 store_stream_events=args.store_stream_events,
+                capture_only=capture_only,
             )
             actual_port = await forward_server.start()
             print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
@@ -287,6 +291,7 @@ async def async_main(args: argparse.Namespace):
                 "turn_counter": 0,
                 "extra_allowed_path_prefixes": tuple(args.extra_allowed_paths),
                 "store_stream_events": args.store_stream_events,
+                "capture_only": capture_only,
                 **_reverse_proxy_trace_options(args.client, args.target),
             }
             app.router.add_route("*", "/{path_info:.*}", proxy_handler)
@@ -329,6 +334,7 @@ async def async_main(args: argparse.Namespace):
                     proxy_mode=args.proxy_mode,
                     ca_cert_path=ca_cert_path,
                     client_cmd=getattr(args, "client_cmd", None),
+                    capture_only=capture_only,
                 )
             except asyncio.CancelledError:
                 pass
@@ -368,6 +374,10 @@ async def async_main(args: argparse.Namespace):
 
         writer.close()
 
+        prompt_export_rc: int | None = None
+        if args.export_prompt:
+            prompt_export_rc = _export_prompt_from_session(store, session_id, args.export_prompt)
+
         if args.max_traces > 0:
             cleaned = cleanup_trace_sessions(args.max_traces, protected_session_id=session_id)
             if cleaned:
@@ -393,7 +403,40 @@ async def async_main(args: argparse.Namespace):
         if dashboard_url_value:
             print(f"   Dashboard: {dashboard_url_value}")
 
+        if prompt_export_rc is not None:
+            if prompt_export_rc != 0:
+                exit_code = 1
+
     return exit_code
+
+
+def _export_prompt_from_session(store, session_id: str, output: str) -> int:
+    from claude_tap.prompt_snapshot import render_prompt_markdown, snapshot_from_records
+
+    try:
+        text = render_prompt_markdown(snapshot_from_records(store.load_records(session_id)))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if output == "-":
+        print(text, end="")
+        return 0
+
+    path = Path(output).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    print(f"📝 Prompt snapshot: {path}")
+    trace_path = _prompt_trace_path(path)
+    trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
+    print(f"🧾 Raw trace: {trace_path}")
+    return 0
+
+
+def _prompt_trace_path(prompt_path: Path) -> Path:
+    if prompt_path.name in {"prompt.md", "prompt.markdown", "system.md", "system.markdown"}:
+        return prompt_path.with_name("trace.jsonl")
+    return prompt_path.with_name(f"{prompt_path.stem}.trace.jsonl")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -406,9 +449,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
         description=(
-            "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, "
-            "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy. All flags not listed below are "
-            "forwarded to the selected client."
+            "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, OpenClaw, Pi, Hermes Agent, "
+            "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy. "
+            "All flags not listed below are forwarded to the selected client."
         ),
         epilog=(
             "claude code:\n"
@@ -449,6 +492,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
             "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
             "\n"
+            "openclaw:\n"
+            "  # Reads OpenClaw config and points the selected provider at the local proxy\n"
+            "  claude-tap --tap-client openclaw -- agent\n"
+            "\n"
             "pi (multi-provider; defaults to forward proxy mode):\n"
             "  # Forward proxy captures OpenAI Codex OAuth and other providers\n"
             '  claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"\n'
@@ -488,6 +535,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "export traces:\n"
             "  claude-tap export trace.jsonl              Export to markdown\n"
             "  claude-tap export trace.jsonl -o out.md    Export to file\n"
+            "  claude-tap export trace.jsonl --format prompt-md -o prompt.md Export prompt snapshot\n"
             "  claude-tap export trace.jsonl --format json Export as JSON\n"
             "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
             "\n"
@@ -614,6 +662,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Persist raw SSE/WebSocket stream events in trace storage and viewer/export output (default: off)",
     )
     storage_group.add_argument(
+        "--tap-export-prompt",
+        metavar="PATH",
+        default=None,
+        dest="export_prompt",
+        help=(
+            "Export the captured prompt surface to Markdown after this run, plus a raw trace JSONL next to it. "
+            "This mode records the request and returns a local success response without contacting upstream."
+        ),
+    )
+    storage_group.add_argument(
         "--tap-no-update-check",
         action="store_true",
         dest="no_update_check",
@@ -638,6 +696,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.target is None:
         if args.client == "codex":
             args.target = _detect_codex_target(claude_args)
+        elif args.client == "kimi-code":
+            args.target = TARGET_DETECTORS["kimi-code"](claude_args)
+        elif args.client == "openclaw":
+            args.target = TARGET_DETECTORS["openclaw"](claude_args)
         else:
             detector = TARGET_DETECTORS.get(args.client)
             args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target

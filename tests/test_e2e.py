@@ -436,6 +436,7 @@ def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout
     Returns the CompletedProcess."""
     env = os.environ.copy()
     env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+    env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
 
     env = e2e_env(env, trace_dir)
     cmd = [
@@ -1194,6 +1195,27 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.claude_args == []
     print("  OK: codex defaults")
 
+    openclaw_config = tmp_path / "openclaw.json"
+    openclaw_config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": {"primary": "openai/default"}}},
+                "models": {
+                    "providers": {
+                        "openai": {"baseUrl": "https://openai.example.com/v1", "api": "openai-responses"},
+                        "anthropic": {"baseUrl": "https://anthropic.example.com", "api": "anthropic-messages"},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(openclaw_config))
+    a = parse_args(["--tap-client", "openclaw", "--", "agent", "--model", "anthropic/claude"])
+    assert a.target == "https://anthropic.example.com"
+    assert a.claude_args == ["agent", "--model", "anthropic/claude"]
+    print("  OK: openclaw target honors forwarded --model")
+
     # Claude flags pass through
     a = parse_args(["-c"])
     assert a.claude_args == ["-c"]
@@ -1242,6 +1264,11 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.store_stream_events is True
     assert a.claude_args == []
     print("  OK: --tap-store-stream-events enables raw event storage")
+
+    a = parse_args(["--tap-export-prompt", "prompt.md"])
+    assert a.export_prompt == "prompt.md"
+    assert a.claude_args == []
+    print("  OK: --tap-export-prompt consumed")
 
     # Mix: tap flags + claude flags
     a = parse_args(["--tap-port", "9999", "-c", "--model", "sonnet"])
@@ -1437,6 +1464,33 @@ async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypat
     assert code == 0
     assert opened_urls == []
     assert migration_calls == [tmp_path]
+
+
+@pytest.mark.asyncio
+async def test_async_main_export_prompt_preserves_client_failure(monkeypatch, tmp_path):
+    """Successful prompt export should not turn a failing client run into success."""
+    from claude_tap import async_main, parse_args
+
+    async def fake_run_client(*args, **kwargs):
+        return 7
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-export-failure.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli._export_prompt_from_session", lambda *_args: 0)
+
+    args = parse_args(
+        [
+            "--tap-output-dir",
+            str(tmp_path),
+            "--tap-no-update-check",
+            "--tap-no-live",
+            "--tap-no-open",
+            "--tap-export-prompt",
+            str(tmp_path / "prompt.md"),
+        ]
+    )
+
+    assert await async_main(args) == 7
 
 
 def test_parse_args_allow_path_validation():
@@ -2353,8 +2407,6 @@ def test_detect_installer():
 ## Test: version check with fake PyPI
 ## ---------------------------------------------------------------------------
 
-FAKE_PYPI_PORT = 19210
-
 # Minimal fake claude that exits immediately without making any upstream
 # requests.  Used by version-check tests which only care about the update
 # banner printed by claude-tap itself, not about proxied API traffic.
@@ -2379,7 +2431,8 @@ def test_version_check_with_fake_pypi():
         def log_message(self, format, *args):
             pass  # silence logs
 
-    server = HTTPServer(("127.0.0.1", FAKE_PYPI_PORT), FakePyPI)
+    server = HTTPServer(("127.0.0.1", 0), FakePyPI)
+    pypi_port = server.server_port
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
 
@@ -2391,7 +2444,7 @@ def test_version_check_with_fake_pypi():
         env = os.environ.copy()
         env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
         env = e2e_env(env, trace_dir)
-        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{FAKE_PYPI_PORT}/pypi/claude-tap/json"
+        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{pypi_port}/pypi/claude-tap/json"
 
         proc = subprocess.run(
             [
@@ -2420,10 +2473,8 @@ def test_version_check_with_fake_pypi():
         raise AssertionError("claude_tap subprocess timed out (30s) — possible port conflict or hang") from exc
     finally:
         server.shutdown()
+        server.server_close()
         _cleanup(trace_dir, fake_bin_dir, "update_check")
-
-
-FAKE_PYPI_NOCHECK_PORT = 19211
 
 
 def test_version_check_no_update():
@@ -2442,7 +2493,8 @@ def test_version_check_no_update():
         def log_message(self, format, *args):
             pass
 
-    server = HTTPServer(("127.0.0.1", FAKE_PYPI_NOCHECK_PORT), FakePyPICurrent)
+    server = HTTPServer(("127.0.0.1", 0), FakePyPICurrent)
+    pypi_port = server.server_port
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
 
@@ -2454,7 +2506,7 @@ def test_version_check_no_update():
         env = os.environ.copy()
         env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
         env = e2e_env(env, trace_dir)
-        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{FAKE_PYPI_NOCHECK_PORT}/pypi/claude-tap/json"
+        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{pypi_port}/pypi/claude-tap/json"
 
         proc = subprocess.run(
             [
@@ -2481,6 +2533,7 @@ def test_version_check_no_update():
         raise AssertionError("claude_tap subprocess timed out (30s) — possible port conflict or hang") from exc
     finally:
         server.shutdown()
+        server.server_close()
         _cleanup(trace_dir, fake_bin_dir, "no_update")
 
 
@@ -3248,6 +3301,7 @@ async def test_forward_proxy_local_reverse_bridge():
             session=session,
             local_reverse_target=f"https://127.0.0.1:{upstream_port}",
             local_reverse_allowed_path_prefixes=("/v1internal",),
+            capture_only=True,
         )
         proxy_port = await server.start()
 
@@ -3434,6 +3488,99 @@ async def test_forward_proxy_connect_websocket():
             await session.close()
 
     print("  test_forward_proxy_connect_websocket PASSED")
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_connect_websocket_capture_only(monkeypatch: pytest.MonkeyPatch):
+    """Capture-only WebSocket mode should synthesize a local response and trace the client prompt."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        ca_dir = tmpdir / "ca"
+
+        ca_cert_path, ca_key_path = ensure_ca(ca_dir)
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port = await _start_fake_wss_upstream(tmpdir)
+        store, session_id, writer = _writer_for_dir(tmpdir)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False)
+
+        def fail_ws_connect(*args, **kwargs):
+            raise AssertionError("capture-only websocket should not connect upstream")
+
+        monkeypatch.setattr(session, "ws_connect", fail_ws_connect)
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+            store_stream_events=True,
+            capture_only=True,
+        )
+        proxy_port = await server.start()
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/v1/responses",
+                    proxy=proxy_url,
+                    ssl=ssl_ctx,
+                )
+                await ws.send_json({"type": "session.update", "tools": []})
+                await ws.send_json({"model": "gpt-test", "instructions": "ws system", "input": "hello"})
+
+                received = []
+                while True:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        received.append(json.loads(msg.data))
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                    ):
+                        break
+                await ws.close()
+
+            assert [event["type"] for event in received] == ["response.created", "response.completed"]
+            assert received[-1]["response"]["status"] == "completed"
+            assert received[-1]["response"]["output"][0]["content"][0]["text"] == "captured"
+
+            await asyncio.sleep(0.1)
+            writer.close()
+            records = [json.loads(line) for line in store.export_jsonl(session_id).splitlines()]
+            assert len(records) == 1
+            assert records[0]["transport"] == "websocket"
+            assert records[0]["request"]["body"]["instructions"] == "ws system"
+            assert records[0]["response"]["status"] == 101
+            assert records[0]["response"]["body"]["status"] == "completed"
+            assert len(records[0]["request"]["ws_events"]) == 2
+            assert records[0]["request"]["ws_events"][1]["model"] == "gpt-test"
+            assert [event["type"] for event in records[0]["response"]["ws_events"]] == [
+                "response.created",
+                "response.completed",
+            ]
+        finally:
+            await server.stop()
+            await session.close()
+
+    print("  test_forward_proxy_connect_websocket_capture_only PASSED")
 
 
 @pytest.mark.asyncio

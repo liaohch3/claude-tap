@@ -110,7 +110,7 @@ def test_export_help_mentions_html(capsys) -> None:
 
     assert exc_info.value.code == 0
     help_text = capsys.readouterr().out
-    assert "{markdown,json,html,compact}" in help_text
+    assert "{markdown,json,html,compact,prompt-md}" in help_text
     assert "for HTML" in help_text
 
 
@@ -307,3 +307,183 @@ def test_export_session_html_does_not_materialize_jsonl_file(trace_db, tmp_path,
     assert "EMBEDDED_TRACE_COMPACT_DATA" in html
     assert "gpt-5.5" in html
     assert "Exported 1 turns" in capsys.readouterr().out
+
+
+def test_export_prompt_markdown_matches_prompt_snapshot_format(tmp_path, capsys) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    prompt_path = tmp_path / "prompt.md"
+    record = {
+        "timestamp": "2026-05-21T10:00:00+00:00",
+        "request_id": "req_1",
+        "turn": 1,
+        "duration_ms": 1,
+        "request": {
+            "method": "POST",
+            "path": "/v1/messages?beta=true",
+            "headers": {},
+            "body": {
+                "model": "claude-opus",
+                "system": [{"type": "text", "text": "main system"}],
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
+                "tools": [
+                    {
+                        "name": "Bash",
+                        "description": "Run shell commands",
+                        "input_schema": {"type": "object", "properties": {"cmd": {"type": "string"}}},
+                    }
+                ],
+            },
+        },
+        "response": {"status": 200, "headers": {}, "body": {}},
+    }
+    trace_path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    assert export_main([str(trace_path), "--format", "prompt-md", "-o", str(prompt_path)]) == 0
+
+    assert prompt_path.read_text(encoding="utf-8") == (
+        "# System Prompt\n\n"
+        "main system\n\n"
+        "# User Message\n\n"
+        "hello\n\n"
+        "# Tools\n\n"
+        "## Bash\n\n"
+        "Run shell commands\n\n"
+        "```json\n"
+        '{\n  "type": "object",\n  "properties": {\n    "cmd": {\n      "type": "string"\n    }\n  }\n}\n'
+        "```\n"
+    )
+    assert f"Exported 1 turns to {prompt_path}" in capsys.readouterr().out
+
+
+def test_export_prompt_markdown_accepts_sqlite_session(trace_db, tmp_path) -> None:
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-21T10:00:00+00:00",
+            "request_id": "req_1",
+            "turn": 1,
+            "duration_ms": 1,
+            "request": {
+                "method": "POST",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "model": "gpt-5",
+                    "instructions": "system instructions",
+                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+                    "tools": [{"type": "function", "name": "shell", "description": "Run shell"}],
+                },
+            },
+            "response": {"status": 200, "headers": {}, "body": {}},
+        },
+    )
+    prompt_path = tmp_path / "prompt.md"
+
+    assert export_main([session_id, "--format", "prompt-md", "-o", str(prompt_path)]) == 0
+
+    text = prompt_path.read_text(encoding="utf-8")
+    assert "# System Prompt\n\nsystem instructions" in text
+    assert "# User Message\n\nhello" in text
+    assert "## shell" in text
+
+
+def test_export_prompt_from_session_also_writes_raw_trace(trace_db, tmp_path, capsys) -> None:
+    from claude_tap.cli import _export_prompt_from_session
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    record = {
+        "timestamp": "2026-05-21T10:00:00+00:00",
+        "request_id": "req_1",
+        "turn": 1,
+        "duration_ms": 1,
+        "request": {
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": {},
+            "body": {
+                "model": "gpt-5",
+                "instructions": "system instructions",
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            },
+        },
+        "response": {"status": 200, "headers": {}, "body": {}},
+    }
+    store.append_record(session_id, record)
+    prompt_path = tmp_path / "prompt.md"
+
+    assert _export_prompt_from_session(store, session_id, str(prompt_path)) == 0
+
+    trace_path = tmp_path / "trace.jsonl"
+    assert prompt_path.exists()
+    assert trace_path.exists()
+    assert trace_path.read_text(encoding="utf-8") == store.export_jsonl(session_id)
+    assert json.loads(trace_path.read_text(encoding="utf-8"))["request_id"] == "req_1"
+    output = capsys.readouterr().out
+    assert f"Prompt snapshot: {prompt_path}" in output
+    assert f"Raw trace: {trace_path}" in output
+
+
+def test_export_prompt_from_session_stdout_and_missing_prompt(trace_db, capsys) -> None:
+    from claude_tap.cli import _export_prompt_from_session
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-21T10:00:00+00:00",
+            "request_id": "req_1",
+            "turn": 1,
+            "duration_ms": 1,
+            "request": {
+                "method": "POST",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {"model": "gpt-5", "instructions": "system instructions"},
+            },
+            "response": {"status": 200, "headers": {}, "body": {}},
+        },
+    )
+
+    assert _export_prompt_from_session(store, session_id, "-") == 0
+    assert "# System Prompt\n\nsystem instructions" in capsys.readouterr().out
+
+    empty_session_id = store.create_session(client="codex", proxy_mode="reverse")
+    assert _export_prompt_from_session(store, empty_session_id, "-") == 1
+    assert "no prompt-bearing request found in trace" in capsys.readouterr().err
+
+
+def test_export_prompt_from_session_uses_stemmed_trace_name(trace_db, tmp_path) -> None:
+    from claude_tap.cli import _export_prompt_from_session
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-21T10:00:00+00:00",
+            "request_id": "req_1",
+            "turn": 1,
+            "duration_ms": 1,
+            "request": {
+                "method": "POST",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {"model": "gpt-5", "instructions": "system instructions"},
+            },
+            "response": {"status": 200, "headers": {}, "body": {}},
+        },
+    )
+
+    assert _export_prompt_from_session(store, session_id, str(tmp_path / "snapshot.md")) == 0
+
+    assert (tmp_path / "snapshot.md").exists()
+    assert (tmp_path / "snapshot.trace.jsonl").exists()

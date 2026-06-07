@@ -13,7 +13,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from typing import Sequence
 
 _BEDROCK_HOST_RE = re.compile(
     r"(^|\.)("
@@ -258,6 +258,15 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         forward_base_url_envs=("CLOUD_CODE_URL",),
         forward_base_url_allowed_path_prefixes=("/v1internal",),
     ),
+    "openclaw": ClientConfig(
+        cmd="openclaw",
+        label="OpenClaw",
+        install_url="https://github.com/openclaw/openclaw",
+        base_url_env="OPENAI_BASE_URL",
+        extra_base_url_envs=("ANTHROPIC_BASE_URL", "GOOGLE_GEMINI_BASE_URL", "OPENROUTER_BASE_URL", "CUSTOM_BASE_URL"),
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+    ),
     "codebuddy": ClientConfig(
         cmd="codebuddy",
         label="CodeBuddy",
@@ -282,6 +291,7 @@ async def run_client(
     proxy_mode: str = "reverse",
     ca_cert_path: Path | None = None,
     client_cmd: str | None = None,
+    capture_only: bool = False,
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
 
@@ -297,6 +307,7 @@ async def run_client(
         return 1
 
     env = os.environ.copy()
+    cleanup_paths: list[Path] = []
 
     cmd_args = list(extra_args)
     cmd_args = _maybe_rewrite_hermes_gateway_start(client, cmd_args)
@@ -347,14 +358,29 @@ async def run_client(
         # Don't set reverse-mode provider-specific base URL in forward mode.
     else:
         if client == "kimi-code":
-            kimi_code_sandbox, _patched_providers, kimi_code_source_home = _prepare_kimi_code_reverse_sandbox(port)
-            env["KIMI_CODE_HOME"] = str(kimi_code_sandbox)
-            env["KIMI_CODE_BASE_URL"] = cfg.reverse_base_url(port)
-            env["NO_PROXY"] = "127.0.0.1"
+            kimi_code_sandbox, _patched_providers, kimi_code_source_home, cmd_args = _prepare_kimi_code_reverse_sandbox(
+                port, cmd_args
+            )
+            reverse_env = {
+                "KIMI_CODE_HOME": str(kimi_code_sandbox),
+                "KIMI_CODE_BASE_URL": cfg.reverse_base_url(port),
+                "KIMI_BASE_URL": cfg.reverse_base_url(port),
+            }
+            if os.environ.get("KIMI_MODEL_NAME") or os.environ.get("KIMI_MODEL_BASE_URL"):
+                reverse_env["KIMI_MODEL_BASE_URL"] = cfg.reverse_base_url(port)
+        elif client == "openclaw":
+            reverse_env = _openclaw_reverse_env(port, cmd_args)
+        elif capture_only and client in {"hermes", "kimi"}:
+            reverse_env = _multi_provider_reverse_env(port)
+        elif capture_only and client == "opencode":
+            reverse_env = _opencode_reverse_env(port)
         else:
             reverse_env = cfg.reverse_base_url_env_map(port)
-            env.update(reverse_env)
-            env["NO_PROXY"] = "127.0.0.1"
+        cleanup_path = reverse_env.pop(_OPENCLAW_CLEANUP_ENV, None)
+        if cleanup_path:
+            cleanup_paths.append(Path(cleanup_path))
+        env.update(reverse_env)
+        env["NO_PROXY"] = "127.0.0.1"
         if cfg.inject_settings_env and not _has_settings_arg(cmd_args):
             cmd_args = _settings_arg(reverse_env) + cmd_args
         base_url_config_overrides: list[str] = []
@@ -400,14 +426,24 @@ async def run_client(
     # so the TUI app has full terminal control (e.g. Cmd+Delete, Ctrl+U).
     use_fg = hasattr(os, "tcsetpgrp") and sys.stdin.isatty()
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        env=env,
-        stdin=None,
-        stdout=None,
-        stderr=None,
-        **({"process_group": 0} if use_fg else {}),
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            env=env,
+            stdin=None,
+            stdout=None,
+            stderr=None,
+            **({"process_group": 0} if use_fg else {}),
+        )
+    except Exception:
+        for path in cleanup_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if client == "kimi-code" and proxy_mode == "reverse" and kimi_code_sandbox is not None:
+            shutil.rmtree(kimi_code_sandbox, ignore_errors=True)
+        raise
 
     if use_fg:
         try:
@@ -450,6 +486,11 @@ async def run_client(
     try:
         code = await proc.wait()
     finally:
+        for path in cleanup_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
         if (
             client == "kimi-code"
             and proxy_mode == "reverse"
@@ -900,13 +941,90 @@ def _sync_kimi_code_migration_suppression(source_home: Path, sandbox: Path) -> N
         skip_target.write_text("", encoding="utf-8")
 
 
-def _read_kimi_code_config(home: Path | None = None) -> dict[str, object]:
-    config_path = (home or _kimi_code_home()) / "config.toml"
+def _read_kimi_code_config(home: Path | None = None, path: Path | None = None) -> dict[str, object]:
+    config_path = path or (home or _kimi_code_home()) / "config.toml"
     try:
-        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError, ValueError):
+        text = config_path.read_text(encoding="utf-8")
+        data = json.loads(text) if config_path.suffix.lower() == ".json" else tomllib.loads(text)
+    except (OSError, json.JSONDecodeError, tomllib.TOMLDecodeError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _kimi_code_option_value(args: Sequence[str], flags: set[str]) -> str | None:
+    for idx, arg in enumerate(args):
+        if arg in flags and idx + 1 < len(args):
+            value = args[idx + 1].strip()
+            if value:
+                return value
+        for flag in flags:
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :].strip()
+                if value:
+                    return value
+    return None
+
+
+def _replace_kimi_code_option_value(args: Sequence[str], flags: set[str], value: str) -> list[str]:
+    rewritten: list[str] = []
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            rewritten.append(value)
+            skip_next = False
+            continue
+        if arg in flags:
+            rewritten.append(arg)
+            skip_next = True
+            continue
+        matched = False
+        for flag in flags:
+            if arg.startswith(f"{flag}="):
+                rewritten.append(f"{flag}={value}")
+                matched = True
+                break
+        if not matched:
+            rewritten.append(arg)
+    return rewritten
+
+
+def _kimi_code_model_arg(cmd_args: Sequence[str] = ()) -> str | None:
+    return _kimi_code_option_value(cmd_args, {"--model", "-m"})
+
+
+def _kimi_code_config_file_arg(cmd_args: Sequence[str] = ()) -> str | None:
+    return _kimi_code_option_value(cmd_args, {"--config-file"})
+
+
+def _kimi_code_inline_config_arg(cmd_args: Sequence[str] = ()) -> str | None:
+    return _kimi_code_option_value(cmd_args, {"--config"})
+
+
+def _loads_kimi_code_inline_config(value: str) -> dict[str, object]:
+    value = value.strip()
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        try:
+            parsed = tomllib.loads(value)
+        except (tomllib.TOMLDecodeError, ValueError):
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _kimi_code_config_for_args(cmd_args: Sequence[str] = ()) -> dict[str, object]:
+    inline_config = _kimi_code_inline_config_arg(cmd_args)
+    if inline_config:
+        return _loads_kimi_code_inline_config(inline_config)
+
+    config_file = _kimi_code_config_file_arg(cmd_args)
+    if config_file:
+        return _read_kimi_code_config(path=Path(config_file).expanduser())
+
+    return _read_kimi_code_config()
 
 
 def _kimi_code_provider_base_url(provider: dict[str, object]) -> str | None:
@@ -921,31 +1039,45 @@ def _kimi_code_provider_base_url(provider: dict[str, object]) -> str | None:
     return None
 
 
-def _should_proxy_kimi_code_url(url: str) -> bool:
-    host = (urlparse(url).hostname or "").lower()
-    return any(marker in host for marker in _KIMI_CODE_PROXY_HOST_MARKERS)
+def _kimi_code_selected_provider_names(config: dict[str, object], cmd_args: Sequence[str] = ()) -> set[str]:
+    providers = config.get("providers")
+    if not isinstance(providers, dict):
+        return set()
+
+    selected_model = _kimi_code_model_arg(cmd_args)
+    if not selected_model:
+        default_model = config.get("default_model")
+        if isinstance(default_model, str) and default_model.strip():
+            selected_model = default_model.strip()
+
+    models = config.get("models")
+    if selected_model and isinstance(models, dict):
+        model = models.get(selected_model)
+        if isinstance(model, dict):
+            provider_name = model.get("provider")
+            if isinstance(provider_name, str) and provider_name in providers:
+                return {provider_name}
+
+    kimi_providers = [
+        name
+        for name, provider in providers.items()
+        if isinstance(name, str) and isinstance(provider, dict) and provider.get("type") == "kimi"
+    ]
+    if len(kimi_providers) == 1:
+        return {kimi_providers[0]}
+    if _KIMI_CODE_MANAGED_PROVIDER in kimi_providers:
+        return {_KIMI_CODE_MANAGED_PROVIDER}
+    return set()
 
 
-def _remap_kimi_code_service_base_url(original: str, proxy_base: str) -> str:
-    proxy_base = proxy_base.rstrip("/")
-    original = original.rstrip("/")
-    for prefix in (
-        "https://api.kimi.com/coding/v1",
-        "https://api.moonshot.ai/v1",
-        "https://api.moonshot.cn/v1",
-    ):
-        if original.startswith(prefix):
-            suffix = original[len(prefix) :]
-            return f"{proxy_base}{suffix}"
-    return proxy_base
-
-
-def _collect_kimi_code_provider_urls(config: dict[str, object]) -> list[str]:
+def _collect_kimi_code_provider_urls(config: dict[str, object], provider_names: set[str] | None = None) -> list[str]:
     urls: list[str] = []
     providers = config.get("providers")
     if not isinstance(providers, dict):
         return urls
-    for provider in providers.values():
+    for name, provider in providers.items():
+        if provider_names is not None and name not in provider_names:
+            continue
         if not isinstance(provider, dict) or provider.get("type") != "kimi":
             continue
         base_url = _kimi_code_provider_base_url(provider)
@@ -954,32 +1086,19 @@ def _collect_kimi_code_provider_urls(config: dict[str, object]) -> list[str]:
     return urls
 
 
-def _collect_kimi_code_service_urls(config: dict[str, object]) -> list[str]:
-    urls: list[str] = []
-    services = config.get("services")
-    if not isinstance(services, dict):
-        return urls
-    for service in services.values():
-        if not isinstance(service, dict):
-            continue
-        base_url = service.get("base_url")
-        if isinstance(base_url, str) and base_url.strip() and _should_proxy_kimi_code_url(base_url):
-            urls.append(base_url.strip())
-    return urls
-
-
-def _collect_kimi_code_base_urls(config: dict[str, object]) -> list[str]:
-    return _collect_kimi_code_provider_urls(config) + _collect_kimi_code_service_urls(config)
-
-
-def _patch_kimi_code_config_dict(config: dict[str, object], proxy_base: str) -> tuple[dict[str, object], list[str]]:
+def _patch_kimi_code_config_dict(
+    config: dict[str, object], proxy_base: str, cmd_args: Sequence[str] = ()
+) -> tuple[dict[str, object], list[str]]:
     patched = json.loads(json.dumps(config))
     patched_providers: list[str] = []
+    provider_names = _kimi_code_selected_provider_names(config, cmd_args)
 
     providers = patched.get("providers")
     if isinstance(providers, dict):
         for name, provider in providers.items():
             if not isinstance(provider, dict) or provider.get("type") != "kimi":
+                continue
+            if provider_names and name not in provider_names:
                 continue
             provider["base_url"] = proxy_base
             env_table = provider.get("env")
@@ -987,30 +1106,15 @@ def _patch_kimi_code_config_dict(config: dict[str, object], proxy_base: str) -> 
                 env_table["KIMI_BASE_URL"] = proxy_base
             patched_providers.append(str(name))
 
-    services = patched.get("services")
-    if isinstance(services, dict):
-        for service in services.values():
-            if not isinstance(service, dict):
-                continue
-            base_url = service.get("base_url")
-            if isinstance(base_url, str) and base_url.strip() and _should_proxy_kimi_code_url(base_url):
-                service["base_url"] = _remap_kimi_code_service_base_url(base_url, proxy_base)
-
     return patched, patched_providers
 
 
-def _proxy_base_url_for_original(old_url: str, proxy_base: str) -> str:
-    if "/search" in old_url or "/fetch" in old_url:
-        return _remap_kimi_code_service_base_url(old_url, proxy_base)
-    return proxy_base
-
-
-def _kimi_code_config_url_replacements(config: dict[str, object], proxy_base: str) -> list[tuple[str, str]]:
+def _kimi_code_config_url_replacements(
+    config: dict[str, object], proxy_base: str, provider_names: set[str]
+) -> list[tuple[str, str]]:
     replacements: list[tuple[str, str]] = []
-    for old_url in _collect_kimi_code_provider_urls(config):
+    for old_url in _collect_kimi_code_provider_urls(config, provider_names):
         replacements.append((old_url, proxy_base))
-    for old_url in _collect_kimi_code_service_urls(config):
-        replacements.append((old_url, _remap_kimi_code_service_base_url(old_url, proxy_base)))
     seen: set[str] = set()
     ordered: list[tuple[str, str]] = []
     for old_url, new_url in sorted(replacements, key=lambda item: len(item[0]), reverse=True):
@@ -1023,11 +1127,21 @@ def _kimi_code_config_url_replacements(config: dict[str, object], proxy_base: st
 
 def _replace_kimi_code_toml_url_assignments(text: str, old_url: str, new_url: str) -> str:
     escaped = re.escape(old_url)
-    pattern = rf'(?m)^((?:base_url|KIMI_BASE_URL)\s*=\s*["\']){escaped}(["\']\s*)$'
+    pattern = rf'(?m)^((?:base_url|KIMI_BASE_URL)\s*=\s*["\']){escaped}(["\'].*)$'
     return re.sub(pattern, rf"\1{new_url}\2", text)
 
 
-def _patch_kimi_code_config_text(source_text: str, proxy_base: str) -> tuple[str, list[str]]:
+def _insert_kimi_code_provider_base_url(text: str, provider_name: str, proxy_base: str) -> str:
+    quoted = f'"{re.escape(provider_name)}"'
+    bare = re.escape(provider_name)
+    pattern = rf"(?m)^(\[providers\.(?:{quoted}|{bare})\]\s*(?:#.*)?\r?\n)"
+    replacement = rf'\1base_url = "{proxy_base}"' + "\n"
+    return re.sub(pattern, replacement, text, count=1)
+
+
+def _patch_kimi_code_config_text(
+    source_text: str, proxy_base: str, cmd_args: Sequence[str] = ()
+) -> tuple[str, list[str]]:
     if not source_text.strip():
         return _minimal_kimi_code_config_toml(proxy_base), [_KIMI_CODE_MANAGED_PROVIDER]
     try:
@@ -1036,11 +1150,29 @@ def _patch_kimi_code_config_text(source_text: str, proxy_base: str) -> tuple[str
         config = {}
     if not isinstance(config, dict):
         config = {}
-    _, patched_providers = _patch_kimi_code_config_dict(config, proxy_base)
+    _, patched_providers = _patch_kimi_code_config_dict(config, proxy_base, cmd_args)
+    provider_names = set(patched_providers)
     result = source_text
-    for old_url, new_url in _kimi_code_config_url_replacements(config, proxy_base):
+    for old_url, new_url in _kimi_code_config_url_replacements(config, proxy_base, provider_names):
         result = _replace_kimi_code_toml_url_assignments(result, old_url, new_url)
+    providers = config.get("providers")
+    if isinstance(providers, dict):
+        for name in provider_names:
+            provider = providers.get(name)
+            if isinstance(provider, dict) and not _kimi_code_provider_base_url(provider):
+                result = _insert_kimi_code_provider_base_url(result, str(name), proxy_base)
     return result, patched_providers
+
+
+def _patch_kimi_code_inline_config(value: str, proxy_base: str, cmd_args: Sequence[str] = ()) -> str:
+    config = _loads_kimi_code_inline_config(value)
+    if not config:
+        return value
+    if value.strip().startswith(("{", "[")):
+        patched, _ = _patch_kimi_code_config_dict(config, proxy_base, cmd_args)
+        return json.dumps(patched, separators=(",", ":"))
+    patched_text, _ = _patch_kimi_code_config_text(value, proxy_base, cmd_args)
+    return patched_text
 
 
 def _minimal_kimi_code_config_toml(proxy_base: str) -> str:
@@ -1236,22 +1368,52 @@ def _remap_kimi_code_sandbox_paths(source_home: Path, sandbox: Path) -> None:
             path.write_text(rewritten, encoding="utf-8")
 
 
-def _prepare_kimi_code_reverse_sandbox(port: int) -> tuple[Path, list[str], Path]:
+def _prepare_kimi_code_reverse_sandbox(
+    port: int, cmd_args: Sequence[str] = ()
+) -> tuple[Path, list[str], Path, list[str]]:
     source_home = _kimi_code_source_home()
     proxy_base = f"http://127.0.0.1:{port}"
     sandbox = Path(tempfile.mkdtemp(prefix=_KIMI_CODE_SANDBOX_DIR_PREFIX))
-    source_config = source_home / "config.toml"
-    target_config = sandbox / "config.toml"
+    patched_cmd_args = list(cmd_args)
+    inline_config = _kimi_code_inline_config_arg(cmd_args)
+    config_file_arg = _kimi_code_config_file_arg(cmd_args)
 
-    if source_config.is_file():
-        source_text = source_config.read_text(encoding="utf-8")
-        patched_text, patched_providers = _patch_kimi_code_config_text(source_text, proxy_base)
-        target_config.write_text(patched_text, encoding="utf-8")
-        if not patched_providers:
-            patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
-    else:
-        target_config.write_text(_minimal_kimi_code_config_toml(proxy_base), encoding="utf-8")
+    if inline_config:
+        patched_inline = _patch_kimi_code_inline_config(inline_config, proxy_base, cmd_args)
+        patched_cmd_args = _replace_kimi_code_option_value(cmd_args, {"--config"}, patched_inline)
+        (sandbox / "config.toml").write_text(_minimal_kimi_code_config_toml(proxy_base), encoding="utf-8")
         patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
+    elif config_file_arg:
+        source_config = Path(config_file_arg).expanduser()
+        target_config = sandbox / ("config.json" if source_config.suffix.lower() == ".json" else "config.toml")
+        try:
+            source_text = source_config.read_text(encoding="utf-8")
+        except OSError:
+            source_text = ""
+        if target_config.suffix.lower() == ".json" and source_text.strip():
+            config = _read_kimi_code_config(path=source_config)
+            patched, patched_providers = _patch_kimi_code_config_dict(config, proxy_base, cmd_args)
+            target_config.write_text(json.dumps(patched, indent=2) + "\n", encoding="utf-8")
+        else:
+            patched_text, patched_providers = _patch_kimi_code_config_text(source_text, proxy_base, cmd_args)
+            if not patched_providers:
+                patched_text = _minimal_kimi_code_config_toml(proxy_base)
+                patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
+            target_config.write_text(patched_text, encoding="utf-8")
+        patched_cmd_args = _replace_kimi_code_option_value(cmd_args, {"--config-file"}, str(target_config))
+    else:
+        source_config = source_home / "config.toml"
+        target_config = sandbox / "config.toml"
+        if source_config.is_file():
+            source_text = source_config.read_text(encoding="utf-8")
+            patched_text, patched_providers = _patch_kimi_code_config_text(source_text, proxy_base, cmd_args)
+            if not patched_providers:
+                patched_text = _minimal_kimi_code_config_toml(proxy_base)
+                patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
+            target_config.write_text(patched_text, encoding="utf-8")
+        else:
+            target_config.write_text(_minimal_kimi_code_config_toml(proxy_base), encoding="utf-8")
+            patched_providers = [_KIMI_CODE_MANAGED_PROVIDER]
 
     for rel, is_dir in _KIMI_CODE_SANDBOX_LINKS:
         _link_kimi_code_sandbox_path(source_home, sandbox, rel, is_dir=is_dir)
@@ -1260,21 +1422,30 @@ def _prepare_kimi_code_reverse_sandbox(port: int) -> tuple[Path, list[str], Path
 
     _sync_kimi_code_migration_suppression(source_home, sandbox)
 
-    return sandbox, patched_providers, source_home
+    return sandbox, patched_providers, source_home, patched_cmd_args
 
 
-def _detect_kimi_code_target() -> str:
-    config = _read_kimi_code_config()
-    default_model = config.get("default_model")
+def _detect_kimi_code_target(cmd_args: Sequence[str] = ()) -> str:
+    for env_key in ("KIMI_MODEL_BASE_URL", "KIMI_BASE_URL"):
+        base_url = os.environ.get(env_key, "").strip()
+        if base_url:
+            return base_url
+
+    config = _kimi_code_config_for_args(cmd_args)
+    selected_model = _kimi_code_model_arg(cmd_args)
+    if not selected_model:
+        default_model = config.get("default_model")
+        if isinstance(default_model, str) and default_model.strip():
+            selected_model = default_model.strip()
     models = config.get("models")
     providers = config.get("providers")
     if (
-        isinstance(default_model, str)
-        and default_model.strip()
+        isinstance(selected_model, str)
+        and selected_model.strip()
         and isinstance(models, dict)
         and isinstance(providers, dict)
     ):
-        alias = models.get(default_model.strip())
+        alias = models.get(selected_model.strip())
         if isinstance(alias, dict):
             provider_name = alias.get("provider")
             if isinstance(provider_name, str):
@@ -1299,9 +1470,195 @@ def _detect_kimi_code_target() -> str:
     return CLIENT_CONFIGS["kimi-code"].default_target
 
 
+_OPENCLAW_CLEANUP_ENV = "__CLAUDE_TAP_OPENCLAW_CONFIG__"
+
+
+def _read_openclaw_config(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _openclaw_config_path() -> Path:
+    explicit = os.environ.get("OPENCLAW_CONFIG_PATH", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    state_dir = os.environ.get("OPENCLAW_STATE_DIR", "").strip()
+    if state_dir:
+        return Path(state_dir).expanduser() / "openclaw.json"
+    return Path.home() / ".openclaw" / "openclaw.json"
+
+
+def _openclaw_model_arg(cmd_args: Sequence[str]) -> str | None:
+    for idx, arg in enumerate(cmd_args):
+        if arg in {"--model", "-m"} and idx + 1 < len(cmd_args):
+            value = cmd_args[idx + 1].strip()
+            if value:
+                return value
+        if arg.startswith("--model="):
+            value = arg.split("=", 1)[1].strip()
+            if value:
+                return value
+    return None
+
+
+def _openclaw_primary_model(cfg: dict, cmd_args: Sequence[str] = ()) -> str | None:
+    if model_arg := _openclaw_model_arg(cmd_args):
+        return model_arg
+    agents = cfg.get("agents")
+    if not isinstance(agents, dict):
+        return None
+    defaults = agents.get("defaults")
+    if not isinstance(defaults, dict):
+        return None
+    model = defaults.get("model")
+    if isinstance(model, str):
+        return model
+    if isinstance(model, dict):
+        primary = model.get("primary")
+        if isinstance(primary, str):
+            return primary
+    models = defaults.get("models")
+    if isinstance(models, dict):
+        for key in models:
+            if isinstance(key, str):
+                return key
+    return None
+
+
+def _openclaw_provider_proxy_url(provider: dict, proxy_url: str) -> str:
+    api = provider.get("api")
+    if not isinstance(api, str):
+        return f"{proxy_url}/v1"
+    if api.startswith("openai-"):
+        return f"{proxy_url}/v1"
+    return proxy_url
+
+
+def _openclaw_provider_target_url(provider: dict, base_url: str) -> str:
+    target = base_url.strip().rstrip("/")
+    if _openclaw_provider_proxy_url(provider, "http://127.0.0.1:0").endswith("/v1") and target.endswith("/v1"):
+        return target[:-3].rstrip("/") or target
+    return target
+
+
+def _openclaw_config_with_proxy(cfg: dict, proxy_url: str, cmd_args: Sequence[str] = ()) -> dict | None:
+    model = _openclaw_primary_model(cfg, cmd_args)
+    if not model or "/" not in model:
+        return None
+    provider_id = model.split("/", 1)[0]
+    models = cfg.get("models")
+    if not isinstance(models, dict):
+        return None
+    providers = models.get("providers")
+    if not isinstance(providers, dict):
+        return None
+    provider = providers.get(provider_id)
+    if not isinstance(provider, dict):
+        return None
+    patched = json.loads(json.dumps(cfg))
+    patched_provider = patched["models"]["providers"][provider_id]
+    patched_provider["baseUrl"] = _openclaw_provider_proxy_url(provider, proxy_url)
+    patched_provider.pop("base_url", None)
+    return patched
+
+
+def _openclaw_reverse_env(port: int, cmd_args: Sequence[str] = ()) -> dict[str, str]:
+    proxy_url = f"http://127.0.0.1:{port}"
+    cfg = _read_openclaw_config(_openclaw_config_path())
+    if cfg:
+        patched = _openclaw_config_with_proxy(cfg, proxy_url, cmd_args)
+        if patched:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".openclaw.json", delete=False) as f:
+                json.dump(patched, f, indent=2)
+                f.write("\n")
+                tmp_path = f.name
+            return {"OPENCLAW_CONFIG_PATH": tmp_path, _OPENCLAW_CLEANUP_ENV: tmp_path}
+    return _openclaw_fallback_reverse_env(proxy_url, cmd_args)
+
+
+def _openclaw_fallback_reverse_env(proxy_url: str, cmd_args: Sequence[str] = ()) -> dict[str, str]:
+    provider = _openclaw_fallback_provider(cmd_args)
+    if provider == "anthropic":
+        return {"ANTHROPIC_BASE_URL": proxy_url}
+    if provider in {"gemini", "google"}:
+        return {"GOOGLE_GEMINI_BASE_URL": proxy_url}
+    if provider == "openrouter":
+        return {"OPENROUTER_BASE_URL": proxy_url}
+    return {"OPENAI_BASE_URL": f"{proxy_url}/v1"}
+
+
+def _openclaw_fallback_provider(cmd_args: Sequence[str] = ()) -> str:
+    model = _openclaw_primary_model({}, cmd_args)
+    if model and "/" in model:
+        return model.split("/", 1)[0]
+    for env_key, provider in (
+        ("OPENAI_API_KEY", "openai"),
+        ("ANTHROPIC_API_KEY", "anthropic"),
+        ("GEMINI_API_KEY", "gemini"),
+        ("GOOGLE_API_KEY", "gemini"),
+        ("OPENROUTER_API_KEY", "openrouter"),
+    ):
+        if os.environ.get(env_key):
+            return provider
+    return "openai"
+
+
+def _opencode_reverse_env(port: int) -> dict[str, str]:
+    proxy_url = f"http://127.0.0.1:{port}"
+    return {
+        "ANTHROPIC_BASE_URL": proxy_url,
+        "OPENAI_BASE_URL": f"{proxy_url}/v1",
+        "GOOGLE_GEMINI_BASE_URL": proxy_url,
+    }
+
+
+def _multi_provider_reverse_env(port: int) -> dict[str, str]:
+    proxy_url = f"http://127.0.0.1:{port}"
+    return {
+        "KIMI_BASE_URL": proxy_url,
+        "MOONSHOT_BASE_URL": f"{proxy_url}/v1",
+        "OPENAI_BASE_URL": f"{proxy_url}/v1",
+        "ANTHROPIC_BASE_URL": proxy_url,
+        "GOOGLE_GEMINI_BASE_URL": proxy_url,
+        "OPENROUTER_BASE_URL": f"{proxy_url}/v1",
+        "CUSTOM_BASE_URL": f"{proxy_url}/v1",
+    }
+
+
+def _detect_openclaw_target(cmd_args: Sequence[str] = ()) -> str:
+    cfg = _read_openclaw_config(_openclaw_config_path())
+    if cfg:
+        model = _openclaw_primary_model(cfg, cmd_args)
+        if model and "/" in model:
+            provider_id = model.split("/", 1)[0]
+            models = cfg.get("models")
+            providers = models.get("providers") if isinstance(models, dict) else None
+            provider = providers.get(provider_id) if isinstance(providers, dict) else None
+            if isinstance(provider, dict):
+                base = provider.get("baseUrl") or provider.get("base_url")
+                if isinstance(base, str) and base.strip():
+                    return _openclaw_provider_target_url(provider, base)
+    for env_key, target in (
+        ("OPENAI_API_KEY", "https://api.openai.com"),
+        ("ANTHROPIC_API_KEY", "https://api.anthropic.com"),
+        ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com"),
+        ("GOOGLE_API_KEY", "https://generativelanguage.googleapis.com"),
+        ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+    ):
+        if os.environ.get(env_key):
+            return target
+    return CLIENT_CONFIGS["openclaw"].default_target
+
+
 TARGET_DETECTORS = {
     "claude": _detect_claude_target,
     "codex": _detect_codex_target,
     "codebuddy": _detect_codebuddy_target,
     "kimi-code": _detect_kimi_code_target,
+    "openclaw": _detect_openclaw_target,
 }

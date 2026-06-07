@@ -86,6 +86,32 @@ max_context_size = 262144
     assert _detect_kimi_code_target() == "https://api.kimi.com/coding/v1"
 
 
+def test_detect_kimi_code_target_uses_shell_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("KIMI_BASE_URL", "https://gateway.example.com/v1")
+
+    assert _detect_kimi_code_target() == "https://gateway.example.com/v1"
+
+
+def test_detect_kimi_code_target_reads_config_file_arg(tmp_path: Path) -> None:
+    override_config = tmp_path / "override.toml"
+    override_config.write_text(
+        """
+default_model = "custom/model"
+
+[providers."custom"]
+type = "kimi"
+base_url = "https://custom.example.com/v1"
+
+[models."custom/model"]
+provider = "custom"
+model = "model"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    assert _detect_kimi_code_target(["--config-file", str(override_config)]) == "https://custom.example.com/v1"
+
+
 def test_patch_kimi_code_config_text_rewrites_provider_base_url() -> None:
     source = """
 [providers."managed:kimi-code"]
@@ -121,6 +147,57 @@ KIMI_BASE_URL = "https://gateway.example.com/v1"
     patched, providers = _patch_kimi_code_config_text(source, "http://127.0.0.1:43123")
     assert 'KIMI_BASE_URL = "http://127.0.0.1:43123"' in patched
     assert providers == ["env-only"]
+
+
+def test_patch_kimi_code_config_text_rewrites_inline_comments() -> None:
+    source = """
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://api.kimi.com/coding/v1" # production endpoint
+api_key = ""
+""".strip()
+    patched, providers = _patch_kimi_code_config_text(source, "http://127.0.0.1:43123")
+
+    assert 'base_url = "http://127.0.0.1:43123" # production endpoint' in patched
+    assert providers == ["managed:kimi-code"]
+
+
+def test_patch_kimi_code_config_text_inserts_missing_provider_base_url() -> None:
+    source = """
+[providers."managed:kimi-code"]
+type = "kimi"
+api_key = ""
+""".strip()
+    patched, providers = _patch_kimi_code_config_text(source, "http://127.0.0.1:43123")
+
+    assert '[providers."managed:kimi-code"]\nbase_url = "http://127.0.0.1:43123"\n' in patched
+    assert providers == ["managed:kimi-code"]
+
+
+def test_patch_kimi_code_config_text_only_rewrites_selected_provider() -> None:
+    source = """
+default_model = "custom/model"
+
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://api.kimi.com/coding/v1"
+api_key = ""
+
+[providers."custom"]
+type = "kimi"
+base_url = "https://gateway.example.com/v1"
+api_key = ""
+
+[models."custom/model"]
+provider = "custom"
+model = "model"
+max_context_size = 1000
+""".strip()
+    patched, providers = _patch_kimi_code_config_text(source, "http://127.0.0.1:43123")
+
+    assert 'base_url = "https://api.kimi.com/coding/v1"' in patched
+    assert 'base_url = "http://127.0.0.1:43123"' in patched
+    assert providers == ["custom"]
 
 
 @pytest.mark.asyncio
@@ -159,10 +236,82 @@ api_key = "sk-test"
     sandbox = Path(env["KIMI_CODE_HOME"])
     assert sandbox.is_dir()
     assert env["KIMI_CODE_BASE_URL"] == "http://127.0.0.1:43123"
-    assert "KIMI_BASE_URL" not in env or env.get("KIMI_BASE_URL") != "http://127.0.0.1:43123"
+    assert env["KIMI_BASE_URL"] == "http://127.0.0.1:43123"
     config = tomllib.loads((sandbox / "config.toml").read_text(encoding="utf-8"))
     provider = config["providers"]["managed:kimi-code"]
     assert provider["base_url"] == "http://127.0.0.1:43123"
+
+
+@pytest.mark.asyncio
+async def test_run_client_kimi_code_reverse_rewrites_config_file_arg(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+    home = tmp_path / "source-home"
+    home.mkdir()
+    override_config = tmp_path / "override.toml"
+    override_config.write_text(
+        """
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://gateway.example.com/v1"
+api_key = "sk-test"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/kimi")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("claude_tap.cli_clients.shutil.rmtree", lambda *_args, **_kwargs: None)
+
+    code = await run_client(
+        43123,
+        ["--config-file", str(override_config), "--prompt", "hi"],
+        client="kimi-code",
+        proxy_mode="reverse",
+    )
+
+    assert code == 0
+    cmd = captured["cmd"]
+    assert cmd[1] == "--config-file"
+    patched_config = Path(cmd[2])
+    assert "claude_tap_kimi_code_" in str(patched_config)
+    assert patched_config.read_text(encoding="utf-8").count("http://127.0.0.1:43123") == 1
+    assert str(override_config) not in cmd
+
+
+@pytest.mark.asyncio
+async def test_run_client_kimi_code_reverse_rewrites_model_env_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+    home = tmp_path / "source-home"
+    home.mkdir()
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+    monkeypatch.setenv("KIMI_MODEL_NAME", "env-model")
+    monkeypatch.setenv("KIMI_MODEL_BASE_URL", "https://gateway.example.com/v1")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/kimi")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["--prompt", "hi"], client="kimi-code", proxy_mode="reverse")
+
+    assert code == 0
+    env = captured["env"]
+    assert env["KIMI_MODEL_BASE_URL"] == "http://127.0.0.1:43123"
+    assert env["KIMI_BASE_URL"] == "http://127.0.0.1:43123"
 
 
 def test_kimi_code_migration_already_handled_reads_legacy_marker(
@@ -200,7 +349,7 @@ def test_prepare_kimi_code_reverse_sandbox_writes_skip_marker_when_migrated(
     monkeypatch.setattr("claude_tap.cli_clients.Path.home", lambda: tmp_path)
     monkeypatch.setenv("KIMI_CODE_HOME", str(real_home))
 
-    sandbox, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    sandbox, _, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
     try:
         assert (sandbox / _KIMI_CODE_SKIP_MIGRATION_MARKER).is_file()
     finally:
@@ -219,9 +368,29 @@ def test_prepare_kimi_code_reverse_sandbox_copies_existing_skip_marker(
     )
     monkeypatch.setenv("KIMI_CODE_HOME", str(real_home))
 
-    sandbox, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    sandbox, _, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
     try:
         assert (sandbox / _KIMI_CODE_SKIP_MIGRATION_MARKER).read_text(encoding="utf-8") == "keep"
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_prepare_kimi_code_reverse_sandbox_replaces_placeholder_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    real_home = tmp_path / "real-kimi-code"
+    real_home.mkdir()
+    (real_home / "config.toml").write_text(
+        "# Placeholder created by kimi-code before login.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(real_home))
+
+    sandbox, providers, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    try:
+        config = tomllib.loads((sandbox / "config.toml").read_text(encoding="utf-8"))
+        assert providers == ["managed:kimi-code"]
+        assert config["providers"]["managed:kimi-code"]["base_url"] == "http://127.0.0.1:43123"
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -240,7 +409,7 @@ def test_prepare_kimi_code_reverse_sandbox_symlinks_auth_dirs(monkeypatch: pytes
     )
     monkeypatch.setenv("KIMI_CODE_HOME", str(home))
 
-    sandbox, providers, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    sandbox, providers, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
     try:
         assert (sandbox / "oauth").is_symlink()
         assert (sandbox / "oauth").resolve() == oauth_dir.resolve()
@@ -262,7 +431,7 @@ def test_prepare_kimi_code_reverse_sandbox_creates_auth_dirs_for_first_login(
     )
     monkeypatch.setenv("KIMI_CODE_HOME", str(home))
 
-    sandbox, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    sandbox, _, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
     try:
         assert (home / "oauth").is_dir()
         assert (home / "credentials").is_dir()
@@ -286,7 +455,7 @@ def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
     )
     monkeypatch.setenv("KIMI_CODE_HOME", str(home))
 
-    sandbox, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
+    sandbox, _, _, _ = _prepare_kimi_code_reverse_sandbox(43123)
     try:
         assert (sandbox / "sessions").is_symlink()
         assert (sandbox / "sessions").resolve() == sessions_dir.resolve()

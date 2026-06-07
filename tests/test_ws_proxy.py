@@ -64,6 +64,7 @@ async def _start_proxy(
     writer,
     strip_prefix="",
     store_stream_events=False,
+    capture_only=False,
 ) -> tuple[web.AppRunner, int, aiohttp.ClientSession]:
     """Start the reverse proxy, return (runner, port, session)."""
     session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
@@ -75,6 +76,7 @@ async def _start_proxy(
         "turn_counter": 0,
         "strip_path_prefix": strip_prefix,
         "store_stream_events": store_stream_events,
+        "capture_only": capture_only,
     }
     app.router.add_route("*", "/{path_info:.*}", proxy_handler)
     runner = web.AppRunner(app)
@@ -83,6 +85,61 @@ async def _start_proxy(
     await site.start()
     port = site._server.sockets[0].getsockname()[1]
     return runner, port, session
+
+
+@pytest.mark.asyncio
+async def test_websocket_capture_only_reverse_skips_upstream_and_reads_prompt_frame(trace_dir, monkeypatch):
+    """Reverse WebSocket capture-only accepts locally and waits past setup frames for the prompt."""
+    store, session_id, writer = _make_writer()
+
+    async def ws_upstream_handler(_request):
+        raise AssertionError("capture-only websocket must not connect upstream")
+
+    upstream_runner, upstream_port = await _start_ws_upstream(ws_upstream_handler)
+    proxy_runner, proxy_port, proxy_session = await _start_proxy(
+        f"http://127.0.0.1:{upstream_port}",
+        writer,
+        store_stream_events=True,
+        capture_only=True,
+    )
+
+    def fail_ws_connect(*args, **kwargs):
+        raise AssertionError("capture-only websocket must not call session.ws_connect")
+
+    monkeypatch.setattr(proxy_session, "ws_connect", fail_ws_connect)
+
+    try:
+        async with aiohttp.ClientSession() as client:
+            ws = await client.ws_connect(f"http://127.0.0.1:{proxy_port}/v1/responses")
+            await ws.send_json({"type": "session.update", "tools": []})
+            await ws.send_json(
+                {
+                    "type": "response.create",
+                    "model": "gpt-test",
+                    "instructions": "ws system",
+                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+                }
+            )
+            received = []
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    received.append(json.loads(msg.data))
+                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
+                    break
+            await ws.close()
+
+        assert [event["type"] for event in received] == ["response.created", "response.completed"]
+        await asyncio.sleep(0.1)
+        writer.close()
+        records = _load_records(store, session_id)
+        assert len(records) == 1
+        assert records[0]["request"]["body"]["instructions"] == "ws system"
+        assert len(records[0]["request"]["ws_events"]) == 2
+        assert records[0]["response"]["body"]["status"] == "completed"
+    finally:
+        await proxy_session.close()
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
 
 
 # ---------------------------------------------------------------------------
