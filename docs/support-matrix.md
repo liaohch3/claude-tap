@@ -21,7 +21,7 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
-| Codex App | ChatGPT account in Codex App | `codex-app://sessions` | n/a | Local session JSONL transcript import | Unit-tested |
+| Codex App | ChatGPT account in Codex App | `codex-app://sessions` | n/a | Local session JSONL transcript import plus automatic best-effort CDP WebSocket enrichment when a Codex App debug endpoint is available | Unit-tested |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy (Google endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Gemini CLI | API key / Vertex-compatible config (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE | Unit-tested |
 | Kimi CLI | Kimi CLI auth/config (`--tap-proxy-mode reverse`) | Kimi Code via `KIMI_BASE_URL`; prompt export capture-only also probes common provider env vars | none for Kimi Code | HTTP/SSE Chat Completions | Unit-tested |
@@ -45,7 +45,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 |--------|--------------|--------|
 | `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
 | `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
-| `codexapp` | `transcript` | Transcript-only listener for `CODEX_HOME/sessions` or `~/.codex/sessions`; no proxy is created |
+| `codexapp` | `transcript` | Transcript listener for `CODEX_HOME/sessions` or `~/.codex/sessions`; no proxy is created. CDP WebSocket evidence is added automatically when Codex App exposes a debug endpoint |
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |
 | `kimi` | `reverse` | Single provider, native `KIMI_BASE_URL` env var |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
@@ -109,6 +109,8 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_codex_client_reverse_proxy` — e2e with fake upstream (OAuth-like, with strip)
 - `test_build_codex_app_transcript_records_preserves_turn_context` — verifies Codex App session JSONL imports as viewer-friendly Responses records with usage, tools, and tool results
 - `test_import_codex_app_transcripts_appends_only_new_completed_records` — verifies Codex App transcript polling appends only new completed records
+- `test_cdp_recorder_writes_viewer_friendly_websocket_record` — verifies Codex App CDP WebSocket frames are reconstructed into viewer-friendly WebSocket records
+- `test_async_main_codexapp_starts_cdp_enrichment_by_default` — verifies `--tap-client codexapp` starts automatic CDP enrichment and stores raw WebSocket events for completeness
 - `test_gemini_registered_in_client_configs` — verifies Gemini CLI registration and default forward mode
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs` — verifies Gemini forward proxy launch env
 - `test_run_client_gemini_reverse_sets_both_base_url_envs` — verifies Gemini reverse proxy base URL env injection
@@ -147,7 +149,8 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Repl
 
 # Codex App
 uv run python -m claude_tap --tap-client codexapp
-# Start or continue a Codex App task and verify the dashboard receives codex-app-transcript records
+# Start or continue a Codex App task and verify the dashboard receives transcript records.
+# If Codex App exposes a debug endpoint, websocket evidence is added automatically.
 
 # Qoder CLI
 uv run python -m claude_tap --tap-client qoder -- -p "Reply OK" --permission-mode dont_ask

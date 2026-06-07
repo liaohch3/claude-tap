@@ -55,7 +55,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 |--------|-------------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, or Claude-compatible gateways such as DeepSeek / GLM |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API key mode or ChatGPT subscription OAuth |
-| [Codex App](https://openai.com/codex/) | Local Codex App sessions imported from `CODEX_HOME` or `~/.codex` |
+| [Codex App](https://openai.com/codex/) | Local Codex App sessions imported from `CODEX_HOME` or `~/.codex`; automatic best-effort CDP WebSocket enrichment |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code or Moonshot Open Platform |
 | [OpenCode](https://opencode.ai) | Multi-provider OpenCode sessions |
@@ -244,6 +244,8 @@ claude-tap --tap-client codexapp
 # Use a custom Codex home directory
 CODEX_HOME=/path/to/codex-home claude-tap --tap-client codexapp
 ```
+
+`--tap-client codexapp` automatically imports the local transcript and silently tries to add CDP WebSocket evidence when a Codex App debug endpoint is available. CDP capture is a side-channel observer, not a proxy; the local session transcript remains the canonical source when the frontend does not expose model traffic through Chrome DevTools Protocol.
 
 </details>
 

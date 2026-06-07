@@ -55,7 +55,7 @@
 |--------|----------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API、AWS Bedrock，或 DeepSeek / GLM 等 Claude 兼容网关 |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
-| [Codex App](https://openai.com/codex/) | 从 `CODEX_HOME` 或 `~/.codex` 导入本地 Codex App 会话 |
+| [Codex App](https://openai.com/codex/) | 从 `CODEX_HOME` 或 `~/.codex` 导入本地 Codex App 会话；自动尽力补充 CDP WebSocket 证据 |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist 的多 Google 端点流量 |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code 或 Moonshot Open Platform |
 | [OpenCode](https://opencode.ai) | 多提供方 OpenCode 会话 |
@@ -243,6 +243,8 @@ claude-tap --tap-client codexapp
 # 使用自定义 Codex home 目录
 CODEX_HOME=/path/to/codex-home claude-tap --tap-client codexapp
 ```
+
+`--tap-client codexapp` 会自动导入本地 transcript，并在 Codex App debug endpoint 可用时静默补充 CDP WebSocket 证据。CDP capture 是旁路观测，不是代理；如果前端没有通过 Chrome DevTools Protocol 暴露模型流量，Codex App 复盘仍以本地 session transcript 为准。
 
 </details>
 

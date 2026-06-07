@@ -54,6 +54,7 @@ from claude_tap.cli_update import (
     parse_update_args,
     update_main,
 )
+from claude_tap.codex_app_cdp import CODEX_APP_CDP_DEFAULT_ENDPOINT, watch_codex_app_cdp
 from claude_tap.codex_app_transcript import codex_app_sessions_dir, watch_codex_app_transcripts
 from claude_tap.cursor_transcript import import_cursor_transcripts
 from claude_tap.forward_proxy import ForwardProxyServer
@@ -260,6 +261,7 @@ async def async_main(args: argparse.Namespace):
     # Reverse proxy mode: aiohttp web app (current behavior)
     forward_server: ForwardProxyServer | None = None
     runner: web.AppRunner | None = None
+    codex_app_cdp_task: asyncio.Task | None = None
     exit_code = 0
     client_started_at = time.time()
     capture_only = bool(getattr(args, "export_prompt", None))
@@ -269,7 +271,14 @@ async def async_main(args: argparse.Namespace):
         if transcript_only:
             sessions_dir = codex_app_sessions_dir()
             print(f"🔍 claude-tap v{__version__} listening for {cfg.label} sessions in {sessions_dir}")
-            print("   Keep Codex App running and use the shared dashboard to inspect imported turns.")
+            print("   Keep Codex App running; debug WebSocket evidence is added automatically when available.")
+            codex_app_cdp_task = asyncio.create_task(
+                watch_codex_app_cdp(
+                    writer,
+                    endpoint=getattr(args, "codexapp_cdp_endpoint", CODEX_APP_CDP_DEFAULT_ENDPOINT),
+                    store_stream_events=True,
+                )
+            )
         else:
             # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY) for
             # outbound upstream requests. This is important when users route traffic
@@ -379,6 +388,12 @@ async def async_main(args: argparse.Namespace):
             try:
                 await runner.cleanup()
             except Exception:
+                pass
+        if codex_app_cdp_task:
+            codex_app_cdp_task.cancel()
+            try:
+                await asyncio.wait_for(codex_app_cdp_task, timeout=5)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
 
         # Shared dashboard runs in a detached process; nothing to stop here.
@@ -634,6 +649,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="PREFIX",
         help="Extra path prefix to allow through the proxy (can be repeated, e.g. --tap-allow-path /custom/api)",
     )
+    proxy_group.add_argument(
+        "--tap-codexapp-cdp-endpoint",
+        default=CODEX_APP_CDP_DEFAULT_ENDPOINT,
+        dest="codexapp_cdp_endpoint",
+        help=argparse.SUPPRESS,
+    )
 
     # -- Viewer options --
     viewer_group = tap_parser.add_argument_group("viewer options")
@@ -713,6 +734,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
     args.client_cmd, claude_args = _extract_wrapped_client_command(args.client, claude_args)
+    if any(arg == "--tap-codexapp-cdp-capture" for arg in claude_args):
+        tap_parser.error(
+            "--tap-codexapp-cdp-capture was removed; Codex App CDP enrichment runs automatically "
+            "with --tap-client codexapp"
+        )
     args.claude_args = claude_args
     # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
     # 127.0.0.1 otherwise (launching the client locally).
@@ -736,6 +762,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         tap_parser.error("--tap-trust-ca does not apply to transcript-only clients")
     if args.trust_ca and args.proxy_mode != "forward":
         tap_parser.error("--tap-trust-ca only applies to forward proxy mode")
+    if args.codexapp_cdp_endpoint != CODEX_APP_CDP_DEFAULT_ENDPOINT and args.client != "codexapp":
+        tap_parser.error("--tap-codexapp-cdp-endpoint only applies to --tap-client codexapp")
 
     # Validate --tap-allow-path prefixes
     for prefix in args.extra_allowed_paths:
