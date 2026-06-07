@@ -130,6 +130,11 @@ def test_parse_args_codexapp_rejects_proxy_mode() -> None:
         parse_args(["--tap-client", "codexapp", "--tap-proxy-mode", "forward"])
 
 
+def test_parse_args_codexapp_rejects_trust_ca() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(["--tap-client", "codexapp", "--tap-trust-ca"])
+
+
 def test_openclaw_declares_multi_provider_reverse_envs() -> None:
     cfg = CLIENT_CONFIGS["openclaw"]
 
