@@ -14,6 +14,7 @@ from aiohttp import web
 
 from claude_tap.compact_trace import build_compact_trace_bundle
 from claude_tap.dashboard import (
+    build_session_query,
     count_trace_sessions,
     dashboard_trace_snapshot,
     ensure_trace_store,
@@ -21,6 +22,7 @@ from claude_tap.dashboard import (
     list_trace_sessions,
     load_trace_session,
     read_dashboard_template,
+    sum_trace_session_records,
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
 from claude_tap.trace_store import get_trace_store, resolve_db_path
@@ -79,6 +81,15 @@ def _session_offset_from_request(request: web.Request) -> int:
     except ValueError:
         return 0
     return max(0, offset)
+
+
+def _session_query_from_request(request: web.Request):
+    return build_session_query(
+        date=request.query.get("date", ""),
+        status=request.query.get("status", ""),
+        search=request.query.get("search", ""),
+        agent=request.query.get("agent", ""),
+    )
 
 
 class LiveViewerServer:
@@ -350,20 +361,27 @@ class LiveViewerServer:
         live_count = await self._current_live_record_count()
         offset = _session_offset_from_request(request)
         limit = _session_limit_from_request(request)
-        total = count_trace_sessions()
+        query = _session_query_from_request(request)
+        total = count_trace_sessions(query)
+        total_records = sum_trace_session_records(query)
         sessions = list_trace_sessions(
             self.session_id,
             live_record_count=live_count,
             limit=limit,
             offset=offset,
+            query=query,
         )
+        dates, has_legacy = get_trace_store().list_dates()
         return web.json_response(
             {
                 "sessions": sessions,
                 "total": total,
+                "total_records": total_records,
                 "offset": offset,
                 "limit": limit,
                 "has_more": offset + len(sessions) < total,
+                "dates": dates,
+                "has_legacy": has_legacy,
             }
         )
 

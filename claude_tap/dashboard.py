@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from claude_tap.bedrock import bedrock_model_from_path
-from claude_tap.trace_store import TraceStore, get_trace_store
+from claude_tap.trace_store import SessionQuery, TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
 from claude_tap.viewer import _decode_bedrock_eventstream_events
 
@@ -32,6 +32,7 @@ CLIENT_LABELS = {
     "qoder": "Qoder",
 }
 DASHBOARD_SUMMARY_VERSION = 2
+VALID_SESSION_STATUSES = {"active", "complete", "error", "empty"}
 
 
 def read_dashboard_template() -> str:
@@ -44,12 +45,33 @@ def ensure_trace_store() -> TraceStore:
     return get_trace_store()
 
 
+def build_session_query(
+    *,
+    date: str = "",
+    status: str = "",
+    search: str = "",
+    agent: str = "",
+) -> SessionQuery:
+    """Build a SQLite-backed session query from dashboard filter values."""
+    normalized_date = date if date == "legacy" or _DATE_RE.match(date) else ""
+    normalized_status = status if status in VALID_SESSION_STATUSES else ""
+    agent_clients, agent_labels = _agent_filter_values(agent)
+    return SessionQuery(
+        date=normalized_date,
+        status=normalized_status,
+        search=search.strip(),
+        agent_clients=agent_clients,
+        agent_labels=agent_labels,
+    )
+
+
 def list_trace_sessions(
     current_session_id: str | None = None,
     *,
     live_record_count: int | None = None,
     limit: int | None = None,
     offset: int = 0,
+    query: SessionQuery | None = None,
     repair_stale_summaries: bool = True,
 ) -> list[dict[str, Any]]:
     """Return trace sessions sorted by most recent activity."""
@@ -69,7 +91,7 @@ def list_trace_sessions(
                     else None
                 ),
             )
-            for row in store.list_session_rows(limit=limit, offset=offset)
+            for row in store.list_session_rows(limit=limit, offset=offset, query=query)
         ]
     except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
         return []
@@ -77,10 +99,18 @@ def list_trace_sessions(
     return sessions
 
 
-def count_trace_sessions() -> int:
+def count_trace_sessions(query: SessionQuery | None = None) -> int:
     """Return the number of stored trace sessions."""
     try:
-        return ensure_trace_store().count_session_rows()
+        return ensure_trace_store().count_session_rows(query)
+    except (OSError, sqlite3.Error, ValueError):
+        return 0
+
+
+def sum_trace_session_records(query: SessionQuery | None = None) -> int:
+    """Return total stored records for matching trace sessions."""
+    try:
+        return ensure_trace_store().sum_session_records(query)
     except (OSError, sqlite3.Error, ValueError):
         return 0
 
@@ -91,17 +121,28 @@ def list_trace_agents(
     live_record_count: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return agent buckets for the dashboard sidebar."""
-    sessions = list_trace_sessions(
-        current_session_id,
-        live_record_count=live_record_count,
-        repair_stale_summaries=False,
-    )
     buckets: dict[str, dict[str, Any]] = {}
-    for session in sessions:
-        key = session["agent_key"]
-        bucket = buckets.setdefault(key, {"key": key, "label": session["agent"], "sessions": 0, "records": 0})
-        bucket["sessions"] += 1
-        bucket["records"] += session["record_count"]
+    try:
+        rows = ensure_trace_store().list_agent_buckets()
+    except (OSError, sqlite3.Error, ValueError):
+        rows = []
+    for row in rows:
+        raw_agent = str(row["agent"] or "Unknown")
+        label = CLIENT_LABELS.get(raw_agent.lower(), raw_agent)
+        key = _agent_key(label)
+        bucket = buckets.setdefault(key, {"key": key, "label": label, "sessions": 0, "records": 0})
+        bucket["sessions"] += int(row["sessions"] or 0)
+        bucket["records"] += int(row["records"] or 0)
+    if current_session_id and live_record_count is not None:
+        live_row = ensure_trace_store().load_session_row(current_session_id)
+        if live_row is not None:
+            live_agent = _infer_agent(
+                [], {"client": live_row["client"] or "", "proxy_mode": live_row["proxy_mode"] or ""}
+            )
+            key = _agent_key(live_agent)
+            bucket = buckets.get(key)
+            if bucket is not None:
+                bucket["records"] = max(int(bucket["records"] or 0), int(live_record_count or 0))
     return sorted(buckets.values(), key=lambda item: (item["label"].lower(), item["key"]))
 
 
@@ -708,6 +749,23 @@ def _record_path(record: dict[str, Any]) -> str:
 def _agent_key(agent: str) -> str:
     key = re.sub(r"[^a-z0-9]+", "-", agent.lower()).strip("-")
     return key or "unknown"
+
+
+def _agent_filter_values(agent_key: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    key = (agent_key or "").strip().lower()
+    if not key or key == "all":
+        return (), ()
+
+    clients: set[str] = set()
+    labels: set[str] = set()
+    for client, label in CLIENT_LABELS.items():
+        if _agent_key(label) == key:
+            clients.add(client)
+            labels.add(label)
+    if key == "unknown":
+        clients.update(("", "unknown"))
+        labels.add("Unknown")
+    return tuple(sorted(clients)), tuple(sorted(labels))
 
 
 def _preview_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:

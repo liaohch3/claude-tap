@@ -1115,7 +1115,10 @@ const state = {
 	  loadingMoreSessions: false,
 	  sessionPageSize: 100,
 	  sessionTotal: 0,
+	  sessionRecordTotal: 0,
 	  sessionsHasMore: false,
+	  dateOptions: [],
+	  hasLegacyDate: false,
 	  loadingSessionId: null,
 	  sessionRequestId: 0,
 	  editMode: false,
@@ -1132,6 +1135,7 @@ const state = {
 const $ = selector => document.querySelector(selector);
 	const MAX_INLINE_DETAIL_RECORDS = 10;
 	let deleteSessionReturnFocusEl = null;
+	let searchRefreshTimer = null;
 
 function initialSessionId() {
   const routeMatch = window.location.pathname.match(SESSION_DETAIL_ROUTE);
@@ -1482,23 +1486,7 @@ async function fetchJSON(url, options = {}) {
 }
 
 	function filteredSessions() {
-	  const needle = state.search.trim().toLowerCase();
-	  return state.sessions.filter(session => {
-    if (state.selectedAgent !== "all" && session.agent_key !== state.selectedAgent) return false;
-    if (state.date !== "all" && session.date !== state.date) return false;
-    if (state.status !== "all" && session.status !== state.status) return false;
-    if (!needle) return true;
-    const haystack = [
-      session.agent,
-      session.model,
-      session.first_user,
-      session.last_response,
-      session.legacy_rel_path,
-      session.id,
-      session.status,
-    ].join(" ").toLowerCase();
-    return haystack.includes(needle);
-	  });
+	  return state.sessions;
 	}
 
 	function sessionsPageUrl(offset, limit) {
@@ -1506,6 +1494,11 @@ async function fetchJSON(url, options = {}) {
 	    offset: String(Math.max(0, offset)),
 	    limit: String(Math.max(1, limit)),
 	  });
+	  const search = state.search.trim();
+	  if (search) params.set("search", search);
+	  if (state.selectedAgent !== "all") params.set("agent", state.selectedAgent);
+	  if (state.date !== "all") params.set("date", state.date);
+	  if (state.status !== "all") params.set("status", state.status);
 	  return `/api/sessions?${params.toString()}`;
 	}
 
@@ -1531,7 +1524,11 @@ async function fetchJSON(url, options = {}) {
 	  const incoming = payload.sessions || [];
 	  state.sessions = mergeSessionPages(state.sessions, incoming, offset);
 	  state.sessionTotal = Number(payload.total || state.sessions.length);
+	  const loadedRecordTotal = state.sessions.reduce((sum, session) => sum + Number(session.record_count || 0), 0);
+	  state.sessionRecordTotal = Number(payload.total_records ?? loadedRecordTotal);
 	  state.sessionsHasMore = Boolean(payload.has_more);
+	  state.dateOptions = Array.isArray(payload.dates) ? payload.dates : state.dateOptions;
+	  state.hasLegacyDate = Boolean(payload.has_legacy);
 	}
 
 	function applyAgentsPayload(payload) {
@@ -1539,6 +1536,26 @@ async function fetchJSON(url, options = {}) {
 	  if (state.selectedAgent !== "all" && !state.agents.some(agent => agent.key === state.selectedAgent)) {
 	    state.selectedAgent = "all";
 	  }
+	}
+
+	function resetSessionPaging() {
+	  state.sessions = [];
+	  state.sessionTotal = 0;
+	  state.sessionRecordTotal = 0;
+	  state.sessionsHasMore = false;
+	  state.selectedSessionIds.clear();
+	}
+
+	function refreshForFilters() {
+	  state.selectedSessionId = null;
+	  state.pendingSessionId = null;
+	  state.view = "list";
+	  resetSessionPaging();
+	  renderFilters();
+	  renderAgents();
+	  renderSessions();
+	  showListView();
+	  refreshSessions({preserveSelection: false}).catch(console.error);
 	}
 
 function renderStatusOptions() {
@@ -1597,6 +1614,8 @@ function updateTracePathBar(session = null) {
 	      state.pendingSessionId = null;
 	      state.selectedSessionId = pendingSessionId;
 	      state.view = "detail";
+	    } else if (state.view === "detail" && state.selectedSessionId) {
+	      state.view = "detail";
 	    } else {
 	      const stillVisible = visible.some(session => session.id === state.selectedSessionId);
       if (!preserveSelection || !stillVisible) {
@@ -1612,10 +1631,12 @@ function updateTracePathBar(session = null) {
     if (state.view === "detail" && state.selectedSessionId) {
       showDetailView();
       const selected = state.sessions.find(session => session.id === state.selectedSessionId);
-      if (!selected || !state.detailSessionId || refreshDetail) {
-        if (!state.detailSessionId) showDetailLoading(state.selectedSessionId);
+      const detailLoaded = state.detailSessionId === state.selectedSessionId;
+      const selectedFingerprint = selected ? sessionDetailFingerprint(selected) : "";
+      if (!detailLoaded || refreshDetail || (selected && selectedFingerprint !== state.detailFingerprint)) {
+        if (!detailLoaded) showDetailLoading(state.selectedSessionId);
         await loadSession(state.selectedSessionId, {preserveLoaded: true});
-      } else {
+      } else if (selected) {
         updateDetailSessionSummary(selected);
       }
     } else {
@@ -1648,19 +1669,19 @@ function updateTracePathBar(session = null) {
 	}
 
 function renderFilters() {
-  const dates = Array.from(new Set(state.sessions.map(session => session.date))).sort().reverse();
+  const dates = Array.from(new Set(state.dateOptions || [])).sort().reverse();
+  const dateValues = state.hasLegacyDate ? dates.concat(["legacy"]) : dates;
   const dateFilter = $("#date-filter");
   const current = state.date;
-  dateFilter.innerHTML = `<option value="all">${esc(t("all_dates"))}</option>` + dates
+  dateFilter.innerHTML = `<option value="all">${esc(t("all_dates"))}</option>` + dateValues
     .map(date => `<option value="${esc(date)}">${esc(date)}</option>`)
     .join("");
-  state.date = dates.includes(current) ? current : "all";
+  state.date = current === "all" || dateValues.includes(current) ? current : "all";
   dateFilter.value = state.date;
 	  renderStatusOptions();
 
-	  const totalRecords = state.sessions.reduce((sum, session) => sum + session.record_count, 0);
 	  $("#stat-sessions").textContent = fmtNumber(state.sessionTotal || state.sessions.length);
-	  $("#stat-records").textContent = fmtNumber(totalRecords);
+	  $("#stat-records").textContent = fmtNumber(state.sessionRecordTotal);
 	}
 
 function renderAgents() {
@@ -1675,11 +1696,7 @@ function renderAgents() {
   document.querySelectorAll("[data-agent]").forEach(button => {
     button.addEventListener("click", () => {
       state.selectedAgent = button.dataset.agent;
-      state.selectedSessionId = null;
-      state.view = "list";
-      renderAgents();
-      renderSessions();
-      showListView();
+      refreshForFilters();
     });
   });
 }
@@ -2329,26 +2346,21 @@ function applyTheme(theme) {
 
 $("#search").addEventListener("input", event => {
   state.search = event.target.value;
-  state.selectedSessionId = null;
-  state.view = "list";
-  renderSessions();
-  showListView();
+  if (searchRefreshTimer) clearTimeout(searchRefreshTimer);
+  searchRefreshTimer = setTimeout(() => {
+    searchRefreshTimer = null;
+    refreshForFilters();
+  }, 250);
 });
 
 $("#date-filter").addEventListener("change", event => {
   state.date = event.target.value;
-  state.selectedSessionId = null;
-  state.view = "list";
-  renderSessions();
-  showListView();
+  refreshForFilters();
 });
 
 $("#status-filter").addEventListener("change", event => {
   state.status = event.target.value;
-  state.selectedSessionId = null;
-  state.view = "list";
-  renderSessions();
-  showListView();
+  refreshForFilters();
 });
 
 	$("#refresh").addEventListener("click", () => refreshSessions({preserveSelection: true, refreshDetail: true}).catch(console.error));

@@ -123,6 +123,36 @@ def _seed_legacy(tmp_path: Path) -> None:
     migrate_legacy_traces(tmp_path)
 
 
+def _seed_dashboard_summary(
+    *,
+    session_id: str,
+    agent: str,
+    status: str,
+    record_count: int,
+    first_user: str,
+    updated_at: str,
+    date_key: str,
+) -> str:
+    return json.dumps(
+        {
+            "id": session_id,
+            "summary_version": DASHBOARD_SUMMARY_VERSION,
+            "date": date_key,
+            "agent": agent,
+            "status": status,
+            "record_count": record_count,
+            "turn_count": record_count,
+            "updated_at": updated_at,
+            "first_user": first_user,
+            "last_response": "",
+            "model": "gpt-5.5",
+            "total_tokens": 0,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def test_dashboard_lists_sessions_across_agents(trace_db, tmp_path: Path) -> None:
     claude_trace = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     agy_trace = tmp_path / "2026-05-20" / "trace_090000.jsonl"
@@ -241,6 +271,64 @@ def test_dashboard_lists_uncached_session_without_record_scan(trace_db, monkeypa
     assert summary["record_count"] == 7
     assert summary["agent"] == "Codex"
     assert summary["status"] == "complete"
+
+
+def test_dashboard_agent_buckets_use_aggregate_query(trace_db, monkeypatch) -> None:
+    store = get_trace_store()
+    codex_id = store.create_session(client="codex", proxy_mode="reverse")
+    claude_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn = store._connect()
+    conn.execute(
+        """
+        UPDATE sessions
+        SET status = 'complete', record_count = 3, summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            _seed_dashboard_summary(
+                session_id=codex_id,
+                agent="Codex",
+                status="complete",
+                record_count=3,
+                first_user="Codex prompt",
+                updated_at="2026-06-01T10:00:00+00:00",
+                date_key="2026-06-01",
+            ),
+            codex_id,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE sessions
+        SET status = 'complete', record_count = 2, summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            _seed_dashboard_summary(
+                session_id=claude_id,
+                agent="Claude Code",
+                status="complete",
+                record_count=2,
+                first_user="Claude prompt",
+                updated_at="2026-06-01T11:00:00+00:00",
+                date_key="2026-06-01",
+            ),
+            claude_id,
+        ),
+    )
+    conn.commit()
+
+    def fail_list_session_rows(*_args, **_kwargs):
+        raise AssertionError("agent buckets must not load every session row")
+
+    monkeypatch.setattr(store, "list_session_rows", fail_list_session_rows)
+
+    agents = list_trace_agents()
+
+    assert [(agent["label"], agent["sessions"], agent["records"]) for agent in agents] == [
+        ("Claude Code", 1, 2),
+        ("Codex", 1, 3),
+    ]
 
 
 def test_dashboard_detail_reads_from_sqlite(trace_db, tmp_path: Path) -> None:
@@ -485,7 +573,11 @@ def test_dashboard_detail_navigation_uses_lazy_shell_route() -> None:
     assert "function sessionDetailFingerprint(session)" in template
     assert "function updateDetailSessionSummary(session)" in template
     assert "function updateDetailI18n(session)" in template
-    assert "if (!selected || !state.detailSessionId || refreshDetail)" in template
+    assert 'params.set("search", search)' in template
+    assert 'params.set("agent", state.selectedAgent)' in template
+    assert "function refreshForFilters()" in template
+    assert 'state.view === "detail" && state.selectedSessionId' in template
+    assert "const detailLoaded = state.detailSessionId === state.selectedSessionId" in template
     assert "updateDetailSessionSummary(selected)" in template
     assert "updateDetailI18n(state.detailSession)" in template
     assert "knownTotal > previousTotal && previousTotal <= loadedRecords" in template
@@ -960,6 +1052,100 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/bad/records") as resp:
                 assert resp.status == 404
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_session_filters_apply_before_paging(trace_db) -> None:
+    store = get_trace_store()
+    conn = store._connect()
+    for index in range(120):
+        session_id = store.create_session(
+            client="claude",
+            proxy_mode="reverse",
+            started_at=datetime(2026, 6, 1, 12, index % 60, tzinfo=timezone.utc),
+        )
+        updated_at = f"2026-06-01T12:{index % 60:02d}:{index // 60:02d}+00:00"
+        conn.execute(
+            """
+            UPDATE sessions
+            SET status = 'complete',
+                record_count = 1,
+                updated_at = ?,
+                date_key = '2026-06-01',
+                summary_json = ?
+            WHERE id = ?
+            """,
+            (
+                updated_at,
+                _seed_dashboard_summary(
+                    session_id=session_id,
+                    agent="Claude Code",
+                    status="complete",
+                    record_count=1,
+                    first_user=f"Noise prompt {index}",
+                    updated_at=updated_at,
+                    date_key="2026-06-01",
+                ),
+                session_id,
+            ),
+        )
+    target_id = store.create_session(
+        client="codex",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 5, 1, 8, 0, tzinfo=timezone.utc),
+    )
+    conn.execute(
+        """
+        UPDATE sessions
+        SET status = 'error',
+            record_count = 7,
+            started_at = '2026-05-01T08:00:00+00:00',
+            updated_at = '2026-05-01T08:00:00+00:00',
+            date_key = '2026-05-01',
+            summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            _seed_dashboard_summary(
+                session_id=target_id,
+                agent="Codex",
+                status="error",
+                record_count=7,
+                first_user="Find me past the first page",
+                updated_at="2026-05-01T08:00:00+00:00",
+                date_key="2026-05-01",
+            ),
+            target_id,
+        ),
+    )
+    conn.commit()
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions?limit=100") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["total"] == 121
+                assert payload["total_records"] == 127
+                assert target_id not in {item["id"] for item in payload["sessions"]}
+
+            for query in (
+                "search=Find%20me%20past",
+                "date=2026-05-01",
+                "status=error",
+                "agent=codex",
+            ):
+                async with session.get(f"http://127.0.0.1:{port}/api/sessions?limit=10&{query}") as resp:
+                    assert resp.status == 200
+                    payload = await resp.json()
+                    assert payload["total"] == 1
+                    assert payload["total_records"] == 7
+                    assert [item["id"] for item in payload["sessions"]] == [target_id]
+                    assert "2026-05-01" in payload["dates"]
     finally:
         await server.stop()
 
