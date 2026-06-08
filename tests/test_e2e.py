@@ -1310,6 +1310,40 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_async_main_stop_hint_includes_custom_dashboard_address(monkeypatch, tmp_path, capsys):
+    """The dashboard stop hint should target the actual shared dashboard address."""
+    from claude_tap import async_main, parse_args
+
+    async def fake_run_client(*args, **kwargs):
+        return 0
+
+    async def fake_ensure_shared_dashboard(*, host, port, output_dir, open_browser, open_browser_fn):
+        return f"http://127.0.0.1:{port}", False
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", fake_ensure_shared_dashboard)
+
+    args = parse_args(
+        [
+            "--tap-output-dir",
+            str(tmp_path),
+            "--tap-live-port",
+            "3000",
+            "--tap-host",
+            "0.0.0.0",
+            "--tap-no-update-check",
+        ]
+    )
+
+    code = await async_main(args)
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert "Stop dashboard: claude-tap dashboard stop --tap-live-port 3000 --tap-host 0.0.0.0" in output
+
+
+@pytest.mark.asyncio
 async def test_async_main_reuses_existing_dashboard_without_reopening_browser(monkeypatch, tmp_path):
     """A second claude-tap run should attach to an existing dashboard without opening another tab."""
     from claude_tap import async_main, parse_args
@@ -2666,8 +2700,9 @@ def test_parse_dashboard_args():
     assert a.command == "stop"
     assert a.live_port == 3000
 
-    with pytest.raises(SystemExit):
-        parse_dashboard_args(["quit"])
+    a = parse_dashboard_args(["quit", "--tap-live-port", "3000"])
+    assert a.command == "quit"
+    assert a.live_port == 3000
 
     print("  test_parse_dashboard_args PASSED")
 
@@ -3961,6 +3996,24 @@ async def test_dashboard_main_stops_running_dashboard(monkeypatch, tmp_path):
     monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
 
     args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 0
+    stop_dashboard.assert_awaited_once_with("127.0.0.1", 23456)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_quit_alias_stops_running_dashboard(monkeypatch, tmp_path):
+    """The dashboard quit alias should route to the same stop flow."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+    stop_dashboard = AsyncMock(return_value=True)
+    monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
+
+    args = parse_dashboard_args(["quit", "--tap-live-port", "23456"])
 
     assert await dashboard_main(args) == 0
     stop_dashboard.assert_awaited_once_with("127.0.0.1", 23456)

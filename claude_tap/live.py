@@ -297,9 +297,7 @@ class LiveViewerServer:
 
     async def _handle_dashboard_health(self, request: web.Request) -> web.Response:
         payload = {"ok": True, "db_path": str(resolve_db_path()), "dashboard_mode": self.dashboard_mode}
-        if self.dashboard_mode:
-            if not _is_trusted_dashboard_token_request(request):
-                return _untrusted_dashboard_token_response()
+        if self.dashboard_mode and _is_trusted_dashboard_token_request(request):
             payload["quit_token"] = self._dashboard_quit_token
         return web.json_response(payload)
 

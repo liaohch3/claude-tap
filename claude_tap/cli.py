@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import shlex
 
 # Keep the stdlib module object available as claude_tap.cli.shutil for
 # existing tests and private integrations that monkeypatch shutil.which there.
@@ -122,6 +123,15 @@ def _open_browser(url: str) -> None:
 
 async def _is_dashboard_reusable(host: str, port: int) -> bool:
     return await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port)
+
+
+def _dashboard_stop_command(host: str, port: int) -> str:
+    parts = ["claude-tap", "dashboard", "stop"]
+    if port != DEFAULT_DASHBOARD_PORT:
+        parts.extend(["--tap-live-port", str(port)])
+    if host != "127.0.0.1":
+        parts.extend(["--tap-host", host])
+    return " ".join(shlex.quote(part) for part in parts)
 
 
 _CLAUDE_EXECUTABLE_NAMES = {"claude", "claude.exe", "claude.cmd", "claude.bat"}
@@ -393,7 +403,7 @@ async def async_main(args: argparse.Namespace):
         print(f"   Database: {resolve_db_path()}")
         if dashboard_url_value:
             print(f"   Dashboard: {dashboard_url_value}")
-            print("   Stop dashboard: claude-tap dashboard stop")
+            print(f"   Stop dashboard: {_dashboard_stop_command(dashboard_host, dashboard_port)}")
 
     return exit_code
 
@@ -669,8 +679,8 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["stop"],
-        help="Use 'stop' to stop a running dashboard service instead of starting one",
+        choices=["stop", "quit"],
+        help="Use 'stop' or 'quit' to stop a running dashboard service instead of starting one",
     )
     parser.add_argument(
         "--tap-output-dir",
@@ -707,7 +717,7 @@ async def dashboard_main(args: argparse.Namespace) -> int:
 
     host = args.host
     port = resolve_dashboard_port(args.live_port)
-    if args.command == "stop":
+    if args.command in {"stop", "quit"}:
         if not await is_dashboard_healthy(host, port, require_current_db=False):
             print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
             return 1

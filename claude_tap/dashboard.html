@@ -1042,6 +1042,7 @@ const state = {
 const $ = selector => document.querySelector(selector);
 const MAX_INLINE_DETAIL_RECORDS = 10;
 let deleteSessionReturnFocusEl = null;
+let dashboardEvents = null;
 
 function initialSessionId() {
   const routeMatch = window.location.pathname.match(SESSION_DETAIL_ROUTE);
@@ -1394,6 +1395,7 @@ async function quitDashboard() {
       method: "POST",
       headers: {"X-Claude-Tap-Dashboard-Token": DASHBOARD_QUIT_TOKEN},
     });
+    closeDashboardEvents();
     $("#live-label").textContent = t("dashboard_stopped");
   } catch (error) {
     state.quittingDashboard = false;
@@ -2039,19 +2041,30 @@ function connectEvents() {
     $("#live-label").textContent = t("live_polling");
     return;
   }
-  const events = new EventSource("/dashboard/events");
+  dashboardEvents = new EventSource("/dashboard/events");
+  const events = dashboardEvents;
   events.addEventListener("open", () => {
+    if (state.quittingDashboard) return;
     $("#live-label").textContent = t("live_watching");
   });
   events.addEventListener("refresh", () => {
+    if (state.quittingDashboard) return;
     refreshSessions({preserveSelection: true}).catch(console.error);
   });
   events.addEventListener("record", () => {
+    if (state.quittingDashboard) return;
     refreshSessions({preserveSelection: true}).catch(console.error);
   });
   events.addEventListener("error", () => {
+    if (state.quittingDashboard) return;
     $("#live-label").textContent = t("live_reconnecting");
   });
+}
+
+function closeDashboardEvents() {
+  if (!dashboardEvents) return;
+  dashboardEvents.close();
+  dashboardEvents = null;
 }
 
 function initTheme() {

@@ -453,6 +453,9 @@ def test_dashboard_template_exposes_quit_control() -> None:
     assert 'const DASHBOARD_QUIT_TOKEN = "";' in template
     assert "const DASHBOARD_CAN_STOP = false;" in template
     assert '"X-Claude-Tap-Dashboard-Token": DASHBOARD_QUIT_TOKEN' in template
+    assert "let dashboardEvents = null;" in template
+    assert "function closeDashboardEvents()" in template
+    assert "if (state.quittingDashboard) return;" in template
 
 
 def test_dashboard_summarize_session_and_migration(trace_db, tmp_path: Path) -> None:
@@ -1007,9 +1010,10 @@ async def test_dashboard_quit_token_requires_trusted_host_and_origin(trace_db) -
                 f"http://127.0.0.1:{port}/dashboard/health",
                 headers={"Host": f"attacker.example:{port}", "Origin": f"http://attacker.example:{port}"},
             ) as resp:
-                assert resp.status == 403
+                assert resp.status == 200
                 payload = await resp.json()
-                assert payload["ok"] is False
+                assert payload["ok"] is True
+                assert payload["dashboard_mode"] is True
                 assert "quit_token" not in payload
 
             async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
