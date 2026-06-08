@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.103] - 2026-06-08
+
+### Changed
+- Fix Codex display turn numbering (#266)
 ## [0.1.102] - 2026-06-06
 
 ### Changed
