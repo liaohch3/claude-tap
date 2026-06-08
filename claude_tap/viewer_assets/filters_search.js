@@ -225,8 +225,15 @@ function applyFilter(preserveDetail) {
     else { $('#stat-cache-read-group').style.display = 'none'; }
     if (sumCacheCreate) { $('#stat-cache-write').textContent = sumCacheCreate.toLocaleString(); $('#stat-cache-write-group').style.display = 'flex'; }
     else { $('#stat-cache-write-group').style.display = 'none'; }
+    if (sumCacheRead && sumInput > 0) {
+      const hitRate = Math.round(sumCacheRead / sumInput * 100);
+      $('#stat-cache-hit-rate').textContent = hitRate + '%';
+      $('#stat-cache-hit-rate-group').style.display = 'flex';
+    } else {
+      $('#stat-cache-hit-rate-group').style.display = 'none';
+    }
   } else {
-    ['stat-input-group','stat-output-group','stat-cache-read-group','stat-cache-write-group'].forEach(id => $('#'+id).style.display = 'none');
+    ['stat-input-group','stat-output-group','stat-cache-read-group','stat-cache-write-group','stat-cache-hit-rate-group'].forEach(id => $('#'+id).style.display = 'none');
   }
   renderToolFilter();
   renderSidebar(preserveDetail);

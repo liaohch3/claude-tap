@@ -51,6 +51,7 @@ function updateStaticTexts() {
     }
   }
   if (e('label-time')) e('label-time').textContent = t('stats_time');
+  if (e('label-cache-hit-rate')) e('label-cache-hit-rate').textContent = t('stats_cache_hit_rate');
   if (e('drop-title')) e('drop-title').textContent = t('drop_title');
   if (e('drop-desc')) e('drop-desc').textContent = t('drop_desc');
   if (e('drop-btn-label')) e('drop-btn-label').textContent = t('drop_btn');
