@@ -1116,11 +1116,14 @@ const state = {
 	  sessionPageSize: 100,
 	  sessionTotal: 0,
 	  sessionRecordTotal: 0,
+	  sessionTotalTokens: 0,
+	  sessionTotalErrors: 0,
 	  sessionsHasMore: false,
 	  dateOptions: [],
 	  hasLegacyDate: false,
 	  loadingSessionId: null,
 	  sessionRequestId: 0,
+	  pollingIntervalId: null,
 	  editMode: false,
 	  selectedSessionIds: new Set(),
 	  pendingDeleteSessionIds: [],
@@ -1526,6 +1529,8 @@ async function fetchJSON(url, options = {}) {
 	  state.sessionTotal = Number(payload.total || state.sessions.length);
 	  const loadedRecordTotal = state.sessions.reduce((sum, session) => sum + Number(session.record_count || 0), 0);
 	  state.sessionRecordTotal = Number(payload.total_records ?? loadedRecordTotal);
+	  state.sessionTotalTokens = Number(payload.total_tokens || 0);
+	  state.sessionTotalErrors = Number(payload.total_errors || 0);
 	  state.sessionsHasMore = Boolean(payload.has_more);
 	  state.dateOptions = Array.isArray(payload.dates) ? payload.dates : state.dateOptions;
 	  state.hasLegacyDate = Boolean(payload.has_legacy);
@@ -1542,6 +1547,8 @@ async function fetchJSON(url, options = {}) {
 	  state.sessions = [];
 	  state.sessionTotal = 0;
 	  state.sessionRecordTotal = 0;
+	  state.sessionTotalTokens = 0;
+	  state.sessionTotalErrors = 0;
 	  state.sessionsHasMore = false;
 	  state.selectedSessionIds.clear();
 	}
@@ -1633,7 +1640,7 @@ function updateTracePathBar(session = null) {
       const selected = state.sessions.find(session => session.id === state.selectedSessionId);
       const detailLoaded = state.detailSessionId === state.selectedSessionId;
       const selectedFingerprint = selected ? sessionDetailFingerprint(selected) : "";
-      if (!detailLoaded || refreshDetail || (selected && selectedFingerprint !== state.detailFingerprint)) {
+      if (!detailLoaded || refreshDetail || !selected || (selected && selectedFingerprint !== state.detailFingerprint)) {
         if (!detailLoaded) showDetailLoading(state.selectedSessionId);
         await loadSession(state.selectedSessionId, {preserveLoaded: true});
       } else if (selected) {
@@ -1655,8 +1662,10 @@ function updateTracePathBar(session = null) {
 	  state.loadingMoreSessions = true;
 	  renderSessionPagination();
 	  const offset = state.sessions.length;
+	  const requestId = state.sessionRequestId;
 	  try {
 	    const payload = await fetchJSON(sessionsPageUrl(offset, state.sessionPageSize));
+	    if (requestId !== state.sessionRequestId) return;
 	    applySessionsPayload(payload, offset);
 	    pruneSelectedSessions();
 	    renderFilters();
@@ -1703,7 +1712,7 @@ function renderAgents() {
 
 	function renderSessions() {
 	  const sessions = filteredSessions();
-	  renderOverview(sessions);
+	  renderOverview();
 	  renderBulkEditControls(sessions);
 	  renderSessionPagination();
 	  if (state.loadingSessions && !state.sessions.length) {
@@ -1789,12 +1798,13 @@ function isSessionRowActionTarget(target) {
 	  `;
 	}
 
-function renderOverview(sessions) {
-  const traces = sessions.reduce((sum, session) => sum + session.record_count, 0);
-  const tokens = sessions.reduce((sum, session) => sum + session.total_tokens, 0);
-  const errors = sessions.filter(session => session.status === "error").length;
-  const errorRate = sessions.length ? `${((errors / sessions.length) * 100).toFixed(1)}%` : "0.0%";
-  $("#overview-threads").textContent = fmtNumber(sessions.length);
+function renderOverview() {
+  const threads = state.sessionTotal;
+  const traces = state.sessionRecordTotal;
+  const tokens = state.sessionTotalTokens;
+  const errors = state.sessionTotalErrors;
+  const errorRate = threads ? `${((errors / threads) * 100).toFixed(1)}%` : "0.0%";
+  $("#overview-threads").textContent = fmtNumber(threads);
   $("#overview-traces").textContent = fmtNumber(traces);
   $("#overview-error-rate").textContent = errorRate;
   $("#overview-tokens").textContent = fmtNumber(tokens);
@@ -1819,9 +1829,12 @@ function renderOverview(sessions) {
 	}
 
 	function pruneSelectedSessions() {
-	  const available = new Set(state.sessions.filter(canDeleteSession).map(session => session.id));
+	  const byId = new Map(state.sessions.map(session => [session.id, session]));
 	  for (const id of Array.from(state.selectedSessionIds)) {
-	    if (!available.has(id)) state.selectedSessionIds.delete(id);
+	    const session = byId.get(id);
+	    if (session && !canDeleteSession(session)) {
+	      state.selectedSessionIds.delete(id);
+	    }
 	  }
 	}
 
@@ -2307,17 +2320,26 @@ function partsText(parts) {
 	    return false;
 	  }
 	  const events = new EventSource("/dashboard/events");
-  events.addEventListener("open", () => {
-    $("#live-label").textContent = t("live_watching");
-  });
-  events.addEventListener("refresh", () => {
-    refreshSessions({preserveSelection: true}).catch(console.error);
-  });
-  events.addEventListener("record", () => {
-    refreshSessions({preserveSelection: true}).catch(console.error);
-  });
+	  events.addEventListener("open", () => {
+	    $("#live-label").textContent = t("live_watching");
+	    if (state.pollingIntervalId) {
+	      clearInterval(state.pollingIntervalId);
+	      state.pollingIntervalId = null;
+	    }
+	  });
+	  events.addEventListener("refresh", () => {
+	    refreshSessions({preserveSelection: true}).catch(console.error);
+	  });
+	  events.addEventListener("record", () => {
+	    refreshSessions({preserveSelection: true}).catch(console.error);
+	  });
 	  events.addEventListener("error", () => {
 	    $("#live-label").textContent = t("live_reconnecting");
+	    if (!state.pollingIntervalId) {
+	      state.pollingIntervalId = setInterval(() => {
+	        refreshSessions({preserveSelection: true}).catch(console.error);
+	      }, 5000);
+	    }
 	  });
 	  return true;
 	}

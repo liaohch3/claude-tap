@@ -15,14 +15,12 @@ from aiohttp import web
 from claude_tap.compact_trace import build_compact_trace_bundle
 from claude_tap.dashboard import (
     build_session_query,
-    count_trace_sessions,
     dashboard_trace_snapshot,
     ensure_trace_store,
     list_trace_agents,
     list_trace_sessions,
     load_trace_session,
     read_dashboard_template,
-    sum_trace_session_records,
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
 from claude_tap.trace_store import get_trace_store, resolve_db_path
@@ -362,8 +360,11 @@ class LiveViewerServer:
         offset = _session_offset_from_request(request)
         limit = _session_limit_from_request(request)
         query = _session_query_from_request(request)
-        total = count_trace_sessions(query)
-        total_records = sum_trace_session_records(query)
+        aggregates = get_trace_store().get_session_aggregates(query)
+        total = aggregates["total_sessions"]
+        total_records = aggregates["total_records"]
+        total_tokens = aggregates["total_tokens"]
+        total_errors = aggregates["total_errors"]
         sessions = list_trace_sessions(
             self.session_id,
             live_record_count=live_count,
@@ -377,6 +378,8 @@ class LiveViewerServer:
                 "sessions": sessions,
                 "total": total,
                 "total_records": total_records,
+                "total_tokens": total_tokens,
+                "total_errors": total_errors,
                 "offset": offset,
                 "limit": limit,
                 "has_more": offset + len(sessions) < total,

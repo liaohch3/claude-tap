@@ -762,6 +762,20 @@ def _agent_filter_values(agent_key: str) -> tuple[tuple[str, ...], tuple[str, ..
         if _agent_key(label) == key:
             clients.add(client)
             labels.add(label)
+
+    # If no pre-defined CLIENT_LABELS matched this key, check actual DB buckets
+    if not clients and not labels and key != "unknown":
+        try:
+            rows = get_trace_store().list_agent_buckets()
+            for row in rows:
+                raw_agent = str(row["agent"] or "Unknown")
+                if _agent_key(raw_agent) == key:
+                    labels.add(raw_agent)
+                    clients.add(raw_agent)
+        except Exception:
+            labels.add(agent_key)
+            clients.add(agent_key)
+
     if key == "unknown":
         clients.update(("", "unknown"))
         labels.add("Unknown")

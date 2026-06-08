@@ -278,6 +278,28 @@ class TraceStore:
         ).fetchone()
         return int(row["total"] or 0) if row is not None else 0
 
+    def get_session_aggregates(self, query: SessionQuery | None = None) -> dict[str, Any]:
+        conn = self._connect()
+        where_sql, params = self._session_where(query)
+        row = conn.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total_sessions,
+                COALESCE(SUM(record_count), 0) AS total_records,
+                COALESCE(SUM(CAST(json_extract(summary_json, '$.total_tokens') AS INTEGER)), 0) AS total_tokens,
+                COALESCE(SUM(CASE WHEN status = 'error' OR (status = 'active' AND json_valid(summary_json) AND json_extract(summary_json, '$.status') = 'error') THEN 1 ELSE 0 END), 0) AS total_errors
+            FROM sessions
+            {where_sql}
+            """,
+            params,
+        ).fetchone()
+        return {
+            "total_sessions": int(row["total_sessions"] or 0) if row else 0,
+            "total_records": int(row["total_records"] or 0) if row else 0,
+            "total_tokens": int(row["total_tokens"] or 0) if row else 0,
+            "total_errors": int(row["total_errors"] or 0) if row else 0,
+        }
+
     def list_agent_buckets(self) -> list[sqlite3.Row]:
         """Return session counts grouped by stored agent signal without loading records."""
         conn = self._connect()
@@ -1064,8 +1086,17 @@ class TraceStore:
                 params.append(query.date)
 
         if query.status:
-            clauses.append("status = ?")
-            params.append(query.status)
+            if query.status == "error":
+                clauses.append(
+                    "(status = 'error' OR (status = 'active' AND json_valid(summary_json) AND json_extract(summary_json, '$.status') = 'error'))"
+                )
+            elif query.status == "active":
+                clauses.append(
+                    "(status = 'active' AND (NOT json_valid(summary_json) OR json_extract(summary_json, '$.status') IS NULL OR json_extract(summary_json, '$.status') != 'error'))"
+                )
+            else:
+                clauses.append("status = ?")
+                params.append(query.status)
 
         if query.agent_clients or query.agent_labels:
             agent_clauses: list[str] = []
@@ -1091,6 +1122,7 @@ class TraceStore:
                 "LOWER(COALESCE(status, '')) LIKE ? ESCAPE '\\'",
                 "LOWER(COALESCE(legacy_rel_path, '')) LIKE ? ESCAPE '\\'",
                 "LOWER(COALESCE(summary_json, '')) LIKE ? ESCAPE '\\'",
+                "id IN (SELECT session_id FROM records WHERE LOWER(payload_json) LIKE ? ESCAPE '\\')",
             ]
             clauses.append(f"({' OR '.join(search_clauses)})")
             params.extend([pattern] * len(search_clauses))

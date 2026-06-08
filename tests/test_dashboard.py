@@ -1472,3 +1472,112 @@ async def test_trace_writer_persists_records_to_sqlite(trace_db) -> None:
 
     assert len(records) == 1
     assert records[0]["capture"]["client"] == "claude"
+
+
+def test_get_session_aggregates(trace_db) -> None:
+    from claude_tap.trace_store import SessionQuery
+
+    store = get_trace_store()
+    conn = store._connect()
+
+    # 1. Active session with no error
+    active_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn.execute(
+        "UPDATE sessions SET status = 'active', record_count = 5, summary_json = ? WHERE id = ?",
+        (
+            json.dumps({"agent": "Claude Code", "status": "active", "total_tokens": 120}, separators=(",", ":")),
+            active_id,
+        ),
+    )
+
+    # 2. Active session with error in summary_json
+    active_err_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn.execute(
+        "UPDATE sessions SET status = 'active', record_count = 2, summary_json = ? WHERE id = ?",
+        (
+            json.dumps({"agent": "Claude Code", "status": "error", "total_tokens": 80}, separators=(",", ":")),
+            active_err_id,
+        ),
+    )
+
+    # 3. Completed session with error status
+    completed_err_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn.execute(
+        "UPDATE sessions SET status = 'error', record_count = 10, summary_json = ? WHERE id = ?",
+        (
+            json.dumps({"agent": "Claude Code", "status": "error", "total_tokens": 300}, separators=(",", ":")),
+            completed_err_id,
+        ),
+    )
+
+    conn.commit()
+
+    # Check global aggregates
+    aggregates = store.get_session_aggregates()
+    assert aggregates["total_sessions"] == 3
+    assert aggregates["total_records"] == 17
+    assert aggregates["total_tokens"] == 500
+    assert aggregates["total_errors"] == 2  # active_err_id and completed_err_id
+
+    # Check query-based status filtering for active status
+    active_query = SessionQuery(status="active")
+    active_aggs = store.get_session_aggregates(active_query)
+    assert active_aggs["total_sessions"] == 1  # only active_id
+
+    # Check query-based status filtering for error status
+    error_query = SessionQuery(status="error")
+    error_aggs = store.get_session_aggregates(error_query)
+    assert error_aggs["total_sessions"] == 2  # active_err_id and completed_err_id
+
+
+def test_agent_filter_values_resolves_custom_agents(trace_db) -> None:
+    from claude_tap.dashboard import _agent_filter_values
+
+    store = get_trace_store()
+    conn = store._connect()
+
+    # Create a session with a custom agent client "My-Agent"
+    custom_id = store.create_session(client="My-Agent", proxy_mode="reverse")
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', record_count = 1, summary_json = ? WHERE id = ?",
+        (
+            json.dumps({"agent": "My-Agent", "status": "complete", "total_tokens": 10}, separators=(",", ":")),
+            custom_id,
+        ),
+    )
+    conn.commit()
+
+    clients, labels = _agent_filter_values("my-agent")
+    assert "My-Agent" in clients
+    assert "My-Agent" in labels
+
+
+@pytest.mark.asyncio
+async def test_search_uncached_records_fallback(trace_db) -> None:
+    from claude_tap.trace_store import SessionQuery
+
+    store = get_trace_store()
+    conn = store._connect()
+
+    # Create a session with NULL summary_json (uncached) but records with a specific text in payload_json
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "claude", "proxy_mode": "reverse"})
+    try:
+        await writer.write(
+            {
+                "timestamp": "2026-05-20T10:15:00+00:00",
+                "request": {"method": "POST", "path": "/v1/messages", "body": "unusual_secret_string"},
+                "response": {"status": 200, "body": {}},
+            }
+        )
+    finally:
+        writer.close()
+
+    # Force summary_json to be NULL to simulate uncached session
+    conn.execute("UPDATE sessions SET summary_json = NULL WHERE id = ?", (session_id,))
+    conn.commit()
+
+    search_query = SessionQuery(search="unusual_secret_string")
+    sessions = store.list_session_rows(query=search_query)
+    assert len(sessions) == 1
+    assert sessions[0]["id"] == session_id
