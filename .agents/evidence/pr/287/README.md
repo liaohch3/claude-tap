@@ -103,6 +103,7 @@ KIMI_TMUX_TURN3 verified=true
 ## Screenshots
 
 All screenshots were taken from real exported viewer HTML generated from the SQLite trace DB. The scroll screenshots intentionally capture different detail-pane positions rather than only the first viewport.
+The committed filenames include `viewer` so the PR evidence policy can identify them as runtime trace viewer screenshots.
 
 - `kimi-code-deep-viewer-turn3-overview.png` - third-turn viewer overview with Kimi Code sidebar entries and tool labels.
 - `kimi-code-deep-viewer-turn3-mid-scroll.png` - scrolled detail pane showing conversation history and tool-call context.
