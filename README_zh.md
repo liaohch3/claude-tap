@@ -53,7 +53,7 @@
 
 | 客户端 | 典型用途 |
 |--------|----------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API、AWS Bedrock，或 DeepSeek / GLM 等 Claude 兼容网关 |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API、AWS Bedrock、DeepSeek / GLM 等 Claude 兼容网关，或 CC Switch 等本地代理上游 |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist 的多 Google 端点流量 |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code 或 Moonshot Open Platform |
@@ -132,6 +132,8 @@ claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 
 `claude-tap` 会从环境变量或 Claude settings 中的 `ANTHROPIC_BASE_URL` 或
 `ANTHROPIC_BEDROCK_BASE_URL` 自动识别自定义 Claude Code 上游；只有想手动覆盖时才需要传 `--tap-target`。
+
+也支持本地代理上游：如果 [CC Switch](https://github.com/farion1231/cc-switch) 等工具把 Claude Code 指向本地 `ANTHROPIC_BASE_URL`，`claude-tap` 会从 Claude settings 中检测到该值，并在转发到上游前记录流量。直接运行常规 Claude Code 命令（`claude-tap`）即可，不需要单独的 `--tap-client` 值。
 
 使用 Claude Code VS Code 插件时，把 `Claude Code: Claude Process Wrapper` 设置为 `claude-tap`；如果 Windows 上 VS Code 找不到它，请填写完整的 `claude-tap.exe` 路径。
 
