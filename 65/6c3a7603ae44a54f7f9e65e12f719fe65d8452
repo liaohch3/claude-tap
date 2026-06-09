@@ -1,0 +1,29 @@
+claude_tap/dashboard.py
+  s_e64ac242088496::t_6c3a157ca540f4 180,653-659
+  s_e64ac242088496::t_ba8a3ea10db370 355-356,391
+  s_e64ac242088496::t_8d7f78f978ef45 626-627,647-652
+tests/test_dashboard.py
+  s_e64ac242088496::t_4061faa51bfae4 767
+  s_e64ac242088496::t_86267b62ae0741 1185-1226,1228-1229,1231-1232
+  s_e64ac242088496::t_448835c2c06899 1230
+  s_e64ac242088496::t_25029dc93ed513 1227
+claude_tap/trace.py
+  s_e64ac242088496::t_bc3fb397cca3a8 6,76,92-101
+  s_e64ac242088496::t_89f378acaf89d5 102-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "656c3a7603ae44a54f7f9e65e12f719fe65d8452",
+  "prompts": {},
+  "sessions": {
+    "s_e64ac242088496": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e6389-af35-7fd3-b131-7b993a82840b",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
