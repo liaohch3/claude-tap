@@ -65,6 +65,41 @@ turn3_verification.txt:
 KIMI_DEEP_TURN3 verified=True
 ```
 
+## Interactive tmux E2E
+
+I also ran Kimi Code as a real interactive TUI process under tmux and sent three consecutive prompts with `tmux paste-buffer` / `tmux send-keys`. This validates a single running Kimi Code process, terminal input handling, tool approval prompts, and continuous conversation state without relying on `--print` or `-r` for each turn.
+
+- tmux session: `ctap-kimi-287`
+- workspace: `/tmp/claude-tap-kimi-code-tmux-287-workspace`
+- trace DB: `/tmp/claude-tap-kimi-code-tmux-287.sqlite3`
+- claude-tap session: `b00ecd17-4c6c-40a6-829a-6f5fdbfc5719`
+- Kimi Code session: `81668bcd-c11e-455f-ab55-280dc4da9031`
+
+Interactive prompts sent:
+
+1. Create and read back `tmux_turn1.txt`, then reply `KIMI_TMUX_TURN1_OK`.
+2. Continue in the same TUI session, append `KIMI_TMUX_TURN2`, run `wc -l` and `sha256sum`, then reply `KIMI_TMUX_TURN2_OK`.
+3. Continue in the same TUI session, list files, run Python verification, write/read `tmux_turn3_check.txt`, then reply `KIMI_TMUX_TURN3_OK`.
+
+The trace captured:
+
+- 12 total API records
+- `client=kimi-code`, `proxy_mode=reverse`, `status=complete`
+- final response: `KIMI_TMUX_TURN3_OK`
+- tool evidence for `Shell`, `WriteFile`, and `ReadFile`
+- real tool approval flow in the interactive TUI
+
+Workspace verification:
+
+```text
+tmux_turn1.txt:
+KIMI_TMUX_TURN1 KIMI_TMUX_287
+KIMI_TMUX_TURN2
+
+tmux_turn3_check.txt:
+KIMI_TMUX_TURN3 verified=true
+```
+
 ## Screenshots
 
 All screenshots were taken from real exported viewer HTML generated from the SQLite trace DB. The scroll screenshots intentionally capture different detail-pane positions rather than only the first viewport.
@@ -76,16 +111,21 @@ All screenshots were taken from real exported viewer HTML generated from the SQL
 - `kimi-code-deep-turn3-bottom-final-response.png` - bottom scroll showing `turn3_verification.txt` readback and `KIMI_DEEP_TURN3_OK verified=true`.
 - `kimi-code-deep-turn2-overview.png` - second-turn viewer overview.
 - `kimi-code-deep-turn2-tool-scroll.png` - second-turn scrolled tool call/result evidence.
+- `kimi-code-tmux-overview.png` - interactive tmux run overview with 12 records and tool labels.
+- `kimi-code-tmux-turn1-tools-scroll.png` - first tmux prompt scrolled tool evidence.
+- `kimi-code-tmux-turn2-history-scroll.png` - second tmux prompt scrolled history/tool evidence.
+- `kimi-code-tmux-turn3-tools-scroll.png` - third tmux prompt scrolled tool evidence.
+- `kimi-code-tmux-bottom-final-response.png` - bottom scroll showing `KIMI_TMUX_TURN3_OK`.
 
 ## Validation
 
 ```bash
 uv run python scripts/check_screenshots.py .agents/evidence/pr/287
 uv run python scripts/verify_screenshots.py /tmp/claude-tap-kimi-code-deep-287-turn2.html /tmp/claude-tap-kimi-code-deep-287-turn3.html
+uv run python scripts/verify_screenshots.py /tmp/claude-tap-kimi-code-tmux-287.html
 ```
 
 Results:
 
-- screenshot quality: `PASS=7 WARN=0 FAIL=0`
-- viewer HTML render verification: both exported HTML files passed
-
+- screenshot quality: `PASS=12 WARN=0 FAIL=0`
+- viewer HTML render verification: all exported HTML files passed
