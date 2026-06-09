@@ -134,7 +134,7 @@ claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 or `ANTHROPIC_BEDROCK_BASE_URL` in your environment or Claude settings. Use
 `--tap-target` only when you want to override that detected target.
 
-Local proxy upstreams are supported too: if a tool such as [CC Switch](https://github.com/farion1231/cc-switch) points Claude Code at a local `ANTHROPIC_BASE_URL`, `claude-tap` detects that value from Claude settings and records the traffic before forwarding it upstream. Run the normal Claude Code command (`claude-tap`); no separate `--tap-client` value is needed.
+Local proxy upstreams are supported too: if a tool such as [CC Switch](https://github.com/farion1231/cc-switch) points Claude Code at a local `ANTHROPIC_BASE_URL`, `claude-tap` detects that value from Claude settings and records the traffic before forwarding it upstream. Use `claude-tap` in place of `claude`, such as `claude-tap -- <claude-args>`; no separate `--tap-client` value is needed.
 
 For the Claude Code VS Code extension, set `Claude Code: Claude Process Wrapper` to `claude-tap`; on Windows, use the full `claude-tap.exe` path if VS Code cannot find it.
 
