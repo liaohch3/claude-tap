@@ -104,18 +104,18 @@ KIMI_TMUX_TURN3 verified=true
 
 All screenshots were taken from real exported viewer HTML generated from the SQLite trace DB. The scroll screenshots intentionally capture different detail-pane positions rather than only the first viewport.
 
-- `kimi-code-deep-turn3-overview.png` - third-turn viewer overview with Kimi Code sidebar entries and tool labels.
-- `kimi-code-deep-turn3-mid-scroll.png` - scrolled detail pane showing conversation history and tool-call context.
-- `kimi-code-deep-turn3-tool-scroll.png` - deeper scroll showing Shell and ReadFile tool results plus resumed user input.
-- `kimi-code-deep-turn3-final-response-scroll.png` - scrolled third-turn tool sequence before the final verification.
-- `kimi-code-deep-turn3-bottom-final-response.png` - bottom scroll showing `turn3_verification.txt` readback and `KIMI_DEEP_TURN3_OK verified=true`.
-- `kimi-code-deep-turn2-overview.png` - second-turn viewer overview.
-- `kimi-code-deep-turn2-tool-scroll.png` - second-turn scrolled tool call/result evidence.
-- `kimi-code-tmux-overview.png` - interactive tmux run overview with 12 records and tool labels.
-- `kimi-code-tmux-turn1-tools-scroll.png` - first tmux prompt scrolled tool evidence.
-- `kimi-code-tmux-turn2-history-scroll.png` - second tmux prompt scrolled history/tool evidence.
-- `kimi-code-tmux-turn3-tools-scroll.png` - third tmux prompt scrolled tool evidence.
-- `kimi-code-tmux-bottom-final-response.png` - bottom scroll showing `KIMI_TMUX_TURN3_OK`.
+- `kimi-code-deep-viewer-turn3-overview.png` - third-turn viewer overview with Kimi Code sidebar entries and tool labels.
+- `kimi-code-deep-viewer-turn3-mid-scroll.png` - scrolled detail pane showing conversation history and tool-call context.
+- `kimi-code-deep-viewer-turn3-tool-scroll.png` - deeper scroll showing Shell and ReadFile tool results plus resumed user input.
+- `kimi-code-deep-viewer-turn3-final-response-scroll.png` - scrolled third-turn tool sequence before the final verification.
+- `kimi-code-deep-viewer-turn3-bottom-final-response.png` - bottom scroll showing `turn3_verification.txt` readback and `KIMI_DEEP_TURN3_OK verified=true`.
+- `kimi-code-deep-viewer-turn2-overview.png` - second-turn viewer overview.
+- `kimi-code-deep-viewer-turn2-tool-scroll.png` - second-turn scrolled tool call/result evidence.
+- `kimi-code-tmux-viewer-overview.png` - interactive tmux run overview with 12 records and tool labels.
+- `kimi-code-tmux-viewer-turn1-tools-scroll.png` - first tmux prompt scrolled tool evidence.
+- `kimi-code-tmux-viewer-turn2-history-scroll.png` - second tmux prompt scrolled history/tool evidence.
+- `kimi-code-tmux-viewer-turn3-tools-scroll.png` - third tmux prompt scrolled tool evidence.
+- `kimi-code-tmux-viewer-bottom-final-response.png` - bottom scroll showing `KIMI_TMUX_TURN3_OK`.
 
 ## Validation
 
