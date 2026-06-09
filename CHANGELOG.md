@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.104] - 2026-06-09
+
+### Changed
+- Document local proxy upstream support
 ## [0.1.103] - 2026-06-08
 
 ### Changed
