@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.105] - 2026-06-09
+
+### Changed
+- fix: guard against None values in usage token fields causing dashboard 500 (#303)
 ## [0.1.104] - 2026-06-09
 
 ### Changed
