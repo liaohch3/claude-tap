@@ -1,0 +1,21 @@
+tests/test_usage.py
+  s_e64ac242088496::t_36a831dc580423 89-104
+tests/test_dashboard.py
+  s_e64ac242088496::t_bd9cb364fd921c 169-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "868f30c44d1a440c0392900972e66770dc742577",
+  "prompts": {},
+  "sessions": {
+    "s_e64ac242088496": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e6389-af35-7fd3-b131-7b993a82840b",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
