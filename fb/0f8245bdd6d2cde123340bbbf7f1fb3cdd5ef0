@@ -1,0 +1,21 @@
+README.md
+  s_e64ac242088496::t_5a9200b4cbb4dd 137
+README_zh.md
+  s_e64ac242088496::t_5a9200b4cbb4dd 136
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "fb0f8245bdd6d2cde123340bbbf7f1fb3cdd5ef0",
+  "prompts": {},
+  "sessions": {
+    "s_e64ac242088496": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e6389-af35-7fd3-b131-7b993a82840b",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
