@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
+from typing import Any, cast
+
 import pytest
 
 from claude_tap.trace import TraceWriter
@@ -114,3 +117,52 @@ async def test_trace_writer_counts_responses_cached_tokens(trace_db) -> None:
         assert summary["cache_read_tokens"] == 11648
     finally:
         writer.close()
+
+
+@pytest.mark.asyncio
+async def test_trace_writer_storage_errors_drop_record_without_interrupting_proxy_flow(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class LockedStore:
+        def append_record(self, session_id: str, record: dict) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        def finalize_session(self, session_id: str, summary: dict) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+    locked_store = LockedStore()
+    writer = TraceWriter("locked-session", store=cast(Any, locked_store))
+
+    await writer.write(
+        {
+            "request": {"body": {"model": "gpt-5.4"}},
+            "response": {"status": 200, "body": {"usage": {"input_tokens": 3, "output_tokens": 2}}},
+        }
+    )
+    writer.close()
+
+    summary = writer.get_summary()
+    assert summary["api_calls"] == 1
+    assert summary["input_tokens"] == 3
+    assert summary["output_tokens"] == 2
+    assert summary["dropped_trace_records"] == 1
+    assert summary["trace_storage_errors"] == 2
+    assert capsys.readouterr().err.count("trace storage failed; continuing without blocking proxy") == 1
+
+
+def test_trace_writer_records_startup_session_create_failure_without_fallback(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class StartupLockedStore:
+        pass
+
+    locked_store = StartupLockedStore()
+    writer = TraceWriter("startup-locked-session", store=cast(Any, locked_store))
+    writer.record_startup_storage_error(sqlite3.OperationalError("database is locked"))
+
+    writer.close()
+
+    summary = writer.get_summary()
+    assert summary["trace_storage_errors"] == 1
+    assert summary["dropped_trace_records"] == 0
+    assert capsys.readouterr().err.count("trace storage failed; continuing without blocking proxy") == 1

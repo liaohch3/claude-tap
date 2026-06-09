@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
+import sys
 from datetime import datetime, timezone
 
 from claude_tap.trace_store import TraceStore, get_trace_store
@@ -15,6 +17,7 @@ class SQLiteLogHandler(logging.Handler):
         super().__init__()
         self.session_id = session_id
         self._store = store or get_trace_store()
+        self._storage_warning_emitted = False
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -30,5 +33,13 @@ class SQLiteLogHandler(logging.Handler):
                 level=record.levelname,
                 logged_at=datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%H:%M:%S"),
             )
+        except sqlite3.Error as exc:
+            self._emit_storage_warning(exc)
         except Exception:
             self.handleError(record)
+
+    def _emit_storage_warning(self, exc: sqlite3.Error) -> None:
+        if self._storage_warning_emitted:
+            return
+        self._storage_warning_emitted = True
+        sys.stderr.write(f"claude-tap: proxy log storage failed ({exc})\n")

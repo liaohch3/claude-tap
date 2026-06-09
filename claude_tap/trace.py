@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+import sys
 from typing import TYPE_CHECKING
 
 from claude_tap.trace_store import TraceStore, get_trace_store
@@ -34,6 +36,10 @@ class TraceWriter:
         self._metadata = metadata or {}
         self._store = store or get_trace_store()
         self._has_error = False
+        self.storage_error_count = 0
+        self.dropped_trace_records = 0
+        self._storage_warning_emitted = False
+        self._startup_storage_error: sqlite3.Error | None = None
 
     async def write(self, record: dict) -> None:
         """Write a record and update statistics."""
@@ -41,7 +47,11 @@ class TraceWriter:
             if self._metadata:
                 capture = record.get("capture") if isinstance(record.get("capture"), dict) else {}
                 record["capture"] = {**self._metadata, **capture}
-            self._store.append_record(self.session_id, record)
+            try:
+                self._store.append_record(self.session_id, record)
+            except sqlite3.Error as exc:
+                self.dropped_trace_records += 1
+                self._record_storage_error(exc)
             self.count += 1
             self._update_stats(record)
 
@@ -50,8 +60,21 @@ class TraceWriter:
 
     def close(self) -> None:
         """Finalize the active session in SQLite."""
+        if self._startup_storage_error is not None:
+            return
+
         summary = self.get_summary()
-        self._store.finalize_session(self.session_id, summary)
+        try:
+            self._store.finalize_session(self.session_id, summary)
+        except sqlite3.Error as exc:
+            self.storage_error_count += 1
+            if not self._storage_warning_emitted:
+                self._emit_storage_warning(exc)
+
+    def record_startup_storage_error(self, exc: sqlite3.Error) -> None:
+        """Record that the initial SQLite session row could not be created."""
+        self._startup_storage_error = exc
+        self._record_storage_error(exc)
 
     def _update_stats(self, record: dict) -> None:
         req_body = record.get("request", {}).get("body", {})
@@ -77,6 +100,16 @@ class TraceWriter:
             if isinstance(response.get("error"), str) and response["error"]:
                 self._has_error = True
 
+    def _record_storage_error(self, exc: sqlite3.Error) -> None:
+        self.storage_error_count += 1
+        if self._storage_warning_emitted:
+            return
+        self._emit_storage_warning(exc)
+
+    def _emit_storage_warning(self, exc: sqlite3.Error) -> None:
+        self._storage_warning_emitted = True
+        sys.stderr.write(f"claude-tap: trace storage failed; continuing without blocking proxy ({exc})\n")
+
     def get_summary(self) -> dict:
         """Return a summary of the trace statistics."""
         return {
@@ -87,4 +120,6 @@ class TraceWriter:
             "cache_create_tokens": self.total_cache_create_tokens,
             "models_used": self.models_used,
             "has_error": self._has_error,
+            "trace_storage_errors": self.storage_error_count,
+            "dropped_trace_records": self.dropped_trace_records,
         }

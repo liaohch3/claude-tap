@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
+import types
 from copy import deepcopy
 
+import pytest
+
+import claude_tap.trace_store as trace_store_module
 from claude_tap.trace_store import (
     BLOB_REF_MARKER,
     COMPACT_RECORD_MARKER,
+    SQLITE_BUSY_TIMEOUT_MS,
+    SQLITE_MAINTENANCE_WRITES,
     TraceStore,
     get_trace_store,
 )
@@ -154,6 +161,101 @@ def test_trace_store_reads_legacy_full_payload_rows(trace_db) -> None:
     assert json.loads(store.export_jsonl(session_id)) == legacy_record
 
 
+def test_trace_store_rolls_back_failed_append_record_transaction(trace_db, monkeypatch) -> None:
+    store = TraceStore(trace_db)
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+
+    def fail_refresh_summary(*args, **kwargs) -> None:
+        raise sqlite3.OperationalError("summary update failed")
+
+    monkeypatch.setattr(store, "_refresh_summary_after_append", fail_refresh_summary)
+
+    with pytest.raises(sqlite3.OperationalError, match="summary update failed"):
+        store.append_record(session_id, _large_codex_record(1, instructions="rollback", tools=[]))
+
+    conn = store._connect()
+    assert not conn.in_transaction
+    assert conn.execute("SELECT COUNT(*) FROM records WHERE session_id = ?", (session_id,)).fetchone()[0] == 0
+    assert conn.execute("SELECT record_count FROM sessions WHERE id = ?", (session_id,)).fetchone()[0] == 0
+
+
+def test_finalize_session_merges_storage_error_counters_into_cached_summary(trace_db) -> None:
+    store = TraceStore(trace_db)
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(session_id, _large_codex_record(1, instructions="summary", tools=[]))
+
+    store.finalize_session(
+        session_id,
+        {
+            "api_calls": 1,
+            "trace_storage_errors": 2,
+            "dropped_trace_records": 1,
+        },
+    )
+
+    row = store.load_session_row(session_id)
+    assert row is not None
+    summary = json.loads(row["summary_json"])
+    assert summary["api_calls"] == 1
+    assert summary["trace_storage_errors"] == 2
+    assert summary["dropped_trace_records"] == 1
+
+
+def test_process_write_lock_converts_os_lock_failures_to_sqlite_errors(trace_db, monkeypatch) -> None:
+    store = TraceStore(trace_db)
+
+    def fail_lock(lock_file) -> None:
+        raise OSError("lock denied")
+
+    monkeypatch.setattr(trace_store_module, "_lock_file_exclusive", fail_lock)
+
+    with pytest.raises(sqlite3.OperationalError, match="trace write lock unavailable"):
+        store.create_session(client="codex", proxy_mode="reverse")
+
+
+def test_trace_store_ignores_checkpoint_errors_after_maintenance_writes(trace_db) -> None:
+    class CheckpointLockedConnection:
+        def execute(self, statement: str):
+            assert statement == "PRAGMA wal_checkpoint(PASSIVE)"
+            raise sqlite3.OperationalError("database is locked")
+
+    store = TraceStore(trace_db)
+    store._writes_since_maintenance = SQLITE_MAINTENANCE_WRITES - 1
+
+    store._after_write_commit(CheckpointLockedConnection())
+
+    assert store._writes_since_maintenance == 0
+
+
+def test_windows_file_lock_helpers_use_msvcrt(monkeypatch) -> None:
+    calls: list[tuple[str, int, int]] = []
+    fake_msvcrt = types.SimpleNamespace(
+        LK_LOCK=1,
+        LK_UNLCK=2,
+        locking=lambda fileno, mode, size: calls.append(("locking", mode, size)),
+    )
+
+    class LockFile:
+        def __init__(self) -> None:
+            self.seek_offsets: list[int] = []
+
+        def seek(self, offset: int) -> None:
+            self.seek_offsets.append(offset)
+
+        def fileno(self) -> int:
+            return 7
+
+    lock_file = LockFile()
+    monkeypatch.setattr(trace_store_module.os, "name", "nt")
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+    trace_store_module._lock_file_exclusive(lock_file)
+    trace_store_module._unlock_file(lock_file)
+
+    assert lock_file.seek_offsets == [0, 0]
+    assert calls == [("locking", fake_msvcrt.LK_LOCK, 1), ("locking", fake_msvcrt.LK_UNLCK, 1)]
+
+
 def test_trace_store_migrates_v3_database_and_keeps_full_rows_readable(tmp_path) -> None:
     db_path = tmp_path / "v3.sqlite3"
     legacy_record = {
@@ -256,3 +358,29 @@ def test_compact_storage_reduces_large_trace_payload_and_preserves_roundtrip(tra
     assert [json.loads(line) for line in store.export_jsonl(session_id).splitlines()] == records
     assert compact_total < len(raw_jsonl.encode("utf-8")) * 0.15
     assert conn.execute("SELECT COUNT(*) FROM record_blobs").fetchone()[0] == 2
+
+
+def test_dashboard_style_reads_do_not_keep_trace_store_connection_open(trace_db) -> None:
+    writer = TraceStore(trace_db)
+    session_id = writer.create_session(client="codex", proxy_mode="forward")
+    record = _large_codex_record(
+        1,
+        instructions="read connection regression instructions",
+        tools=[],
+    )
+    writer.append_record(session_id, deepcopy(record))
+    writer.close()
+
+    reader = TraceStore(trace_db)
+
+    assert reader.list_session_rows()[0]["id"] == session_id
+    assert getattr(reader._tls, "conn", None) is None
+
+    assert reader.load_records(session_id) == [record]
+    assert getattr(reader._tls, "conn", None) is None
+
+    conn = reader._open_connection()
+    try:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == SQLITE_BUSY_TIMEOUT_MS
+    finally:
+        conn.close()

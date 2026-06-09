@@ -13,6 +13,7 @@ import ipaddress
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -1434,6 +1435,48 @@ async def test_async_main_finalizes_session_when_proxy_startup_fails(monkeypatch
     rows = get_trace_store().list_session_rows()
     assert len(rows) == 1
     assert rows[0]["status"] == "empty"
+
+
+@pytest.mark.asyncio
+async def test_async_main_continues_when_startup_session_create_is_locked(monkeypatch, tmp_path, capsys):
+    """Initial SQLite session creation failures should not stop proxy startup."""
+    from claude_tap import async_main, parse_args
+
+    class StartupLockedStore:
+        def create_session(self, *, client: str = "", proxy_mode: str = "", started_at=None) -> str:
+            raise sqlite3.OperationalError("database is locked")
+
+        def append_log(
+            self,
+            session_id: str,
+            message: str,
+            *,
+            level: str = "INFO",
+            logged_at: str | None = None,
+        ) -> None:
+            return None
+
+    async def fake_run_client(*args, **kwargs):
+        return 0
+
+    def fail_cleanup(*args, **kwargs) -> int:
+        raise sqlite3.OperationalError("database is locked")
+
+    locked_store = StartupLockedStore()
+    monkeypatch.setattr("claude_tap.cli.get_trace_store", lambda: locked_store)
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli.cleanup_trace_sessions", fail_cleanup)
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "startup-create-locked.sqlite3"))
+
+    args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-live", "--tap-no-update-check"])
+
+    code = await async_main(args)
+
+    assert code == 0
+    stderr = capsys.readouterr().err
+    assert "trace storage failed; continuing without blocking proxy" in stderr
+    assert "trace cleanup skipped because storage is unavailable" in stderr
+    assert not (tmp_path / "traces.sqlite3.fallback.jsonl").exists()
 
 
 @pytest.mark.asyncio
