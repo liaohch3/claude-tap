@@ -646,6 +646,12 @@ body.detail-route .detail-inspector-bar {
   transition: all .15s;
 }
 .act-btn:hover { background: var(--bg-hover); color: var(--blue); }
+.act-btn-primary {
+  border: 1px solid color-mix(in srgb, var(--blue) 28%, transparent);
+  background: var(--blue-bg); color: var(--blue);
+}
+.act-btn-primary:hover { background: var(--blue); color: #fff; }
+.act-btn-primary:disabled { opacity: .6; cursor: default; }
 .export-menu {
   position: relative;
   display: inline-flex;
@@ -1844,6 +1850,7 @@ function renderDetail(session, records) {
         <button class="detail-tab" data-tab="${alternateTab}">${esc(alternateLabel)}</button>
       </div>
       <div class="action-bar">
+        ${canResume ? `<button class="act-btn act-btn-primary" data-detail-i18n="resume_group" data-install-resume="${esc(session.id)}">${esc(t("resume_group"))}</button>` : ""}
         <details class="export-menu">
           <summary class="act-btn" data-detail-i18n="export_menu">${esc(t("export_menu"))}</summary>
           <div class="export-menu-list">
