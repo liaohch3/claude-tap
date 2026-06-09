@@ -177,8 +177,7 @@ def merge_record_into_summary(
     if not summary.get("agent"):
         summary["agent"] = _infer_agent([record], manifest_entry)
         summary["agent_key"] = _agent_key(summary["agent"])
-    status_code = _response_status(record)
-    if status_code >= 400 or _record_error(record):
+    if _is_session_error_record(record):
         summary["status"] = "error"
         summary["error"] = summary.get("error") or _first_error([record])
     else:
@@ -336,7 +335,6 @@ def _summarize_session(
     agent = _infer_agent(records, manifest_entry)
     input_tokens = output_tokens = cache_read_tokens = cache_create_tokens = 0
     models: dict[str, int] = {}
-    statuses: list[int] = []
     duration_ms = 0
     turns: set[int] = set()
 
@@ -349,15 +347,13 @@ def _summarize_session(
         model = _record_model(record)
         if model:
             models[model] = models.get(model, 0) + 1
-        status_code = _response_status(record)
-        if status_code:
-            statuses.append(status_code)
         duration_ms += _duration_ms(record)
         turn = record.get("turn")
         if isinstance(turn, int):
             turns.add(turn)
 
-    has_error = any(code >= 400 for code in statuses) or any(_record_error(record) for record in records)
+    error_records = [record for record in records if _is_session_error_record(record)]
+    has_error = bool(error_records)
     if has_error:
         resolved_status = "error"
     elif is_current and records:
@@ -392,7 +388,7 @@ def _summarize_session(
         "model": _top_key(models) or _record_model(last_record) or "unknown",
         "first_user": _first_user_preview(preview_records),
         "last_response": _last_response_preview(preview_records),
-        "error": _first_error(records),
+        "error": _first_error(error_records),
     }
 
 
@@ -627,6 +623,8 @@ def _is_primary_model_record(record: dict[str, Any]) -> bool:
 
 def _is_auxiliary_record(record: dict[str, Any]) -> bool:
     path = _record_path(record).lower()
+    if _is_model_probe_path(path):
+        return True
     auxiliary_fragments = (
         "/token",
         "oauth",
@@ -644,6 +642,21 @@ def _is_auxiliary_record(record: dict[str, Any]) -> bool:
         "fetchuserinfo",
     )
     return any(fragment in path for fragment in auxiliary_fragments)
+
+
+def _is_model_probe_path(path: str) -> bool:
+    clean_path = path.split("?", 1)[0].rstrip("/")
+    if clean_path in {"/models", "/v1/models", "/v1alpha/models", "/v1beta/models"}:
+        return True
+    match = re.fullmatch(r"/(?:v1/)?models/([^/:]+)", clean_path)
+    return match is not None
+
+
+def _is_session_error_record(record: dict[str, Any]) -> bool:
+    if _record_error(record):
+        return True
+    status_code = _response_status(record)
+    return status_code >= 400 and not _is_auxiliary_record(record)
 
 
 def _first_user_preview(records: list[dict[str, Any]]) -> str:

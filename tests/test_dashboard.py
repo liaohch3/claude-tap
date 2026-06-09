@@ -764,6 +764,7 @@ def test_dashboard_preview_skips_auxiliary_auth_records(trace_db, tmp_path: Path
 
     assert summary["first_user"] == "Gemini dashboard prompt"
     assert summary["last_response"] == "Gemini dashboard response."
+    assert summary["status"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -1181,3 +1182,51 @@ async def test_trace_writer_persists_records_to_sqlite(trace_db) -> None:
 
     assert len(records) == 1
     assert records[0]["capture"]["client"] == "claude"
+
+
+@pytest.mark.asyncio
+async def test_kimi_code_model_probe_error_does_not_mark_successful_session_failed(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="kimi-code", proxy_mode="reverse")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "kimi-code", "proxy_mode": "reverse"})
+    try:
+        await writer.write(
+            {
+                "timestamp": "2026-06-09T08:00:00+00:00",
+                "request": {"method": "GET", "path": "/models", "body": {}},
+                "response": {"status": 401, "body": {"error": "missing bearer token"}},
+            }
+        )
+        await writer.write(
+            {
+                "timestamp": "2026-06-09T08:00:02+00:00",
+                "request": {
+                    "method": "POST",
+                    "path": "/chat/completions",
+                    "body": {"model": "kimi-code/kimi-for-coding", "messages": [{"role": "user", "content": "ping"}]},
+                },
+                "response": {
+                    "status": 200,
+                    "body": {
+                        "model": "kimi-code/kimi-for-coding",
+                        "choices": [{"message": {"content": "pong"}}],
+                        "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+                    },
+                },
+            }
+        )
+    finally:
+        writer.close()
+
+    conn = store._connect()
+    row = conn.execute("SELECT status, summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    summary = json.loads(row["summary_json"])
+    payload = load_trace_session(session_id)
+
+    assert row["status"] == "complete"
+    assert summary["status"] == "complete"
+    assert payload is not None
+    assert payload["session"]["status"] == "complete"
+    assert payload["session"]["error"] == ""
+    assert payload["session"]["first_user"] == "ping"
+    assert payload["session"]["last_response"] == "pong"

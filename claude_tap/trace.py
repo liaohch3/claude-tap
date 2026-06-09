@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import TYPE_CHECKING
 
 from claude_tap.trace_store import TraceStore, get_trace_store
@@ -72,7 +73,7 @@ class TraceWriter:
         response = record.get("response")
         if isinstance(response, dict):
             status = response.get("status")
-            if isinstance(status, int) and status >= 400:
+            if isinstance(status, int) and status >= 400 and not _is_auxiliary_status_probe(record):
                 self._has_error = True
             if isinstance(response.get("error"), str) and response["error"]:
                 self._has_error = True
@@ -88,3 +89,15 @@ class TraceWriter:
             "models_used": self.models_used,
             "has_error": self._has_error,
         }
+
+
+def _is_auxiliary_status_probe(record: dict) -> bool:
+    request = record.get("request")
+    path = request.get("path") if isinstance(request, dict) else ""
+    if not isinstance(path, str):
+        return False
+    clean_path = path.lower().split("?", 1)[0].rstrip("/")
+    if clean_path in {"/models", "/v1/models", "/v1alpha/models", "/v1beta/models"}:
+        return True
+    match = re.fullmatch(r"/(?:v1/)?models/([^/:]+)", clean_path)
+    return match is not None
