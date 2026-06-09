@@ -166,6 +166,27 @@ def test_dashboard_indexes_sessions_in_sqlite(trace_db, tmp_path: Path) -> None:
     assert payload["records"][0]["turn"] == 1
 
 
+def test_dashboard_summarizes_null_usage_token_fields(trace_db, tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_082000.jsonl"
+    record = _anthropic_record()
+    record["response"]["body"]["usage"] = {
+        "input_tokens": 42,
+        "output_tokens": 9,
+        "cache_read_input_tokens": None,
+        "cache_creation_input_tokens": None,
+    }
+    _write_jsonl(trace_path, [record])
+    _seed_legacy(tmp_path)
+
+    summary = list_trace_sessions()[0]
+
+    assert summary["input_tokens"] == 42
+    assert summary["output_tokens"] == 9
+    assert summary["cache_read_tokens"] == 0
+    assert summary["cache_create_tokens"] == 0
+    assert summary["total_tokens"] == 51
+
+
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])

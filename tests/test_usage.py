@@ -86,6 +86,22 @@ def test_normalize_usage_preserves_explicit_anthropic_cache_read() -> None:
     assert usage["cache_read_input_tokens"] == 4
 
 
+def test_normalize_usage_drops_null_token_fields_before_alias_mapping() -> None:
+    usage = normalize_usage(
+        {
+            "input_tokens": None,
+            "output_tokens": None,
+            "prompt_tokens": 8,
+            "completion_tokens": 5,
+            "cache_creation_input_tokens": None,
+        }
+    )
+
+    assert usage["input_tokens"] == 8
+    assert usage["output_tokens"] == 5
+    assert "cache_creation_input_tokens" not in usage
+
+
 @pytest.mark.asyncio
 async def test_trace_writer_counts_responses_cached_tokens(trace_db) -> None:
     from claude_tap.trace_store import get_trace_store

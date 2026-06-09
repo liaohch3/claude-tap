@@ -151,7 +151,9 @@ def merge_record_into_summary(
     summary["turn_count"] = max(int(summary.get("turn_count") or 0), record_count)
     summary["input_tokens"] = int(summary.get("input_tokens") or 0) + (usage.get("input_tokens") or 0)
     summary["output_tokens"] = int(summary.get("output_tokens") or 0) + (usage.get("output_tokens") or 0)
-    summary["cache_read_tokens"] = int(summary.get("cache_read_tokens") or 0) + (usage.get("cache_read_input_tokens") or 0)
+    summary["cache_read_tokens"] = int(summary.get("cache_read_tokens") or 0) + (
+        usage.get("cache_read_input_tokens") or 0
+    )
     summary["cache_create_tokens"] = int(summary.get("cache_create_tokens") or 0) + (
         usage.get("cache_creation_input_tokens") or 0
     )
