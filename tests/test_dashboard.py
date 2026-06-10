@@ -935,7 +935,7 @@ async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp
             ) as resp:
                 assert resp.status == 200
                 data = await resp.json()
-                assert data["resume_command"].startswith("claude --resume ")
+                assert data["resume_command"].startswith("claude-tap --resume ")
                 assert data["message_count"] == 2
                 installed = Path(data["path"])
                 assert installed.exists()
@@ -969,7 +969,7 @@ async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkey
                 assert resp.status == 200
                 data = await resp.json()
                 assert data["message_count"] == 2
-                assert data["resume_command"].startswith("claude --resume ")
+                assert data["resume_command"].startswith("claude-tap --resume ")
                 installed = Path(data["path"])
                 assert installed.exists()
                 assert installed.parent.parent == config_dir / "projects"

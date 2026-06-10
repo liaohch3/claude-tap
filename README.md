@@ -415,7 +415,7 @@ claude-tap export trace.ctap.json -o trace.html
 claude-tap export <session-id> --format claude-resume -o transplant.jsonl
 # On machine B: install it into Claude Code's store, then resume.
 claude-tap import-resume transplant.jsonl --cwd /path/to/project
-claude --resume <printed-session-id>
+claude-tap --resume <printed-session-id>   # resume through the proxy so it stays captured
 
 # Capture only the prompt surface for automation; also writes trace.jsonl next to prompt.md
 claude-tap --tap-export-prompt prompt.md -- -p "hello"

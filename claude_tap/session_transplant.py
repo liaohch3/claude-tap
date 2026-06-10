@@ -376,7 +376,9 @@ RESUME_TARGETS: dict[str, ResumeTarget] = {
         ),
         project_dir=_claude_project_dir,
         filename=lambda sid: f"{sid}.jsonl",
-        resume_command=lambda sid: f"claude --resume {sid}",
+        # Resume through claude-tap so the continued conversation is captured
+        # into the dashboard; plain `claude --resume` would bypass the proxy.
+        resume_command=lambda sid: f"claude-tap --resume {sid}",
     ),
 }
 

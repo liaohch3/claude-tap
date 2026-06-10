@@ -294,7 +294,7 @@ def test_install_resume_session_writes_under_project_slug(tmp_path) -> None:
     expected = tmp_path / ".claude" / "projects" / "C--work-proj" / "abc123.jsonl"
     assert installed.path == expected
     assert expected.exists()
-    assert installed.resume_command == "claude --resume abc123"
+    assert installed.resume_command == "claude-tap --resume abc123"
     assert installed.message_count == 4
 
 
@@ -313,7 +313,7 @@ def test_import_resume_main_installs_and_warns_on_cwd_divergence(tmp_path, capsy
     assert "Warning" in out.err and r"D:\other\place" in out.err
     installed = tmp_path / "home" / ".claude" / "projects" / project_slug(str(target)) / "sid9.jsonl"
     assert installed.exists()
-    assert "claude --resume sid9" in out.out
+    assert "claude-tap --resume sid9" in out.out
     # the re-homed session reproduces the original conversation (string content
     # normalized to a text block by the parse round-trip)
     expected = parse_jsonl_conversation(build_session_jsonl(_tool_conversation(), _det_env()))

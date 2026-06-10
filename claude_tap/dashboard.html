@@ -1243,7 +1243,7 @@ const DASHBOARD_I18N = {
     import_resume_submit: "Import",
     import_resume_working: "Importing…",
     import_resume_no_file: "Choose a session file first.",
-    import_resume_done: "Imported {count} messages. Resume command copied to clipboard:\n\n{command}",
+    import_resume_done: "Imported {count} messages. Run this in {cwd} to resume (kept captured in the dashboard); copied to clipboard:\n\n{command}",
     import_resume_failed: "Import failed: {error}",
     copy_session_id: "Copy session id",
     unable_load_session: "Unable to load session: {error}",
@@ -1358,7 +1358,7 @@ const DASHBOARD_I18N = {
     import_resume_submit: "导入",
     import_resume_working: "导入中…",
     import_resume_no_file: "请先选择一个会话文件。",
-    import_resume_done: "已导入 {count} 条消息。续聊命令已复制到剪贴板：\n\n{command}",
+    import_resume_done: "已导入 {count} 条消息。在 {cwd} 下运行以续聊（会持续被 dashboard 捕获），已复制到剪贴板：\n\n{command}",
     import_resume_failed: "导入失败：{error}",
     copy_session_id: "复制会话 ID",
     unable_load_session: "无法加载会话：{error}",
@@ -1849,7 +1849,7 @@ async function submitImportResume() {
       }),
     });
     await navigator.clipboard?.writeText(data.resume_command || "").catch(() => {});
-    resultEl.textContent = t("import_resume_done", {count: data.message_count, command: data.resume_command});
+    resultEl.textContent = t("import_resume_done", {count: data.message_count, cwd: data.cwd, command: data.resume_command});
     resultEl.hidden = false;
   } catch (err) {
     errorEl.textContent = t("import_resume_failed", {error: err?.message || String(err)});

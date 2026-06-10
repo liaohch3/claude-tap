@@ -412,7 +412,7 @@ claude-tap export trace.ctap.json -o trace.html
 claude-tap export <session-id> --format claude-resume -o transplant.jsonl
 # 在 B 机：装进 Claude Code 的会话存储，然后续聊。
 claude-tap import-resume transplant.jsonl --cwd /path/to/project
-claude --resume <打印出的 session-id>
+claude-tap --resume <打印出的 session-id>   # 经代理续聊，持续被捕获
 
 # 只捕获 prompt 表面用于自动化；同时在 prompt.md 旁写入 trace.jsonl
 claude-tap --tap-export-prompt prompt.md -- -p "hello"
