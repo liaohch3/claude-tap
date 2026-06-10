@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.107] - 2026-06-10
+
+### Changed
+- fix: keep Gemini native traces visible
 ## [0.1.106] - 2026-06-10
 
 ### Changed
