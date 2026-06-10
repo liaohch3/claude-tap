@@ -1114,7 +1114,7 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert await export_button.count() == 1
                 assert await export_button.inner_text() == "Export"
                 assert await page.locator("#viewer-actions > .viewer-action").count() == 0
-                assert await page.locator("#viewer-actions .export-menu-item").count() == 4
+                assert await page.locator("#viewer-actions .export-menu-item").count() == 5
                 hrefs = await page.locator("#viewer-actions .export-menu-item").evaluate_all(
                     "(links) => links.map((link) => link.getAttribute('href'))"
                 )
@@ -1122,6 +1122,7 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert f"/api/sessions/{session_id}/export/compact" in hrefs
                 assert f"/api/sessions/{session_id}/export/log" in hrefs
                 assert f"/api/sessions/{session_id}/export/html" in hrefs
+                assert f"/api/sessions/{session_id}/export/resume" in hrefs
 
                 async with page.expect_download() as download_info:
                     await export_button.click()
@@ -1163,7 +1164,7 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                 await page.locator("#viewer-actions .export-menu > summary").click()
                 menu = page.locator("#viewer-actions .export-menu-list")
                 assert await menu.is_visible()
-                assert await page.locator("#viewer-actions .export-menu-item").count() == 4
+                assert await page.locator("#viewer-actions .export-menu-item").count() == 5
 
                 layout = await page.evaluate(
                     """() => {
