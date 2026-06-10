@@ -88,7 +88,8 @@ class LiveViewerServer:
         if self.migrate_from is not None:
             migrate_legacy_traces(self.migrate_from)
 
-        app = web.Application()
+        # Resume imports upload a whole session log; lift the 1 MB body cap.
+        app = web.Application(client_max_size=64 * 1024 * 1024)
         if self.dashboard_mode:
             app.router.add_get("/", self._handle_dashboard_index)
         else:
@@ -114,6 +115,7 @@ class LiveViewerServer:
         app.router.add_get("/api/sessions/{session_id}/export/html", self._handle_export_html)
         app.router.add_get("/api/sessions/{session_id}/export/claude-resume", self._handle_export_claude_resume)
         app.router.add_post("/api/sessions/{session_id}/install-resume", self._handle_install_resume)
+        app.router.add_post("/api/import-resume", self._handle_import_resume)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -471,6 +473,43 @@ class LiveViewerServer:
             installed = install_resume_session(messages, cwd, version=detect_claude_version())
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=422)
+        return web.json_response(
+            {
+                "session_id": installed.session_id,
+                "path": str(installed.path),
+                "cwd": cwd,
+                "resume_command": installed.resume_command,
+                "message_count": installed.message_count,
+            }
+        )
+
+    async def _handle_import_resume(self, request: web.Request) -> web.Response:
+        """Install an uploaded transplant/session JSONL into the local Claude Code store."""
+        from claude_tap.session_transplant import (
+            detect_claude_version,
+            install_resume_session,
+            parse_jsonl_conversation,
+        )
+
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        content = payload.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return web.json_response({"error": "Missing session file content"}, status=400)
+        messages = parse_jsonl_conversation(content)
+        if not messages:
+            return web.json_response({"error": "No user/assistant messages found in file"}, status=422)
+        cwd = str(payload.get("cwd") or "").strip() or str(Path.cwd())
+        try:
+            installed = install_resume_session(messages, cwd, version=detect_claude_version())
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=422)
+        except OSError as exc:
+            return web.json_response({"error": f"Could not write session: {exc}"}, status=500)
         return web.json_response(
             {
                 "session_id": installed.session_id,

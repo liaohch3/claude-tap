@@ -945,6 +945,52 @@ async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp
 
 
 @pytest.mark.asyncio
+async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkeypatch) -> None:
+    from claude_tap.session_transplant import TransplantEnv, build_session_jsonl
+
+    config_dir = tmp_path / "cfg" / ".claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    conversation = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+    ]
+    document = build_session_jsonl(conversation, TransplantEnv(cwd=r"D:\src", session_id="orig"))
+    target = tmp_path / "proj"
+    target.mkdir()
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"content": document, "cwd": str(target)},
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["message_count"] == 2
+                assert data["resume_command"].startswith("claude --resume ")
+                installed = Path(data["path"])
+                assert installed.exists()
+                assert installed.parent.parent == config_dir / "projects"
+
+            # empty/garbage content is rejected, not 500
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"content": "not jsonl\n", "cwd": str(target)},
+            ) as resp:
+                assert resp.status == 422
+
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"cwd": str(target)},
+            ) as resp:
+                assert resp.status == 400
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_viewer_guards_resume_link_by_provider(trace_db, tmp_path: Path) -> None:
     _write_jsonl(tmp_path / "2026-05-20" / "trace_080000.jsonl", [_anthropic_record()])
     _write_jsonl(tmp_path / "2026-05-20" / "trace_090000.jsonl", [_antigravity_record()])

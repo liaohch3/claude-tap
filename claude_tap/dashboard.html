@@ -875,6 +875,54 @@ pre {
   cursor: progress;
   opacity: .65;
 }
+.confirm-btn.primary {
+  border-color: color-mix(in srgb, var(--blue) 45%, var(--border));
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+.confirm-btn.primary:hover { border-color: var(--blue); }
+.fab-import {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 40;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--blue) 45%, var(--border));
+  background: var(--blue);
+  color: #fff;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.22);
+}
+.fab-import:hover { filter: brightness(1.07); }
+.import-field { display: grid; gap: 4px; margin-bottom: 10px; }
+.import-field label { font-size: 12px; color: var(--text-secondary); }
+.import-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--sans);
+}
+.import-result {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--bg-hover);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
 
 @media (max-width: 900px) {
   body { overflow: auto; height: auto; min-height: 100vh; }
@@ -1023,6 +1071,31 @@ pre {
   </div>
 </div>
 
+<button id="import-fab" class="fab-import" type="button" data-i18n-title="import_resume_title" aria-label="Import session">+</button>
+
+<div id="import-resume-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="import-resume-title">
+  <div class="confirm-dialog">
+    <h2 id="import-resume-title" class="confirm-title" data-i18n="import_resume_title">Import session</h2>
+    <div class="confirm-body">
+      <p data-i18n="import_resume_desc">Install a transplanted session file from another machine into Claude Code, then resume it.</p>
+      <div class="import-field">
+        <label for="import-file" data-i18n="import_resume_file">Session file (.jsonl)</label>
+        <input id="import-file" type="file" accept=".jsonl,.json,application/x-ndjson">
+      </div>
+      <div class="import-field">
+        <label for="import-cwd" data-i18n="import_resume_cwd">Target project directory</label>
+        <input id="import-cwd" type="text" placeholder="C:\path\to\project">
+      </div>
+      <div id="import-resume-error" class="confirm-error" hidden></div>
+      <div id="import-resume-result" class="import-result" hidden></div>
+    </div>
+    <div class="confirm-actions">
+      <button id="import-resume-cancel" class="confirm-btn" type="button" data-i18n="cancel">Cancel</button>
+      <button id="import-resume-submit" class="confirm-btn primary" type="button" data-i18n="import_resume_submit">Import</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
 
@@ -1146,6 +1219,15 @@ const DASHBOARD_I18N = {
     install_resume_prompt: "Target project directory to resume in (must match on this machine):",
     install_resume_done: "Installed as a resumable session ({count} messages). Copied to clipboard:\n\n{command}",
     install_resume_failed: "Could not install resume session: {error}",
+    import_resume_title: "Import session",
+    import_resume_desc: "Install a transplanted session file from another machine into Claude Code, then resume it.",
+    import_resume_file: "Session file (.jsonl)",
+    import_resume_cwd: "Target project directory",
+    import_resume_submit: "Import",
+    import_resume_working: "Importing…",
+    import_resume_no_file: "Choose a session file first.",
+    import_resume_done: "Imported {count} messages. Resume command copied to clipboard:\n\n{command}",
+    import_resume_failed: "Import failed: {error}",
     copy_session_id: "Copy session id",
     unable_load_session: "Unable to load session: {error}",
     unable_load_dashboard: "Unable to load dashboard: {error}",
@@ -1247,6 +1329,15 @@ const DASHBOARD_I18N = {
     install_resume_prompt: "要续聊的目标项目目录（需与本机一致）：",
     install_resume_done: "已装为可续聊会话（{count} 条消息）。已复制到剪贴板：\n\n{command}",
     install_resume_failed: "安装续聊会话失败：{error}",
+    import_resume_title: "导入会话",
+    import_resume_desc: "把别的机器传来的会话文件装进本机 Claude Code，然后续聊。",
+    import_resume_file: "会话文件（.jsonl）",
+    import_resume_cwd: "目标项目目录",
+    import_resume_submit: "导入",
+    import_resume_working: "导入中…",
+    import_resume_no_file: "请先选择一个会话文件。",
+    import_resume_done: "已导入 {count} 条消息。续聊命令已复制到剪贴板：\n\n{command}",
+    import_resume_failed: "导入失败：{error}",
     copy_session_id: "复制会话 ID",
     unable_load_session: "无法加载会话：{error}",
     unable_load_dashboard: "无法加载面板：{error}",
@@ -1683,6 +1774,61 @@ function hideDeleteSessionDialog({force = false} = {}) {
   modal.setAttribute("aria-hidden", "true");
   if (deleteSessionReturnFocusEl?.isConnected) deleteSessionReturnFocusEl.focus();
   deleteSessionReturnFocusEl = null;
+}
+
+let importResumeReturnFocusEl = null;
+
+function showImportResumeDialog() {
+  importResumeReturnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  $("#import-resume-error").hidden = true;
+  $("#import-resume-result").hidden = true;
+  $("#import-file").value = "";
+  const modal = $("#import-resume-modal");
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+  $("#import-cwd").focus();
+}
+
+function hideImportResumeDialog() {
+  if ($("#import-resume-submit").disabled) return;
+  const modal = $("#import-resume-modal");
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+  if (importResumeReturnFocusEl?.isConnected) importResumeReturnFocusEl.focus();
+  importResumeReturnFocusEl = null;
+}
+
+async function submitImportResume() {
+  const errorEl = $("#import-resume-error");
+  const resultEl = $("#import-resume-result");
+  const submit = $("#import-resume-submit");
+  errorEl.hidden = true;
+  resultEl.hidden = true;
+  const file = $("#import-file").files?.[0];
+  if (!file) {
+    errorEl.textContent = t("import_resume_no_file");
+    errorEl.hidden = false;
+    return;
+  }
+  submit.disabled = true;
+  submit.textContent = t("import_resume_working");
+  try {
+    const content = await file.text();
+    const data = await fetchJSON("/api/import-resume", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({content, cwd: $("#import-cwd").value.trim()}),
+    });
+    await navigator.clipboard?.writeText(data.resume_command || "").catch(() => {});
+    resultEl.textContent = t("import_resume_done", {count: data.message_count, command: data.resume_command});
+    resultEl.hidden = false;
+  } catch (err) {
+    errorEl.textContent = t("import_resume_failed", {error: err?.message || String(err)});
+    errorEl.hidden = false;
+  } finally {
+    submit.disabled = false;
+    submit.textContent = t("import_resume_submit");
+  }
 }
 
 async function confirmDeleteSession() {
@@ -2145,6 +2291,17 @@ $("#delete-session-modal").addEventListener("click", event => {
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !$("#delete-session-modal").classList.contains("hidden")) {
     hideDeleteSessionDialog();
+  }
+});
+$("#import-fab").addEventListener("click", () => showImportResumeDialog());
+$("#import-resume-cancel").addEventListener("click", () => hideImportResumeDialog());
+$("#import-resume-submit").addEventListener("click", () => submitImportResume().catch(console.error));
+$("#import-resume-modal").addEventListener("click", event => {
+  if (event.target === event.currentTarget) hideImportResumeDialog();
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !$("#import-resume-modal").classList.contains("hidden")) {
+    hideImportResumeDialog();
   }
 });
 $("#theme-toggle").addEventListener("click", toggleTheme);
