@@ -8,6 +8,7 @@ import re
 import sqlite3
 import threading
 import uuid
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -27,9 +28,19 @@ from claude_tap.compact_trace import (
 )
 
 DB_FILENAME = "traces.sqlite3"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 STALE_ACTIVE_SESSION_AFTER = timedelta(hours=24)
+PREFIX_DELTA_MARKER = "__claude_tap_prefix_delta__"
+PREFIX_DELTA_VERSION = 1
+PREFIX_ANCHOR_INTERVAL = 25
+MIN_PREFIX_ITEMS = 2
+MIN_PREFIX_BYTES = 512
+MIN_PREFIX_SAVINGS_BYTES = 128
+PREFIX_COMPACT_PATHS = (
+    ("request", "body", "input"),
+    ("request", "body", "messages"),
+)
 
 _store: TraceStore | None = None
 _store_lock = threading.Lock()
@@ -76,6 +87,7 @@ class TraceStore:
         self._schema_lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._tls = threading.local()
+        self._last_record_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 
     def create_session(
         self,
@@ -109,7 +121,14 @@ class TraceStore:
             conn = self._connect()
             next_index = self._next_record_index(conn, session_id)
             updated_at = _str_or_none(record.get("timestamp")) or datetime.now(timezone.utc).isoformat()
-            payload_json = self._encode_record(conn, session_id, record)
+            previous_record = self._load_previous_record_for_append(conn, session_id, next_index)
+            payload_json = self._encode_record(
+                conn,
+                session_id,
+                record,
+                record_index=next_index,
+                previous_record=previous_record,
+            )
             conn.execute(
                 """
                 INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
@@ -138,6 +157,7 @@ class TraceStore:
             record_count = int(count_row["record_count"]) if count_row is not None else next_index
             self._refresh_summary_after_append(conn, session_id, record, record_count)
             conn.commit()
+            self._last_record_cache[session_id] = (next_index, deepcopy(record))
 
     def append_log(
         self,
@@ -243,56 +263,51 @@ class TraceStore:
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         offset = max(0, offset)
-        params: list[object] = [session_id]
-        limit_sql = ""
+        start_index = offset + 1
+        query_start_index = _prefix_anchor_index(start_index)
+        params: list[object] = [session_id, query_start_index]
+        upper_bound_sql = ""
         if limit is not None:
-            limit_sql = " LIMIT ? OFFSET ?"
-            params.append(max(0, limit))
-            params.append(offset)
-        elif offset:
-            limit_sql = " LIMIT -1 OFFSET ?"
-            params.append(offset)
+            end_index = offset + max(0, limit)
+            if end_index < start_index:
+                return []
+            upper_bound_sql = " AND record_index <= ?"
+            params.append(end_index)
         conn = self._connect()
         rows = conn.execute(
             f"""
-            SELECT session_id, payload_json
+            SELECT session_id, record_index, payload_json
             FROM records
             WHERE session_id = ?
+              AND record_index >= ?
+              {upper_bound_sql}
             ORDER BY record_index
-            {limit_sql}
             """,
             params,
         ).fetchall()
-        return self._rows_to_records(rows)
+        records = self._rows_to_records(rows)
+        trim_count = start_index - query_start_index
+        if trim_count:
+            records = records[trim_count:]
+        if limit is not None:
+            records = records[:limit]
+        return records
 
     def load_boundary_records(self, session_id: str) -> list[dict[str, Any]]:
         """Load the first and last records for a session without reading everything."""
         conn = self._connect()
-        first = conn.execute(
-            """
-            SELECT session_id, payload_json
-            FROM records
-            WHERE session_id = ?
-            ORDER BY record_index
-            LIMIT 1
-            """,
+        row = conn.execute(
+            "SELECT MAX(record_index) AS last_index FROM records WHERE session_id = ?",
             (session_id,),
         ).fetchone()
-        last = conn.execute(
-            """
-            SELECT session_id, payload_json
-            FROM records
-            WHERE session_id = ?
-            ORDER BY record_index DESC
-            LIMIT 1
-            """,
-            (session_id,),
-        ).fetchone()
-        if first is None:
+        if row is None or row["last_index"] is None:
             return []
-        if last is None or first["payload_json"] == last["payload_json"]:
-            return self._rows_to_records([first])
-        return self._rows_to_records([first, last])
+        last_index = int(row["last_index"])
+        first_records = self.load_records(session_id, limit=1, offset=0)
+        if last_index <= 1:
+            return first_records
+        last_records = self.load_records(session_id, limit=1, offset=last_index - 1)
+        return first_records + last_records
 
     def load_records_for_date(self, date_key: str) -> list[dict[str, Any]]:
         """Load all records for sessions on a given date in one query."""
@@ -300,7 +315,7 @@ class TraceStore:
         if date_key == "legacy":
             rows = conn.execute(
                 """
-                SELECT r.session_id, r.payload_json
+                SELECT r.session_id, r.record_index, r.payload_json
                 FROM records r
                 INNER JOIN sessions s ON s.id = r.session_id
                 WHERE s.date_key = 'legacy' OR s.legacy_rel_path NOT LIKE '%/%'
@@ -310,7 +325,7 @@ class TraceStore:
         elif _DATE_RE.match(date_key):
             rows = conn.execute(
                 """
-                SELECT r.session_id, r.payload_json
+                SELECT r.session_id, r.record_index, r.payload_json
                 FROM records r
                 INNER JOIN sessions s ON s.id = r.session_id
                 WHERE s.date_key = ?
@@ -424,6 +439,8 @@ class TraceStore:
             if to_delete:
                 placeholders = ",".join("?" * len(to_delete))
                 conn.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", to_delete)
+                for session_id in to_delete:
+                    self._last_record_cache.pop(session_id, None)
             conn.commit()
         return {
             "date": date_key,
@@ -456,6 +473,7 @@ class TraceStore:
             deleted_records = int(record_row["count"] or 0) if record_row is not None else 0
             deleted_logs = int(log_row["count"] or 0) if log_row is not None else 0
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            self._last_record_cache.pop(session_id, None)
             conn.commit()
         return {
             "session_id": session_id,
@@ -496,6 +514,8 @@ class TraceStore:
                 return 0
             placeholders = ",".join("?" * len(to_remove))
             conn.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", to_remove)
+            for session_id in to_remove:
+                self._last_record_cache.pop(session_id, None)
             conn.commit()
             return len(to_remove)
 
@@ -587,22 +607,28 @@ class TraceStore:
                 if row is not None:
                     return None
                 raise
-            conn.executemany(
-                """
-                INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                [
+            previous_record = None
+            for index, record in enumerate(records, start=1):
+                conn.execute(
+                    """
+                    INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
                     (
                         session_id,
                         index,
                         _int_or_none(record.get("turn")),
                         _str_or_none(record.get("timestamp")),
-                        self._encode_record(conn, session_id, record),
-                    )
-                    for index, record in enumerate(records, start=1)
-                ],
-            )
+                        self._encode_record(
+                            conn,
+                            session_id,
+                            record,
+                            record_index=index,
+                            previous_record=previous_record,
+                        ),
+                    ),
+                )
+                previous_record = record
             conn.executemany(
                 """
                 INSERT INTO proxy_logs (session_id, line_no, logged_at, level, message)
@@ -738,7 +764,7 @@ class TraceStore:
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         current = conn.execute("PRAGMA user_version").fetchone()[0]
         if current == 0:
-            self._create_v4_schema(conn)
+            self._create_v5_schema(conn)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         if current == 2:
@@ -746,10 +772,13 @@ class TraceStore:
             current = 3
         if current == 3:
             self._migrate_v3_to_v4(conn)
+            current = 4
+        if current == 4:
+            self._migrate_v4_to_v5(conn)
             return
         if current != SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported trace database schema version {current}; expected {SCHEMA_VERSION}.")
-        self._create_v4_schema(conn)
+        self._create_v5_schema(conn)
 
     def _create_v3_schema(self, conn: sqlite3.Connection) -> None:
         self._create_v3_tables(conn)
@@ -759,6 +788,9 @@ class TraceStore:
         self._create_v3_tables(conn)
         self._create_v4_tables(conn)
         self._create_v3_indexes(conn)
+
+    def _create_v5_schema(self, conn: sqlite3.Connection) -> None:
+        self._create_v4_schema(conn)
 
     def _migrate_v2_to_v3(self, conn: sqlite3.Connection) -> None:
         suffix = uuid.uuid4().hex
@@ -814,6 +846,11 @@ class TraceStore:
 
     def _migrate_v3_to_v4(self, conn: sqlite3.Connection) -> None:
         self._create_v4_tables(conn)
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+
+    def _migrate_v4_to_v5(self, conn: sqlite3.Connection) -> None:
+        self._create_v5_schema(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
 
@@ -905,7 +942,42 @@ class TraceStore:
         ).fetchone()
         return int(row["next_index"])
 
-    def _encode_record(self, conn: sqlite3.Connection, session_id: str, record: dict[str, Any]) -> str:
+    def _load_previous_record_for_append(
+        self,
+        conn: sqlite3.Connection,
+        session_id: str,
+        next_record_index: int,
+    ) -> dict[str, Any] | None:
+        previous_index = next_record_index - 1
+        if previous_index < 1:
+            return None
+        cached = self._last_record_cache.get(session_id)
+        if cached is not None and cached[0] == previous_index:
+            return cached[1]
+        start_index = _prefix_anchor_index(previous_index)
+        rows = conn.execute(
+            """
+            SELECT session_id, record_index, payload_json
+            FROM records
+            WHERE session_id = ?
+              AND record_index >= ?
+              AND record_index <= ?
+            ORDER BY record_index
+            """,
+            (session_id, start_index, previous_index),
+        ).fetchall()
+        records = self._decode_rows(conn, rows)
+        return records[-1] if records else None
+
+    def _encode_record(
+        self,
+        conn: sqlite3.Connection,
+        session_id: str,
+        record: dict[str, Any],
+        *,
+        record_index: int,
+        previous_record: dict[str, Any] | None,
+    ) -> str:
         compact_record = record
         refs: list[dict[str, object]] = []
         for path in COMPACT_BLOB_PATHS:
@@ -923,14 +995,28 @@ class TraceStore:
                     "bytes": ref[BLOB_REF_MARKER]["bytes"],
                 }
             )
+        prefix_refs: list[dict[str, object]] = []
+        if previous_record is not None and _should_prefix_compact(record_index):
+            compact_record, prefix_refs = _compact_record_prefixes(
+                compact_record,
+                previous_record,
+                base_record_index=record_index - 1,
+            )
         payload: dict[str, Any] = compact_record
-        if refs:
+        if refs or prefix_refs:
+            encoding = "json-blob-ref"
+            if prefix_refs:
+                encoding += "+prefix-delta"
+            marker: dict[str, Any] = {
+                "version": COMPACT_RECORD_VERSION,
+                "encoding": encoding,
+            }
+            if refs:
+                marker["refs"] = refs
+            if prefix_refs:
+                marker["prefix_refs"] = prefix_refs
             payload = {
-                COMPACT_RECORD_MARKER: {
-                    "version": COMPACT_RECORD_VERSION,
-                    "encoding": "json-blob-ref",
-                    "refs": refs,
-                },
+                COMPACT_RECORD_MARKER: marker,
                 "record": compact_record,
             }
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -949,16 +1035,27 @@ class TraceStore:
         return make_blob_ref(hash_value, size_bytes)
 
     def _rows_to_records(self, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+        return self._decode_rows(self._connect(), rows)
+
+    def _decode_rows(self, conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         blob_cache: dict[tuple[str, str], Any] = {}
-        conn = self._connect()
+        previous_by_session: dict[str, dict[str, Any]] = {}
         for row in rows:
+            session_id = row["session_id"]
             try:
-                record = self._decode_record_payload(conn, row["session_id"], row["payload_json"], blob_cache)
+                record = self._decode_record_payload(
+                    conn,
+                    session_id,
+                    row["payload_json"],
+                    blob_cache,
+                    previous_by_session.get(session_id),
+                )
             except (json.JSONDecodeError, KeyError):
                 continue
             if isinstance(record, dict):
                 records.append(record)
+                previous_by_session[session_id] = record
         return records
 
     def _decode_record_payload(
@@ -967,12 +1064,16 @@ class TraceStore:
         session_id: str,
         payload_json: str,
         blob_cache: dict[tuple[str, str], Any],
+        previous_record: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
         payload = json.loads(payload_json)
-        return decode_compact_record_payload(
+        record = decode_compact_record_payload(
             payload,
             lambda ref: self._load_record_blob(conn, session_id, ref, blob_cache),
         )
+        if not isinstance(record, dict):
+            return None
+        return _materialize_prefix_deltas(record, previous_record)
 
     def _load_record_blob(
         self,
@@ -1019,6 +1120,129 @@ def _replace_path(root: dict[str, Any], path: tuple[str, ...], replacement: Any)
         new_node = child_copy
     new_node[path[-1]] = replacement
     return new_root
+
+
+def _prefix_anchor_index(record_index: int) -> int:
+    if record_index <= 1:
+        return 1
+    return ((record_index - 1) // PREFIX_ANCHOR_INTERVAL) * PREFIX_ANCHOR_INTERVAL + 1
+
+
+def _should_prefix_compact(record_index: int) -> bool:
+    return record_index > 1 and _prefix_anchor_index(record_index) != record_index
+
+
+def _compact_record_prefixes(
+    record: dict[str, Any],
+    previous_record: dict[str, Any],
+    *,
+    base_record_index: int,
+) -> tuple[dict[str, Any], list[dict[str, object]]]:
+    compact_record = record
+    refs: list[dict[str, object]] = []
+    for path in PREFIX_COMPACT_PATHS:
+        current_value = _get_path(compact_record, path)
+        previous_value = _get_path(previous_record, path)
+        ref = _make_prefix_delta_ref(
+            previous_value,
+            current_value,
+            base_record_index=base_record_index,
+        )
+        if ref is None:
+            continue
+        compact_record = _replace_path(compact_record, path, ref)
+        meta = ref[PREFIX_DELTA_MARKER]
+        refs.append(
+            {
+                "path": "/" + "/".join(path),
+                "base_record_index": meta["base_record_index"],
+                "prefix_items": meta["prefix_items"],
+                "delta_items": len(meta["delta"]),
+                "saved_bytes": meta["saved_bytes"],
+            }
+        )
+    return compact_record, refs
+
+
+def _make_prefix_delta_ref(
+    previous_value: Any,
+    current_value: Any,
+    *,
+    base_record_index: int,
+) -> dict[str, Any] | None:
+    if not isinstance(previous_value, list) or not isinstance(current_value, list):
+        return None
+    prefix_items = _common_prefix_len(previous_value, current_value)
+    if prefix_items < MIN_PREFIX_ITEMS:
+        return None
+    payload_json = json.dumps(current_value, ensure_ascii=False, separators=(",", ":"))
+    payload_bytes = len(payload_json.encode("utf-8"))
+    if payload_bytes < MIN_PREFIX_BYTES:
+        return None
+    delta = current_value[prefix_items:]
+    ref = {
+        PREFIX_DELTA_MARKER: {
+            "version": PREFIX_DELTA_VERSION,
+            "base_record_index": base_record_index,
+            "base_items": len(previous_value),
+            "prefix_items": prefix_items,
+            "delta": delta,
+            "saved_bytes": 0,
+        }
+    }
+    ref_json = json.dumps(ref, ensure_ascii=False, separators=(",", ":"))
+    ref_bytes = len(ref_json.encode("utf-8"))
+    saved_bytes = payload_bytes - ref_bytes
+    if saved_bytes < MIN_PREFIX_SAVINGS_BYTES:
+        return None
+    ref[PREFIX_DELTA_MARKER]["saved_bytes"] = saved_bytes
+    return ref
+
+
+def _common_prefix_len(left: list[Any], right: list[Any]) -> int:
+    prefix_len = 0
+    for left_item, right_item in zip(left, right, strict=False):
+        if left_item != right_item:
+            break
+        prefix_len += 1
+    return prefix_len
+
+
+def _materialize_prefix_deltas(record: dict[str, Any], previous_record: dict[str, Any] | None) -> dict[str, Any]:
+    materialized = record
+    for path in PREFIX_COMPACT_PATHS:
+        value = _get_path(materialized, path)
+        if not _is_prefix_delta_ref(value):
+            continue
+        if previous_record is None:
+            raise KeyError("missing prefix base record")
+        previous_value = _get_path(previous_record, path)
+        if not isinstance(previous_value, list):
+            raise KeyError("missing prefix base path")
+        ref = value[PREFIX_DELTA_MARKER]
+        prefix_items = ref["prefix_items"]
+        delta = ref["delta"]
+        if not isinstance(prefix_items, int) or prefix_items < 0:
+            raise KeyError("invalid prefix length")
+        if not isinstance(delta, list):
+            raise KeyError("invalid prefix delta")
+        if len(previous_value) < prefix_items:
+            raise KeyError("prefix base shorter than ref")
+        materialized = _replace_path(materialized, path, previous_value[:prefix_items] + delta)
+    return materialized
+
+
+def _is_prefix_delta_ref(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != {PREFIX_DELTA_MARKER}:
+        return False
+    ref = value[PREFIX_DELTA_MARKER]
+    return (
+        isinstance(ref, dict)
+        and ref.get("version") == PREFIX_DELTA_VERSION
+        and isinstance(ref.get("base_record_index"), int)
+        and isinstance(ref.get("prefix_items"), int)
+        and isinstance(ref.get("delta"), list)
+    )
 
 
 def _legacy_source_key(output_dir: Path) -> str:
