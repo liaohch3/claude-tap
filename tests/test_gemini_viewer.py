@@ -271,3 +271,68 @@ def test_viewer_renders_gemini_semantic_sections(gemini_html_file: Path) -> None
     assert "Output: /repo" in detail
     assert "run_shell_command" in detail
     assert "Final OK from Gemini." in detail
+
+
+@pytest.mark.skipif(pw_missing, reason="playwright not installed")
+def test_viewer_keeps_gemini_native_paths_visible_with_chat_completions(tmp_path: Path) -> None:
+    from playwright.sync_api import sync_playwright
+
+    gemini_record = json.loads(json.dumps(_gemini_record()))
+    gemini_record["request"]["path"] = "/v1beta/models/gemini-3.5-flash:generateContent"
+    gemini_record["request"]["body"]["model"] = "gemini-3.5-flash"
+
+    chat_record = {
+        "timestamp": "2026-05-13T12:01:00+00:00",
+        "request_id": "req_grading",
+        "turn": 2,
+        "duration_ms": 456,
+        "request": {
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": {"Host": "api.openai.test"},
+            "body": {
+                "model": "gemini-3.5-flash",
+                "messages": [{"role": "user", "content": "Grade this answer."}],
+            },
+        },
+        "response": {
+            "status": 200,
+            "body": {
+                "model": "gemini-3.5-flash",
+                "choices": [{"message": {"role": "assistant", "content": "score: 0"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+            },
+        },
+    }
+
+    trace_path = tmp_path / "mixed-gemini-native-and-chat.jsonl"
+    html_path = tmp_path / "mixed-gemini-native-and-chat.html"
+    trace_path.write_text(
+        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in (gemini_record, chat_record)),
+        encoding="utf-8",
+    )
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"file://{html_path}", timeout=10000)
+        page.wait_for_selector(".sidebar-item", timeout=5000)
+
+        result = page.evaluate(
+            """() => ({
+              turns: document.querySelector('#stat-turns').textContent,
+              activePaths: Array.from(activePaths).sort(),
+              filteredPaths: filtered.map(getPath).sort(),
+              pathFilter: document.querySelector('#path-filter').innerText.replace(/\\s+/g, ' ').trim(),
+            })"""
+        )
+        browser.close()
+
+    assert result["turns"] == "2"
+    assert result["activePaths"] == [
+        "/v1/chat/completions",
+        "/v1beta/models/gemini-3.5-flash:generateContent",
+    ]
+    assert result["filteredPaths"] == result["activePaths"]
+    assert "+1 more" not in result["pathFilter"]
