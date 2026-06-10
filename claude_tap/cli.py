@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import shlex
 
 # Keep the stdlib module object available as claude_tap.cli.shutil for
 # existing tests and private integrations that monkeypatch shutil.which there.
@@ -66,6 +67,7 @@ from claude_tap.shared_dashboard import (
     is_dashboard_healthy,
     is_legacy_dashboard_healthy,
     resolve_dashboard_port,
+    stop_shared_dashboard,
 )
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
@@ -121,6 +123,15 @@ def _open_browser(url: str) -> None:
 
 async def _is_dashboard_reusable(host: str, port: int) -> bool:
     return await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port)
+
+
+def _dashboard_stop_command(host: str, port: int) -> str:
+    parts = ["claude-tap", "dashboard", "stop"]
+    if port != DEFAULT_DASHBOARD_PORT:
+        parts.extend(["--tap-live-port", str(port)])
+    if host != "127.0.0.1":
+        parts.extend(["--tap-host", host])
+    return " ".join(shlex.quote(part) for part in parts)
 
 
 _CLAUDE_EXECUTABLE_NAMES = {"claude", "claude.exe", "claude.cmd", "claude.bat"}
@@ -402,6 +413,7 @@ async def async_main(args: argparse.Namespace):
         print(f"   Database: {resolve_db_path()}")
         if dashboard_url_value:
             print(f"   Dashboard: {dashboard_url_value}")
+            print(f"   Stop dashboard: {_dashboard_stop_command(dashboard_host, dashboard_port)}")
 
         if prompt_export_rc is not None:
             if prompt_export_rc != 0:
@@ -542,6 +554,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "\n"
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
+            "  claude-tap dashboard stop                  Stop the shared dashboard service\n"
             "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
             "\n"
             "trust local CA:\n"
@@ -724,6 +737,12 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Open a local claude-tap dashboard for browsing trace history.",
     )
     parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["stop", "quit"],
+        help="Use 'stop' or 'quit' to stop a running dashboard service instead of starting one",
+    )
+    parser.add_argument(
         "--tap-output-dir",
         default="./.traces",
         dest="output_dir",
@@ -755,10 +774,21 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def dashboard_main(args: argparse.Namespace) -> int:
     """Run the standalone dashboard until interrupted."""
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     host = args.host
     port = resolve_dashboard_port(args.live_port)
+    if args.command in {"stop", "quit"}:
+        if not await is_dashboard_healthy(host, port, require_current_db=False):
+            print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
+            return 1
+        if not await stop_shared_dashboard(host, port):
+            print(f"Unable to stop claude-tap dashboard on {dashboard_url(host, port)}")
+            return 1
+        print(f"Stopped claude-tap dashboard on {dashboard_url(host, port)}")
+        return 0
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     if await _is_dashboard_reusable(host, port):
         migrate_legacy_traces(output_dir)
         url = dashboard_url(host, port)
@@ -794,8 +824,7 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         _open_browser(server.url)
 
     try:
-        while True:
-            await asyncio.sleep(3600)
+        await server.wait_stopped()
     except asyncio.CancelledError:
         pass
     finally:

@@ -18,6 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+
+
+## [0.1.105] - 2026-06-09
+
+### Changed
+- fix: guard against None values in usage token fields causing dashboard 500 (#303)
+## [0.1.104] - 2026-06-09
+
+### Changed
+- Document local proxy upstream support
+## [0.1.103] - 2026-06-08
+
+### Changed
+- Fix Codex display turn numbering (#266)
 ## [0.1.102] - 2026-06-06
 
 ### Changed

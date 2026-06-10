@@ -196,6 +196,27 @@ def test_dashboard_indexes_sessions_in_sqlite(trace_db, tmp_path: Path) -> None:
     assert payload["records"][0]["turn"] == 1
 
 
+def test_dashboard_summarizes_null_usage_token_fields(trace_db, tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_082000.jsonl"
+    record = _anthropic_record()
+    record["response"]["body"]["usage"] = {
+        "input_tokens": 42,
+        "output_tokens": 9,
+        "cache_read_input_tokens": None,
+        "cache_creation_input_tokens": None,
+    }
+    _write_jsonl(trace_path, [record])
+    _seed_legacy(tmp_path)
+
+    summary = list_trace_sessions()[0]
+
+    assert summary["input_tokens"] == 42
+    assert summary["output_tokens"] == 9
+    assert summary["cache_read_tokens"] == 0
+    assert summary["cache_create_tokens"] == 0
+    assert summary["total_tokens"] == 51
+
+
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])
@@ -604,6 +625,21 @@ def test_dashboard_template_exposes_session_delete_controls() -> None:
     assert "function confirmDeleteSession()" in template
     assert "body: JSON.stringify({session_ids: sessionIds})" in template
     assert 'method: "DELETE"' in template
+
+
+def test_dashboard_template_exposes_quit_control() -> None:
+    template = read_dashboard_template()
+
+    assert 'id="dashboard-quit"' in template
+    assert "quit_dashboard_confirm" in template
+    assert "Stop dashboard service" in template
+    assert "function quitDashboard()" in template
+    assert 'const DASHBOARD_QUIT_TOKEN = "";' in template
+    assert "const DASHBOARD_CAN_STOP = false;" in template
+    assert '"X-Claude-Tap-Dashboard-Token": DASHBOARD_QUIT_TOKEN' in template
+    assert "let dashboardEvents = null;" in template
+    assert "function closeDashboardEvents()" in template
+    assert "if (state.quittingDashboard) return;" in template
 
 
 def test_dashboard_summarize_session_and_migration(trace_db, tmp_path: Path) -> None:
@@ -1186,7 +1222,115 @@ async def test_dashboard_server_sse_events(trace_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dashboard_session_route_serves_lazy_detail_shell(trace_db, tmp_path: Path) -> None:
+async def test_dashboard_server_quit_route_stops_dashboard(trace_db) -> None:
+    from claude_tap.shared_dashboard import is_dashboard_healthy, wait_for_dashboard_stopped
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"http://127.0.0.1:{port}/dashboard") as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert f'const DASHBOARD_QUIT_TOKEN = "{server._dashboard_quit_token}";' in html
+                assert "const DASHBOARD_CAN_STOP = true;" in html
+
+            async with session.post(f"http://127.0.0.1:{port}/dashboard/quit") as resp:
+                assert resp.status == 403
+                payload = await resp.json()
+                assert payload["ok"] is False
+
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
+                assert resp.status == 200
+                health = await resp.json()
+                assert health["quit_token"] == server._dashboard_quit_token
+
+            async with session.post(
+                f"http://127.0.0.1:{port}/dashboard/quit",
+                headers={"X-Claude-Tap-Dashboard-Token": health["quit_token"]},
+            ) as resp:
+                assert resp.status == 200
+                assert await resp.json() == {"ok": True}
+
+        assert await wait_for_dashboard_stopped("127.0.0.1", port, timeout=2.0) is True
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is False
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_quit_token_requires_trusted_host_and_origin(trace_db) -> None:
+    from claude_tap.shared_dashboard import is_dashboard_healthy
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                f"http://127.0.0.1:{port}/dashboard",
+                headers={"Host": f"attacker.example:{port}", "Origin": f"http://attacker.example:{port}"},
+            ) as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert 'const DASHBOARD_QUIT_TOKEN = "";' in html
+                assert "const DASHBOARD_CAN_STOP = false;" in html
+                assert "session-list" in html
+
+            async with session.get(
+                f"http://127.0.0.1:{port}/dashboard/health",
+                headers={"Host": f"attacker.example:{port}", "Origin": f"http://attacker.example:{port}"},
+            ) as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["ok"] is True
+                assert payload["dashboard_mode"] is True
+                assert "quit_token" not in payload
+
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
+                assert resp.status == 200
+                health = await resp.json()
+                token = health["quit_token"]
+
+            for headers in (
+                {"Host": f"attacker.example:{port}", "X-Claude-Tap-Dashboard-Token": token},
+                {
+                    "Origin": f"http://attacker.example:{port}",
+                    "X-Claude-Tap-Dashboard-Token": token,
+                },
+                {
+                    "Origin": f"http://127.0.0.1:{port + 1}",
+                    "X-Claude-Tap-Dashboard-Token": token,
+                },
+            ):
+                async with session.post(f"http://127.0.0.1:{port}/dashboard/quit", headers=headers) as resp:
+                    assert resp.status == 403
+                    payload = await resp.json()
+                    assert payload["ok"] is False
+
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is True
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_quit_route_rejects_non_dashboard_server(trace_db) -> None:
+    server = LiveViewerServer(port=0, dashboard_mode=False)
+    port = await server.start()
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"http://127.0.0.1:{port}/dashboard/quit") as resp:
+                assert resp.status == 403
+                payload = await resp.json()
+                assert payload["ok"] is False
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_path: Path) -> None:
     playwright = pytest.importorskip("playwright.async_api")
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(turn=turn) for turn in range(1, 13)])

@@ -536,7 +536,25 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   if (entries.length) {
                     sessionTurnDiscriminator(entries[0]);
                     sessionKeyForEntry(entries[0], null);
+                    matchSearch(entries[0], '1');
+                    const originalPrompt = window.prompt;
+                    window.prompt = () => '1';
+                    promptJumpToTurn();
+                    window.prompt = originalPrompt;
+                    _buildDiffTargetOptions(Math.min(1, filtered.length - 1));
+                    if (filtered.length > 1) showDiffForIdx(1, null, 0);
                   }
+                  const stubEntry = buildStubEntry({
+                    turn: '2.2',
+                    transport: 'websocket',
+                    method: 'WEBSOCKET',
+                    path: '/v1/responses',
+                    model: 'gpt-5.5',
+                    request_generate: true,
+                    response_output_count: 1,
+                    output_tokens: 1,
+                  }, 0);
+                  normalizeDisplayTurns([stubEntry], true);
                   const imageBlock = {
                     type: 'image',
                     source: {

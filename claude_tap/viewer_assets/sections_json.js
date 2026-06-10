@@ -126,12 +126,12 @@ function toggleJT(event, id) {
 
 function copyRequestBody(btn) {
   let e = filtered[activeIdx]; if (!e) return;
-  if (e._isStub) e = getFullEntry(e);
+  e = resolveEntryForDetail(e);
   copyToClipboard(JSON.stringify(e.request?.body, null, 2), btn);
 }
 function copyCurl(btn) {
   let e = filtered[activeIdx]; if (!e) return;
-  if (e._isStub) e = getFullEntry(e);
+  e = resolveEntryForDetail(e);
   const method = e.request?.method || 'POST', path = e.request?.path || '/v1/messages';
   const headers = e.request?.headers || {}, body = e.request?.body;
   const base = e.upstream_base_url || 'https://api.anthropic.com';

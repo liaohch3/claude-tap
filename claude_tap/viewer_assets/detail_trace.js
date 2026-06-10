@@ -44,7 +44,7 @@ function setDetailViewMode(mode) {
   detailViewMode = mode;
   const entry = filtered[activeIdx];
   if (!entry) return;
-  renderDetail(entry._isStub ? getFullEntry(entry) : entry);
+  renderDetail(resolveEntryForDetail(entry));
 }
 
 function detailTabButton(mode, label) {
@@ -64,7 +64,7 @@ function setTraceFormatMode(mode) {
   traceFormatMode = mode;
   const entry = filtered[activeIdx];
   if (!entry) return;
-  renderDetail(entry._isStub ? getFullEntry(entry) : entry);
+  renderDetail(resolveEntryForDetail(entry));
 }
 
 function renderTraceFormatControls() {
@@ -164,7 +164,11 @@ function renderTraceDetail(entry, ctx) {
   };
   const metadata = {
     request_id: entry.request_id || '',
+    display_turn: entry.display_turn ?? '',
+    capture_turn: entry.capture_turn ?? entry.turn ?? '',
     turn: entry.turn ?? '',
+    record_index: entry.record_index ?? '',
+    websocket_response_index: entry.websocket_response_index ?? '',
     duration_ms: entry.duration_ms ?? 0,
     transport: entry.transport || 'http',
     upstream_base_url: entry.upstream_base_url || '',

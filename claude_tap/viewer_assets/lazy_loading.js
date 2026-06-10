@@ -27,6 +27,7 @@ function buildStubEntry(meta, rawIdx) {
 
   // Build a minimal system field to support task fingerprinting
   const body = { model: meta.model || '' };
+  if (typeof meta.request_generate === 'boolean') body.generate = meta.request_generate;
   if (meta.has_system && meta.sys_hint) {
     body.system = meta.sys_hint;
   }
@@ -40,6 +41,14 @@ function buildStubEntry(meta, rawIdx) {
     meta.response_tool_names.forEach(n => respContent.push({ type: 'tool_use', name: n }));
   }
 
+  const responseBody = {
+    usage: usage,
+    content: respContent.length ? respContent : undefined,
+    error: meta.error_message ? { message: meta.error_message } : undefined,
+  };
+  if (typeof meta.response_generate === 'boolean') responseBody.generate = meta.response_generate;
+  if (meta.response_output_count) responseBody.output = Array.from({ length: meta.response_output_count }, () => ({}));
+
   return {
     _isStub: true,
     _rawIdx: rawIdx,
@@ -47,6 +56,7 @@ function buildStubEntry(meta, rawIdx) {
     request_id: meta.request_id || '',
     timestamp: meta.timestamp || '',
     duration_ms: meta.duration_ms || 0,
+    transport: meta.transport || '',
     request: {
       method: meta.method || '',
       path: meta.path || '',
@@ -54,11 +64,7 @@ function buildStubEntry(meta, rawIdx) {
     },
     response: {
       status: meta.status || 0,
-      body: {
-        usage: usage,
-        content: respContent.length ? respContent : undefined,
-        error: meta.error_message ? { message: meta.error_message } : undefined,
-      },
+      body: responseBody,
     },
   };
 }
@@ -104,6 +110,17 @@ function getFullEntry(entry) {
   }
 }
 
+function resolveEntryForDetail(entry) {
+  if (!entry || !entry._isStub) return entry;
+  return {
+    ...getFullEntry(entry),
+    display_turn: entry.display_turn,
+    capture_turn: entry.capture_turn,
+    record_index: entry.record_index,
+    websocket_response_index: entry.websocket_response_index,
+  };
+}
+
 /* ─── Virtual scroll state ─── */
 let virtualMode = false;
 const VS_ITEM_HEIGHT = 68;
@@ -124,4 +141,3 @@ const TRACE_JSONL_PATH = typeof __TRACE_JSONL_PATH__ !== 'undefined' ? __TRACE_J
 const TRACE_HTML_PATH = typeof __TRACE_HTML_PATH__ !== 'undefined' ? __TRACE_HTML_PATH__ : '';
 const CLAUDE_TAP_VERSION = typeof __CLAUDE_TAP_VERSION__ !== 'undefined' ? __CLAUDE_TAP_VERSION__ : '';
 const TRACE_SESSION_EXPORTS = typeof __TRACE_SESSION_EXPORTS__ !== 'undefined' ? __TRACE_SESSION_EXPORTS__ : null;
-

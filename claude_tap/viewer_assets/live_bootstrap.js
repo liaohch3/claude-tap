@@ -29,7 +29,7 @@ function initLiveMode() {
 
       liveRecords.push(record);
       if (!viewingDate) {
-        entries.push(...expandLiveWebSocketResponseEntries([record]));
+        entries.push(...normalizeDisplayTurns(expandLiveWebSocketResponseEntries([record]), false));
         updateLiveStatus('connected', entries.length);
         clearTimeout(liveRenderTimer);
         liveRenderTimer = setTimeout(() => renderApp(true), 50);
@@ -127,7 +127,7 @@ async function onDateChange(value) {
   if (value === 'live') {
     viewingDate = null;
     activePaths.clear();
-    entries = expandLiveWebSocketResponseEntries(liveRecords.slice(), true);
+    entries = normalizeDisplayTurns(expandLiveWebSocketResponseEntries(liveRecords.slice(), true), true);
     if (entries.length) renderApp(true);
     else renderLiveWaitingState();
     return;
@@ -136,7 +136,7 @@ async function onDateChange(value) {
   try {
     const resp = await fetch('/api/traces/' + encodeURIComponent(value));
     activePaths.clear();
-    entries = expandWebSocketResponseEntries(await resp.json());
+    entries = normalizeDisplayTurns(expandWebSocketResponseEntries(await resp.json()), true);
     renderApp();
   } catch (e) {
     console.error('Failed to load traces for date:', value, e);
@@ -168,7 +168,7 @@ async function deleteSelectedTraceDate() {
     await fetchDates('live');
     viewingDate = null;
     activePaths.clear();
-    entries = expandLiveWebSocketResponseEntries(liveRecords.slice(), true);
+    entries = normalizeDisplayTurns(expandLiveWebSocketResponseEntries(liveRecords.slice(), true), true);
     if (entries.length) renderApp(true);
     else renderLiveWaitingState();
   } catch (e) {
@@ -245,7 +245,7 @@ function parseTraceText(text) {
 }
 
 if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
-  entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? expandLiveWebSocketResponseEntries(EMBEDDED_TRACE_DATA, true) : [];
+  entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? normalizeDisplayTurns(expandLiveWebSocketResponseEntries(EMBEDDED_TRACE_DATA, true), true) : [];
   document.addEventListener('DOMContentLoaded', () => {
     initCommonUi();
     initLiveMode();
@@ -256,7 +256,7 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
     }
   });
 } else if (typeof EMBEDDED_TRACE_COMPACT_DATA !== 'undefined') {
-  entries = expandWebSocketResponseEntries(materializeCompactTraceBundle(EMBEDDED_TRACE_COMPACT_DATA) || []);
+  entries = normalizeDisplayTurns(expandWebSocketResponseEntries(materializeCompactTraceBundle(EMBEDDED_TRACE_COMPACT_DATA) || []), true);
   document.addEventListener('DOMContentLoaded', () => {
     initCommonUi();
     if (entries.length) renderApp();
@@ -265,14 +265,14 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
 } else if (typeof EMBEDDED_TRACE_META !== 'undefined') {
   // Lazy mode: build stub entries from metadata
   lazyMode = true;
-  entries = EMBEDDED_TRACE_META.map((meta, i) => buildStubEntry(meta, i));
+  entries = normalizeDisplayTurns(EMBEDDED_TRACE_META.map((meta, i) => buildStubEntry(meta, i)), true);
   document.addEventListener('DOMContentLoaded', () => {
     initCommonUi();
     if (entries.length) renderApp();
     else renderEmptyTraceState();
   });
 } else if (typeof EMBEDDED_TRACE_DATA !== 'undefined') {
-  entries = expandWebSocketResponseEntries(EMBEDDED_TRACE_DATA);
+  entries = normalizeDisplayTurns(expandWebSocketResponseEntries(EMBEDDED_TRACE_DATA), true);
   document.addEventListener('DOMContentLoaded', () => {
     initCommonUi();
     if (entries.length) renderApp();
@@ -288,7 +288,7 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
 function loadFile(file) {
   const reader = new FileReader();
   reader.onload = () => {
-    entries = expandWebSocketResponseEntries(parseTraceText(reader.result));
+    entries = normalizeDisplayTurns(expandWebSocketResponseEntries(parseTraceText(reader.result)), true);
     if (!entries.length) { alert('No valid entries found / 未找到有效条目'); return; }
     renderApp();
   };

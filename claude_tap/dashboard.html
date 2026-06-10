@@ -133,6 +133,21 @@ button { cursor: pointer; }
   font-size: 12px; line-height: 1; min-width: 72px;
 }
 .lang-select:hover { border-color: var(--blue); color: var(--blue); }
+.dashboard-quit {
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-card); color: var(--text-tertiary);
+  font-size: 15px; line-height: 1; transition: all .15s;
+}
+.dashboard-quit:hover {
+  border-color: var(--red);
+  background: var(--red-bg);
+  color: var(--red);
+}
+.dashboard-quit:disabled {
+  cursor: progress;
+  opacity: .65;
+}
 
 .trace-path-bar {
   display: flex; align-items: center; gap: 6px; padding: 4px 12px;
@@ -973,6 +988,7 @@ pre {
     <option value="en">English</option>
     <option value="zh-CN">简体中文</option>
   </select>
+  <button class="dashboard-quit" id="dashboard-quit" type="button" title="Stop dashboard service" data-i18n-title="quit_dashboard">&#9211;</button>
 </div>
 
 <div class="trace-path-bar" id="trace-path-bar">
@@ -1099,6 +1115,8 @@ pre {
 
 <script>
 const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
+const DASHBOARD_QUIT_TOKEN = "";
+const DASHBOARD_CAN_STOP = false;
 
 const state = {
   sessions: [],
@@ -1128,6 +1146,7 @@ const state = {
 	  selectedSessionIds: new Set(),
 	  pendingDeleteSessionIds: [],
 	  deletingSessionIds: new Set(),
+	  quittingDashboard: false,
 	  detailSessionId: null,
 	  detailRecordsLoaded: 0,
 	  detailRecordTotal: 0,
@@ -1139,6 +1158,7 @@ const $ = selector => document.querySelector(selector);
 	const MAX_INLINE_DETAIL_RECORDS = 10;
 	let deleteSessionReturnFocusEl = null;
 	let searchRefreshTimer = null;
+	let dashboardEvents = null;
 
 function initialSessionId() {
   const routeMatch = window.location.pathname.match(SESSION_DETAIL_ROUTE);
@@ -1162,8 +1182,13 @@ const DASHBOARD_I18N = {
     live_watching: "Watching",
     live_polling: "Polling",
     live_reconnecting: "Reconnecting",
+    dashboard_stopped: "Service stopped",
     theme_toggle: "Toggle dark mode",
     language: "Language",
+    quit_dashboard: "Stop dashboard service",
+    quit_dashboard_confirm: "Stop the claude-tap dashboard service?",
+    quitting_dashboard: "Stopping",
+    dashboard_quit_failed: "Unable to stop dashboard service: {error}",
     dashboard: "Dashboard",
     trace_history_sessions: "trace history sessions",
     dashboard_title: "Conversation Log",
@@ -1266,8 +1291,13 @@ const DASHBOARD_I18N = {
     live_watching: "监听中",
     live_polling: "轮询中",
     live_reconnecting: "重连中",
+    dashboard_stopped: "服务已停止",
     theme_toggle: "切换深色模式",
     language: "语言",
+    quit_dashboard: "停止面板服务",
+    quit_dashboard_confirm: "停止 claude-tap dashboard 服务？",
+    quitting_dashboard: "正在停止",
+    dashboard_quit_failed: "无法停止面板服务：{error}",
     dashboard: "面板",
     trace_history_sessions: "trace 历史会话",
     dashboard_title: "对话日志",
@@ -1564,6 +1594,31 @@ async function fetchJSON(url, options = {}) {
 	  showListView();
 	  refreshSessions({preserveSelection: false}).catch(console.error);
 	}
+
+async function quitDashboard() {
+  if (state.quittingDashboard) return;
+  if (!DASHBOARD_CAN_STOP) return;
+  if (!window.confirm(t("quit_dashboard_confirm"))) return;
+
+  const button = $("#dashboard-quit");
+  state.quittingDashboard = true;
+  if (button) button.disabled = true;
+  $("#live-label").textContent = t("quitting_dashboard");
+
+  try {
+    await fetchJSON("/dashboard/quit", {
+      method: "POST",
+      headers: {"X-Claude-Tap-Dashboard-Token": DASHBOARD_QUIT_TOKEN},
+    });
+    closeDashboardEvents();
+    $("#live-label").textContent = t("dashboard_stopped");
+  } catch (error) {
+    state.quittingDashboard = false;
+    if (button) button.disabled = false;
+    $("#live-label").textContent = t("live_reconnecting");
+    window.alert(t("dashboard_quit_failed", {error: error.message}));
+  }
+}
 
 function renderStatusOptions() {
   const statusFilter = $("#status-filter");
@@ -2319,8 +2374,10 @@ function partsText(parts) {
 	    $("#live-label").textContent = t("live_polling");
 	    return false;
 	  }
-	  const events = new EventSource("/dashboard/events");
+	  dashboardEvents = new EventSource("/dashboard/events");
+	  const events = dashboardEvents;
 	  events.addEventListener("open", () => {
+	    if (state.quittingDashboard) return;
 	    $("#live-label").textContent = t("live_watching");
 	    if (state.pollingIntervalId) {
 	      clearInterval(state.pollingIntervalId);
@@ -2328,12 +2385,15 @@ function partsText(parts) {
 	    }
 	  });
 	  events.addEventListener("refresh", () => {
+	    if (state.quittingDashboard) return;
 	    refreshSessions({preserveSelection: true}).catch(console.error);
 	  });
 	  events.addEventListener("record", () => {
+	    if (state.quittingDashboard) return;
 	    refreshSessions({preserveSelection: true}).catch(console.error);
 	  });
 	  events.addEventListener("error", () => {
+	    if (state.quittingDashboard) return;
 	    $("#live-label").textContent = t("live_reconnecting");
 	    if (!state.pollingIntervalId) {
 	      state.pollingIntervalId = setInterval(() => {
@@ -2343,6 +2403,12 @@ function partsText(parts) {
 	  });
 	  return true;
 	}
+
+function closeDashboardEvents() {
+  if (!dashboardEvents) return;
+  dashboardEvents.close();
+  dashboardEvents = null;
+}
 
 function initTheme() {
   const saved = localStorage.getItem("claude-tap-theme");
@@ -2406,6 +2472,11 @@ document.addEventListener("keydown", event => {
   }
 });
 $("#theme-toggle").addEventListener("click", toggleTheme);
+const dashboardQuitButton = $("#dashboard-quit");
+if (dashboardQuitButton) {
+  dashboardQuitButton.hidden = !DASHBOARD_CAN_STOP;
+  dashboardQuitButton.addEventListener("click", () => quitDashboard().catch(console.error));
+}
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));
 
 	applyI18n();

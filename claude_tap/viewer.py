@@ -90,6 +90,16 @@ def _iter_response_events(resp: dict) -> list[dict]:
     return []
 
 
+def _iter_request_events(req: dict) -> list[dict]:
+    """Return request-side WebSocket events when a raw trace stores them."""
+    if not isinstance(req, dict):
+        return []
+    events = req.get("ws_events")
+    if isinstance(events, list):
+        return events
+    return []
+
+
 def _event_type(event: dict) -> str:
     if not isinstance(event, dict):
         return ""
@@ -107,6 +117,38 @@ def _event_payload(event: dict) -> dict | None:
         except (json.JSONDecodeError, TypeError):
             return None
     return payload if isinstance(payload, dict) else None
+
+
+def _first_bool(*values: object) -> bool | None:
+    for value in values:
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _response_payload_from_event(event: dict) -> dict:
+    data = _event_payload(event)
+    if not isinstance(data, dict):
+        return {}
+    response = data.get("response")
+    if isinstance(response, dict):
+        return response
+    return data
+
+
+def _last_response_payload_for_event(events: list[dict], event_type: str) -> dict:
+    for event in reversed(events):
+        if _event_type(event) == event_type:
+            return _response_payload_from_event(event)
+    return {}
+
+
+def _response_output_count_from_events(events: list[dict]) -> int:
+    completed = _last_response_payload_for_event(events, "response.completed")
+    output = completed.get("output")
+    if isinstance(output, list):
+        return len(output)
+    return sum(1 for event in events if _event_type(event) == "response.output_item.done")
 
 
 def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
@@ -735,9 +777,17 @@ def _extract_metadata(record_json: str) -> dict | None:
     resp = _dict_or_empty(r.get("response"))
     raw_resp_body = resp.get("body")
     resp_body = _dict_or_empty(raw_resp_body)
+    request_events = _iter_request_events(req)
     stream_events = _iter_response_events(resp)
     if not stream_events:
         stream_events = _parse_sse_data_frames(raw_resp_body)
+    created_response = _last_response_payload_for_event(stream_events, "response.created")
+    completed_response = _last_response_payload_for_event(stream_events, "response.completed")
+    request_event_bodies = [_event_payload(event) for event in request_events]
+    response_output = resp_body.get("output")
+    response_output_count = (
+        len(response_output) if isinstance(response_output, list) else _response_output_count_from_events(stream_events)
+    )
 
     # Token usage — from response.body.usage or terminal stream event
     usage = resp_body.get("usage") or _extract_gemini_response_usage(raw_resp_body) or {}
@@ -812,9 +862,21 @@ def _extract_metadata(record_json: str) -> dict | None:
         "request_id": r.get("request_id", ""),
         "timestamp": r.get("timestamp", ""),
         "duration_ms": r.get("duration_ms", 0),
+        "transport": r.get("transport", ""),
         "method": req.get("method", ""),
         "path": req.get("path", ""),
         "model": body.get("model", ""),
+        "request_generate": _first_bool(
+            body.get("generate"),
+            *(event_body.get("generate") for event_body in request_event_bodies if isinstance(event_body, dict)),
+            created_response.get("generate"),
+        ),
+        "response_generate": _first_bool(
+            resp_body.get("generate"),
+            completed_response.get("generate"),
+            created_response.get("generate"),
+        ),
+        "response_output_count": response_output_count,
         "status": resp.get("status", 0),
         "error_message": error_msg,
         "input_tokens": usage.get("input_tokens", 0),
