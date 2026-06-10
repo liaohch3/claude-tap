@@ -940,6 +940,14 @@ async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp
                 installed = Path(data["path"])
                 assert installed.exists()
                 assert installed.parent.parent == config_dir / "projects"
+
+            # a non-dict JSON body must not crash the handler (defaults cwd)
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/sessions/{session_id}/install-resume",
+                data="[1, 2, 3]",
+                headers={"Content-Type": "application/json"},
+            ) as resp:
+                assert resp.status == 200
     finally:
         await server.stop()
 

@@ -89,7 +89,7 @@ def import_resume_main(argv: list[str] | None = None) -> int:
             session_id=args.session_id,
             title=args.name,
         )
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 

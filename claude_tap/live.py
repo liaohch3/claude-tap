@@ -358,11 +358,12 @@ class LiveViewerServer:
                 "log": f"/api/sessions/{quote(session_id)}/export/log",
                 "html": f"/api/sessions/{quote(session_id)}/export/html",
             }
+            records = store.load_records(session_id)
             # Resume export only applies to Anthropic-protocol (Claude Code) traffic.
-            if has_transplantable_conversation(store.load_records(session_id)):
+            if has_transplantable_conversation(records):
                 export_urls["claudeResume"] = f"/api/sessions/{quote(session_id)}/export/claude-resume"
             _generate_html_viewer_from_compact_bundle(
-                build_compact_trace_bundle(store.load_records(session_id)),
+                build_compact_trace_bundle(records),
                 html_path,
                 display_trace_path=export_urls["compact"],
                 display_html_path=f"/dashboard/session/{quote(session_id)}",
@@ -467,12 +468,16 @@ class LiveViewerServer:
             payload = await request.json()
         except (json.JSONDecodeError, ValueError):
             payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
         cwd = str(payload.get("cwd") or "").strip() or str(Path.cwd())
         try:
             messages = extract_conversation(store.load_records(session_id))
             installed = install_resume_session(messages, cwd, version=detect_claude_version())
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=422)
+        except OSError as exc:
+            return web.json_response({"error": f"Could not write session: {exc}"}, status=500)
         return web.json_response(
             {
                 "session_id": installed.session_id,
