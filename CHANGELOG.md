@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.106] - 2026-06-10
+
+### Changed
+- feat: clarify shared dashboard lifecycle controls (#293)
 ## [0.1.105] - 2026-06-09
 
 ### Changed
