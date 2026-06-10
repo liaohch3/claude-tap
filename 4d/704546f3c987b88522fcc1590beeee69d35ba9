@@ -1,0 +1,24 @@
+claude_tap/viewer.py
+  s_3b299e0ec9d987::t_592b078f260843 7,413-417,838,880
+  s_3b299e0ec9d987::t_6021f3ec521d16 395-400,403-405,410
+claude_tap/viewer_assets/renderers.js
+  s_3b299e0ec9d987::t_6021f3ec521d16 76-82,84-86,90
+tests/test_gemini_viewer.py
+  s_3b299e0ec9d987::t_6021f3ec521d16 210-233,363-401
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "4d704546f3c987b88522fcc1590beeee69d35ba9",
+  "prompts": {},
+  "sessions": {
+    "s_3b299e0ec9d987": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e6cbf-9476-7ac0-bb8d-7eec4edf3ba9",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
