@@ -106,7 +106,7 @@ def export_main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--format",
-        choices=["markdown", "json", "html", "compact", "prompt-md", "claude-resume"],
+        choices=["markdown", "json", "html", "compact", "prompt-md", "resume", "claude-resume"],
         default=None,
         help="Output format (default: inferred from -o extension, or markdown)",
     )
@@ -114,7 +114,7 @@ def export_main(argv: list[str] | None = None) -> int:
         "--cwd",
         dest="cwd",
         default=None,
-        help="Working directory to stamp on a claude-resume export (default: current dir)",
+        help="Working directory to stamp on a portable resume export (default: current dir)",
     )
 
     args = parser.parse_args(argv)
@@ -228,7 +228,7 @@ def export_main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
-    elif fmt == "claude-resume":
+    elif fmt in {"resume", "claude-resume"}:
         import os
         import uuid
 

@@ -407,12 +407,14 @@ claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 claude-tap export <session-id> --format compact -o trace.ctap.json
 claude-tap export trace.ctap.json -o trace.html
 
-# 把进行到一半的 Claude Code 会话搬到另一台机器。
-# 在 A 机：把对话重建成可续聊的会话日志。
-claude-tap export <session-id> --format claude-resume -o transplant.jsonl
-# 在 B 机：装进 Claude Code 的会话存储，然后续聊。
-claude-tap import-resume transplant.jsonl --cwd /path/to/project
-claude-tap --resume <打印出的 session-id>   # 经代理续聊，持续被捕获
+# 把进行到一半的会话分享到另一台机器或另一个智能体。
+# 在 A 机：把对话重建成可移植的会话日志。
+claude-tap export <session-id> --format resume -o transplant.jsonl
+# 在 B 机：装进支持的智能体会话存储，然后续聊。
+claude-tap import-resume transplant.jsonl --target claude --cwd /path/to/project
+claude-tap import-resume transplant.jsonl --target codex --cwd /path/to/project
+claude-tap --resume <打印出的 Claude session-id>                    # Claude Code，经代理续聊
+claude-tap --tap-client codex -- resume <打印出的 Codex session-id> # Codex CLI，经代理续聊
 
 # 只捕获 prompt 表面用于自动化；同时在 prompt.md 旁写入 trace.jsonl
 claude-tap --tap-export-prompt prompt.md -- -p "hello"

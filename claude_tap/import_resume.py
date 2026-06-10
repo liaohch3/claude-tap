@@ -1,4 +1,4 @@
-"""Install a transplanted conversation as a resumable Claude Code session."""
+"""Install a transplanted conversation as a resumable agent session."""
 
 from __future__ import annotations
 
@@ -26,8 +26,13 @@ def _source_cwds(text: str) -> set[str]:
             event = json.loads(raw)
         except json.JSONDecodeError:
             continue
-        if isinstance(event, dict) and isinstance(event.get("cwd"), str):
+        if not isinstance(event, dict):
+            continue
+        if isinstance(event.get("cwd"), str):
             found.add(event["cwd"])
+        payload = event.get("payload")
+        if isinstance(payload, dict) and isinstance(payload.get("cwd"), str):
+            found.add(payload["cwd"])
     return found
 
 
@@ -35,9 +40,9 @@ def import_resume_main(argv: list[str] | None = None) -> int:
     """Entry point for the import-resume subcommand."""
     parser = argparse.ArgumentParser(
         prog="claude-tap import-resume",
-        description="Install a transplant/session JSONL into Claude Code's project store so it can be resumed.",
+        description="Install a portable session JSONL into a supported agent's local store so it can be resumed.",
     )
-    parser.add_argument("source", type=Path, help="Path to a claude-resume export or a Claude Code session JSONL")
+    parser.add_argument("source", type=Path, help="Path to a portable resume export or supported session JSONL")
     parser.add_argument("--cwd", default=None, help="Target project directory to resume in (default: current dir)")
     parser.add_argument("--git-branch", default="", help="Git branch to stamp on the session")
     parser.add_argument("--session-id", default=None, help="Force a specific session id (default: new random uuid)")
@@ -52,7 +57,7 @@ def import_resume_main(argv: list[str] | None = None) -> int:
         "--home",
         type=Path,
         default=None,
-        help="Home directory that contains the .claude store (default: your home directory)",
+        help="Home directory that contains the selected agent store (default: your home directory)",
     )
     args = parser.parse_args(argv)
 

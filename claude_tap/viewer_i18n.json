@@ -91,7 +91,7 @@
     "diff_fallback_warning": "No exact thread match found — showing closest same-model request",
     "diff_select_target": "Compare against:",
     "diff_select_auto": "Auto",
-    "export_claude_resume": "Resume in Claude Code"
+    "export_claude_resume": "Download portable session"
   },
   "zh-CN": {
     "title": "claude-tap",
@@ -185,7 +185,7 @@
     "diff_fallback_warning": "未找到精确线程匹配 — 显示最近的同模型请求",
     "diff_select_target": "对比对象：",
     "diff_select_auto": "自动",
-    "export_claude_resume": "在 Claude Code 中续聊"
+    "export_claude_resume": "下载可分享会话文件"
   },
   "ja": {
     "title": "claude-tap",
@@ -279,7 +279,7 @@
     "diff_fallback_warning": "正確なスレッド一致が見つかりません — 同モデルの直近のリクエストを表示",
     "diff_select_target": "比較対象：",
     "diff_select_auto": "自動",
-    "export_claude_resume": "Claude Code で再開"
+    "export_claude_resume": "ポータブルセッションをダウンロード"
   },
   "ko": {
     "title": "claude-tap",
@@ -373,7 +373,7 @@
     "diff_fallback_warning": "정확한 스레드 일치를 찾을 수 없습니다 — 가장 가까운 동일 모델 요청을 표시",
     "diff_select_target": "비교 대상：",
     "diff_select_auto": "자동",
-    "export_claude_resume": "Claude Code에서 재개"
+    "export_claude_resume": "휴대용 세션 다운로드"
   },
   "fr": {
     "title": "claude-tap",
@@ -467,7 +467,7 @@
     "diff_fallback_warning": "Aucune correspondance de fil exacte trouvée — affichage de la requête du même modèle la plus proche",
     "diff_select_target": "Comparer avec :",
     "diff_select_auto": "Auto",
-    "export_claude_resume": "Reprendre dans Claude Code"
+    "export_claude_resume": "Télécharger la session portable"
   },
   "ar": {
     "title": "claude-tap",
@@ -561,7 +561,7 @@
     "diff_fallback_warning": "لم يتم العثور على تطابق دقيق للخيط — عرض أقرب طلب لنفس النموذج",
     "diff_select_target": "مقارنة مع:",
     "diff_select_auto": "تلقائي",
-    "export_claude_resume": "استئناف في Claude Code"
+    "export_claude_resume": "تنزيل جلسة محمولة"
   },
   "de": {
     "title": "claude-tap",
@@ -655,7 +655,7 @@
     "diff_fallback_warning": "Keine exakte Thread-Übereinstimmung gefunden — zeige nächste Anfrage desselben Modells",
     "diff_select_target": "Vergleichen mit:",
     "diff_select_auto": "Auto",
-    "export_claude_resume": "In Claude Code fortsetzen"
+    "export_claude_resume": "Portable Sitzung herunterladen"
   },
   "ru": {
     "title": "claude-tap",
@@ -749,6 +749,6 @@
     "diff_fallback_warning": "Точное совпадение потока не найдено — показан ближайший запрос той же модели",
     "diff_select_target": "Сравнить с:",
     "diff_select_auto": "Авто",
-    "export_claude_resume": "Продолжить в Claude Code"
+    "export_claude_resume": "Скачать переносимую сессию"
   }
 }

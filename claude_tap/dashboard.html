@@ -1079,7 +1079,7 @@ pre {
   <div class="confirm-dialog">
     <h2 id="import-resume-title" class="confirm-title" data-i18n="import_resume_title">Import session</h2>
     <div class="confirm-body">
-      <p data-i18n="import_resume_desc">Install a transplanted session file from another machine into Claude Code, then resume it.</p>
+      <p data-i18n="import_resume_desc">Install a portable session file from another machine, then resume it in a supported agent.</p>
       <div class="import-field">
         <label for="import-file" data-i18n="import_resume_file">Session file (.jsonl)</label>
         <input id="import-file" type="file" accept=".jsonl,.json,application/x-ndjson">
@@ -1088,7 +1088,7 @@ pre {
         <label for="import-target" data-i18n="import_resume_target">Resume in</label>
         <select id="import-target">
           <option value="claude" selected data-i18n="import_target_claude">Claude Code</option>
-          <option value="codex" disabled data-i18n="import_target_codex">Codex (coming soon)</option>
+          <option value="codex" data-i18n="import_target_codex">Codex CLI</option>
         </select>
       </div>
       <div class="import-field">
@@ -1223,28 +1223,28 @@ const DASHBOARD_I18N = {
     export_compact: "Export Compact",
     export_log: "Export Log",
     export_html: "Export HTML",
-    export_claude_resume: "Download resume session",
+    export_claude_resume: "Download portable session",
     export_menu: "Export",
     export_group: "Export",
-    resume_group: "Resume in Claude Code",
+    resume_group: "Share or resume session",
     install_resume: "Install to this machine",
     install_resume_working: "Installing…",
     install_resume_prompt: "Target project directory to resume in (must match on this machine):",
     install_resume_done: "Installed as a resumable session ({count} messages). Copied to clipboard:\n\n{command}",
     install_resume_failed: "Could not install resume session: {error}",
     import_resume_title: "Import session",
-    import_resume_desc: "Install a transplanted session file from another machine into Claude Code, then resume it.",
+    import_resume_desc: "Install a portable session file from another machine, then resume it in a supported agent.",
     import_resume_file: "Session file (.jsonl)",
     import_resume_target: "Resume in",
     import_target_claude: "Claude Code",
-    import_target_codex: "Codex (coming soon)",
+    import_target_codex: "Codex CLI",
     import_resume_cwd: "Target project directory",
     import_resume_name: "Session name (optional)",
     import_resume_name_ph: "e.g. Refactor auth (shown in resume picker)",
     import_resume_submit: "Import",
     import_resume_working: "Importing…",
     import_resume_no_file: "Choose a session file first.",
-    import_resume_done: "Imported {count} messages. Run this in {cwd} to resume (kept captured in the dashboard); copied to clipboard:\n\n{command}",
+    import_resume_done: "Imported {count} messages for {target}. Run this in {cwd} to resume; copied to clipboard:\n\n{command}",
     import_resume_failed: "Import failed: {error}",
     copy_session_id: "Copy session id",
     unable_load_session: "Unable to load session: {error}",
@@ -1338,28 +1338,28 @@ const DASHBOARD_I18N = {
     export_compact: "导出压缩文件",
     export_log: "导出日志",
     export_html: "导出 HTML",
-    export_claude_resume: "下载续聊会话文件",
+    export_claude_resume: "下载可分享会话文件",
     export_menu: "导出",
     export_group: "导出",
-    resume_group: "在 Claude Code 中续聊",
+    resume_group: "分享或续聊会话",
     install_resume: "装入本机",
     install_resume_working: "安装中…",
     install_resume_prompt: "要续聊的目标项目目录（需与本机一致）：",
     install_resume_done: "已装为可续聊会话（{count} 条消息）。已复制到剪贴板：\n\n{command}",
     install_resume_failed: "安装续聊会话失败：{error}",
     import_resume_title: "导入会话",
-    import_resume_desc: "把别的机器传来的会话文件装进本机 Claude Code，然后续聊。",
+    import_resume_desc: "把别的机器传来的可移植会话文件装进本机支持的智能体，然后续聊。",
     import_resume_file: "会话文件（.jsonl）",
     import_resume_target: "续聊到",
     import_target_claude: "Claude Code",
-    import_target_codex: "Codex（即将支持）",
+    import_target_codex: "Codex CLI",
     import_resume_cwd: "目标项目目录",
     import_resume_name: "会话名称（可选）",
     import_resume_name_ph: "例如：重构鉴权（会显示在续聊选择器里）",
     import_resume_submit: "导入",
     import_resume_working: "导入中…",
     import_resume_no_file: "请先选择一个会话文件。",
-    import_resume_done: "已导入 {count} 条消息。在 {cwd} 下运行以续聊（会持续被 dashboard 捕获），已复制到剪贴板：\n\n{command}",
+    import_resume_done: "已为 {target} 导入 {count} 条消息。在 {cwd} 下运行以续聊，已复制到剪贴板：\n\n{command}",
     import_resume_failed: "导入失败：{error}",
     copy_session_id: "复制会话 ID",
     unable_load_session: "无法加载会话：{error}",
@@ -1850,7 +1850,12 @@ async function submitImportResume() {
       }),
     });
     await navigator.clipboard?.writeText(data.resume_command || "").catch(() => {});
-    resultEl.textContent = t("import_resume_done", {count: data.message_count, cwd: data.cwd, command: data.resume_command});
+    resultEl.textContent = t("import_resume_done", {
+      count: data.message_count,
+      cwd: data.cwd,
+      command: data.resume_command,
+      target: data.target_label || data.target || $("#import-target").value || "agent",
+    });
     resultEl.hidden = false;
   } catch (err) {
     errorEl.textContent = t("import_resume_failed", {error: err?.message || String(err)});
@@ -2017,8 +2022,8 @@ function renderDetail(session, records) {
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
-  // Resume is only offered for Claude Code (Anthropic protocol) sessions; other
-  // agents (Codex, Gemini, Antigravity) have no Claude-resume target yet.
+  // Export-from-trace is only offered for Claude Code (Anthropic protocol)
+  // sessions; the imported portable file can then target Claude or Codex.
   const canResume = session.agent === "Claude Code";
   $("#detail").innerHTML = `
     <div class="detail-inspector-bar">
@@ -2038,7 +2043,7 @@ function renderDetail(session, records) {
             ${canResume ? `
             <div class="export-menu-label" data-detail-i18n="resume_group">${esc(t("resume_group"))}</div>
             <button class="export-menu-item" data-detail-i18n="install_resume" data-install-resume="${esc(session.id)}">${esc(t("install_resume"))}</button>
-            <a class="export-menu-item" data-detail-i18n="export_claude_resume" href="/api/sessions/${encodeURIComponent(session.id)}/export/claude-resume" download>${esc(t("export_claude_resume"))}</a>` : ""}
+            <a class="export-menu-item" data-detail-i18n="export_claude_resume" href="/api/sessions/${encodeURIComponent(session.id)}/export/resume" download>${esc(t("export_claude_resume"))}</a>` : ""}
           </div>
         </details>
         <button class="act-btn" data-detail-i18n="copy_path" data-copy-path="${esc(session.id)}">${esc(t("copy_path"))}</button>

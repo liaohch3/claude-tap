@@ -187,14 +187,46 @@ def test_extract_conversation_keeps_signed_thinking_in_appended_tail() -> None:
 
 def test_resume_target_registry_has_claude_and_rejects_unknown() -> None:
     assert "claude" in RESUME_TARGETS
+    assert "codex" in RESUME_TARGETS
     assert get_resume_target("claude").label == "Claude Code"
+    assert get_resume_target("codex").label == "Codex CLI"
     with pytest.raises(ValueError, match="unknown resume target"):
-        get_resume_target("codex")
+        get_resume_target("gemini")
+
+
+def test_install_resume_session_writes_codex_session_and_index(tmp_path) -> None:
+    installed = install_resume_session(
+        _tool_conversation(),
+        r"C:\work\proj",
+        target="codex",
+        home=tmp_path,
+        session_id="abc123",
+        title="Portable handoff",
+    )
+
+    assert installed.target == "codex"
+    assert installed.resume_command == "claude-tap --tap-client codex -- resume abc123"
+    assert installed.path.name.endswith("-abc123.jsonl")
+    assert installed.path.parent.parent.parent.parent == tmp_path / ".codex" / "sessions"
+    lines = [json.loads(line) for line in installed.path.read_text(encoding="utf-8").splitlines()]
+    assert lines[0]["type"] == "session_meta"
+    assert lines[0]["payload"]["id"] == "abc123"
+    assert lines[0]["payload"]["thread_name"] == "Portable handoff"
+    assert any(line.get("payload", {}).get("role") == "user" for line in lines if line.get("type") == "response_item")
+    assert any(
+        line.get("payload", {}).get("role") == "assistant" for line in lines if line.get("type") == "response_item"
+    )
+
+    index = tmp_path / ".codex" / "session_index.jsonl"
+    assert index.exists()
+    entries = [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
+    assert entries[-1]["id"] == "abc123"
+    assert entries[-1]["thread_name"] == "Portable handoff"
 
 
 def test_install_resume_session_rejects_unknown_target(tmp_path) -> None:
     with pytest.raises(ValueError, match="unknown resume target"):
-        install_resume_session([{"role": "user", "content": "x"}], r"C:\p", target="codex", home=tmp_path)
+        install_resume_session([{"role": "user", "content": "x"}], r"C:\p", target="gemini", home=tmp_path)
 
 
 def test_install_resume_session_rejects_traversal_session_id(tmp_path) -> None:
@@ -281,6 +313,21 @@ def test_export_claude_resume_format(tmp_path, capsys) -> None:
         {"role": "user", "content": [{"type": "text", "text": "hello"}]},
         {"role": "assistant", "content": [{"type": "text", "text": "hi there"}]},
     ]
+
+
+def test_export_resume_format_alias(tmp_path, capsys) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    record = {
+        "turn": 1,
+        "request": {"path": "/v1/messages", "body": {"model": "m", "messages": [{"role": "user", "content": "hi"}]}},
+        "response": {"body": {"content": [{"type": "text", "text": "hello"}]}},
+    }
+    trace_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    out_path = tmp_path / "portable.jsonl"
+
+    assert export_main([str(trace_path), "--format", "resume", "-o", str(out_path)]) == 0
+
+    assert parse_jsonl_conversation(out_path.read_text(encoding="utf-8"))[-1]["content"][0]["text"] == "hello"
 
 
 def test_install_resume_session_writes_under_project_slug(tmp_path) -> None:

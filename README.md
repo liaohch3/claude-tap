@@ -410,12 +410,14 @@ claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 claude-tap export <session-id> --format compact -o trace.ctap.json
 claude-tap export trace.ctap.json -o trace.html
 
-# Move an in-progress Claude Code session to another machine.
-# On machine A: rebuild the conversation as a resumable session log.
-claude-tap export <session-id> --format claude-resume -o transplant.jsonl
-# On machine B: install it into Claude Code's store, then resume.
-claude-tap import-resume transplant.jsonl --cwd /path/to/project
-claude-tap --resume <printed-session-id>   # resume through the proxy so it stays captured
+# Share an in-progress session with another machine or agent.
+# On machine A: rebuild the conversation as a portable session log.
+claude-tap export <session-id> --format resume -o transplant.jsonl
+# On machine B: install it into a supported agent store, then resume.
+claude-tap import-resume transplant.jsonl --target claude --cwd /path/to/project
+claude-tap import-resume transplant.jsonl --target codex --cwd /path/to/project
+claude-tap --resume <printed-claude-session-id>                    # Claude Code, captured through the proxy
+claude-tap --tap-client codex -- resume <printed-codex-session-id> # Codex CLI, captured through the proxy
 
 # Capture only the prompt surface for automation; also writes trace.jsonl next to prompt.md
 claude-tap --tap-export-prompt prompt.md -- -p "hello"

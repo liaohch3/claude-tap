@@ -113,6 +113,7 @@ class LiveViewerServer:
         app.router.add_get("/api/sessions/{session_id}/export/compact", self._handle_export_compact)
         app.router.add_get("/api/sessions/{session_id}/export/log", self._handle_export_log)
         app.router.add_get("/api/sessions/{session_id}/export/html", self._handle_export_html)
+        app.router.add_get("/api/sessions/{session_id}/export/resume", self._handle_export_claude_resume)
         app.router.add_get("/api/sessions/{session_id}/export/claude-resume", self._handle_export_claude_resume)
         app.router.add_post("/api/sessions/{session_id}/install-resume", self._handle_install_resume)
         app.router.add_post("/api/import-resume", self._handle_import_resume)
@@ -361,7 +362,7 @@ class LiveViewerServer:
             records = store.load_records(session_id)
             # Resume export only applies to Anthropic-protocol (Claude Code) traffic.
             if has_transplantable_conversation(records):
-                export_urls["claudeResume"] = f"/api/sessions/{quote(session_id)}/export/claude-resume"
+                export_urls["claudeResume"] = f"/api/sessions/{quote(session_id)}/export/resume"
             _generate_html_viewer_from_compact_bundle(
                 build_compact_trace_bundle(records),
                 html_path,
@@ -425,7 +426,7 @@ class LiveViewerServer:
         )
 
     async def _handle_export_claude_resume(self, request: web.Request) -> web.Response:
-        """Download the session rebuilt as a Claude Code resumable log."""
+        """Download the session rebuilt as a portable resumable log."""
         from claude_tap.session_transplant import (
             TransplantEnv,
             build_session_jsonl,
@@ -489,9 +490,10 @@ class LiveViewerServer:
         )
 
     async def _handle_import_resume(self, request: web.Request) -> web.Response:
-        """Install an uploaded transplant/session JSONL into the local Claude Code store."""
+        """Install an uploaded transplant/session JSONL into a supported local agent store."""
         from claude_tap.session_transplant import (
             detect_claude_version,
+            get_resume_target,
             install_resume_session,
             parse_jsonl_conversation,
         )
@@ -512,6 +514,7 @@ class LiveViewerServer:
         title = str(payload.get("name") or "").strip()
         target = str(payload.get("target") or "claude").strip() or "claude"
         try:
+            resume_target = get_resume_target(target)
             installed = install_resume_session(
                 messages, cwd, target=target, version=detect_claude_version(), title=title
             )
@@ -526,6 +529,8 @@ class LiveViewerServer:
                 "cwd": cwd,
                 "resume_command": installed.resume_command,
                 "message_count": installed.message_count,
+                "target": installed.target,
+                "target_label": resume_target.label,
             }
         )
 

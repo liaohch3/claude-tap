@@ -1,4 +1,4 @@
-"""Reconstruct a resumable Claude Code session from captured trace traffic.
+"""Reconstruct portable resumable sessions from captured trace traffic.
 
 claude-tap records the wire traffic exchanged with the Anthropic Messages API.
 The largest request body in a session already carries the entire conversation
@@ -9,19 +9,21 @@ conversation in a different shape: one JSONL event per content block, threaded
 through ``uuid``/``parentUuid`` into a tree where each ``tool_result`` points at
 the ``tool_use`` it answers.
 
-This module bridges the two so a session captured on machine A can be re-homed
-and resumed on machine B with ``claude --resume <id>``. Only the conversation is
-transplanted; Claude Code rebuilds the system prompt and tool definitions itself
-at launch from its own version, which is the desired behaviour.
+This module bridges captured traffic into local agent resume stores so a
+session captured on machine A can be re-homed and resumed on machine B. Only the
+conversation is transplanted; the destination agent rebuilds its own system
+prompt and tool definitions at launch, which is the desired behaviour.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +61,14 @@ def detect_claude_version(default: str = DEFAULT_VERSION) -> str:
         return default
     match = re.search(r"\d+\.\d+\.\d+", out.stdout or "")
     return match.group(0) if match else default
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _as_dict(value: object) -> dict:
@@ -172,6 +182,19 @@ def _content_blocks(content: object) -> list[Any]:
     if content is None:
         return []
     return [content]
+
+
+def _normalized_text_blocks(content: object) -> list[Any]:
+    raw_blocks = _content_blocks(content)
+    blocks: list[Any] = []
+    for block in raw_blocks:
+        if isinstance(block, str):
+            blocks.append({"type": "text", "text": block})
+        elif isinstance(block, dict) and block.get("type") in {"input_text", "output_text"}:
+            blocks.append({"type": "text", "text": block.get("text", "")})
+        else:
+            blocks.append(block)
+    return blocks
 
 
 def conversation_to_events(messages: list[dict], env: TransplantEnv) -> list[dict]:
@@ -290,6 +313,20 @@ def _derive_last_prompt(messages: list[dict]) -> str:
     return ""
 
 
+def _derive_first_prompt(messages: list[dict]) -> str:
+    for message in messages:
+        if message.get("role") != _USER:
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content[:120]
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") in {"text", "input_text"}:
+                    return str(block.get("text", ""))[:120]
+    return "Imported session"
+
+
 def project_slug(cwd: str) -> str:
     """Reproduce Claude Code's project directory slug for a working directory.
 
@@ -310,12 +347,21 @@ def claude_home(home: Path | None = None) -> Path:
 
     if home is not None:
         return home / ".claude"
-    import os
-
     configured = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
     if configured:
         return Path(configured).expanduser()
     return Path.home() / ".claude"
+
+
+def codex_home(home: Path | None = None) -> Path:
+    """Resolve the ``.codex`` store directory."""
+
+    if home is not None:
+        return home / ".codex"
+    configured = os.environ.get("CODEX_HOME", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".codex"
 
 
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -367,6 +413,152 @@ def _claude_project_dir(home: Path | None, cwd: str) -> Path:
     return claude_home(home) / "projects" / project_slug(cwd)
 
 
+def _codex_project_dir(home: Path | None, _cwd: str) -> Path:
+    # Bucket by local date to match the local timestamp in _codex_filename
+    # (real Codex rollouts name the file with local time).
+    now = datetime.now()
+    return codex_home(home) / "sessions" / f"{now.year:04d}" / f"{now.month:02d}" / f"{now.day:02d}"
+
+
+def _codex_filename(sid: str) -> str:
+    stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    return f"rollout-{stamp}-{sid}.jsonl"
+
+
+def _codex_block_text(block: object) -> str:
+    if isinstance(block, str):
+        return block
+    if not isinstance(block, dict):
+        return json.dumps(block, ensure_ascii=False)
+    block_type = block.get("type")
+    if block_type in {"text", "input_text", "output_text"}:
+        return str(block.get("text", ""))
+    if block_type == "tool_use":
+        name = str(block.get("name") or "tool")
+        payload = json.dumps(block.get("input") or {}, ensure_ascii=False, indent=2)
+        return f"[tool call: {name}]\n{payload}"
+    if block_type == "tool_result":
+        content = block.get("content")
+        if isinstance(content, list):
+            rendered = "\n".join(_codex_block_text(item) for item in content)
+        else:
+            rendered = str(content or "")
+        tool_id = str(block.get("tool_use_id") or "unknown")
+        return f"[tool result: {tool_id}]\n{rendered}"
+    if block_type == "thinking":
+        return ""
+    return json.dumps(block, ensure_ascii=False)
+
+
+def _codex_message_text(message: dict) -> str:
+    blocks = _content_blocks(message.get("content"))
+    rendered = [_codex_block_text(block).strip() for block in blocks]
+    return "\n\n".join(text for text in rendered if text)
+
+
+def build_codex_session_jsonl(messages: list[dict], env: TransplantEnv, *, title: str = "") -> str:
+    """Render a Codex CLI session JSONL document.
+
+    Codex stores both user-facing event messages and model response items. Tool
+    calls from other agents are preserved as transcript text so Codex resumes
+    with the context even though it cannot replay those tool invocations.
+    """
+
+    now = _utc_now()
+    timestamp = _iso_z(now)
+    thread_name = (title.strip() or _derive_first_prompt(messages)).replace("\n", " ")[:200]
+    lines: list[dict] = [
+        {
+            "timestamp": timestamp,
+            "type": "session_meta",
+            "payload": {
+                "id": env.session_id,
+                "timestamp": timestamp,
+                "cwd": env.cwd,
+                "originator": "claude-tap",
+                "cli_version": "unknown",
+                "source": "claude-tap",
+                "model_provider": "openai",
+                "thread_name": thread_name,
+            },
+        },
+        {
+            "timestamp": timestamp,
+            "type": "turn_context",
+            "payload": {
+                "turn_id": env.new_uuid(),
+                "cwd": env.cwd,
+                "workspace_roots": [env.cwd],
+                "current_date": now.date().isoformat(),
+                "timezone": "",
+                "approval_policy": "on-request",
+                "sandbox_policy": {"type": "read-only"},
+                "model": "gpt-5",
+                "summary": "auto",
+            },
+        },
+    ]
+
+    for message in messages:
+        role = message.get("role")
+        text = _codex_message_text(message)
+        if not text:
+            continue
+        if role == _USER:
+            lines.append(
+                {
+                    "timestamp": timestamp,
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]},
+                }
+            )
+            lines.append(
+                {
+                    "timestamp": timestamp,
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": text, "local_images": [], "text_elements": []},
+                }
+            )
+        elif role == _ASSISTANT:
+            lines.append(
+                {
+                    "timestamp": timestamp,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": text}],
+                    },
+                }
+            )
+            lines.append(
+                {
+                    "timestamp": timestamp,
+                    "type": "event_msg",
+                    "payload": {"type": "agent_message", "message": text, "phase": None, "memory_citation": None},
+                }
+            )
+    return "".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines)
+
+
+def _update_codex_session_index(home: Path | None, sid: str, messages: list[dict], title: str) -> None:
+    index_path = codex_home(home) / "session_index.jsonl"
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    thread_name = (title.strip() or _derive_first_prompt(messages)).replace("\n", " ")[:200]
+    entry = {"id": sid, "thread_name": thread_name, "updated_at": _iso_z(_utc_now())}
+    entries: list[dict] = []
+    if index_path.exists():
+        for raw in index_path.read_text(encoding="utf-8").splitlines():
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and parsed.get("id") != sid:
+                entries.append(parsed)
+    entries.append(entry)
+    index_path.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in entries), encoding="utf-8")
+
+
 RESUME_TARGETS: dict[str, ResumeTarget] = {
     "claude": ResumeTarget(
         name="claude",
@@ -379,6 +571,14 @@ RESUME_TARGETS: dict[str, ResumeTarget] = {
         # Resume through claude-tap so the continued conversation is captured
         # into the dashboard; plain `claude --resume` would bypass the proxy.
         resume_command=lambda sid: f"claude-tap --resume {sid}",
+    ),
+    "codex": ResumeTarget(
+        name="codex",
+        label="Codex CLI",
+        build=lambda messages, env, _last_prompt, title: build_codex_session_jsonl(messages, env, title=title),
+        project_dir=_codex_project_dir,
+        filename=_codex_filename,
+        resume_command=lambda sid: f"claude-tap --tap-client codex -- resume {sid}",
     ),
 }
 
@@ -422,6 +622,8 @@ def install_resume_session(
     project_dir.mkdir(parents=True, exist_ok=True)
     path = project_dir / resume_target.filename(sid)
     path.write_text(document, encoding="utf-8")
+    if resume_target.name == "codex":
+        _update_codex_session_index(home, sid, messages, title)
     return InstalledSession(
         session_id=sid,
         path=path,
@@ -433,11 +635,11 @@ def install_resume_session(
 
 
 def parse_jsonl_conversation(text: str) -> list[dict]:
-    """Rebuild API messages from a Claude Code-shaped session JSONL.
+    """Rebuild API messages from supported session JSONL shapes.
 
-    Lets ``import-resume`` consume either a claude-tap transplant file or a
-    native Claude Code session log, merging consecutive same-role blocks back
-    into the Messages API ``messages[]`` shape.
+    Lets ``import-resume`` consume a claude-tap portable export, a native Claude
+    Code session log, or a Codex session log, merging consecutive same-role
+    blocks back into the Messages API ``messages[]`` shape.
     """
 
     messages: list[dict] = []
@@ -449,20 +651,22 @@ def parse_jsonl_conversation(text: str) -> list[dict]:
             event = json.loads(raw)
         except json.JSONDecodeError:
             continue
-        if not isinstance(event, dict) or event.get("type") not in (_USER, _ASSISTANT):
+        if not isinstance(event, dict):
             continue
-        message = event.get("message")
+        if event.get("type") == "response_item":
+            payload = event.get("payload")
+            message = payload if isinstance(payload, dict) and payload.get("type") == "message" else {}
+        elif event.get("type") in (_USER, _ASSISTANT):
+            message = event.get("message")
+        else:
+            continue
         if not isinstance(message, dict):
             continue
         role = message.get("role")
         content = message.get("content")
-        blocks = (
-            content
-            if isinstance(content, list)
-            else [{"type": "text", "text": content}]
-            if isinstance(content, str)
-            else []
-        )
+        blocks = _normalized_text_blocks(content)
+        if role not in (_USER, _ASSISTANT) or not blocks:
+            continue
         if messages and messages[-1]["role"] == role:
             messages[-1]["content"].extend(blocks)
         else:

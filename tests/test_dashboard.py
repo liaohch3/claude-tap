@@ -917,7 +917,7 @@ async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp
                 session_id = (await resp.json())["sessions"][0]["id"]
 
             # A-side download: a resumable Claude Code session log
-            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/claude-resume") as resp:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/resume") as resp:
                 assert resp.status == 200
                 assert resp.content_type == "application/x-ndjson"
                 assert f'filename="resume_{session_id[:8]}.jsonl"' in resp.headers["Content-Disposition"]
@@ -925,6 +925,10 @@ async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp
                 types = [line.get("type") for line in lines]
                 assert "user" in types and "assistant" in types
                 assert types[-1] == "last-prompt"
+
+            # keep the older route as a compatibility alias
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/claude-resume") as resp:
+                assert resp.status == 200
 
             # B-side install: writes a fresh resumable session into the local store
             target = tmp_path / "proj"
@@ -957,7 +961,9 @@ async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkey
     from claude_tap.session_transplant import TransplantEnv, build_session_jsonl
 
     config_dir = tmp_path / "cfg" / ".claude"
+    codex_home = tmp_path / "cfg" / ".codex"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
     conversation = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
@@ -984,10 +990,25 @@ async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkey
                 # the custom name is written as an ai-title event
                 assert '"aiTitle": "My demo"' in installed.read_text(encoding="utf-8")
 
-            # an unsupported target is rejected, not silently installed as claude
+            # the same portable file can be installed for Codex as a separate target
             async with session.post(
                 f"http://127.0.0.1:{port}/api/import-resume",
-                json={"content": document, "cwd": str(target), "target": "codex"},
+                json={"content": document, "cwd": str(target), "name": "Codex demo", "target": "codex"},
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["target"] == "codex"
+                assert data["target_label"] == "Codex CLI"
+                assert data["resume_command"].startswith("claude-tap --tap-client codex -- resume ")
+                installed = Path(data["path"])
+                assert installed.exists()
+                assert installed.parent.parent.parent.parent == codex_home / "sessions"
+                index = codex_home / "session_index.jsonl"
+                assert '"thread_name": "Codex demo"' in index.read_text(encoding="utf-8")
+
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"content": document, "cwd": str(target), "target": "gemini"},
             ) as resp:
                 assert resp.status == 422
                 assert "unknown resume target" in (await resp.json())["error"]
@@ -1023,10 +1044,10 @@ async def test_dashboard_viewer_guards_resume_link_by_provider(trace_db, tmp_pat
             by_agent = {item["agent"]: item["id"] for item in sessions}
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/{by_agent['Claude Code']}/html") as resp:
-                assert "export/claude-resume" in await resp.text()
+                assert "export/resume" in await resp.text()
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/{by_agent['Antigravity']}/html") as resp:
-                assert "export/claude-resume" not in await resp.text()
+                assert "export/resume" not in await resp.text()
     finally:
         await server.stop()
 
