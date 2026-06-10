@@ -903,7 +903,8 @@ pre {
 .fab-import:hover { filter: brightness(1.07); }
 .import-field { display: grid; gap: 4px; margin-bottom: 10px; }
 .import-field label { font-size: 12px; color: var(--text-secondary); }
-.import-field input {
+.import-field input,
+.import-field select {
   width: 100%;
   box-sizing: border-box;
   padding: 6px 8px;
@@ -1083,8 +1084,19 @@ pre {
         <input id="import-file" type="file" accept=".jsonl,.json,application/x-ndjson">
       </div>
       <div class="import-field">
+        <label for="import-target" data-i18n="import_resume_target">Resume in</label>
+        <select id="import-target">
+          <option value="claude" selected data-i18n="import_target_claude">Claude Code</option>
+          <option value="codex" disabled data-i18n="import_target_codex">Codex (coming soon)</option>
+        </select>
+      </div>
+      <div class="import-field">
         <label for="import-cwd" data-i18n="import_resume_cwd">Target project directory</label>
         <input id="import-cwd" type="text" placeholder="C:\path\to\project">
+      </div>
+      <div class="import-field">
+        <label for="import-name" data-i18n="import_resume_name">Session name (optional)</label>
+        <input id="import-name" type="text" data-i18n-placeholder="import_resume_name_ph" placeholder="e.g. Refactor auth (shown in resume picker)">
       </div>
       <div id="import-resume-error" class="confirm-error" hidden></div>
       <div id="import-resume-result" class="import-result" hidden></div>
@@ -1222,7 +1234,12 @@ const DASHBOARD_I18N = {
     import_resume_title: "Import session",
     import_resume_desc: "Install a transplanted session file from another machine into Claude Code, then resume it.",
     import_resume_file: "Session file (.jsonl)",
+    import_resume_target: "Resume in",
+    import_target_claude: "Claude Code",
+    import_target_codex: "Codex (coming soon)",
     import_resume_cwd: "Target project directory",
+    import_resume_name: "Session name (optional)",
+    import_resume_name_ph: "e.g. Refactor auth (shown in resume picker)",
     import_resume_submit: "Import",
     import_resume_working: "Importing…",
     import_resume_no_file: "Choose a session file first.",
@@ -1332,7 +1349,12 @@ const DASHBOARD_I18N = {
     import_resume_title: "导入会话",
     import_resume_desc: "把别的机器传来的会话文件装进本机 Claude Code，然后续聊。",
     import_resume_file: "会话文件（.jsonl）",
+    import_resume_target: "续聊到",
+    import_target_claude: "Claude Code",
+    import_target_codex: "Codex（即将支持）",
     import_resume_cwd: "目标项目目录",
+    import_resume_name: "会话名称（可选）",
+    import_resume_name_ph: "例如：重构鉴权（会显示在续聊选择器里）",
     import_resume_submit: "导入",
     import_resume_working: "导入中…",
     import_resume_no_file: "请先选择一个会话文件。",
@@ -1783,6 +1805,8 @@ function showImportResumeDialog() {
   $("#import-resume-error").hidden = true;
   $("#import-resume-result").hidden = true;
   $("#import-file").value = "";
+  $("#import-name").value = "";
+  $("#import-target").value = "claude";
   const modal = $("#import-resume-modal");
   modal.classList.remove("hidden");
   modal.setAttribute("aria-hidden", "false");
@@ -1817,7 +1841,12 @@ async function submitImportResume() {
     const data = await fetchJSON("/api/import-resume", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({content, cwd: $("#import-cwd").value.trim()}),
+      body: JSON.stringify({
+        content,
+        cwd: $("#import-cwd").value.trim(),
+        name: $("#import-name").value.trim(),
+        target: $("#import-target").value || "claude",
+      }),
     });
     await navigator.clipboard?.writeText(data.resume_command || "").catch(() => {});
     resultEl.textContent = t("import_resume_done", {count: data.message_count, command: data.resume_command});

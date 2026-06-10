@@ -247,8 +247,12 @@ def conversation_to_events(messages: list[dict], env: TransplantEnv) -> list[dic
     return events
 
 
-def build_session_jsonl(messages: list[dict], env: TransplantEnv, *, last_prompt: str = "") -> str:
-    """Render a complete, resumable session JSONL document."""
+def build_session_jsonl(messages: list[dict], env: TransplantEnv, *, last_prompt: str = "", title: str = "") -> str:
+    """Render a complete, resumable session JSONL document.
+
+    ``title`` is written as an ``ai-title`` event so the session shows a
+    recognizable name in Claude Code's resume picker.
+    """
 
     events = conversation_to_events(messages, env)
     leaf_uuid = events[-1]["uuid"] if events else None
@@ -267,6 +271,8 @@ def build_session_jsonl(messages: list[dict], env: TransplantEnv, *, last_prompt
                 "sessionId": env.session_id,
             }
         )
+    if title.strip():
+        lines.append({"type": "ai-title", "aiTitle": title.strip(), "sessionId": env.session_id})
     return "".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines)
 
 
@@ -351,7 +357,7 @@ class ResumeTarget:
 
     name: str
     label: str
-    build: Callable[[list[dict], TransplantEnv, str], str]
+    build: Callable[[list[dict], TransplantEnv, str, str], str]
     project_dir: Callable[[Path | None, str], Path]
     filename: Callable[[str], str]
     resume_command: Callable[[str], str]
@@ -365,7 +371,9 @@ RESUME_TARGETS: dict[str, ResumeTarget] = {
     "claude": ResumeTarget(
         name="claude",
         label="Claude Code",
-        build=lambda messages, env, last_prompt: build_session_jsonl(messages, env, last_prompt=last_prompt),
+        build=lambda messages, env, last_prompt, title: build_session_jsonl(
+            messages, env, last_prompt=last_prompt, title=title
+        ),
         project_dir=_claude_project_dir,
         filename=lambda sid: f"{sid}.jsonl",
         resume_command=lambda sid: f"claude --resume {sid}",
@@ -394,6 +402,7 @@ def install_resume_session(
     session_id: str | None = None,
     timestamp: str = "1970-01-01T00:00:00.000Z",
     last_prompt: str = "",
+    title: str = "",
 ) -> InstalledSession:
     """Write a resumable session into the target CLI's store for ``target_cwd``."""
 
@@ -406,7 +415,7 @@ def install_resume_session(
         git_branch=git_branch,
         timestamp=timestamp,
     )
-    document = resume_target.build(messages, env, last_prompt)
+    document = resume_target.build(messages, env, last_prompt, title)
     project_dir = resume_target.project_dir(home, target_cwd)
     project_dir.mkdir(parents=True, exist_ok=True)
     path = project_dir / resume_target.filename(sid)

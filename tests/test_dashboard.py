@@ -964,7 +964,7 @@ async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkey
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"http://127.0.0.1:{port}/api/import-resume",
-                json={"content": document, "cwd": str(target)},
+                json={"content": document, "cwd": str(target), "name": "My demo", "target": "claude"},
             ) as resp:
                 assert resp.status == 200
                 data = await resp.json()
@@ -973,6 +973,16 @@ async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkey
                 installed = Path(data["path"])
                 assert installed.exists()
                 assert installed.parent.parent == config_dir / "projects"
+                # the custom name is written as an ai-title event
+                assert '"aiTitle": "My demo"' in installed.read_text(encoding="utf-8")
+
+            # an unsupported target is rejected, not silently installed as claude
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"content": document, "cwd": str(target), "target": "codex"},
+            ) as resp:
+                assert resp.status == 422
+                assert "unknown resume target" in (await resp.json())["error"]
 
             # empty/garbage content is rejected, not 500
             async with session.post(

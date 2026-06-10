@@ -41,6 +41,7 @@ def import_resume_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=None, help="Target project directory to resume in (default: current dir)")
     parser.add_argument("--git-branch", default="", help="Git branch to stamp on the session")
     parser.add_argument("--session-id", default=None, help="Force a specific session id (default: new random uuid)")
+    parser.add_argument("--name", default="", help="Custom session title shown in the resume picker (optional)")
     parser.add_argument(
         "--target",
         default="claude",
@@ -86,6 +87,7 @@ def import_resume_main(argv: list[str] | None = None) -> int:
             version=detect_claude_version(),
             git_branch=args.git_branch,
             session_id=args.session_id,
+            title=args.name,
         )
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)

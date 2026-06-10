@@ -504,8 +504,12 @@ class LiveViewerServer:
         if not messages:
             return web.json_response({"error": "No user/assistant messages found in file"}, status=422)
         cwd = str(payload.get("cwd") or "").strip() or str(Path.cwd())
+        title = str(payload.get("name") or "").strip()
+        target = str(payload.get("target") or "claude").strip() or "claude"
         try:
-            installed = install_resume_session(messages, cwd, version=detect_claude_version())
+            installed = install_resume_session(
+                messages, cwd, target=target, version=detect_claude_version(), title=title
+            )
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=422)
         except OSError as exc:
