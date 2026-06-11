@@ -15,11 +15,10 @@ from typing import Any
 
 from claude_tap.compact_trace import (
     BLOB_KIND_JSON,
-    BLOB_REF_MARKER,
-    COMPACT_BLOB_PATHS,
     COMPACT_RECORD_MARKER,
     COMPACT_RECORD_VERSION,
     MIN_BLOB_BYTES,
+    compact_record_blobs,
     decode_compact_record_payload,
     dump_compact_trace,
     json_blob_payload,
@@ -906,23 +905,9 @@ class TraceStore:
         return int(row["next_index"])
 
     def _encode_record(self, conn: sqlite3.Connection, session_id: str, record: dict[str, Any]) -> str:
-        compact_record = record
-        refs: list[dict[str, object]] = []
-        for path in COMPACT_BLOB_PATHS:
-            value = _get_path(compact_record, path)
-            if value is None:
-                continue
-            ref = self._store_json_blob(conn, session_id, value)
-            if ref is None:
-                continue
-            compact_record = _replace_path(compact_record, path, ref)
-            refs.append(
-                {
-                    "path": "/" + "/".join(path),
-                    "hash": ref[BLOB_REF_MARKER]["hash"],
-                    "bytes": ref[BLOB_REF_MARKER]["bytes"],
-                }
-            )
+        compact_record, refs = compact_record_blobs(
+            record, lambda value: self._store_json_blob(conn, session_id, value)
+        )
         payload: dict[str, Any] = compact_record
         if refs:
             payload = {
@@ -992,33 +977,6 @@ class TraceStore:
                 raise KeyError(hash_value)
             blob_cache[cache_key] = json.loads(row["payload_json"])
         return blob_cache[cache_key]
-
-
-def _get_path(root: dict[str, Any], path: tuple[str, ...]) -> Any:
-    node: Any = root
-    for key in path:
-        if not isinstance(node, dict) or key not in node:
-            return None
-        node = node[key]
-    return node
-
-
-def _replace_path(root: dict[str, Any], path: tuple[str, ...], replacement: Any) -> dict[str, Any]:
-    if not path:
-        return root
-    new_root = dict(root)
-    old_node: Any = root
-    new_node: dict[str, Any] = new_root
-    for key in path[:-1]:
-        child = old_node.get(key) if isinstance(old_node, dict) else None
-        if not isinstance(child, dict):
-            return root
-        child_copy = dict(child)
-        new_node[key] = child_copy
-        old_node = child
-        new_node = child_copy
-    new_node[path[-1]] = replacement
-    return new_root
 
 
 def _legacy_source_key(output_dir: Path) -> str:

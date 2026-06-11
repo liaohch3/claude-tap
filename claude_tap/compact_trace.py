@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from hashlib import sha256
 from typing import Any
 
@@ -18,6 +19,10 @@ COMPACT_BLOB_PATHS = (
     ("request", "body", "tools"),
     ("response", "body", "instructions"),
     ("response", "body", "tools"),
+)
+COMPACT_ITEM_BLOB_PATHS = (
+    ("request", "body", "input"),
+    ("request", "body", "messages"),
 )
 
 
@@ -109,23 +114,7 @@ def json_blob_payload(value: Any) -> tuple[str, int, str]:
 
 
 def _encode_compact_record(record: dict[str, Any], blobs: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    compact_record = record
-    refs: list[dict[str, object]] = []
-    for path in COMPACT_BLOB_PATHS:
-        value = _get_path(compact_record, path)
-        if value is None:
-            continue
-        ref = _store_bundle_blob(blobs, value)
-        if ref is None:
-            continue
-        compact_record = _replace_path(compact_record, path, ref)
-        refs.append(
-            {
-                "path": "/" + "/".join(path),
-                "hash": ref[BLOB_REF_MARKER]["hash"],
-                "bytes": ref[BLOB_REF_MARKER]["bytes"],
-            }
-        )
+    compact_record, refs = compact_record_blobs(record, lambda value: _store_bundle_blob(blobs, value))
     if not refs:
         return compact_record
     return {
@@ -136,6 +125,52 @@ def _encode_compact_record(record: dict[str, Any], blobs: dict[str, dict[str, An
         },
         "record": compact_record,
     }
+
+
+def compact_record_blobs(
+    record: dict[str, Any],
+    store_blob: Callable[[Any], dict[str, Any] | None],
+) -> tuple[dict[str, Any], list[dict[str, object]]]:
+    """Replace large repeated record fields and list items with blob refs."""
+    compact_record = record
+    refs: list[dict[str, object]] = []
+    for path in COMPACT_BLOB_PATHS:
+        value = _get_path(compact_record, path)
+        if value is None:
+            continue
+        ref = store_blob(value)
+        if ref is None:
+            continue
+        compact_record = _replace_path(compact_record, path, ref)
+        refs.append(
+            {
+                "path": "/" + "/".join(path),
+                "hash": ref[BLOB_REF_MARKER]["hash"],
+                "bytes": ref[BLOB_REF_MARKER]["bytes"],
+            }
+        )
+    for path in COMPACT_ITEM_BLOB_PATHS:
+        value = _get_path(compact_record, path)
+        if not isinstance(value, list):
+            continue
+        compact_items: list[Any] | None = None
+        for index, item in enumerate(value):
+            ref = store_blob(item)
+            if ref is None:
+                continue
+            if compact_items is None:
+                compact_items = list(value)
+            compact_items[index] = ref
+            refs.append(
+                {
+                    "path": "/" + "/".join((*path, str(index))),
+                    "hash": ref[BLOB_REF_MARKER]["hash"],
+                    "bytes": ref[BLOB_REF_MARKER]["bytes"],
+                }
+            )
+        if compact_items is not None:
+            compact_record = _replace_path(compact_record, path, compact_items)
+    return compact_record, refs
 
 
 def _store_bundle_blob(blobs: dict[str, dict[str, Any]], value: Any) -> dict[str, Any] | None:
