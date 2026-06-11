@@ -226,16 +226,58 @@ function materializeCompactRefPath(value, path, blobs, cache) {
   return value;
 }
 
+const LEGACY_COMPACT_BLOB_PATHS = [
+  ['request', 'body', 'instructions'],
+  ['request', 'body', 'tools'],
+  ['response', 'body', 'instructions'],
+  ['response', 'body', 'tools'],
+];
+
+const LEGACY_COMPACT_ITEM_BLOB_PATHS = [
+  ['request', 'body', 'input'],
+  ['request', 'body', 'messages'],
+];
+
+function getCompactPath(value, path) {
+  let node = value;
+  for (const key of path) {
+    if (!node || typeof node !== 'object' || Array.isArray(node) || !Object.prototype.hasOwnProperty.call(node, key)) {
+      return undefined;
+    }
+    node = node[key];
+  }
+  return node;
+}
+
+function legacyCompactRefPaths(record) {
+  const paths = [];
+  for (const path of LEGACY_COMPACT_BLOB_PATHS) {
+    if (isCompactBlobRef(getCompactPath(record, path))) paths.push(path);
+  }
+  for (const path of LEGACY_COMPACT_ITEM_BLOB_PATHS) {
+    const value = getCompactPath(record, path);
+    if (!Array.isArray(value)) continue;
+    value.forEach((item, index) => {
+      if (isCompactBlobRef(item)) paths.push([...path, String(index)]);
+    });
+  }
+  return paths;
+}
+
 function materializeCompactRecord(payload, blobs, cache) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
   const marker = payload.__claude_tap_compact_record__;
   if (!marker) return payload;
   if (marker.version !== 1) throw new Error(`Unsupported compact trace record version: ${marker.version}`);
   let record = payload.record;
-  const refs = Array.isArray(marker.refs) ? marker.refs : [];
-  for (const ref of refs) {
-    const path = parseCompactRefPath(ref && ref.path);
-    if (path) record = materializeCompactRefPath(record, path, blobs, cache);
+  let refPaths = Array.isArray(marker.refs)
+    ? marker.refs.map(ref => parseCompactRefPath(ref && ref.path)).filter(Boolean)
+    : [];
+  if (!refPaths.length && record && typeof record === 'object' && !Array.isArray(record)) {
+    refPaths = legacyCompactRefPaths(record);
+  }
+  for (const path of refPaths) {
+    record = materializeCompactRefPath(record, path, blobs, cache);
   }
   return record && typeof record === 'object' && !Array.isArray(record) ? record : null;
 }

@@ -6,7 +6,13 @@ import json
 import sqlite3
 from copy import deepcopy
 
-from claude_tap.compact_trace import BLOB_REF_MARKER, load_compact_trace
+from claude_tap.compact_trace import (
+    BLOB_KIND_JSON,
+    BLOB_REF_MARKER,
+    json_blob_payload,
+    load_compact_trace,
+    make_blob_ref,
+)
 from claude_tap.trace_store import (
     COMPACT_RECORD_MARKER,
     TraceStore,
@@ -208,6 +214,82 @@ def test_trace_store_reads_legacy_full_payload_rows(trace_db) -> None:
 
     assert store.load_records(session_id) == [legacy_record]
     assert json.loads(store.export_jsonl(session_id)) == legacy_record
+
+
+def test_trace_store_reads_legacy_compact_rows_without_refs(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    instructions = "legacy shared instructions " * 200
+    tools = [
+        {
+            "type": "function",
+            "name": "legacy_shell",
+            "description": "legacy shared tool schema " * 120,
+            "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}},
+        }
+    ]
+    fake_user_blob_ref = {
+        BLOB_REF_MARKER: {
+            "version": 1,
+            "kind": "json",
+            "hash": "sha256:user-controlled-marker-shape",
+            "bytes": 42,
+        }
+    }
+    legacy_record = _large_codex_record(1, instructions=instructions, tools=tools)
+    legacy_record["response"]["body"]["output"].append(
+        {
+            "type": "message",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "preserve marker-shaped user payload",
+                    "metadata": fake_user_blob_ref,
+                }
+            ],
+        }
+    )
+    compact_payload = deepcopy(legacy_record)
+    conn = sqlite3.connect(trace_db)
+    for value in (instructions, tools):
+        payload_json, size_bytes, hash_value = json_blob_payload(value)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO record_blobs (session_id, hash, kind, payload_json, size_bytes, created_at)
+            VALUES (?, ?, ?, ?, ?, '2026-06-11T08:02:00+00:00')
+            """,
+            (session_id, hash_value, BLOB_KIND_JSON, payload_json, size_bytes),
+        )
+        ref = make_blob_ref(hash_value, size_bytes)
+        for section in ("request", "response"):
+            target = compact_payload[section]["body"]
+            if target.get("instructions") == value:
+                target["instructions"] = ref
+            if target.get("tools") == value:
+                target["tools"] = ref
+    legacy_compact_payload = {
+        COMPACT_RECORD_MARKER: {
+            "version": 1,
+            "encoding": "json-blob-ref",
+        },
+        "record": compact_payload,
+    }
+    conn.execute(
+        """
+        INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
+        VALUES (?, 1, 1, ?, ?)
+        """,
+        (
+            session_id,
+            legacy_record["timestamp"],
+            json.dumps(legacy_compact_payload, ensure_ascii=False, separators=(",", ":")),
+        ),
+    )
+    conn.commit()
+
+    assert store.load_records(session_id) == [legacy_record]
+    assert [json.loads(line) for line in store.export_jsonl(session_id).splitlines()] == [legacy_record]
+    assert load_compact_trace(store.export_compact(session_id)) == [legacy_record]
 
 
 def test_trace_store_migrates_v3_database_and_keeps_full_rows_readable(tmp_path) -> None:

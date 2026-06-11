@@ -96,14 +96,10 @@ def decode_compact_record_payload(payload: Any, load_blob: Any) -> dict[str, Any
     refs = marker.get("refs")
     if not isinstance(record, dict):
         return None
-    if not isinstance(refs, list):
-        refs = []
-    for ref in refs:
-        if not isinstance(ref, dict):
-            continue
-        path = _parse_ref_path(ref.get("path"))
-        if path is None:
-            continue
+    ref_paths = _ref_paths_from_marker_refs(refs)
+    if not ref_paths:
+        ref_paths = _legacy_compact_ref_paths(record)
+    for path in ref_paths:
         record = _materialize_blob_ref_path(record, path, load_blob)
     return record if isinstance(record, dict) else None
 
@@ -207,6 +203,32 @@ def _parse_ref_path(path: Any) -> tuple[str, ...] | None:
     if not isinstance(path, str) or not path.startswith("/"):
         return None
     return tuple(part.replace("~1", "/").replace("~0", "~") for part in path.removeprefix("/").split("/"))
+
+
+def _ref_paths_from_marker_refs(refs: Any) -> list[tuple[str, ...]]:
+    if not isinstance(refs, list):
+        return []
+    paths: list[tuple[str, ...]] = []
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        path = _parse_ref_path(ref.get("path"))
+        if path is not None:
+            paths.append(path)
+    return paths
+
+
+def _legacy_compact_ref_paths(record: dict[str, Any]) -> list[tuple[str, ...]]:
+    paths: list[tuple[str, ...]] = []
+    for path in COMPACT_BLOB_PATHS:
+        if is_blob_ref(_get_path(record, path)):
+            paths.append(path)
+    for path in COMPACT_ITEM_BLOB_PATHS:
+        value = _get_path(record, path)
+        if not isinstance(value, list):
+            continue
+        paths.extend((*path, str(index)) for index, item in enumerate(value) if is_blob_ref(item))
+    return paths
 
 
 def _materialize_blob_ref_path(root: dict[str, Any], path: tuple[str, ...], load_blob: Any) -> dict[str, Any]:

@@ -254,6 +254,70 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           plain(context.parseTraceText(JSON.stringify(compactBundle))),
           plain(context.materializeCompactTraceBundle(compactBundle)),
         );
+
+        const legacyCompactBundle = {
+          __claude_tap_compact_trace__: { version: 1 },
+          blobs: {
+            hash_legacy_instructions: {
+              kind: 'json',
+              payload: 'legacy compact instructions',
+            },
+            hash_legacy_input: {
+              kind: 'json',
+              payload: {
+                role: 'user',
+                content: [{ type: 'input_text', text: 'legacy compact input item' }],
+              },
+            },
+          },
+          records: [{
+            __claude_tap_compact_record__: {
+              version: 1,
+              encoding: 'json-blob-ref',
+            },
+            record: {
+              turn: 2,
+              request: {
+                body: {
+                  instructions: {
+                    __claude_tap_blob_ref__: { version: 1, kind: 'json', hash: 'hash_legacy_instructions' },
+                  },
+                  input: [
+                    {
+                      __claude_tap_blob_ref__: { version: 1, kind: 'json', hash: 'hash_legacy_input' },
+                    },
+                    {
+                      role: 'user',
+                      content: [{ type: 'input_text', text: 'keep marker shape' }],
+                      metadata: fakeUserMarker,
+                    },
+                  ],
+                },
+              },
+              response: { body: { output: [] } },
+            },
+          }],
+        };
+        assert.deepEqual(plain(context.materializeCompactTraceBundle(legacyCompactBundle)), [{
+          turn: 2,
+          request: {
+            body: {
+              instructions: 'legacy compact instructions',
+              input: [
+                {
+                  role: 'user',
+                  content: [{ type: 'input_text', text: 'legacy compact input item' }],
+                },
+                {
+                  role: 'user',
+                  content: [{ type: 'input_text', text: 'keep marker shape' }],
+                  metadata: fakeUserMarker,
+                },
+              ],
+            },
+          },
+          response: { body: { output: [] } },
+        }]);
         """
     )
 
