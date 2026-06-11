@@ -1,0 +1,19 @@
+scripts/check_coverage.py
+  s_dc3cf7190e850a::t_e8ff2efe7917f9 695-712
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "8d92c20cabfb5751d9a6925e2c99666df0f7aab5",
+  "prompts": {},
+  "sessions": {
+    "s_dc3cf7190e850a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e3fb3-d9d0-7cb1-a30b-9c2b352ed439",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
