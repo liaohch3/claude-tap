@@ -381,6 +381,58 @@ def test_trace_store_compacts_repeated_responses_input_items(trace_db) -> None:
     assert conn.execute("SELECT COUNT(*) FROM record_blobs").fetchone()[0] == 3
 
 
+def test_compact_records_preserve_user_blob_ref_shaped_payloads(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    fake_user_blob_ref = {
+        BLOB_REF_MARKER: {
+            "version": 1,
+            "kind": "json",
+            "hash": "sha256:user-controlled-marker-shape",
+            "bytes": 42,
+        }
+    }
+    shared_context = _large_message_item(1)
+    records = [
+        _responses_input_record(
+            1,
+            [
+                shared_context,
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_marker",
+                    "output": fake_user_blob_ref,
+                },
+            ],
+        ),
+        _responses_input_record(
+            2,
+            [
+                shared_context,
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "second turn keeps a user supplied marker-shaped object",
+                            "metadata": fake_user_blob_ref,
+                        }
+                    ],
+                },
+            ],
+        ),
+    ]
+
+    for record in records:
+        store.append_record(session_id, deepcopy(record))
+
+    raw_payloads = _raw_record_payloads(trace_db)
+    assert any(COMPACT_RECORD_MARKER in payload for payload in raw_payloads)
+    assert store.load_records(session_id) == records
+    assert [json.loads(line) for line in store.export_jsonl(session_id).splitlines()] == records
+    assert load_compact_trace(store.export_compact(session_id)) == records
+
+
 def test_trace_store_keeps_small_messages_inline(trace_db) -> None:
     store = get_trace_store()
     session_id = store.create_session(client="claude", proxy_mode="reverse")

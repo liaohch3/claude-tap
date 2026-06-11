@@ -190,21 +190,38 @@ function isCompactBlobRef(value) {
     typeof value.__claude_tap_blob_ref__.hash === 'string';
 }
 
-function materializeCompactValue(value, blobs, cache) {
-  if (isCompactBlobRef(value)) {
-    const ref = value.__claude_tap_blob_ref__;
-    if (!cache.has(ref.hash)) {
-      const blob = blobs[ref.hash];
-      if (!blob || blob.kind !== (ref.kind || 'json')) throw new Error(`Missing compact trace blob: ${ref.hash}`);
-      cache.set(ref.hash, blob.payload);
-    }
-    return cache.get(ref.hash);
+function loadCompactBlobRef(value, blobs, cache) {
+  const ref = value.__claude_tap_blob_ref__;
+  if (!cache.has(ref.hash)) {
+    const blob = blobs[ref.hash];
+    if (!blob || blob.kind !== (ref.kind || 'json')) throw new Error(`Missing compact trace blob: ${ref.hash}`);
+    cache.set(ref.hash, blob.payload);
   }
-  if (Array.isArray(value)) return value.map(item => materializeCompactValue(item, blobs, cache));
-  if (value && typeof value === 'object') {
-    const out = {};
-    for (const [key, item] of Object.entries(value)) out[key] = materializeCompactValue(item, blobs, cache);
+  return cache.get(ref.hash);
+}
+
+function parseCompactRefPath(path) {
+  if (typeof path !== 'string' || !path.startsWith('/')) return null;
+  return path.slice(1).split('/').map(part => part.replaceAll('~1', '/').replaceAll('~0', '~'));
+}
+
+function materializeCompactRefPath(value, path, blobs, cache) {
+  if (!path.length) return isCompactBlobRef(value) ? loadCompactBlobRef(value, blobs, cache) : value;
+  const [key, ...rest] = path;
+  if (Array.isArray(value)) {
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0 || index >= value.length) return value;
+    const replacement = materializeCompactRefPath(value[index], rest, blobs, cache);
+    if (replacement === value[index]) return value;
+    const out = value.slice();
+    out[index] = replacement;
     return out;
+  }
+  if (value && typeof value === 'object') {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) return value;
+    const replacement = materializeCompactRefPath(value[key], rest, blobs, cache);
+    if (replacement === value[key]) return value;
+    return { ...value, [key]: replacement };
   }
   return value;
 }
@@ -214,7 +231,12 @@ function materializeCompactRecord(payload, blobs, cache) {
   const marker = payload.__claude_tap_compact_record__;
   if (!marker) return payload;
   if (marker.version !== 1) throw new Error(`Unsupported compact trace record version: ${marker.version}`);
-  const record = materializeCompactValue(payload.record, blobs, cache);
+  let record = payload.record;
+  const refs = Array.isArray(marker.refs) ? marker.refs : [];
+  for (const ref of refs) {
+    const path = parseCompactRefPath(ref && ref.path);
+    if (path) record = materializeCompactRefPath(record, path, blobs, cache);
+  }
   return record && typeof record === 'object' && !Array.isArray(record) ? record : null;
 }
 

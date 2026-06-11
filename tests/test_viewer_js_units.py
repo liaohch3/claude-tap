@@ -191,15 +191,43 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
             },
           },
           records: [{
-            __claude_tap_compact_record__: { version: 1 },
+            __claude_tap_compact_record__: {
+              version: 1,
+              refs: [{ path: '/request', hash: 'hash_1', bytes: 100 }],
+            },
             record: {
               turn: 1,
               request: {
                 __claude_tap_blob_ref__: { version: 1, kind: 'json', hash: 'hash_1' },
               },
-              response: { status: 200, body: { output: [] } },
+              response: {
+                status: 200,
+                body: {
+                  output: [{
+                    type: 'message',
+                    content: [{
+                      type: 'output_text',
+                      text: 'marker-shaped user payload',
+                      metadata: {
+                        __claude_tap_blob_ref__: {
+                          version: 1,
+                          kind: 'json',
+                          hash: 'user-controlled-marker-shape',
+                        },
+                      },
+                    }],
+                  }],
+                },
+              },
             },
           }],
+        };
+        const fakeUserMarker = {
+          __claude_tap_blob_ref__: {
+            version: 1,
+            kind: 'json',
+            hash: 'user-controlled-marker-shape',
+          },
         };
         assert.deepEqual(plain(context.materializeCompactTraceBundle(compactBundle)), [{
           turn: 1,
@@ -208,7 +236,19 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
             path: '/v1/responses',
             body: { input: [{ role: 'user', content: 'compact prompt' }] },
           },
-          response: { status: 200, body: { output: [] } },
+          response: {
+            status: 200,
+            body: {
+              output: [{
+                type: 'message',
+                content: [{
+                  type: 'output_text',
+                  text: 'marker-shaped user payload',
+                  metadata: fakeUserMarker,
+                }],
+              }],
+            },
+          },
         }]);
         assert.deepEqual(
           plain(context.parseTraceText(JSON.stringify(compactBundle))),
