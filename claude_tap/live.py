@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import re
+import secrets
 import tempfile
 from datetime import date
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
+from claude_tap.compact_trace import build_compact_trace_bundle
 from claude_tap.dashboard import (
+    build_session_query,
     dashboard_trace_snapshot,
     ensure_trace_store,
     list_trace_agents,
@@ -21,10 +25,91 @@ from claude_tap.dashboard import (
     read_dashboard_template,
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
+from claude_tap.shared_dashboard import dashboard_url
 from claude_tap.trace_store import get_trace_store, resolve_db_path
-from claude_tap.viewer import VIEWER_SCRIPT_ANCHOR, VIEWER_TEMPLATE_PATH, _generate_html_viewer, _read_viewer_template
+from claude_tap.viewer import (
+    VIEWER_SCRIPT_ANCHOR,
+    VIEWER_TEMPLATE_PATH,
+    _generate_html_viewer,
+    _generate_html_viewer_from_compact_bundle,
+    _read_viewer_template,
+)
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+DEFAULT_SESSION_PAGE_LIMIT = 100
+MAX_SESSION_PAGE_LIMIT = 500
+
+_DASHBOARD_QUIT_TOKEN_HEADER = "X-Claude-Tap-Dashboard-Token"
+
+
+def _split_host_port(value: str) -> tuple[str, int | None]:
+    host = value.strip()
+    if not host:
+        return "", None
+    if host.startswith("["):
+        end = host.find("]")
+        if end < 0:
+            return host, None
+        name = host[1:end]
+        rest = host[end + 1 :]
+        if rest.startswith(":") and rest[1:].isdigit():
+            return name, int(rest[1:])
+        return name, None
+    if host.count(":") == 1:
+        name, port = host.rsplit(":", 1)
+        if port.isdigit():
+            return name, int(port)
+    return host, None
+
+
+def _is_trusted_localhost(value: str | None) -> bool:
+    if value is None:
+        return False
+    host = value.strip().strip("[]").lower().rstrip(".")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _origin_port(origin) -> int | None:
+    if origin.port is not None:
+        return origin.port
+    if origin.scheme == "http":
+        return 80
+    if origin.scheme == "https":
+        return 443
+    return None
+
+
+def _is_trusted_dashboard_token_request(request: web.Request) -> bool:
+    host, host_port = _split_host_port(request.headers.get("Host", ""))
+    if not _is_trusted_localhost(host):
+        return False
+
+    origin_value = request.headers.get("Origin")
+    if not origin_value:
+        return True
+    try:
+        origin = urlsplit(origin_value)
+    except ValueError:
+        return False
+    if origin.scheme not in {"http", "https"} or not _is_trusted_localhost(origin.hostname):
+        return False
+    try:
+        origin_port = _origin_port(origin)
+    except ValueError:
+        return False
+    return host_port is None or origin_port == host_port
+
+
+def _untrusted_dashboard_token_response() -> web.Response:
+    return web.json_response(
+        {"ok": False, "error": "Dashboard quit requires a trusted localhost Host and Origin"},
+        status=403,
+    )
 
 
 def _record_limit_from_request(request: web.Request) -> int | None:
@@ -47,6 +132,37 @@ def _record_offset_from_request(request: web.Request) -> int:
     except ValueError:
         return 0
     return max(0, offset)
+
+
+def _session_limit_from_request(request: web.Request) -> int:
+    value = request.query.get("limit")
+    if value is None:
+        return DEFAULT_SESSION_PAGE_LIMIT
+    try:
+        limit = int(value)
+    except ValueError:
+        return DEFAULT_SESSION_PAGE_LIMIT
+    return max(1, min(MAX_SESSION_PAGE_LIMIT, limit))
+
+
+def _session_offset_from_request(request: web.Request) -> int:
+    value = request.query.get("offset")
+    if value is None:
+        return 0
+    try:
+        offset = int(value)
+    except ValueError:
+        return 0
+    return max(0, offset)
+
+
+def _session_query_from_request(request: web.Request):
+    return build_session_query(
+        date=request.query.get("date", ""),
+        status=request.query.get("status", ""),
+        search=request.query.get("search", ""),
+        agent=request.query.get("agent", ""),
+    )
 
 
 class LiveViewerServer:
@@ -73,8 +189,10 @@ class LiveViewerServer:
         self._runner: web.AppRunner | None = None
         self._actual_port: int = 0
         self._shutdown_event = asyncio.Event()
+        self._stop_lock = asyncio.Lock()
         self._dashboard_watch_task: asyncio.Task | None = None
         self._dashboard_snapshot: dict[str, tuple[str, int, str]] = {}
+        self._dashboard_quit_token = secrets.token_urlsafe(32)
 
     async def start(self) -> int:
         """Start the viewer server and return the actual port."""
@@ -91,6 +209,7 @@ class LiveViewerServer:
         app.router.add_get("/dashboard/session/{session_id}", self._handle_dashboard_session_detail)
         app.router.add_get("/dashboard/health", self._handle_dashboard_health)
         app.router.add_get("/dashboard/events", self._handle_dashboard_sse)
+        app.router.add_post("/dashboard/quit", self._handle_dashboard_quit)
         app.router.add_get("/events", self._handle_sse)
         app.router.add_get("/records", self._handle_records)
         app.router.add_get("/api/dates", self._handle_dates)
@@ -98,10 +217,14 @@ class LiveViewerServer:
         app.router.add_delete("/api/traces/{date}", self._handle_delete_traces_by_date)
         app.router.add_get("/api/agents", self._handle_agents)
         app.router.add_get("/api/sessions", self._handle_sessions)
+        app.router.add_delete("/api/sessions", self._handle_delete_sessions)
+        app.router.add_delete("/api/sessions/{session_id}", self._handle_delete_session)
         app.router.add_get("/api/sessions/{session_id}/records", self._handle_session_records)
         app.router.add_get("/api/sessions/{session_id}/html", self._handle_session_html_compat)
         app.router.add_get("/api/sessions/{session_id}/export/jsonl", self._handle_export_jsonl)
+        app.router.add_get("/api/sessions/{session_id}/export/compact", self._handle_export_compact)
         app.router.add_get("/api/sessions/{session_id}/export/log", self._handle_export_log)
+        app.router.add_get("/api/sessions/{session_id}/export/html", self._handle_export_html)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -121,28 +244,39 @@ class LiveViewerServer:
 
     async def stop(self) -> None:
         """Stop the viewer server."""
-        self._shutdown_event.set()
-        if self._dashboard_watch_task:
-            self._dashboard_watch_task.cancel()
-            try:
-                await self._dashboard_watch_task
-            except asyncio.CancelledError:
-                pass
-        for client in self._sse_clients:
-            try:
-                await client.write_eof()
-            except Exception:
-                pass
-        self._sse_clients.clear()
-        for client in self._dashboard_clients:
-            try:
-                await client.write_eof()
-            except Exception:
-                pass
-        self._dashboard_clients.clear()
+        async with self._stop_lock:
+            if self._shutdown_event.is_set() and self._runner is None:
+                return
 
-        if self._runner:
-            await self._runner.cleanup()
+            self._shutdown_event.set()
+            if self._dashboard_watch_task:
+                self._dashboard_watch_task.cancel()
+                try:
+                    await self._dashboard_watch_task
+                except asyncio.CancelledError:
+                    pass
+                self._dashboard_watch_task = None
+            for client in self._sse_clients:
+                try:
+                    await client.write_eof()
+                except Exception:
+                    pass
+            self._sse_clients.clear()
+            for client in self._dashboard_clients:
+                try:
+                    await client.write_eof()
+                except Exception:
+                    pass
+            self._dashboard_clients.clear()
+
+            if self._runner:
+                runner = self._runner
+                self._runner = None
+                await runner.cleanup()
+
+    async def wait_stopped(self) -> None:
+        """Wait until the server shutdown event is set."""
+        await self._shutdown_event.wait()
 
     async def broadcast(self, record: dict) -> None:
         """Broadcast a new record to all connected SSE clients."""
@@ -171,7 +305,7 @@ class LiveViewerServer:
     @property
     def url(self) -> str:
         """Return the viewer URL."""
-        return f"http://{self.host}:{self._actual_port}"
+        return dashboard_url(self.host, self._actual_port)
 
     async def _handle_dashboard_index(self, request: web.Request) -> web.Response:
         """Serve the session-first dashboard."""
@@ -181,14 +315,51 @@ class LiveViewerServer:
             html = read_dashboard_template()
         except OSError:
             return web.Response(status=404, text="dashboard.html not found")
+        if self.dashboard_mode and _is_trusted_dashboard_token_request(request):
+            html = html.replace(
+                'const DASHBOARD_QUIT_TOKEN = "";',
+                f"const DASHBOARD_QUIT_TOKEN = {json.dumps(self._dashboard_quit_token)};",
+                1,
+            ).replace(
+                "const DASHBOARD_CAN_STOP = false;",
+                "const DASHBOARD_CAN_STOP = true;",
+                1,
+            )
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_dashboard_session_detail(self, request: web.Request) -> web.Response:
-        """Serve a dashboard session as the standalone trace viewer page."""
-        return await self._session_html_response(request.match_info["session_id"])
+        """Serve the dashboard shell for a session detail route."""
+        if ensure_trace_store().load_session_row(request.match_info["session_id"]) is None:
+            return web.Response(status=404, text="Session not found")
+        return await self._handle_dashboard_index(request)
 
     async def _handle_dashboard_health(self, request: web.Request) -> web.Response:
-        return web.json_response({"ok": True, "db_path": str(resolve_db_path())})
+        payload = {"ok": True, "db_path": str(resolve_db_path()), "dashboard_mode": self.dashboard_mode}
+        if self.dashboard_mode and _is_trusted_dashboard_token_request(request):
+            payload["quit_token"] = self._dashboard_quit_token
+        return web.json_response(payload)
+
+    async def _handle_dashboard_quit(self, request: web.Request) -> web.Response:
+        if not self.dashboard_mode:
+            return web.json_response(
+                {"ok": False, "error": "Dashboard quit is only available in dashboard mode"},
+                status=403,
+            )
+        if not _is_trusted_dashboard_token_request(request):
+            return _untrusted_dashboard_token_response()
+        token = request.headers.get(_DASHBOARD_QUIT_TOKEN_HEADER)
+        if token != self._dashboard_quit_token:
+            return web.json_response(
+                {"ok": False, "error": "Dashboard quit requires a same-origin token"},
+                status=403,
+            )
+
+        async def stop_soon() -> None:
+            await asyncio.sleep(0.05)
+            await self.stop()
+
+        asyncio.create_task(stop_soon())
+        return web.json_response({"ok": True})
 
     async def _handle_index(self, request: web.Request) -> web.Response:
         """Serve the viewer HTML with live mode enabled."""
@@ -310,7 +481,36 @@ class LiveViewerServer:
     async def _handle_sessions(self, request: web.Request) -> web.Response:
         """Return trace history sessions."""
         live_count = await self._current_live_record_count()
-        return web.json_response({"sessions": list_trace_sessions(self.session_id, live_record_count=live_count)})
+        offset = _session_offset_from_request(request)
+        limit = _session_limit_from_request(request)
+        query = _session_query_from_request(request)
+        aggregates = get_trace_store().get_session_aggregates(query)
+        total = aggregates["total_sessions"]
+        total_records = aggregates["total_records"]
+        total_tokens = aggregates["total_tokens"]
+        total_errors = aggregates["total_errors"]
+        sessions = list_trace_sessions(
+            self.session_id,
+            live_record_count=live_count,
+            limit=limit,
+            offset=offset,
+            query=query,
+        )
+        dates, has_legacy = get_trace_store().list_dates()
+        return web.json_response(
+            {
+                "sessions": sessions,
+                "total": total,
+                "total_records": total_records,
+                "total_tokens": total_tokens,
+                "total_errors": total_errors,
+                "offset": offset,
+                "limit": limit,
+                "has_more": offset + len(sessions) < total,
+                "dates": dates,
+                "has_legacy": has_legacy,
+            }
+        )
 
     async def _handle_session_records(self, request: web.Request) -> web.Response:
         """Return one session's summary and records."""
@@ -335,17 +535,17 @@ class LiveViewerServer:
             return web.Response(status=404, text="Session not found")
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
-            trace_path = tmp_path / f"session-{session_id[:8]}.jsonl"
             html_path = tmp_path / f"session-{session_id[:8]}.html"
-            trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
             export_urls = {
                 "jsonl": f"/api/sessions/{quote(session_id)}/export/jsonl",
+                "compact": f"/api/sessions/{quote(session_id)}/export/compact",
                 "log": f"/api/sessions/{quote(session_id)}/export/log",
+                "html": f"/api/sessions/{quote(session_id)}/export/html",
             }
-            _generate_html_viewer(
-                trace_path,
+            _generate_html_viewer_from_compact_bundle(
+                build_compact_trace_bundle(store.load_records(session_id)),
                 html_path,
-                display_trace_path=export_urls["jsonl"],
+                display_trace_path=export_urls["compact"],
                 display_html_path=f"/dashboard/session/{quote(session_id)}",
             )
             if not html_path.exists():
@@ -376,6 +576,20 @@ class LiveViewerServer:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    async def _handle_export_compact(self, request: web.Request) -> web.Response:
+        session_id = request.match_info["session_id"]
+        store = ensure_trace_store()
+        if store.load_session_row(session_id) is None:
+            return web.Response(status=404, text="Session not found")
+        body = store.export_compact(session_id)
+        filename = f"trace_{session_id[:8]}.ctap.json"
+        return web.Response(
+            text=body,
+            content_type="application/json",
+            charset="utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     async def _handle_export_log(self, request: web.Request) -> web.Response:
         session_id = request.match_info["session_id"]
         store = ensure_trace_store()
@@ -386,6 +600,97 @@ class LiveViewerServer:
         return web.Response(
             text=body,
             content_type="text/plain",
+            charset="utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    async def _handle_delete_session(self, request: web.Request) -> web.Response:
+        """Delete one stored trace session."""
+        session_id = request.match_info["session_id"]
+        store = ensure_trace_store()
+        row = store.load_session_row(session_id)
+        if row is None:
+            return web.json_response({"error": "Session not found"}, status=404)
+        if self.session_id and session_id == self.session_id:
+            return web.json_response({"error": "Live session cannot be deleted"}, status=409)
+        if (row["status"] or "") == "active":
+            return web.json_response({"error": "Active session cannot be deleted"}, status=409)
+        result = store.delete_session(session_id)
+        await self._broadcast_dashboard_event({"type": "refresh"})
+        return web.json_response(result)
+
+    async def _handle_delete_sessions(self, request: web.Request) -> web.Response:
+        """Delete multiple stored trace sessions."""
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, web.HTTPBadRequest):
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        raw_ids = payload.get("session_ids") if isinstance(payload, dict) else None
+        if not isinstance(raw_ids, list):
+            return web.json_response({"error": "session_ids must be a list"}, status=400)
+        session_ids = [item for item in raw_ids if isinstance(item, str) and item]
+        if not session_ids:
+            return web.json_response({"error": "No sessions selected"}, status=400)
+
+        store = ensure_trace_store()
+        deletable_ids = []
+        skipped_active = []
+        missing_ids = []
+        for session_id in dict.fromkeys(session_ids):
+            row = store.load_session_row(session_id)
+            if row is None:
+                missing_ids.append(session_id)
+                continue
+            if self.session_id and session_id == self.session_id:
+                skipped_active.append(session_id)
+                continue
+            if (row["status"] or "") == "active":
+                skipped_active.append(session_id)
+                continue
+            deletable_ids.append(session_id)
+
+        if not deletable_ids:
+            return web.json_response(
+                {
+                    "error": "No selected sessions can be deleted",
+                    "deleted_sessions": 0,
+                    "deleted_records": 0,
+                    "deleted_logs": 0,
+                    "missing_sessions": missing_ids,
+                    "skipped_active_sessions": skipped_active,
+                },
+                status=409,
+            )
+
+        result = store.delete_sessions(deletable_ids)
+        result["missing_sessions"] = [*missing_ids, *result.get("missing_sessions", [])]
+        result["skipped_active_sessions"] = skipped_active
+        await self._broadcast_dashboard_event({"type": "refresh"})
+        return web.json_response(result)
+
+    async def _handle_export_html(self, request: web.Request) -> web.Response:
+        session_id = request.match_info["session_id"]
+        store = ensure_trace_store()
+        if store.load_session_row(session_id) is None:
+            return web.Response(status=404, text="Session not found")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            trace_path = tmp_path / f"session-{session_id[:8]}.jsonl"
+            html_path = tmp_path / f"trace_{session_id[:8]}.html"
+            trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
+            _generate_html_viewer(
+                trace_path,
+                html_path,
+                display_trace_path=f"/api/sessions/{quote(session_id)}/export/jsonl",
+                display_html_path=f"/api/sessions/{quote(session_id)}/export/html",
+            )
+            if not html_path.exists():
+                return web.Response(status=500, text="Failed to generate session viewer")
+            body = html_path.read_text(encoding="utf-8")
+        filename = f"trace_{session_id[:8]}.html"
+        return web.Response(
+            text=body,
+            content_type="text/html",
             charset="utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
 import subprocess
@@ -15,12 +16,15 @@ from pathlib import Path
 
 import aiohttp
 
+from claude_tap.process_utils import windows_no_console_subprocess_kwargs
 from claude_tap.trace_store import resolve_db_path
 
 DEFAULT_DASHBOARD_PORT = 19527
 _DASHBOARD_HEALTH_TIMEOUT = 1.5
 _DASHBOARD_SESSIONS_HEALTH_TIMEOUT = 3.0
+_DASHBOARD_QUIT_TIMEOUT = 2.0
 _DASHBOARD_LOCK_NAME = "dashboard.lock"
+_DASHBOARD_QUIT_TOKEN_HEADER = "X-Claude-Tap-Dashboard-Token"
 
 
 def resolve_dashboard_port(explicit: int | None = None) -> int:
@@ -33,8 +37,21 @@ def resolve_dashboard_port(explicit: int | None = None) -> int:
     return DEFAULT_DASHBOARD_PORT
 
 
-def dashboard_url(host: str, port: int) -> str:
+def dashboard_connect_host(host: str) -> str:
+    """Return the local address clients should use for a dashboard bind host."""
     normalized_host = host.strip()
+    bare_host = normalized_host.strip("[]")
+    try:
+        address = ipaddress.ip_address(bare_host)
+    except ValueError:
+        return normalized_host or "127.0.0.1"
+    if address.is_unspecified:
+        return "::1" if address.version == 6 else "127.0.0.1"
+    return bare_host
+
+
+def dashboard_url(host: str, port: int) -> str:
+    normalized_host = dashboard_connect_host(host)
     if ":" in normalized_host and not normalized_host.startswith("["):
         normalized_host = f"[{normalized_host}]"
     return f"http://{normalized_host}:{port}"
@@ -182,9 +199,53 @@ async def wait_for_dashboard_healthy(
     return False
 
 
+async def stop_shared_dashboard(host: str, port: int) -> bool:
+    """Ask a running shared dashboard service to stop and wait until it is gone."""
+    base_url = dashboard_url(host, port)
+    timeout = aiohttp.ClientTimeout(total=_DASHBOARD_QUIT_TIMEOUT)
+    status, payload = await _dashboard_get_status_and_payload(
+        f"{base_url}/dashboard/health",
+        timeout_seconds=_DASHBOARD_HEALTH_TIMEOUT,
+    )
+    if status != 200 or not isinstance(payload, dict):
+        return False
+    quit_token = payload.get("quit_token")
+    if not isinstance(quit_token, str) or not quit_token:
+        return False
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{base_url}/dashboard/quit",
+                headers={_DASHBOARD_QUIT_TOKEN_HEADER: quit_token},
+            ) as resp:
+                if resp.status != 200:
+                    return False
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+        return False
+
+    return await wait_for_dashboard_stopped(host, port)
+
+
+async def wait_for_dashboard_stopped(
+    host: str,
+    port: int,
+    *,
+    timeout: float = 5.0,
+    interval: float = 0.1,
+) -> bool:
+    """Return True once no dashboard responds on the configured endpoint."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not await is_dashboard_healthy(host, port, require_current_db=False):
+            return True
+        await asyncio.sleep(interval)
+    return False
+
+
 def _spawn_dashboard_subprocess(host: str, port: int, output_dir: Path) -> subprocess.Popen[bytes]:
     cmd = [
-        sys.executable,
+        _dashboard_python_executable(),
         "-m",
         "claude_tap",
         "dashboard",
@@ -198,14 +259,29 @@ def _spawn_dashboard_subprocess(host: str, port: int, output_dir: Path) -> subpr
         cmd.extend(["--tap-host", host])
 
     kwargs: dict = {
+        "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
     }
     if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        kwargs.update(windows_no_console_subprocess_kwargs())
     else:
         kwargs["start_new_session"] = True
     return subprocess.Popen(cmd, **kwargs)
+
+
+def _dashboard_python_executable() -> str:
+    if sys.platform != "win32":
+        return sys.executable
+
+    executable = Path(sys.executable)
+    if executable.name.lower() != "python.exe":
+        return sys.executable
+
+    pythonw = executable.with_name("pythonw.exe")
+    if pythonw.exists():
+        return str(pythonw)
+    return sys.executable
 
 
 async def ensure_shared_dashboard(
@@ -220,8 +296,6 @@ async def ensure_shared_dashboard(
     url = dashboard_url(host, port)
     if await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port):
         _migrate_legacy_traces(output_dir)
-        if open_browser:
-            open_browser_fn(url)
         return url, False
 
     spawned = await asyncio.to_thread(_spawn_dashboard_subprocess_if_needed, host, port, output_dir)
@@ -231,6 +305,6 @@ async def ensure_shared_dashboard(
     else:
         _migrate_legacy_traces(output_dir)
 
-    if open_browser:
+    if open_browser and spawned:
         open_browser_fn(url)
     return url, spawned

@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from claude_tap.trace_store import TraceStore, get_trace_store
+from claude_tap.bedrock import bedrock_model_from_path
+from claude_tap.trace_store import SessionQuery, TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
+from claude_tap.viewer import _decode_bedrock_eventstream_events
 
 DASHBOARD_TEMPLATE_PATH = Path(__file__).parent / "dashboard.html"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -25,10 +27,13 @@ CLIENT_LABELS = {
     "gemini": "Gemini",
     "hermes": "Hermes",
     "kimi": "Kimi",
+    "kimi-code": "Kimi Code",
     "opencode": "OpenCode",
     "pi": "Pi",
     "qoder": "Qoder",
 }
+DASHBOARD_SUMMARY_VERSION = 2
+VALID_SESSION_STATUSES = {"active", "complete", "error", "empty"}
 
 
 def read_dashboard_template() -> str:
@@ -41,17 +46,45 @@ def ensure_trace_store() -> TraceStore:
     return get_trace_store()
 
 
+def build_session_query(
+    *,
+    date: str = "",
+    status: str = "",
+    search: str = "",
+    agent: str = "",
+) -> SessionQuery:
+    """Build a SQLite-backed session query from dashboard filter values."""
+    normalized_date = date if date == "legacy" or _DATE_RE.match(date) else ""
+    normalized_status = status if status in VALID_SESSION_STATUSES else ""
+    agent_clients, agent_labels = _agent_filter_values(agent)
+    return SessionQuery(
+        date=normalized_date,
+        status=normalized_status,
+        search=search.strip(),
+        agent_clients=agent_clients,
+        agent_labels=agent_labels,
+    )
+
+
 def list_trace_sessions(
     current_session_id: str | None = None,
     *,
     live_record_count: int | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+    query: SessionQuery | None = None,
+    repair_stale_summaries: bool = True,
 ) -> list[dict[str, Any]]:
     """Return trace sessions sorted by most recent activity."""
     store = ensure_trace_store()
     try:
         sessions = [
             _apply_current_session_state(
-                _session_summary_from_row(store, row),
+                _session_summary_from_row(
+                    store,
+                    row,
+                    repair_stale_summary=repair_stale_summaries,
+                ),
                 current_session_id,
                 live_record_count=(
                     live_record_count
@@ -59,12 +92,28 @@ def list_trace_sessions(
                     else None
                 ),
             )
-            for row in store.list_session_rows()
+            for row in store.list_session_rows(limit=limit, offset=offset, query=query)
         ]
     except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
         return []
     sessions.sort(key=lambda item: (_timestamp_sort_value(item.get("updated_at")), item.get("id") or ""), reverse=True)
     return sessions
+
+
+def count_trace_sessions(query: SessionQuery | None = None) -> int:
+    """Return the number of stored trace sessions."""
+    try:
+        return ensure_trace_store().count_session_rows(query)
+    except (OSError, sqlite3.Error, ValueError):
+        return 0
+
+
+def sum_trace_session_records(query: SessionQuery | None = None) -> int:
+    """Return total stored records for matching trace sessions."""
+    try:
+        return ensure_trace_store().sum_session_records(query)
+    except (OSError, sqlite3.Error, ValueError):
+        return 0
 
 
 def list_trace_agents(
@@ -73,13 +122,28 @@ def list_trace_agents(
     live_record_count: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return agent buckets for the dashboard sidebar."""
-    sessions = list_trace_sessions(current_session_id, live_record_count=live_record_count)
     buckets: dict[str, dict[str, Any]] = {}
-    for session in sessions:
-        key = session["agent_key"]
-        bucket = buckets.setdefault(key, {"key": key, "label": session["agent"], "sessions": 0, "records": 0})
-        bucket["sessions"] += 1
-        bucket["records"] += session["record_count"]
+    try:
+        rows = ensure_trace_store().list_agent_buckets()
+    except (OSError, sqlite3.Error, ValueError):
+        rows = []
+    for row in rows:
+        raw_agent = str(row["agent"] or "Unknown")
+        label = CLIENT_LABELS.get(raw_agent.lower(), raw_agent)
+        key = _agent_key(label)
+        bucket = buckets.setdefault(key, {"key": key, "label": label, "sessions": 0, "records": 0})
+        bucket["sessions"] += int(row["sessions"] or 0)
+        bucket["records"] += int(row["records"] or 0)
+    if current_session_id and live_record_count is not None:
+        live_row = ensure_trace_store().load_session_row(current_session_id)
+        if live_row is not None:
+            live_agent = _infer_agent(
+                [], {"client": live_row["client"] or "", "proxy_mode": live_row["proxy_mode"] or ""}
+            )
+            key = _agent_key(live_agent)
+            bucket = buckets.get(key)
+            if bucket is not None:
+                bucket["records"] = max(int(bucket["records"] or 0), int(live_record_count or 0))
     return sorted(buckets.values(), key=lambda item: (item["label"].lower(), item["key"]))
 
 
@@ -103,7 +167,7 @@ def load_trace_session(
     if row is None:
         return None
     summary = _apply_current_session_state(
-        _session_summary_from_row(store, row),
+        _session_summary_from_row(store, row, allow_record_scan=False),
         current_session_id,
         live_record_count=(
             live_record_count
@@ -128,7 +192,7 @@ def merge_record_into_summary(
         "proxy_mode": row["proxy_mode"] or "",
     }
     if summary is None or summary.get("id") != row["id"]:
-        return _summarize_session(
+        initial_summary = _summarize_session(
             session_id=row["id"],
             date_key=row["date_key"] or "legacy",
             legacy_rel_path=row["legacy_rel_path"],
@@ -140,16 +204,23 @@ def merge_record_into_summary(
             is_current=True,
             record_count=record_count,
         )
+        if _is_auxiliary_status_error_record(record):
+            initial_summary["status"] = "active"
+            initial_summary["error"] = ""
+        return initial_summary
 
     summary = dict(summary)
+    summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
     usage = _record_usage(record)
     summary["record_count"] = record_count
     summary["turn_count"] = max(int(summary.get("turn_count") or 0), record_count)
-    summary["input_tokens"] = int(summary.get("input_tokens") or 0) + usage.get("input_tokens", 0)
-    summary["output_tokens"] = int(summary.get("output_tokens") or 0) + usage.get("output_tokens", 0)
-    summary["cache_read_tokens"] = int(summary.get("cache_read_tokens") or 0) + usage.get("cache_read_input_tokens", 0)
-    summary["cache_create_tokens"] = int(summary.get("cache_create_tokens") or 0) + usage.get(
-        "cache_creation_input_tokens", 0
+    summary["input_tokens"] = int(summary.get("input_tokens") or 0) + (usage.get("input_tokens") or 0)
+    summary["output_tokens"] = int(summary.get("output_tokens") or 0) + (usage.get("output_tokens") or 0)
+    summary["cache_read_tokens"] = int(summary.get("cache_read_tokens") or 0) + (
+        usage.get("cache_read_input_tokens") or 0
+    )
+    summary["cache_create_tokens"] = int(summary.get("cache_create_tokens") or 0) + (
+        usage.get("cache_creation_input_tokens") or 0
     )
     summary["total_tokens"] = (
         summary["input_tokens"]
@@ -172,13 +243,39 @@ def merge_record_into_summary(
     if not summary.get("agent"):
         summary["agent"] = _infer_agent([record], manifest_entry)
         summary["agent_key"] = _agent_key(summary["agent"])
-    status_code = _response_status(record)
-    if status_code >= 400 or _record_error(record):
+    if _is_session_error_record(record):
         summary["status"] = "error"
         summary["error"] = summary.get("error") or _first_error([record])
-    else:
+    elif summary.get("status") != "error":
         summary["status"] = "active"
     return summary
+
+
+def is_dashboard_summary_current(summary: Any, session_id: str) -> bool:
+    return (
+        isinstance(summary, dict)
+        and summary.get("id") == session_id
+        and summary.get("summary_version") == DASHBOARD_SUMMARY_VERSION
+    )
+
+
+def build_stored_session_summary(row: sqlite3.Row, records: list[dict[str, Any]]) -> dict[str, Any]:
+    manifest_entry = {
+        "client": row["client"] or "",
+        "proxy_mode": row["proxy_mode"] or "",
+    }
+    return _summarize_session(
+        session_id=row["id"],
+        date_key=row["date_key"] or "legacy",
+        legacy_rel_path=row["legacy_rel_path"],
+        records=records,
+        manifest_entry=manifest_entry,
+        status=row["status"] or "complete",
+        started_at=row["started_at"] or "",
+        updated_at=row["updated_at"] or "",
+        is_current=row["status"] == "active",
+        record_count=int(row["record_count"] or len(records)),
+    )
 
 
 def build_imported_session_summary(
@@ -201,24 +298,32 @@ def build_imported_session_summary(
     )
 
 
-def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, Any]:
+def _session_summary_from_row(
+    store: TraceStore,
+    row: sqlite3.Row,
+    *,
+    allow_record_scan: bool = False,
+    repair_stale_summary: bool = True,
+) -> dict[str, Any]:
     summary_json = row["summary_json"]
     if summary_json:
         try:
             cached = json.loads(summary_json)
         except json.JSONDecodeError:
             cached = None
-        if isinstance(cached, dict) and cached.get("id") == row["id"]:
-            if row["status"] != "active":
-                return cached
-            cached = dict(cached)
-            db_count = int(row["record_count"] or 0)
-            cached["updated_at"] = row["updated_at"] or cached.get("updated_at") or ""
-            cached["record_count"] = db_count
-            cached["turn_count"] = max(int(cached.get("turn_count") or 0), db_count)
-            if db_count > 0 and cached.get("status") != "error":
-                cached["status"] = "active"
-            return cached
+        if isinstance(cached, dict) and (not cached.get("id") or cached.get("id") == row["id"]):
+            needs_error_repair = row["status"] == "error" and not cached.get("error")
+            if (
+                repair_stale_summary
+                and row["status"] != "active"
+                and (not is_dashboard_summary_current(cached, row["id"]) or needs_error_repair)
+            ):
+                boundary_records = store.load_boundary_records(row["id"])
+                if boundary_records:
+                    summary = _summary_from_boundary_records(row, boundary_records, cached)
+                    store.store_summary(row["id"], summary)
+                    return summary
+            return _normalize_cached_session_summary(row, cached)
 
     record_count = int(row["record_count"] or 0)
     manifest_entry = {
@@ -238,9 +343,30 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
             is_current=row["status"] == "active",
             record_count=0,
         )
+        summary["active"] = row["status"] == "active"
         if row["status"] != "active":
             store.store_summary(row["id"], summary)
         return summary
+
+    if not allow_record_scan:
+        if row["status"] == "error":
+            records = store.load_records(row["id"])
+            if records:
+                summary = _summarize_session(
+                    session_id=row["id"],
+                    date_key=row["date_key"] or "legacy",
+                    legacy_rel_path=row["legacy_rel_path"],
+                    records=records,
+                    manifest_entry=manifest_entry,
+                    status=row["status"] or "error",
+                    started_at=row["started_at"] or "",
+                    updated_at=row["updated_at"] or "",
+                    is_current=False,
+                    record_count=record_count,
+                )
+                store.store_summary(row["id"], summary)
+                return summary
+        return _minimal_session_summary_from_row(row)
 
     records = store.load_records(row["id"])
     summary = _summarize_session(
@@ -255,8 +381,93 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
         is_current=False,
         record_count=record_count,
     )
+    summary["active"] = row["status"] == "active"
     if row["status"] != "active":
         store.store_summary(row["id"], summary)
+    return summary
+
+
+def _minimal_session_summary_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    record_count = int(row["record_count"] or 0)
+    manifest_entry = {
+        "client": row["client"] or "",
+        "proxy_mode": row["proxy_mode"] or "",
+    }
+    summary = _summarize_session(
+        session_id=row["id"],
+        date_key=row["date_key"] or "legacy",
+        legacy_rel_path=row["legacy_rel_path"],
+        records=[],
+        manifest_entry=manifest_entry,
+        status=row["status"] or ("empty" if record_count == 0 else "complete"),
+        started_at=row["started_at"] or "",
+        updated_at=row["updated_at"] or "",
+        is_current=row["status"] == "active",
+        record_count=record_count,
+    )
+    if record_count > 0 and summary["status"] == "empty":
+        summary["status"] = row["status"] if row["status"] in {"active", "complete", "error"} else "complete"
+    return summary
+
+
+def _summary_from_boundary_records(
+    row: sqlite3.Row,
+    records: list[dict[str, Any]],
+    cached: dict[str, Any],
+) -> dict[str, Any]:
+    summary = build_stored_session_summary(row, records)
+    for key in (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_create_tokens",
+        "total_tokens",
+        "duration_ms",
+        "turn_count",
+        "model",
+        "error",
+    ):
+        if cached.get(key):
+            summary[key] = cached[key]
+    summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
+    summary["record_count"] = int(row["record_count"] or summary.get("record_count") or 0)
+    summary["turn_count"] = max(int(summary.get("turn_count") or 0), summary["record_count"])
+    return summary
+
+
+def _normalize_cached_session_summary(row: sqlite3.Row, cached: dict[str, Any]) -> dict[str, Any]:
+    summary = _minimal_session_summary_from_row(row)
+    summary.update(cached)
+    summary["id"] = row["id"]
+    summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
+    summary["date"] = row["date_key"] if _DATE_RE.match(row["date_key"] or "") else "legacy"
+    summary["legacy_rel_path"] = row["legacy_rel_path"]
+    summary["started_at"] = row["started_at"] or summary.get("started_at") or ""
+    summary["updated_at"] = row["updated_at"] or summary.get("updated_at") or summary["started_at"]
+    summary["active"] = row["status"] == "active"
+    summary["live"] = False
+    db_count = int(row["record_count"] or 0)
+    summary["record_count"] = db_count
+    summary["turn_count"] = max(int(summary.get("turn_count") or 0), db_count)
+    row_status = row["status"] or ""
+    if row_status == "active" and db_count > 0 and summary.get("status") != "error":
+        summary["status"] = "active"
+    elif row_status in {"active", "complete", "error", "empty"}:
+        summary["status"] = row_status
+    elif db_count == 0:
+        summary["status"] = "empty"
+    elif summary.get("status") not in {"active", "complete", "error", "empty"}:
+        summary["status"] = "complete"
+    if not summary.get("agent"):
+        summary["agent"] = _infer_agent([], {"client": row["client"] or "", "proxy_mode": row["proxy_mode"] or ""})
+    summary["agent_key"] = _agent_key(str(summary.get("agent") or ""))
+    token_total = (
+        int(summary.get("input_tokens") or 0)
+        + int(summary.get("output_tokens") or 0)
+        + int(summary.get("cache_read_tokens") or 0)
+        + int(summary.get("cache_create_tokens") or 0)
+    )
+    summary["total_tokens"] = token_total if token_total else int(cached.get("total_tokens") or 0)
     return summary
 
 
@@ -269,6 +480,7 @@ def _apply_current_session_state(
     session = dict(session)
     is_current = bool(current_session_id and session.get("id") == current_session_id)
     session["live"] = is_current
+    session["active"] = bool(session.get("active")) or is_current
     if is_current:
         count = int(session.get("record_count") or 0)
         if live_record_count is not None:
@@ -300,28 +512,28 @@ def _summarize_session(
     agent = _infer_agent(records, manifest_entry)
     input_tokens = output_tokens = cache_read_tokens = cache_create_tokens = 0
     models: dict[str, int] = {}
-    statuses: list[int] = []
     duration_ms = 0
     turns: set[int] = set()
 
     for record in records:
         usage = _record_usage(record)
-        input_tokens += usage.get("input_tokens", 0)
-        output_tokens += usage.get("output_tokens", 0)
-        cache_read_tokens += usage.get("cache_read_input_tokens", 0)
-        cache_create_tokens += usage.get("cache_creation_input_tokens", 0)
+        input_tokens += usage.get("input_tokens") or 0
+        output_tokens += usage.get("output_tokens") or 0
+        cache_read_tokens += usage.get("cache_read_input_tokens") or 0
+        cache_create_tokens += usage.get("cache_creation_input_tokens") or 0
         model = _record_model(record)
         if model:
             models[model] = models.get(model, 0) + 1
-        status_code = _response_status(record)
-        if status_code:
-            statuses.append(status_code)
         duration_ms += _duration_ms(record)
         turn = record.get("turn")
         if isinstance(turn, int):
             turns.add(turn)
 
-    has_error = any(code >= 400 for code in statuses) or any(_record_error(record) for record in records)
+    error_records = [record for record in records if _is_session_error_record(record)]
+    auxiliary_error_records = [record for record in records if _is_auxiliary_status_error_record(record)]
+    has_error = bool(error_records) or (
+        bool(auxiliary_error_records) and not any(_is_successful_primary_record(record) for record in records)
+    )
     if has_error:
         resolved_status = "error"
     elif is_current and records:
@@ -331,14 +543,17 @@ def _summarize_session(
     else:
         resolved_status = status if status in {"active", "complete", "error", "empty"} else "complete"
 
+    error_display_records = error_records or (auxiliary_error_records if has_error else [])
     preview_records = _preview_records(records)
     count = record_count if record_count is not None else len(records)
     return {
         "id": session_id,
+        "summary_version": DASHBOARD_SUMMARY_VERSION,
         "date": date_key if _DATE_RE.match(date_key) else "legacy",
         "agent": agent,
         "agent_key": _agent_key(agent),
         "status": resolved_status,
+        "active": is_current or status == "active",
         "live": is_current,
         "legacy_rel_path": legacy_rel_path,
         "started_at": started_at,
@@ -354,7 +569,7 @@ def _summarize_session(
         "model": _top_key(models) or _record_model(last_record) or "unknown",
         "first_user": _first_user_preview(preview_records),
         "last_response": _last_response_preview(preview_records),
-        "error": _first_error(records),
+        "error": _first_error(error_display_records),
     }
 
 
@@ -392,6 +607,21 @@ def _record_usage(record: dict[str, Any]) -> dict[str, int]:
             if candidate:
                 usage = candidate
                 break
+    if not usage:
+        merged_usage: dict[str, int] = {}
+        for event in _bedrock_events(record):
+            payload = event.get("data", {}) if isinstance(event, dict) else {}
+            candidate = payload.get("usage", {}) if isinstance(payload, dict) else {}
+            for key, value in candidate.items():
+                if isinstance(value, int):
+                    merged_usage[key] = max(merged_usage.get(key, 0), value)
+            message = payload.get("message", {}) if isinstance(payload, dict) else {}
+            msg_usage = message.get("usage", {}) if isinstance(message, dict) else {}
+            for key, value in msg_usage.items():
+                if isinstance(value, int):
+                    merged_usage[key] = max(merged_usage.get(key, 0), value)
+        if merged_usage:
+            usage = merged_usage
     if not usage and isinstance(body, dict):
         usage = body
     return normalize_usage(usage)
@@ -416,9 +646,19 @@ def _record_model(record: dict[str, Any]) -> str:
         value = resp_body.get("model")
         if isinstance(value, str) and value:
             return value
+    for event in _bedrock_events(record)[:3]:
+        data = event.get("data", {}) if isinstance(event, dict) else {}
+        msg = data.get("message", {}) if isinstance(data, dict) else {}
+        if isinstance(msg, dict):
+            value = msg.get("model")
+            if isinstance(value, str) and value:
+                return value
     path = request.get("path") if isinstance(request, dict) else ""
     if isinstance(path, str):
-        match = re.search(r"/models/([^:?/]+)", path)
+        bedrock_model = bedrock_model_from_path(path)
+        if bedrock_model:
+            return bedrock_model
+        match = re.search(r"/models?/([^:?/]+)", path)
         if match:
             return match.group(1)
     return ""
@@ -536,6 +776,37 @@ def _agent_key(agent: str) -> str:
     return key or "unknown"
 
 
+def _agent_filter_values(agent_key: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    key = (agent_key or "").strip().lower()
+    if not key or key == "all":
+        return (), ()
+
+    clients: set[str] = set()
+    labels: set[str] = set()
+    for client, label in CLIENT_LABELS.items():
+        if _agent_key(label) == key:
+            clients.add(client)
+            labels.add(label)
+
+    # If no pre-defined CLIENT_LABELS matched this key, check actual DB buckets
+    if not clients and not labels and key != "unknown":
+        try:
+            rows = get_trace_store().list_agent_buckets()
+            for row in rows:
+                raw_agent = str(row["agent"] or "Unknown")
+                if _agent_key(raw_agent) == key:
+                    labels.add(raw_agent)
+                    clients.add(raw_agent)
+        except Exception:
+            labels.add(agent_key)
+            clients.add(agent_key)
+
+    if key == "unknown":
+        clients.update(("", "unknown"))
+        labels.add("Unknown")
+    return tuple(sorted(clients)), tuple(sorted(labels))
+
+
 def _preview_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     primary = [record for record in records if _is_primary_model_record(record)]
     if primary:
@@ -564,6 +835,8 @@ def _is_primary_model_record(record: dict[str, Any]) -> bool:
 
 def _is_auxiliary_record(record: dict[str, Any]) -> bool:
     path = _record_path(record).lower()
+    if _is_model_probe_path(path):
+        return True
     auxiliary_fragments = (
         "/token",
         "oauth",
@@ -581,6 +854,31 @@ def _is_auxiliary_record(record: dict[str, Any]) -> bool:
         "fetchuserinfo",
     )
     return any(fragment in path for fragment in auxiliary_fragments)
+
+
+def _is_model_probe_path(path: str) -> bool:
+    clean_path = path.split("?", 1)[0].rstrip("/")
+    if clean_path in {"/models", "/v1/models", "/v1alpha/models", "/v1beta/models"}:
+        return True
+    match = re.fullmatch(r"/(?:v1/)?models/([^/:]+)", clean_path)
+    return match is not None
+
+
+def _is_session_error_record(record: dict[str, Any]) -> bool:
+    if _record_error(record):
+        return True
+    status_code = _response_status(record)
+    return status_code >= 400 and not _is_auxiliary_record(record)
+
+
+def _is_auxiliary_status_error_record(record: dict[str, Any]) -> bool:
+    status_code = _response_status(record)
+    return status_code >= 400 and _is_auxiliary_record(record)
+
+
+def _is_successful_primary_record(record: dict[str, Any]) -> bool:
+    status_code = _response_status(record)
+    return 200 <= status_code < 400 and not _is_auxiliary_record(record)
 
 
 def _first_user_preview(records: list[dict[str, Any]]) -> str:
@@ -636,6 +934,15 @@ def _response_events(record: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _bedrock_events(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Decode AWS Bedrock EventStream binary body into structured events."""
+    response = record.get("response")
+    if not isinstance(response, dict):
+        return []
+    body = response.get("body")
+    return _decode_bedrock_eventstream_events(body)
+
+
 def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     data = event.get("data", event)
     if isinstance(data, str):
@@ -662,8 +969,7 @@ def _request_user_text(body: Any) -> str:
         for message in messages:
             role = str(message.get("role") or "").lower() if isinstance(message, dict) else ""
             if isinstance(message, dict) and role == "user":
-                text = _content_text(message.get("content"))
-                prompt = _clean_user_prompt_text(text)
+                prompt = _clean_user_content_text(message.get("content"))
                 if prompt:
                     return prompt
 
@@ -683,8 +989,7 @@ def _request_user_text(body: Any) -> str:
             role = str(content.get("role") or "user").lower()
             if role != "user":
                 continue
-            text = _parts_text(content.get("parts"))
-            prompt = _clean_user_prompt_text(text)
+            prompt = _clean_user_content_text(content.get("parts"))
             if prompt:
                 return prompt
 
@@ -694,11 +999,11 @@ def _request_user_text(body: Any) -> str:
 
 def _input_user_text(value: Any) -> str:
     if isinstance(value, str):
-        return value
+        return _clean_user_prompt_text(value)
     if isinstance(value, dict):
         role = str(value.get("role") or "").lower()
         if role == "user":
-            return _clean_user_prompt_text(_content_text(value.get("content") or value.get("text")))
+            return _clean_user_content_text(value.get("content") or value.get("text"))
         return ""
     if not isinstance(value, list):
         return ""
@@ -708,8 +1013,7 @@ def _input_user_text(value: Any) -> str:
             continue
         role = str(item.get("role") or "").lower()
         if role == "user":
-            text = _content_text(item.get("content") or item.get("text"))
-            prompt = _clean_user_prompt_text(text)
+            prompt = _clean_user_content_text(item.get("content") or item.get("text"))
             if prompt:
                 return prompt
 
@@ -721,11 +1025,35 @@ def _input_user_text(value: Any) -> str:
         if role or item_type in ("function_call_output", "tool_result", "reasoning"):
             continue
         if item_type in ("message", "input_text") or "content" in item:
-            text = _content_text(item.get("content") or item.get("text"))
-            prompt = _clean_user_prompt_text(text)
+            prompt = _clean_user_content_text(item.get("content") or item.get("text"))
             if prompt:
                 return prompt
     return ""
+
+
+def _clean_user_content_text(value: Any) -> str:
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if _is_auxiliary_user_content_block(item):
+                continue
+            text = _content_text(item)
+            prompt = _clean_user_prompt_text(text)
+            if prompt:
+                if re.search(r"<USER_REQUEST>\s*.*?\s*</USER_REQUEST>", text, flags=re.DOTALL | re.IGNORECASE):
+                    return prompt
+                parts.append(prompt)
+        return "\n".join(parts).strip()
+    if _is_auxiliary_user_content_block(value):
+        return ""
+    return _clean_user_prompt_text(_content_text(value))
+
+
+def _is_auxiliary_user_content_block(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    block_type = str(value.get("type") or "").lower()
+    return block_type in {"function_call_output", "tool_result"}
 
 
 def _clean_user_prompt_text(text: str) -> str:
@@ -751,6 +1079,7 @@ def _clean_user_prompt_text(text: str) -> str:
     first_tag = re.match(r"^<([A-Za-z_-]+)>", text)
     if first_tag and first_tag.group(1).lower() in {
         "artifacts",
+        "additional_metadata",
         "environment_context",
         "session_context",
         "skills",
@@ -804,6 +1133,13 @@ def _response_text(body: Any) -> str:
             return text
 
     output = body.get("output")
+    if isinstance(output, dict):
+        message = output.get("message")
+        if isinstance(message, dict):
+            text = _content_text(message.get("content"))
+            if text:
+                return text
+
     text = _content_text(output)
     if text:
         return text

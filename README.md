@@ -11,7 +11,9 @@
 
 `claude-tap` is a local proxy and trace viewer for AI coding agents. Run your CLI through it, then inspect the real API traffic: system prompts, conversation history, tool schemas, tool calls, streaming responses, token usage, and request diffs.
 
-It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
+Website: [Local AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · Guide: [How to view agent traces locally](docs/guides/agent-trace-viewer.md)
+
+It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [OpenClaw](https://github.com/openclaw/openclaw), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
 
 <p align="center">
   <img src="docs/demo.gif" alt="claude-tap demo showing a real Codex trace" width="100%">
@@ -45,17 +47,18 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 - 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
 - 📦 **Share one portable artifact**: each run writes a local trace session that can be exported to a self-contained HTML viewer for review or archiving.
 - 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
-- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
+- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
 
 ## Supported Clients
 
 | Client | Typical use |
 |--------|-------------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API or Claude-compatible gateways such as DeepSeek / GLM |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, Claude-compatible gateways such as DeepSeek / GLM, or local proxy upstreams such as CC Switch |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API key mode or ChatGPT subscription OAuth |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
-| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code or Moonshot Open Platform |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Legacy kimi-cli and the newer Kimi Code CLI |
 | [OpenCode](https://opencode.ai) | Multi-provider OpenCode sessions |
+| [OpenClaw](https://github.com/openclaw/openclaw) | Multi-provider OpenClaw sessions |
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi sessions, including OpenAI Codex OAuth providers |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Multi-provider Hermes TUI or gateway sessions |
 | [Cursor CLI](https://cursor.com/cli) | Cursor Agent sessions plus readable local transcript import |
@@ -97,6 +100,9 @@ claude-tap --tap-client gemini -- -p "hello"
 # Kimi CLI
 claude-tap --tap-client kimi
 
+# New Kimi Code CLI
+claude-tap --tap-client kimi-code
+
 # Pi
 claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
 
@@ -129,8 +135,10 @@ claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
 `claude-tap` auto-detects custom Claude Code upstreams from `ANTHROPIC_BASE_URL`
-in your environment or Claude settings. Use `--tap-target` only when you want to
-override that detected target.
+or `ANTHROPIC_BEDROCK_BASE_URL` in your environment or Claude settings. Use
+`--tap-target` only when you want to override that detected target.
+
+Local proxy upstreams are supported too: if a tool such as [CC Switch](https://github.com/farion1231/cc-switch) points Claude Code at a local `ANTHROPIC_BASE_URL`, `claude-tap` detects that value from Claude settings and records the traffic before forwarding it upstream. Use `claude-tap` in place of `claude`, such as `claude-tap -- <claude-args>`; no separate `--tap-client` value is needed.
 
 For the Claude Code VS Code extension, set `Claude Code: Claude Process Wrapper` to `claude-tap`; on Windows, use the full `claude-tap.exe` path if VS Code cannot find it.
 
@@ -159,6 +167,36 @@ claude-tap -- --permission-mode bypassPermissions
 ```
 
 `claude-tap` reads the DeepSeek upstream from `ANTHROPIC_BASE_URL`, then launches Claude Code against the local proxy. Use `--tap-target https://api.deepseek.com/anthropic` only as a manual override.
+
+</details>
+
+<details>
+<summary>Claude Code with AWS Bedrock</summary>
+
+`claude-tap` supports two Bedrock scenarios and auto-detects which applies:
+
+**Custom Bedrock gateway (company proxy, no SigV4)**
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_BEDROCK_BASE_URL="https://your-gateway.company.com/bedrock"
+claude-tap
+```
+
+`claude-tap` detects the non-AWS host, redirects both `ANTHROPIC_BASE_URL` and `ANTHROPIC_BEDROCK_BASE_URL` to the local proxy, and decodes the AWS EventStream binary response format to extract token usage and model info.
+
+**AWS native Bedrock (SigV4-signed requests)**
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_BEDROCK_BASE_URL="https://bedrock-runtime.us-east-1.amazonaws.com"
+export AWS_REGION="us-east-1"
+claude-tap --tap-proxy-mode forward
+```
+
+When the endpoint is a real AWS domain (`*.amazonaws.com`), `claude-tap` does **not** rewrite `ANTHROPIC_BEDROCK_BASE_URL` to localhost — doing so would break AWS SigV4 signature validation. Use forward proxy mode (`--tap-proxy-mode forward`) to capture this traffic without modifying the signed request.
+
+Use `--tap-target` only as a manual override when auto-detection does not apply.
 
 </details>
 
@@ -199,14 +237,16 @@ claude-tap --tap-client codex -- --full-auto
 <details>
 <summary>Kimi CLI examples</summary>
 
-Kimi CLI uses reverse proxy mode by default through `KIMI_BASE_URL`. Use your existing Kimi CLI auth/config; the default upstream target is the Kimi Code API.
+Use `--tap-client kimi` for legacy kimi-cli, or `--tap-client kimi-code` for the newer Kimi Code CLI. Both use reverse proxy mode by default.
 
 ```bash
 claude-tap --tap-client kimi
 claude-tap --tap-client kimi -- --thinking
-
-# Use Moonshot Open Platform instead of Kimi Code
 claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1
+
+claude-tap --tap-client kimi-code
+claude-tap --tap-client kimi-code -- --thinking
+claude-tap --tap-client kimi-code --tap-target https://api.moonshot.ai/v1
 ```
 
 </details>
@@ -371,8 +411,15 @@ claude-tap --tap-no-live
 # Browse saved traces without launching a client
 claude-tap dashboard
 
+# Stop the shared dashboard service
+claude-tap dashboard stop
+
 # Regenerate a self-contained HTML viewer from JSONL
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
+
+# Export a portable compact trace bundle, then render it later
+claude-tap export <session-id> --format compact -o trace.ctap.json
+claude-tap export trace.ctap.json -o trace.html
 
 # Embed the exported viewer in an iframe with reduced chrome
 # trace.html?embed=1&hideHeader=1&hidePath=1&hideHistory=1&hideControls=1&density=compact&theme=light
@@ -390,12 +437,14 @@ claude-tap --tap-no-open
 
 In proxy-only mode, start your client in another terminal and point its base URL or proxy settings at the local proxy. Use the [client support matrix](docs/support-matrix.md) for exact wiring.
 
+When used as VSCode Claude Code's `claudeProcessWrapper`, claude-tap honors the Claude binary path passed by the extension.
+
 ### CLI Options
 
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default), agy, codex, gemini, kimi, opencode, pi, hermes, cursor, qoder, or codebuddy
+--tap-client CLIENT      Client to launch: claude (default), agy, codex, gemini, kimi, kimi-code, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer while the client runs (default: on)
 --tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)
@@ -409,7 +458,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/codebuddy, forward for agy/gemini/opencode/pi/hermes/cursor/qoder)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/kimi-code/openclaw/codebuddy, forward for agy/gemini/opencode/pi/hermes/cursor/qoder)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 

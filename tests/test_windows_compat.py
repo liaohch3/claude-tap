@@ -86,6 +86,57 @@ async def test_run_client_passes_resolved_path_for_cmd_shim(monkeypatch) -> None
     assert cmd[3:] == ("--version",), "original args must follow --settings payload"
 
 
+@pytest.mark.asyncio
+async def test_run_client_uses_wrapper_provided_claude_binary(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    wrapped_claude = tmp_path / "claude"
+    wrapped_claude.write_text("#!/bin/sh\n", encoding="utf-8")
+    _strip_sigtstp(monkeypatch)
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: None)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(
+        43123,
+        ["--output-format", "stream-json"],
+        client="claude",
+        proxy_mode="reverse",
+        client_cmd=str(wrapped_claude),
+    )
+    assert code == 0
+    cmd = captured["cmd"]
+    assert cmd[0] == str(wrapped_claude)
+    assert cmd[1] == "--settings"
+    assert cmd[3:] == ("--output-format", "stream-json")
+
+
+@pytest.mark.asyncio
+async def test_run_client_does_not_execute_wrapper_directory(monkeypatch, tmp_path: Path) -> None:
+    async def fail_create_subprocess_exec(*cmd, **kwargs):
+        raise AssertionError(f"directory path should not be executed: {cmd}")
+
+    wrapped_dir = tmp_path / "claude"
+    wrapped_dir.mkdir()
+    _strip_sigtstp(monkeypatch)
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: None)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(
+        43123,
+        ["--output-format", "stream-json"],
+        client="claude",
+        proxy_mode="reverse",
+        client_cmd=str(wrapped_dir),
+    )
+    assert code == 1
+
+
 def test_module_import_reconfigures_stdout_to_utf8() -> None:
     import claude_tap.cli  # noqa: F401
 
@@ -114,6 +165,44 @@ def test_start_background_update_resolves_uv_shim(monkeypatch) -> None:
 
     _start_background_update("uv")
     assert captured["cmd"] == [shim, "tool", "upgrade", "claude-tap"]
+
+
+def test_start_background_update_hides_windows_console(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeStartupInfo:
+        def __init__(self) -> None:
+            self.dwFlags = 0
+            self.wShowWindow: int | None = None
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return object()
+
+    shim = r"C:\Users\x\AppData\Local\Programs\uv\uv.cmd"
+    monkeypatch.setattr("claude_tap.cli_update.sys.platform", "win32")
+    monkeypatch.setattr("claude_tap.cli_update.shutil.which", lambda name: shim if name == "uv" else None)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x1000, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x2000, raising=False)
+    monkeypatch.setattr(subprocess, "STARTF_USESHOWWINDOW", 0x4000, raising=False)
+    monkeypatch.setattr(subprocess, "SW_HIDE", 0, raising=False)
+    monkeypatch.setattr(subprocess, "STARTUPINFO", FakeStartupInfo, raising=False)
+
+    _start_background_update("uv")
+
+    assert captured["cmd"] == [shim, "tool", "upgrade", "claude-tap"]
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["stdout"] == subprocess.DEVNULL
+    assert kwargs["stderr"] == subprocess.DEVNULL
+    assert kwargs["creationflags"] == 0x1000 | 0x2000
+    startupinfo = kwargs["startupinfo"]
+    assert isinstance(startupinfo, FakeStartupInfo)
+    assert startupinfo.dwFlags == 0x4000
+    assert startupinfo.wShowWindow == 0
 
 
 def test_start_background_update_returns_none_when_uv_missing(monkeypatch) -> None:

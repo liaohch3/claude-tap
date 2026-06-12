@@ -8,15 +8,40 @@ import re
 import sqlite3
 import threading
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from claude_tap.compact_trace import (
+    BLOB_KIND_JSON,
+    COMPACT_RECORD_MARKER,
+    COMPACT_RECORD_VERSION,
+    MIN_BLOB_BYTES,
+    compact_record_blobs,
+    decode_compact_record_payload,
+    dump_compact_trace,
+    json_blob_payload,
+    make_blob_ref,
+)
+
 DB_FILENAME = "traces.sqlite3"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 STALE_ACTIVE_SESSION_AFTER = timedelta(hours=24)
+
+
+@dataclass(frozen=True)
+class SessionQuery:
+    """Session-list filters that can be applied directly in SQLite."""
+
+    date: str = ""
+    status: str = ""
+    search: str = ""
+    agent_clients: tuple[str, ...] = ()
+    agent_labels: tuple[str, ...] = ()
+
 
 _store: TraceStore | None = None
 _store_lock = threading.Lock()
@@ -96,6 +121,7 @@ class TraceStore:
             conn = self._connect()
             next_index = self._next_record_index(conn, session_id)
             updated_at = _str_or_none(record.get("timestamp")) or datetime.now(timezone.utc).isoformat()
+            payload_json = self._encode_record(conn, session_id, record)
             conn.execute(
                 """
                 INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
@@ -106,7 +132,7 @@ class TraceStore:
                     next_index,
                     _int_or_none(record.get("turn")),
                     _str_or_none(record.get("timestamp")),
-                    json.dumps(record, ensure_ascii=False, separators=(",", ":")),
+                    payload_json,
                 ),
             )
             conn.execute(
@@ -211,16 +237,129 @@ class TraceStore:
         conn = self._connect()
         return conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
 
-    def list_session_rows(self) -> list[sqlite3.Row]:
+    def list_session_rows(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        query: SessionQuery | None = None,
+    ) -> list[sqlite3.Row]:
         conn = self._connect()
+        offset = max(0, offset)
+        limit_sql = ""
+        where_sql, params = self._session_where(query)
+        if limit is not None:
+            limit_sql = " LIMIT ? OFFSET ?"
+            params.extend([max(0, limit), offset])
         return conn.execute(
-            """
+            f"""
             SELECT * FROM sessions
+            {where_sql}
             ORDER BY COALESCE(julianday(updated_at), 0) DESC,
                      COALESCE(julianday(started_at), 0) DESC,
                      id DESC
+            {limit_sql}
+            """,
+            params,
+        ).fetchall()
+
+    def count_session_rows(self, query: SessionQuery | None = None) -> int:
+        conn = self._connect()
+        where_sql, params = self._session_where(query)
+        row = conn.execute(f"SELECT COUNT(*) AS count FROM sessions {where_sql}", params).fetchone()
+        return int(row["count"] or 0) if row is not None else 0
+
+    def sum_session_records(self, query: SessionQuery | None = None) -> int:
+        conn = self._connect()
+        where_sql, params = self._session_where(query)
+        row = conn.execute(
+            f"SELECT COALESCE(SUM(record_count), 0) AS total FROM sessions {where_sql}", params
+        ).fetchone()
+        return int(row["total"] or 0) if row is not None else 0
+
+    def get_session_aggregates(self, query: SessionQuery | None = None) -> dict[str, Any]:
+        conn = self._connect()
+        where_sql, params = self._session_where(query)
+        row = conn.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total_sessions,
+                COALESCE(SUM(record_count), 0) AS total_records,
+                COALESCE(SUM(CAST(json_extract(summary_json, '$.total_tokens') AS INTEGER)), 0) AS total_tokens,
+                COALESCE(SUM(CASE WHEN status = 'error' OR (status = 'active' AND json_valid(summary_json) AND json_extract(summary_json, '$.status') = 'error') THEN 1 ELSE 0 END), 0) AS total_errors
+            FROM sessions
+            {where_sql}
+            """,
+            params,
+        ).fetchone()
+        return {
+            "total_sessions": int(row["total_sessions"] or 0) if row else 0,
+            "total_records": int(row["total_records"] or 0) if row else 0,
+            "total_tokens": int(row["total_tokens"] or 0) if row else 0,
+            "total_errors": int(row["total_errors"] or 0) if row else 0,
+        }
+
+    def list_agent_buckets(self) -> list[sqlite3.Row]:
+        """Return session counts grouped by stored agent signal without loading records."""
+        conn = self._connect()
+        agent_expr = self._agent_label_expr()
+        return conn.execute(
+            f"""
+            SELECT
+                {agent_expr} AS agent,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(record_count), 0) AS records
+            FROM sessions
+            GROUP BY agent
+            ORDER BY LOWER(agent), agent
             """
         ).fetchall()
+
+    def delete_sessions(self, session_ids: list[str]) -> dict[str, int | list[str]]:
+        """Delete multiple trace sessions and their dependent records/logs."""
+        unique_ids = list(dict.fromkeys(session_id for session_id in session_ids if session_id))
+        if not unique_ids:
+            return {
+                "deleted_sessions": 0,
+                "deleted_records": 0,
+                "deleted_logs": 0,
+                "missing_sessions": [],
+            }
+        placeholders = ",".join("?" * len(unique_ids))
+        with self._write_lock:
+            conn = self._connect()
+            rows = conn.execute(
+                f"SELECT id FROM sessions WHERE id IN ({placeholders})",
+                unique_ids,
+            ).fetchall()
+            existing_ids = [row["id"] for row in rows]
+            missing_ids = [session_id for session_id in unique_ids if session_id not in set(existing_ids)]
+            if not existing_ids:
+                return {
+                    "deleted_sessions": 0,
+                    "deleted_records": 0,
+                    "deleted_logs": 0,
+                    "missing_sessions": missing_ids,
+                }
+            existing_placeholders = ",".join("?" * len(existing_ids))
+            record_row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM records WHERE session_id IN ({existing_placeholders})",
+                existing_ids,
+            ).fetchone()
+            log_row = conn.execute(
+                f"SELECT COUNT(*) AS count FROM proxy_logs WHERE session_id IN ({existing_placeholders})",
+                existing_ids,
+            ).fetchone()
+            deleted_records = int(record_row["count"] or 0) if record_row is not None else 0
+            deleted_logs = int(log_row["count"] or 0) if log_row is not None else 0
+            conn.execute(f"DELETE FROM sessions WHERE id IN ({existing_placeholders})", existing_ids)
+            conn.commit()
+        return {
+            "deleted_sessions": len(existing_ids),
+            "deleted_records": deleted_records,
+            "deleted_logs": deleted_logs,
+            "missing_sessions": missing_ids,
+        }
 
     def load_records(
         self,
@@ -241,7 +380,7 @@ class TraceStore:
         conn = self._connect()
         rows = conn.execute(
             f"""
-            SELECT payload_json
+            SELECT session_id, payload_json
             FROM records
             WHERE session_id = ?
             ORDER BY record_index
@@ -249,14 +388,14 @@ class TraceStore:
             """,
             params,
         ).fetchall()
-        return _rows_to_records(rows)
+        return self._rows_to_records(rows)
 
     def load_boundary_records(self, session_id: str) -> list[dict[str, Any]]:
         """Load the first and last records for a session without reading everything."""
         conn = self._connect()
         first = conn.execute(
             """
-            SELECT payload_json
+            SELECT session_id, payload_json
             FROM records
             WHERE session_id = ?
             ORDER BY record_index
@@ -266,7 +405,7 @@ class TraceStore:
         ).fetchone()
         last = conn.execute(
             """
-            SELECT payload_json
+            SELECT session_id, payload_json
             FROM records
             WHERE session_id = ?
             ORDER BY record_index DESC
@@ -277,8 +416,8 @@ class TraceStore:
         if first is None:
             return []
         if last is None or first["payload_json"] == last["payload_json"]:
-            return _rows_to_records([first])
-        return _rows_to_records([first, last])
+            return self._rows_to_records([first])
+        return self._rows_to_records([first, last])
 
     def load_records_for_date(self, date_key: str) -> list[dict[str, Any]]:
         """Load all records for sessions on a given date in one query."""
@@ -286,7 +425,7 @@ class TraceStore:
         if date_key == "legacy":
             rows = conn.execute(
                 """
-                SELECT r.payload_json
+                SELECT r.session_id, r.payload_json
                 FROM records r
                 INNER JOIN sessions s ON s.id = r.session_id
                 WHERE s.date_key = 'legacy' OR s.legacy_rel_path NOT LIKE '%/%'
@@ -296,7 +435,7 @@ class TraceStore:
         elif _DATE_RE.match(date_key):
             rows = conn.execute(
                 """
-                SELECT r.payload_json
+                SELECT r.session_id, r.payload_json
                 FROM records r
                 INNER JOIN sessions s ON s.id = r.session_id
                 WHERE s.date_key = ?
@@ -306,7 +445,7 @@ class TraceStore:
             ).fetchall()
         else:
             raise ValueError("Invalid date format")
-        return _rows_to_records(rows)
+        return self._rows_to_records(rows)
 
     def load_logs(self, session_id: str) -> list[dict[str, str]]:
         conn = self._connect()
@@ -333,6 +472,10 @@ class TraceStore:
         return "\n".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) for record in records) + (
             "\n" if records else ""
         )
+
+    def export_compact(self, session_id: str) -> str:
+        records = self.load_records(session_id)
+        return dump_compact_trace(records)
 
     def export_log(self, session_id: str) -> str:
         lines = []
@@ -366,7 +509,14 @@ class TraceStore:
     def dashboard_snapshot(self) -> dict[str, tuple[str, int, str]]:
         """Return session_id -> (updated_at, record_count, status) for change detection."""
         snapshot: dict[str, tuple[str, int, str]] = {}
-        for row in self.list_session_rows():
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT id, updated_at, record_count, status
+            FROM sessions
+            """
+        ).fetchall()
+        for row in rows:
             snapshot[row["id"]] = (
                 row["updated_at"] or "",
                 int(row["record_count"] or 0),
@@ -377,7 +527,8 @@ class TraceStore:
     def list_dates(self) -> tuple[list[str], bool]:
         dates: set[str] = set()
         has_legacy = False
-        for row in self.list_session_rows():
+        conn = self._connect()
+        for row in conn.execute("SELECT DISTINCT date_key FROM sessions").fetchall():
             date_key = row["date_key"] or ""
             if _DATE_RE.match(date_key):
                 dates.add(date_key)
@@ -413,6 +564,37 @@ class TraceStore:
             "deleted_files": len(to_delete),
             "skipped_sessions": len(skipped),
             "skipped_files": len(skipped),
+        }
+
+    def delete_session(self, session_id: str) -> dict[str, int | str]:
+        """Delete one trace session and its dependent records/logs."""
+        with self._write_lock:
+            conn = self._connect()
+            row = conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if row is None:
+                return {
+                    "session_id": session_id,
+                    "deleted_sessions": 0,
+                    "deleted_records": 0,
+                    "deleted_logs": 0,
+                }
+            record_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM records WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            log_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM proxy_logs WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            deleted_records = int(record_row["count"] or 0) if record_row is not None else 0
+            deleted_logs = int(log_row["count"] or 0) if log_row is not None else 0
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.commit()
+        return {
+            "session_id": session_id,
+            "deleted_sessions": 1,
+            "deleted_records": deleted_records,
+            "deleted_logs": deleted_logs,
         }
 
     def cleanup_old_sessions(self, max_sessions: int, *, protected_session_id: str | None = None) -> int:
@@ -549,7 +731,7 @@ class TraceStore:
                         index,
                         _int_or_none(record.get("turn")),
                         _str_or_none(record.get("timestamp")),
-                        json.dumps(record, ensure_ascii=False, separators=(",", ":")),
+                        self._encode_record(conn, session_id, record),
                     )
                     for index, record in enumerate(records, start=1)
                 ],
@@ -620,7 +802,11 @@ class TraceStore:
         record: dict[str, Any],
         record_count: int,
     ) -> None:
-        from claude_tap.dashboard import merge_record_into_summary
+        from claude_tap.dashboard import (
+            build_stored_session_summary,
+            is_dashboard_summary_current,
+            merge_record_into_summary,
+        )
 
         row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         if row is None:
@@ -631,12 +817,15 @@ class TraceStore:
                 existing = json.loads(row["summary_json"])
             except json.JSONDecodeError:
                 existing = None
-        summary = merge_record_into_summary(
-            existing,
-            row=row,
-            record=record,
-            record_count=record_count,
-        )
+        if existing is not None and not is_dashboard_summary_current(existing, session_id):
+            summary = build_stored_session_summary(row, self.load_records(session_id))
+        else:
+            summary = merge_record_into_summary(
+                existing,
+                row=row,
+                record=record,
+                record_count=record_count,
+            )
         conn.execute(
             """
             UPDATE sessions
@@ -682,18 +871,26 @@ class TraceStore:
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         current = conn.execute("PRAGMA user_version").fetchone()[0]
         if current == 0:
-            self._create_v3_schema(conn)
+            self._create_v4_schema(conn)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             return
         if current == 2:
             self._migrate_v2_to_v3(conn)
+            current = 3
+        if current == 3:
+            self._migrate_v3_to_v4(conn)
             return
         if current != SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported trace database schema version {current}; expected {SCHEMA_VERSION}.")
-        self._create_v3_schema(conn)
+        self._create_v4_schema(conn)
 
     def _create_v3_schema(self, conn: sqlite3.Connection) -> None:
         self._create_v3_tables(conn)
+        self._create_v3_indexes(conn)
+
+    def _create_v4_schema(self, conn: sqlite3.Connection) -> None:
+        self._create_v3_tables(conn)
+        self._create_v4_tables(conn)
         self._create_v3_indexes(conn)
 
     def _migrate_v2_to_v3(self, conn: sqlite3.Connection) -> None:
@@ -740,13 +937,18 @@ class TraceStore:
             conn.execute(f"DROP TABLE {records_v2}")
             conn.execute(f"DROP TABLE {sessions_v2}")
             self._create_v3_indexes(conn)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            conn.execute("PRAGMA user_version = 3")
             conn.commit()
         except Exception:
             conn.rollback()
             raise
         finally:
             conn.execute("PRAGMA foreign_keys = ON")
+
+    def _migrate_v3_to_v4(self, conn: sqlite3.Connection) -> None:
+        self._create_v4_tables(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
 
     def _create_v3_tables(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -801,6 +1003,22 @@ class TraceStore:
             """
         )
 
+    def _create_v4_tables(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS record_blobs (
+                session_id TEXT NOT NULL,
+                hash TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, hash),
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+            """
+        )
+
     def _create_v3_indexes(self, conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_date_key ON sessions(date_key)")
@@ -820,17 +1038,171 @@ class TraceStore:
         ).fetchone()
         return int(row["next_index"])
 
+    @staticmethod
+    def _agent_label_expr() -> str:
+        return """
+            COALESCE(
+                NULLIF(
+                    CASE
+                        WHEN json_valid(summary_json)
+                        THEN json_extract(summary_json, '$.agent')
+                        ELSE ''
+                    END,
+                    ''
+                ),
+                NULLIF(client, ''),
+                'Unknown'
+            )
+        """
 
-def _rows_to_records(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for row in rows:
-        try:
-            record = json.loads(row["payload_json"])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict):
-            records.append(record)
-    return records
+    @staticmethod
+    def _summary_agent_lower_expr() -> str:
+        return """
+            LOWER(
+                CASE
+                    WHEN json_valid(summary_json)
+                    THEN COALESCE(json_extract(summary_json, '$.agent'), '')
+                    ELSE ''
+                END
+            )
+        """
+
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    def _session_where(self, query: SessionQuery | None) -> tuple[str, list[object]]:
+        if query is None:
+            return "", []
+
+        clauses: list[str] = []
+        params: list[object] = []
+        if query.date:
+            if query.date == "legacy":
+                clauses.append("(date_key = 'legacy' OR legacy_rel_path NOT LIKE '%/%')")
+            elif _DATE_RE.match(query.date):
+                clauses.append("date_key = ?")
+                params.append(query.date)
+
+        if query.status:
+            if query.status == "error":
+                clauses.append(
+                    "(status = 'error' OR (status = 'active' AND json_valid(summary_json) AND json_extract(summary_json, '$.status') = 'error'))"
+                )
+            elif query.status == "active":
+                clauses.append(
+                    "(status = 'active' AND (NOT json_valid(summary_json) OR json_extract(summary_json, '$.status') IS NULL OR json_extract(summary_json, '$.status') != 'error'))"
+                )
+            else:
+                clauses.append("status = ?")
+                params.append(query.status)
+
+        if query.agent_clients or query.agent_labels:
+            agent_clauses: list[str] = []
+            if query.agent_clients:
+                placeholders = ",".join("?" * len(query.agent_clients))
+                agent_clauses.append(f"LOWER(COALESCE(client, '')) IN ({placeholders})")
+                params.extend(client.lower() for client in query.agent_clients)
+            if query.agent_labels:
+                placeholders = ",".join("?" * len(query.agent_labels))
+                summary_agent_expr = self._summary_agent_lower_expr()
+                agent_clauses.append(f"{summary_agent_expr} IN ({placeholders})")
+                params.extend(label.lower() for label in query.agent_labels)
+            clauses.append(f"({' OR '.join(agent_clauses)})")
+
+        search = query.search.strip().lower()
+        if search:
+            pattern = f"%{self._escape_like(search)}%"
+            search_clauses = [
+                "LOWER(COALESCE(id, '')) LIKE ? ESCAPE '\\'",
+                "LOWER(COALESCE(date_key, '')) LIKE ? ESCAPE '\\'",
+                "LOWER(COALESCE(client, '')) LIKE ? ESCAPE '\\'",
+                "LOWER(COALESCE(proxy_mode, '')) LIKE ? ESCAPE '\\'",
+                "LOWER(COALESCE(status, '')) LIKE ? ESCAPE '\\'",
+                "LOWER(COALESCE(legacy_rel_path, '')) LIKE ? ESCAPE '\\'",
+                "LOWER(COALESCE(summary_json, '')) LIKE ? ESCAPE '\\'",
+                "id IN (SELECT session_id FROM records WHERE LOWER(payload_json) LIKE ? ESCAPE '\\')",
+            ]
+            clauses.append(f"({' OR '.join(search_clauses)})")
+            params.extend([pattern] * len(search_clauses))
+
+        if not clauses:
+            return "", []
+        return f"WHERE {' AND '.join(clauses)}", params
+
+    def _encode_record(self, conn: sqlite3.Connection, session_id: str, record: dict[str, Any]) -> str:
+        compact_record, refs = compact_record_blobs(
+            record, lambda value: self._store_json_blob(conn, session_id, value)
+        )
+        payload: dict[str, Any] = compact_record
+        if refs:
+            payload = {
+                COMPACT_RECORD_MARKER: {
+                    "version": COMPACT_RECORD_VERSION,
+                    "encoding": "json-blob-ref",
+                    "refs": refs,
+                },
+                "record": compact_record,
+            }
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+    def _store_json_blob(self, conn: sqlite3.Connection, session_id: str, value: Any) -> dict[str, Any] | None:
+        payload_json, size_bytes, hash_value = json_blob_payload(value)
+        if size_bytes < MIN_BLOB_BYTES:
+            return None
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO record_blobs (session_id, hash, kind, payload_json, size_bytes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (session_id, hash_value, BLOB_KIND_JSON, payload_json, size_bytes, datetime.now(timezone.utc).isoformat()),
+        )
+        return make_blob_ref(hash_value, size_bytes)
+
+    def _rows_to_records(self, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        blob_cache: dict[tuple[str, str], Any] = {}
+        conn = self._connect()
+        for row in rows:
+            try:
+                record = self._decode_record_payload(conn, row["session_id"], row["payload_json"], blob_cache)
+            except (json.JSONDecodeError, KeyError):
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+        return records
+
+    def _decode_record_payload(
+        self,
+        conn: sqlite3.Connection,
+        session_id: str,
+        payload_json: str,
+        blob_cache: dict[tuple[str, str], Any],
+    ) -> dict[str, Any] | None:
+        payload = json.loads(payload_json)
+        return decode_compact_record_payload(
+            payload,
+            lambda ref: self._load_record_blob(conn, session_id, ref, blob_cache),
+        )
+
+    def _load_record_blob(
+        self,
+        conn: sqlite3.Connection,
+        session_id: str,
+        ref: dict[str, Any],
+        blob_cache: dict[tuple[str, str], Any],
+    ) -> Any:
+        hash_value = ref["hash"]
+        cache_key = (session_id, hash_value)
+        if cache_key not in blob_cache:
+            row = conn.execute(
+                "SELECT payload_json FROM record_blobs WHERE session_id = ? AND hash = ? AND kind = ?",
+                (session_id, hash_value, ref.get("kind") or BLOB_KIND_JSON),
+            ).fetchone()
+            if row is None:
+                raise KeyError(hash_value)
+            blob_cache[cache_key] = json.loads(row["payload_json"])
+        return blob_cache[cache_key]
 
 
 def _legacy_source_key(output_dir: Path) -> str:

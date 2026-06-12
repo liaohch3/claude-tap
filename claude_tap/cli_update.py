@@ -11,6 +11,8 @@ import subprocess
 import sys
 import urllib.request
 
+from claude_tap.process_utils import windows_no_console_subprocess_kwargs
+
 # ---------------------------------------------------------------------------
 # Smart update check
 # ---------------------------------------------------------------------------
@@ -40,10 +42,36 @@ async def _check_pypi_version(timeout: float = 3.0) -> str | None:
 
 def _detect_installer() -> str:
     """Detect whether claude-tap was installed via uv or pip."""
-    exe = sys.executable or ""
-    if "uv" in exe.lower() or shutil.which("uv"):
+    exe = (sys.executable or "").lower().replace("\\", "/")
+    uv_tool_dir = os.environ.get("UV_TOOL_DIR", "").lower().replace("\\", "/").rstrip("/")
+    if uv_tool_dir and exe.startswith(f"{uv_tool_dir}/"):
+        return "uv"
+    if "/uv/data/tools/" in exe or "/uv/tools/" in exe:
+        return "uv"
+    if sys.platform != "win32" and shutil.which("uv"):
         return "uv"
     return "pip"
+
+
+def _maybe_start_background_update(
+    *,
+    no_auto_update: bool,
+    dashboard_stop_command: str = "claude-tap dashboard stop",
+) -> None:
+    """Start a safe automatic update, or explain why it was skipped."""
+    if no_auto_update:
+        return
+
+    installer = _detect_installer()
+    if sys.platform == "win32" and installer == "pip":
+        print("   Automatic updates are disabled for pip installs on Windows.")
+        print("   Exit all claude-tap sessions, then run:")
+        print(f"     {dashboard_stop_command}")
+        print(f'     "{sys.executable}" -m pip install --upgrade claude-tap')
+        return
+
+    if _start_background_update(installer) is not None:
+        print(f"   Downloading update in background ({installer})...")
 
 
 def _start_background_update(installer: str) -> subprocess.Popen | None:
@@ -52,7 +80,12 @@ def _start_background_update(installer: str) -> subprocess.Popen | None:
         cmd = _build_update_command(installer)
         if cmd is None:
             return None
-        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **windows_no_console_subprocess_kwargs(),
+        )
     except Exception:
         return None
 

@@ -23,10 +23,14 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy (Google endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Gemini CLI | API key / Vertex-compatible config (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE | Unit-tested |
-| Kimi CLI | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested |
-| Kimi CLI | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
+| Kimi CLI (legacy kimi-cli) | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested (`KIMI_BASE_URL`) |
+| Kimi CLI (legacy kimi-cli) | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
+| Kimi Code CLI | `~/.kimi-code/config.toml` + OAuth (`managed:kimi-code`) | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested (`KIMI_CODE_HOME` sandbox) |
+| Kimi Code CLI | Custom `type = "kimi"` provider in config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported via `--tap-target` |
 | OpenCode | Provider creds via `opencode providers` (OpenAI OAuth and OpenCode free provider verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Real E2E verified |
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
+| OpenClaw | Provider creds via `~/.openclaw/openclaw.json` or `OPENCLAW_CONFIG_PATH` | Selected provider `baseUrl` patched through a temporary config file | provider-dependent | HTTP/SSE | Unit-tested |
+| OpenClaw | No patchable config (`--tap-proxy-mode reverse`) | Provider env fallback (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, or `OPENROUTER_BASE_URL`) | provider-dependent | HTTP/SSE | Unit-tested |
 | Pi | Provider creds via Pi `/login` or `PI_CODING_AGENT_DIR` auth file (`openai-codex` OAuth verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE + WebSocket | Real E2E verified |
 | Pi | Custom OpenAI-compatible setup (`--tap-proxy-mode reverse`) | `https://api.openai.com` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
@@ -46,8 +50,10 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
 | `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |
-| `kimi` | `reverse` | Single provider, native `KIMI_BASE_URL` env var |
+| `kimi` | `reverse` | Legacy kimi-cli; native `KIMI_BASE_URL` env var |
+| `kimi-code` | `reverse` | Patches `~/.kimi-code/config.toml` via temporary `KIMI_CODE_HOME` sandbox |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
+| `openclaw` | `reverse` | Patches the selected OpenClaw provider config when possible, otherwise falls back to provider-specific base URL env vars |
 | `pi` | `forward` | Multi-provider; Pi can use OpenAI Codex OAuth and custom model registry providers, so forward proxy captures traffic without relying on a single base URL override |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
 | `cursor` | `forward` | Cursor CLI has no base URL override; forward proxy captures network traffic and local transcripts provide readable turns |
@@ -110,11 +116,13 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs` — verifies Gemini forward proxy launch env
 - `test_run_client_gemini_reverse_sets_both_base_url_envs` — verifies Gemini reverse proxy base URL env injection
 - `test_viewer_renders_gemini_semantic_sections` — verifies Gemini systemInstruction, contents, functionDeclarations, functionCall, functionResponse, SSE output, and token usage render as semantic viewer sections
-- `test_kimi_registered_in_client_configs` — verifies Kimi CLI registration
-- `test_kimi_client_reverse_proxy` — e2e with fake Kimi Chat Completions stream
+- `test_kimi_registered_in_client_configs` — verifies legacy Kimi CLI registration
+- `test_kimi_client_reverse_proxy` — e2e with fake Kimi Chat Completions stream (`KIMI_BASE_URL`)
+- `test_kimi_code_*` — verifies Kimi Code CLI registration, sandbox config patch, and e2e capture
 - `test_chat_completions_reasoning_content_is_mirrored_as_thinking` — verifies Kimi thinking stream rendering shape
 - `test_websocket_proxy_basic` — WS relay and trace recording
 - `test_hermes_*` — registration, parse_args default-mode resolution, forward/reverse env, argv rewrite
+- `test_openclaw_*` — verifies OpenClaw registration, selected-provider config patching, fallback env routing, and target detection
 - `test_pi_*` — registration, parse_args default-mode resolution, forward/reverse env, and argument preservation
 - `test_cursor_registered_in_client_configs` — verifies Cursor CLI registration and default forward mode
 - `test_run_client_cursor_forward_sets_proxy_ca_and_no_proxy` — verifies Cursor launch env for forward proxy mode
@@ -151,8 +159,11 @@ uv run python -m claude_tap --tap-client agy --tap-live
 # On first run, verify macOS prompts only for the user login keychain, not sudo/admin System keychain writes.
 # Then verify the trace contains /v1internal:streamGenerateContent model records.
 
-# Kimi CLI
+# Kimi CLI (legacy kimi-cli)
 uv run python -m claude_tap --tap-client kimi -- --thinking
+
+# Kimi Code CLI
+uv run python -m claude_tap --tap-client kimi-code -- --thinking
 # Verify the trace contains /chat/completions records and thinking/text output
 
 # Gemini CLI

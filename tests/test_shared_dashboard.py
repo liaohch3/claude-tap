@@ -12,11 +12,13 @@ from claude_tap.shared_dashboard import (
     _dashboard_spawn_lock,
     _spawn_dashboard_subprocess,
     _sync_dashboard_healthy_for_current_db,
+    dashboard_connect_host,
     dashboard_url,
     ensure_shared_dashboard,
     is_dashboard_healthy,
     is_legacy_dashboard_healthy,
     resolve_dashboard_port,
+    stop_shared_dashboard,
 )
 from claude_tap.trace_store import resolve_db_path
 
@@ -51,7 +53,14 @@ def test_resolve_dashboard_port_ignores_invalid_env(monkeypatch: pytest.MonkeyPa
 
 
 def test_dashboard_url() -> None:
+    assert dashboard_connect_host("localhost") == "localhost"
+    assert dashboard_connect_host(" ") == "127.0.0.1"
+    assert dashboard_connect_host("0.0.0.0") == "127.0.0.1"
+    assert dashboard_connect_host("::") == "::1"
+    assert dashboard_connect_host("[::]") == "::1"
     assert dashboard_url("127.0.0.1", 1234) == "http://127.0.0.1:1234"
+    assert dashboard_url("0.0.0.0", 1234) == "http://127.0.0.1:1234"
+    assert dashboard_url("::", 1234) == "http://[::1]:1234"
     assert dashboard_url("::1", 1234) == "http://[::1]:1234"
     assert dashboard_url("[::1]", 1234) == "http://[::1]:1234"
 
@@ -98,11 +107,11 @@ def test_dashboard_spawn_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 
 def test_spawn_dashboard_subprocess(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    spawned_args = []
+    spawned_args: list[tuple[list[str], dict[str, object]]] = []
 
     class FakePopen:
         def __init__(self, cmd: list[str], **kwargs: object) -> None:
-            spawned_args.append(cmd)
+            spawned_args.append((cmd, kwargs))
             self.pid = 99999
 
     monkeypatch.setattr(subprocess, "Popen", FakePopen)
@@ -110,11 +119,67 @@ def test_spawn_dashboard_subprocess(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     _spawn_dashboard_subprocess("127.0.0.1", 19527, tmp_path)
 
     assert len(spawned_args) == 1
-    cmd = spawned_args[0]
+    cmd, kwargs = spawned_args[0]
     assert "dashboard" in cmd
     assert "--tap-live-port" in cmd
     assert "19527" in cmd
     assert str(tmp_path) in cmd
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["stdout"] == subprocess.DEVNULL
+    assert kwargs["stderr"] == subprocess.DEVNULL
+    assert kwargs["start_new_session"] is True
+
+
+def test_spawn_dashboard_subprocess_hides_windows_console(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeStartupInfo:
+        def __init__(self) -> None:
+            self.dwFlags = 0
+            self.wShowWindow: int | None = None
+
+    class FakePopen:
+        def __init__(self, cmd: list[str], **kwargs: object) -> None:
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            self.pid = 99999
+
+    scripts_dir = tmp_path / "uv" / "tools" / "claude-tap" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    python_exe = scripts_dir / "python.exe"
+    pythonw_exe = scripts_dir / "pythonw.exe"
+    python_exe.touch()
+    pythonw_exe.touch()
+
+    monkeypatch.setattr("claude_tap.shared_dashboard.sys.platform", "win32")
+    monkeypatch.setattr("claude_tap.shared_dashboard.sys.executable", str(python_exe))
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x1000, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x2000, raising=False)
+    monkeypatch.setattr(subprocess, "STARTF_USESHOWWINDOW", 0x4000, raising=False)
+    monkeypatch.setattr(subprocess, "SW_HIDE", 0, raising=False)
+    monkeypatch.setattr(subprocess, "STARTUPINFO", FakeStartupInfo, raising=False)
+
+    _spawn_dashboard_subprocess("0.0.0.0", 19527, tmp_path)
+
+    cmd = captured["cmd"]
+    kwargs = captured["kwargs"]
+    assert isinstance(cmd, list)
+    assert isinstance(kwargs, dict)
+    assert cmd[0] == str(pythonw_exe)
+    assert cmd[-2:] == ["--tap-host", "0.0.0.0"]
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["stdout"] == subprocess.DEVNULL
+    assert kwargs["stderr"] == subprocess.DEVNULL
+    assert kwargs["creationflags"] == 0x1000 | 0x2000
+    assert "start_new_session" not in kwargs
+    startupinfo = kwargs["startupinfo"]
+    assert isinstance(startupinfo, FakeStartupInfo)
+    assert startupinfo.dwFlags == 0x4000
+    assert startupinfo.wShowWindow == 0
 
 
 @pytest.mark.asyncio
@@ -137,11 +202,130 @@ async def test_is_dashboard_healthy_real_server(monkeypatch: pytest.MonkeyPatch,
         async with aiohttp.ClientSession() as session:
             async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
                 assert resp.status == 200
-                assert await resp.json() == {"ok": True, "db_path": str(resolve_db_path())}
+                payload = await resp.json()
+                assert payload["ok"] is True
+                assert payload["db_path"] == str(resolve_db_path())
+                assert payload["dashboard_mode"] is True
+                assert isinstance(payload["quit_token"], str)
+                assert payload["quit_token"]
         assert await is_dashboard_healthy("127.0.0.1", port) is True
         assert await wait_for_dashboard_healthy("127.0.0.1", port, timeout=1.0) is True
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_shared_dashboard_stops_real_server(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from claude_tap.live import LiveViewerServer
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        assert await stop_shared_dashboard("127.0.0.1", port) is True
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is False
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_bind_all_dashboard_uses_loopback_for_local_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from claude_tap.live import LiveViewerServer
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+
+    server = LiveViewerServer(port=0, host="0.0.0.0", migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        assert server.url == f"http://127.0.0.1:{port}"
+        assert await is_dashboard_healthy("0.0.0.0", port) is True
+        assert await stop_shared_dashboard("0.0.0.0", port) is True
+        assert await is_dashboard_healthy("0.0.0.0", port, require_current_db=False) is False
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_shared_dashboard_requires_health_token() -> None:
+    quit_called = False
+
+    async def health(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True})
+
+    async def quit_dashboard(request: web.Request) -> web.Response:
+        nonlocal quit_called
+        quit_called = True
+        return web.json_response({"ok": True})
+
+    app = web.Application()
+    app.router.add_get("/dashboard/health", health)
+    app.router.add_post("/dashboard/quit", quit_dashboard)
+    runner, port = await _start_test_app(app)
+    try:
+        assert await stop_shared_dashboard("127.0.0.1", port) is False
+        assert quit_called is False
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_stop_shared_dashboard_rejects_unhealthy_or_forbidden_server() -> None:
+    async def unhealthy(request: web.Request) -> web.Response:
+        return web.json_response({"ok": False}, status=500)
+
+    unhealthy_app = web.Application()
+    unhealthy_app.router.add_get("/dashboard/health", unhealthy)
+    unhealthy_runner, unhealthy_port = await _start_test_app(unhealthy_app)
+    try:
+        assert await stop_shared_dashboard("127.0.0.1", unhealthy_port) is False
+    finally:
+        await unhealthy_runner.cleanup()
+
+    async def health(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True, "quit_token": "test-token"})
+
+    async def forbidden_quit(request: web.Request) -> web.Response:
+        assert request.headers["X-Claude-Tap-Dashboard-Token"] == "test-token"
+        return web.json_response({"ok": False}, status=403)
+
+    forbidden_app = web.Application()
+    forbidden_app.router.add_get("/dashboard/health", health)
+    forbidden_app.router.add_post("/dashboard/quit", forbidden_quit)
+    forbidden_runner, forbidden_port = await _start_test_app(forbidden_app)
+    try:
+        assert await stop_shared_dashboard("127.0.0.1", forbidden_port) is False
+    finally:
+        await forbidden_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_stop_shared_dashboard_handles_post_client_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import aiohttp
+
+    async def healthy(*_args: object, **_kwargs: object) -> tuple[int, dict[str, str]]:
+        return 200, {"quit_token": "test-token"}
+
+    class FailingSession:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FailingSession":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        def post(self, *_args: object, **_kwargs: object) -> object:
+            raise aiohttp.ClientError("post failed")
+
+    monkeypatch.setattr("claude_tap.shared_dashboard._dashboard_get_status_and_payload", healthy)
+    monkeypatch.setattr("claude_tap.shared_dashboard.aiohttp.ClientSession", FailingSession)
+
+    assert await stop_shared_dashboard("127.0.0.1", 19527) is False
 
 
 @pytest.mark.asyncio
@@ -207,7 +391,9 @@ async def test_is_dashboard_healthy_falls_back_for_legacy_dashboard() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_shared_dashboard_already_healthy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_ensure_shared_dashboard_already_healthy_does_not_reopen_browser(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     async def mock_true(h: str, p: int) -> bool:
         return True
 
@@ -230,7 +416,7 @@ async def test_ensure_shared_dashboard_already_healthy(monkeypatch: pytest.Monke
 
     assert url == "http://127.0.0.1:19527"
     assert spawned is False
-    assert opened == ["http://127.0.0.1:19527"]
+    assert opened == []
     assert migrated == [tmp_path]
 
 
@@ -247,16 +433,19 @@ async def test_ensure_shared_dashboard_migrates_after_lock_time_reuse(
     monkeypatch.setattr("claude_tap.shared_dashboard._spawn_dashboard_subprocess_if_needed", lambda h, p, d: False)
     monkeypatch.setattr("claude_tap.shared_dashboard._migrate_legacy_traces", migrated.append)
 
+    opened: list[str] = []
+
     url, spawned = await ensure_shared_dashboard(
         host="127.0.0.1",
         port=19527,
         output_dir=tmp_path,
-        open_browser=False,
-        open_browser_fn=lambda url: None,
+        open_browser=True,
+        open_browser_fn=opened.append,
     )
 
     assert url == "http://127.0.0.1:19527"
     assert spawned is False
+    assert opened == []
     assert migrated == [tmp_path]
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import shlex
 
 # Keep the stdlib module object available as claude_tap.cli.shutil for
 # existing tests and private integrations that monkeypatch shutil.which there.
@@ -49,6 +50,7 @@ from claude_tap.cli_update import (
     _build_update_command,
     _check_pypi_version,
     _detect_installer,
+    _maybe_start_background_update,
     _start_background_update,
     _version_tuple,
     parse_update_args,
@@ -66,6 +68,7 @@ from claude_tap.shared_dashboard import (
     is_dashboard_healthy,
     is_legacy_dashboard_healthy,
     resolve_dashboard_port,
+    stop_shared_dashboard,
 )
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
@@ -109,6 +112,7 @@ _CLI_COMPAT_EXPORTS = (
     _read_settings_env_base_url,
     _selected_codex_provider_base_url,
     _settings_arg,
+    _start_background_update,
     _toml_dotted_key_segment,
     parse_update_args,
 )
@@ -121,6 +125,38 @@ def _open_browser(url: str) -> None:
 
 async def _is_dashboard_reusable(host: str, port: int) -> bool:
     return await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port)
+
+
+def _dashboard_stop_command(host: str, port: int) -> str:
+    parts = ["claude-tap", "dashboard", "stop"]
+    if port != DEFAULT_DASHBOARD_PORT:
+        parts.extend(["--tap-live-port", str(port)])
+    if host != "127.0.0.1":
+        parts.extend(["--tap-host", host])
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+_CLAUDE_EXECUTABLE_NAMES = {"claude", "claude.exe", "claude.cmd", "claude.bat"}
+
+
+def _looks_like_claude_binary_path(value: str) -> bool:
+    if not value or value.startswith("-"):
+        return False
+    # VSCode's claudeProcessWrapper passes the bundled Claude binary path as
+    # argv[0]. Require a path-looking file so normal prompts/dirs named
+    # "claude" are not silently stripped or executed.
+    if "/" not in value and "\\" not in value and not (len(value) > 1 and value[1] == ":"):
+        return False
+    path = Path(value)
+    return path.name.lower() in _CLAUDE_EXECUTABLE_NAMES and path.is_file()
+
+
+def _extract_wrapped_client_command(client: str, args: list[str]) -> tuple[str | None, list[str]]:
+    if client != "claude" or not args:
+        return None, args
+    if _looks_like_claude_binary_path(args[0]):
+        return args[0], args[1:]
+    return None, args
 
 
 def _trust_ca_for_current_user(ca_cert_path: Path) -> int:
@@ -193,9 +229,9 @@ async def async_main(args: argparse.Namespace):
 
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
+    dashboard_host = args.host
+    dashboard_port = resolve_dashboard_port(args.live_port)
     if args.live_viewer:
-        dashboard_host = args.host
-        dashboard_port = resolve_dashboard_port(args.live_port)
         try:
             dashboard_url_value, spawned = await ensure_shared_dashboard(
                 host=dashboard_host,
@@ -237,6 +273,9 @@ async def async_main(args: argparse.Namespace):
     runner: web.AppRunner | None = None
     exit_code = 0
     client_started_at = time.time()
+    capture_only = bool(getattr(args, "export_prompt", None))
+    if capture_only:
+        print("📝 Prompt export mode: upstream calls are skipped after capture.")
     try:
         if args.proxy_mode == "forward":
             assert ca_cert_path is not None
@@ -251,6 +290,7 @@ async def async_main(args: argparse.Namespace):
                 local_reverse_target=args.target,
                 local_reverse_allowed_path_prefixes=CLIENT_CONFIGS[args.client].forward_base_url_allowed_path_prefixes,
                 store_stream_events=args.store_stream_events,
+                capture_only=capture_only,
             )
             actual_port = await forward_server.start()
             print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
@@ -264,6 +304,7 @@ async def async_main(args: argparse.Namespace):
                 "turn_counter": 0,
                 "extra_allowed_path_prefixes": tuple(args.extra_allowed_paths),
                 "store_stream_events": args.store_stream_events,
+                "capture_only": capture_only,
                 **_reverse_proxy_trace_options(args.client, args.target),
             }
             app.router.add_route("*", "/{path_info:.*}", proxy_handler)
@@ -289,10 +330,10 @@ async def async_main(args: argparse.Namespace):
                 latest = await _check_pypi_version()
                 if latest and _version_tuple(latest) > _version_tuple(__version__):
                     print(f"⬆️  Update available: {__version__} → {latest}")
-                    if not args.no_auto_update:
-                        installer = _detect_installer()
-                        _start_background_update(installer)
-                        print(f"   Downloading update in background ({installer})...")
+                    _maybe_start_background_update(
+                        no_auto_update=args.no_auto_update,
+                        dashboard_stop_command=_dashboard_stop_command(dashboard_host, dashboard_port),
+                    )
             except Exception:
                 pass
 
@@ -305,6 +346,8 @@ async def async_main(args: argparse.Namespace):
                     client=args.client,
                     proxy_mode=args.proxy_mode,
                     ca_cert_path=ca_cert_path,
+                    client_cmd=getattr(args, "client_cmd", None),
+                    capture_only=capture_only,
                 )
             except asyncio.CancelledError:
                 pass
@@ -344,6 +387,10 @@ async def async_main(args: argparse.Namespace):
 
         writer.close()
 
+        prompt_export_rc: int | None = None
+        if args.export_prompt:
+            prompt_export_rc = _export_prompt_from_session(store, session_id, args.export_prompt)
+
         if args.max_traces > 0:
             cleaned = cleanup_trace_sessions(args.max_traces, protected_session_id=session_id)
             if cleaned:
@@ -368,8 +415,42 @@ async def async_main(args: argparse.Namespace):
         print(f"   Database: {resolve_db_path()}")
         if dashboard_url_value:
             print(f"   Dashboard: {dashboard_url_value}")
+            print(f"   Stop dashboard: {_dashboard_stop_command(dashboard_host, dashboard_port)}")
+
+        if prompt_export_rc is not None:
+            if prompt_export_rc != 0:
+                exit_code = 1
 
     return exit_code
+
+
+def _export_prompt_from_session(store, session_id: str, output: str) -> int:
+    from claude_tap.prompt_snapshot import render_prompt_markdown, snapshot_from_records
+
+    try:
+        text = render_prompt_markdown(snapshot_from_records(store.load_records(session_id)))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if output == "-":
+        print(text, end="")
+        return 0
+
+    path = Path(output).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    print(f"📝 Prompt snapshot: {path}")
+    trace_path = _prompt_trace_path(path)
+    trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
+    print(f"🧾 Raw trace: {trace_path}")
+    return 0
+
+
+def _prompt_trace_path(prompt_path: Path) -> Path:
+    if prompt_path.name in {"prompt.md", "prompt.markdown", "system.md", "system.markdown"}:
+        return prompt_path.with_name("trace.jsonl")
+    return prompt_path.with_name(f"{prompt_path.stem}.trace.jsonl")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -382,9 +463,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
         description=(
-            "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, "
-            "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy. All flags not listed below are "
-            "forwarded to the selected client."
+            "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, OpenClaw, Pi, Hermes Agent, "
+            "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy. "
+            "All flags not listed below are forwarded to the selected client."
         ),
         epilog=(
             "claude code:\n"
@@ -404,12 +485,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # With model and full auto-approval\n"
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
             "\n"
-            "kimi cli:\n"
-            "  # Uses KIMI_BASE_URL and forwards to Kimi Code by default\n"
+            "kimi cli (legacy kimi-cli; uses shell KIMI_BASE_URL):\n"
             "  claude-tap --tap-client kimi\n"
             "  claude-tap --tap-client kimi -- --thinking\n"
-            "  # Use Moonshot Open Platform instead of Kimi Code\n"
             "  claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1\n"
+            "\n"
+            "kimi-code cli (MoonshotAI/kimi-code; patches ~/.kimi-code/config.toml via sandbox):\n"
+            "  claude-tap --tap-client kimi-code\n"
+            "  claude-tap --tap-client kimi-code -- --thinking\n"
+            "  claude-tap --tap-client kimi-code --tap-target https://api.moonshot.ai/v1\n"
             "\n"
             "gemini cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client gemini -- -p "hello"\n'
@@ -421,6 +505,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client opencode\n"
             "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
             "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
+            "\n"
+            "openclaw:\n"
+            "  # Reads OpenClaw config and points the selected provider at the local proxy\n"
+            "  claude-tap --tap-client openclaw -- agent\n"
             "\n"
             "pi (multi-provider; defaults to forward proxy mode):\n"
             "  # Forward proxy captures OpenAI Codex OAuth and other providers\n"
@@ -461,6 +549,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "export traces:\n"
             "  claude-tap export trace.jsonl              Export to markdown\n"
             "  claude-tap export trace.jsonl -o out.md    Export to file\n"
+            "  claude-tap export trace.jsonl --format prompt-md -o prompt.md Export prompt snapshot\n"
             "  claude-tap export trace.jsonl --format json Export as JSON\n"
             "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
             "\n"
@@ -470,6 +559,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "\n"
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
+            "  claude-tap dashboard stop                  Stop the shared dashboard service\n"
             "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
             "\n"
             "trust local CA:\n"
@@ -510,7 +600,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex/kimi/codebuddy, "
+            "Default depends on the client: 'reverse' for claude/codex/kimi/kimi-code/codebuddy, "
             "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder."
         ),
     )
@@ -587,6 +677,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Persist raw SSE/WebSocket stream events in trace storage and viewer/export output (default: off)",
     )
     storage_group.add_argument(
+        "--tap-export-prompt",
+        metavar="PATH",
+        default=None,
+        dest="export_prompt",
+        help=(
+            "Export the captured prompt surface to Markdown after this run, plus a raw trace JSONL next to it. "
+            "This mode records the request and returns a local success response without contacting upstream."
+        ),
+    )
+    storage_group.add_argument(
         "--tap-no-update-check",
         action="store_true",
         dest="no_update_check",
@@ -602,6 +702,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Strip leading "--" separator if present (argparse leaves it in remainder)
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
+    args.client_cmd, claude_args = _extract_wrapped_client_command(args.client, claude_args)
     args.claude_args = claude_args
     # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
     # 127.0.0.1 otherwise (launching the client locally).
@@ -610,6 +711,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.target is None:
         if args.client == "codex":
             args.target = _detect_codex_target(claude_args)
+        elif args.client == "kimi-code":
+            args.target = TARGET_DETECTORS["kimi-code"](claude_args)
+        elif args.client == "openclaw":
+            args.target = TARGET_DETECTORS["openclaw"](claude_args)
         else:
             detector = TARGET_DETECTORS.get(args.client)
             args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
@@ -637,6 +742,12 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="claude-tap dashboard",
         description="Open a local claude-tap dashboard for browsing trace history.",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["stop", "quit"],
+        help="Use 'stop' or 'quit' to stop a running dashboard service instead of starting one",
     )
     parser.add_argument(
         "--tap-output-dir",
@@ -670,10 +781,21 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def dashboard_main(args: argparse.Namespace) -> int:
     """Run the standalone dashboard until interrupted."""
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     host = args.host
     port = resolve_dashboard_port(args.live_port)
+    if args.command in {"stop", "quit"}:
+        if not await is_dashboard_healthy(host, port, require_current_db=False):
+            print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
+            return 1
+        if not await stop_shared_dashboard(host, port):
+            print(f"Unable to stop claude-tap dashboard on {dashboard_url(host, port)}")
+            return 1
+        print(f"Stopped claude-tap dashboard on {dashboard_url(host, port)}")
+        return 0
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     if await _is_dashboard_reusable(host, port):
         migrate_legacy_traces(output_dir)
         url = dashboard_url(host, port)
@@ -709,8 +831,7 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         _open_browser(server.url)
 
     try:
-        while True:
-            await asyncio.sleep(3600)
+        await server.wait_stopped()
     except asyncio.CancelledError:
         pass
     finally:

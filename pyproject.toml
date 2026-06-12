@@ -37,7 +37,7 @@ requires = ["setuptools>=68.0", "setuptools-scm[toml]>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["claude_tap"]
+packages = ["claude_tap", "claude_tap.viewer_assets"]
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
@@ -45,6 +45,7 @@ local_scheme = "no-local-version"
 
 [tool.setuptools.package-data]
 claude_tap = ["dashboard.html", "viewer.html", "viewer_i18n.json", "py.typed"]
+"claude_tap.viewer_assets" = ["*.css", "*.js"]
 
 [project.optional-dependencies]
 dev = [
