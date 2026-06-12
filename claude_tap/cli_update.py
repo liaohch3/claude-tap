@@ -43,7 +43,10 @@ async def _check_pypi_version(timeout: float = 3.0) -> str | None:
 def _detect_installer() -> str:
     """Detect whether claude-tap was installed via uv or pip."""
     exe = (sys.executable or "").lower().replace("\\", "/")
-    if "/uv/tools/" in exe:
+    uv_tool_dir = os.environ.get("UV_TOOL_DIR", "").lower().replace("\\", "/").rstrip("/")
+    if uv_tool_dir and exe.startswith(f"{uv_tool_dir}/"):
+        return "uv"
+    if "/uv/data/tools/" in exe or "/uv/tools/" in exe:
         return "uv"
     if sys.platform != "win32" and shutil.which("uv"):
         return "uv"
@@ -58,7 +61,9 @@ def _maybe_start_background_update(*, no_auto_update: bool) -> None:
     installer = _detect_installer()
     if sys.platform == "win32" and installer == "pip":
         print("   Automatic updates are disabled for pip installs on Windows.")
-        print("   Exit claude-tap, then run `claude-tap update --installer pip`.")
+        print("   Exit all claude-tap sessions, then run:")
+        print("     claude-tap dashboard stop")
+        print(f'     "{sys.executable}" -m pip install --upgrade claude-tap')
         return
 
     if _start_background_update(installer) is not None:

@@ -10,7 +10,8 @@ installer detection and automatic-update decision on Windows:
 The command ran from the PR checkout in an isolated pip-installed virtual
 environment. It exercises the startup update decision that runs before the
 dashboard and trace viewer workflow. The output confirms that a Windows pip
-installation receives manual update instructions instead of starting a
-background pip process.
+installation receives instructions to stop the shared dashboard and run pip
+through the current Python executable instead of starting a background pip
+process.
 
 No API keys, prompts, trace records, or user data are present.

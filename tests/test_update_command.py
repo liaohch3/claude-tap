@@ -18,10 +18,22 @@ from claude_tap.cli import (
 def test_detect_installer_uses_uv_tool_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "claude_tap.cli_update.sys.executable",
-        r"C:\Users\alice\AppData\Local\uv\tools\claude-tap\Scripts\python.exe",
+        r"C:\Users\alice\AppData\Roaming\uv\data\tools\claude-tap\Scripts\python.exe",
     )
     monkeypatch.setattr("claude_tap.cli_update.sys.platform", "win32")
     monkeypatch.setattr("claude_tap.cli_update.shutil.which", lambda _name: r"C:\tools\uv.exe")
+
+    assert _detect_installer() == "uv"
+
+
+def test_detect_installer_honors_custom_uv_tool_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "claude_tap.cli_update.sys.executable",
+        r"D:\managed-tools\claude-tap\Scripts\python.exe",
+    )
+    monkeypatch.setenv("UV_TOOL_DIR", r"D:\managed-tools")
+    monkeypatch.setattr("claude_tap.cli_update.sys.platform", "win32")
+    monkeypatch.setattr("claude_tap.cli_update.shutil.which", lambda _name: None)
 
     assert _detect_installer() == "uv"
 
@@ -58,7 +70,9 @@ def test_windows_pip_auto_update_is_replaced_with_manual_instructions(
 
     out = capsys.readouterr().out
     assert "Automatic updates are disabled for pip installs on Windows." in out
-    assert "claude-tap update --installer pip" in out
+    assert "claude-tap dashboard stop" in out
+    assert f'"{sys.executable}" -m pip install --upgrade claude-tap' in out
+    assert "claude-tap update" not in out
 
 
 def test_no_auto_update_flag_skips_installer_detection(monkeypatch: pytest.MonkeyPatch) -> None:
