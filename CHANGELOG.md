@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.109] - 2026-06-12
+
+### Changed
+- perf: compact repeated message content in traces
 ## [0.1.108] - 2026-06-10
 
 ### Changed
