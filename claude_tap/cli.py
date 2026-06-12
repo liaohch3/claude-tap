@@ -50,7 +50,7 @@ from claude_tap.cli_update import (
     _build_update_command,
     _check_pypi_version,
     _detect_installer,
-    _is_editable_install,
+    _maybe_start_background_update,
     _start_background_update,
     _version_tuple,
     parse_update_args,
@@ -112,6 +112,7 @@ _CLI_COMPAT_EXPORTS = (
     _read_settings_env_base_url,
     _selected_codex_provider_base_url,
     _settings_arg,
+    _start_background_update,
     _toml_dotted_key_segment,
     parse_update_args,
 )
@@ -329,22 +330,7 @@ async def async_main(args: argparse.Namespace):
                 latest = await _check_pypi_version()
                 if latest and _version_tuple(latest) > _version_tuple(__version__):
                     print(f"⬆️  Update available: {__version__} → {latest}")
-                    if args.no_auto_update:
-                        pass  # user opted out of auto-download
-                    elif sys.platform == "win32" and _detect_installer() == "pip":
-                        # Windows pip background upgrades are unsafe — the running
-                        # process holds file locks that can leave ~laude_tap debris
-                        # and corrupt the installation.
-                        print("   Background updates are disabled for pip installs on Windows.")
-                        print("   Exit claude-tap, then run `claude-tap update`.")
-                    elif _is_editable_install():
-                        print("   Editable install detected — skipping auto-update.")
-                        print("   Run `pip install -e .` manually to update.")
-                    else:
-                        installer = _detect_installer()
-                        proc = _start_background_update(installer)
-                        if proc is not None:
-                            print(f"   Downloading update in background ({installer})...")
+                    _maybe_start_background_update(no_auto_update=args.no_auto_update)
             except Exception:
                 pass
 
