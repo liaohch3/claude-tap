@@ -41,6 +41,23 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
   </tr>
 </table>
 
+## Built with claude-tap
+
+<table>
+  <tr>
+    <td width="55%">
+      <strong><a href="https://github.com/WEIFENG2333/phistory">Phistory</a></strong> archives versioned system prompt snapshots from agent CLIs such as Claude Code, Codex, Kimi, opencode, and Pi. It uses claude-tap's capture-only prompt export to preserve raw HTTP trace evidence and generate comparison-friendly prompt snapshots.
+      <br><br>
+      <a href="https://phistory.cc/">Open the prompt diff viewer</a> · <a href="https://github.com/WEIFENG2333/phistory">View repository</a>
+    </td>
+    <td width="45%" align="center">
+      <a href="https://phistory.cc/">
+        <img src="https://raw.githubusercontent.com/WEIFENG2333/phistory/main/docs/screenshot.png" alt="Phistory prompt diff viewer" width="420">
+      </a>
+    </td>
+  </tr>
+</table>
+
 ## Why use it
 
 - 👀 **See the exact context**: inspect prompts, messages, tool definitions, tool calls, tool results, reconstructed streaming responses, and token usage.
@@ -500,6 +517,10 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 </details>
 
 ## Community
+
+### Ecosystem
+
+- [Phistory](https://github.com/WEIFENG2333/phistory) archives versioned system prompt snapshots from agent CLIs such as Claude Code, Codex, Kimi, opencode, and Pi. It uses claude-tap's capture-only prompt export to preserve raw HTTP trace evidence and generate comparison-friendly prompt snapshots.
 
 ### Star History
 

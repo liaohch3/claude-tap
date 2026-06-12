@@ -41,6 +41,23 @@
   </tr>
 </table>
 
+## 使用 claude-tap 构建
+
+<table>
+  <tr>
+    <td width="55%">
+      <strong><a href="https://github.com/WEIFENG2333/phistory">Phistory</a></strong> 会归档 Claude Code、Codex、Kimi、opencode、Pi 等 Agent CLI 的系统提示词版本快照。它基于 claude-tap 的 capture-only prompt export 能力，保留原始 HTTP trace 证据，并生成方便阅读和对比的 prompt 快照。
+      <br><br>
+      <a href="https://phistory.cc/">打开 prompt diff 查看器</a> · <a href="https://github.com/WEIFENG2333/phistory">查看仓库</a>
+    </td>
+    <td width="45%" align="center">
+      <a href="https://phistory.cc/">
+        <img src="https://raw.githubusercontent.com/WEIFENG2333/phistory/main/docs/screenshot.png" alt="Phistory prompt diff 查看器" width="420">
+      </a>
+    </td>
+  </tr>
+</table>
+
 ## 为什么用它
 
 - 👀 **看见真实上下文**：检查 prompt、messages、工具定义、工具调用、工具结果、流式 chunk 和 token 用量。
@@ -497,6 +514,10 @@ claude-tap --tap-no-open
 </details>
 
 ## 社区
+
+### 生态项目
+
+- [Phistory](https://github.com/WEIFENG2333/phistory) 会归档 Claude Code、Codex、Kimi、opencode、Pi 等 Agent CLI 的系统提示词版本快照。它基于 claude-tap 的 capture-only prompt export 能力，保留原始 HTTP trace 证据，并生成方便阅读和对比的 prompt 快照。
 
 ### Star 历史
 
