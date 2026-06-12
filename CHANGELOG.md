@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.110] - 2026-06-12
+
+### Changed
+- Add bulk session deletion and lazy dashboard paging (#298)
 ## [0.1.109] - 2026-06-12
 
 ### Changed
