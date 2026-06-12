@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.113] - 2026-06-12
+
+### Changed
+- docs: add Phistory ecosystem showcase (#321)
 ## [0.1.112] - 2026-06-12
 
 ### Changed
