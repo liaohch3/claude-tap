@@ -201,7 +201,7 @@ def test_append_log_refreshes_active_session_heartbeat(trace_db) -> None:
     session_id = store.create_session(client="claude", proxy_mode="reverse")
     stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     conn = store._connect()
-    conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (stale, session_id))
+    conn.execute("UPDATE sessions SET updated_at = ?, status = 'complete' WHERE id = ?", (stale, session_id))
     conn.commit()
 
     store.append_log(session_id, "proxy still alive", logged_at="12:00:00")
@@ -209,6 +209,7 @@ def test_append_log_refreshes_active_session_heartbeat(trace_db) -> None:
     row = store.load_session_row(session_id)
     assert row is not None
     assert row["updated_at"] > stale
+    assert row["status"] == "active"
 
 
 def test_finalize_session_refreshes_cached_summary_timestamp(trace_db) -> None:
@@ -392,6 +393,12 @@ async def test_shared_dashboard_delete_history_requires_force_for_active_session
         proxy_mode="reverse",
         started_at=datetime(2026, 5, 1, 12, 30, tzinfo=timezone.utc),
     )
+    conn = get_trace_store()._connect()
+    conn.execute(
+        "UPDATE sessions SET updated_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), active_session),
+    )
+    conn.commit()
 
     server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
     port = await server.start()

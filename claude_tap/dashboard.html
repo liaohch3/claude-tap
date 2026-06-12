@@ -585,25 +585,6 @@ body.detail-route .main {
 body.detail-route .detail-page-head {
   margin-bottom: 8px;
 }
-.back-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 32px;
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-card);
-  color: var(--blue);
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1;
-  transition: background .15s, border-color .15s;
-}
-.back-btn:hover {
-  border-color: var(--blue);
-  background: var(--blue-bg);
-}
 .detail-heading {
   min-width: 0;
   display: grid;
@@ -701,6 +682,8 @@ body.detail-route .detail-page-head {
   min-height: 360px;
 }
 .detail-inspector-bar {
+  position: relative;
+  z-index: 30;
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin: 0 0 10px;
   padding: 6px;
@@ -1082,7 +1065,6 @@ pre {
 
   <section id="detail-view" class="detail-view hidden">
     <div class="detail-page-head">
-      <button id="back-to-list" class="back-btn" type="button" data-i18n="back_to_sessions">Back to sessions</button>
       <div class="detail-heading">
         <div class="detail-title" id="detail-title" data-i18n="session_detail">Session detail</div>
         <div class="detail-subtitle" id="detail-subtitle" data-i18n="no_session_selected">No session selected.</div>
@@ -1170,10 +1152,6 @@ function sessionDetailUrl(sessionId) {
   return `/dashboard/session/${encodeURIComponent(sessionId)}`;
 }
 
-function dashboardListUrl() {
-  return "/dashboard";
-}
-
 const DASHBOARD_I18N = {
   en: {
     document_title: "claude-tap dashboard",
@@ -1248,7 +1226,6 @@ const DASHBOARD_I18N = {
 	    deleting_sessions: "Deleting...",
 	    selected_delete_summary: "{count} sessions selected",
 	    unable_delete_session: "Unable to delete session: {error}",
-    back_to_sessions: "Back to sessions",
     session_detail: "Session detail",
     session_details: "{agent} details",
     no_session_selected: "No session selected.",
@@ -1357,7 +1334,6 @@ const DASHBOARD_I18N = {
 	    deleting_sessions: "正在删除...",
 	    selected_delete_summary: "已选择 {count} 个会话",
 	    unable_delete_session: "无法删除会话：{error}",
-    back_to_sessions: "返回会话列表",
     session_detail: "会话详情",
     session_details: "{agent} 详情",
     no_session_selected: "未选择会话。",
@@ -2172,19 +2148,8 @@ async function loadMoreSessionRecords(session, records, button) {
 	function renderDetail(session, records) {
 	  const totalRecords = Number(session.record_count || records.length);
 	  const hasHiddenRecords = totalRecords > records.length;
-	  const alternateTab = state.activeTab === "conversation" ? "raw" : "conversation";
-	  const alternateLabel = alternateTab === "conversation" ? t("full_viewer") : t("tab_trace");
-	  const viewerHtml = state.activeTab === "conversation" ? `
-	      <div class="viewer-frame-wrap">
-	        <div class="viewer-loading" data-viewer-loading>${loadingMarkup(t("loading_viewer"))}</div>
-	        <iframe
-	          class="viewer-frame"
-	          data-viewer-frame
-	          src="/api/sessions/${encodeURIComponent(session.id)}/html"
-	          title="${esc(t("session_details", {agent: session.agent || t("session_detail")}))}"
-	        ></iframe>
-	      </div>
-	    ` : "";
+	  const alternateTab = detailAlternateTab();
+	  const alternateLabel = detailTabLabel(alternateTab);
 	  state.detailSessionId = session.id;
   state.detailRecordsLoaded = records.length;
   state.detailRecordTotal = totalRecords;
@@ -2196,7 +2161,7 @@ async function loadMoreSessionRecords(session, records, button) {
   $("#detail").innerHTML = `
     <div class="detail-inspector-bar">
       <div class="detail-tabs">
-        <button class="detail-tab" data-tab="${alternateTab}">${esc(alternateLabel)}</button>
+        <button class="detail-tab" data-tab-toggle data-tab="${alternateTab}">${esc(alternateLabel)}</button>
       </div>
       <div class="action-bar">
         <details class="export-menu">
@@ -2212,7 +2177,6 @@ async function loadMoreSessionRecords(session, records, button) {
       </div>
     </div>
 	    <div id="conversation-tab" class="${state.activeTab === "conversation" ? "" : "hidden"}">
-	      ${viewerHtml}
 	    </div>
     <div id="raw-tab" class="${state.activeTab === "raw" ? "" : "hidden"}">
       ${hasHiddenRecords ? `<div class="detail-fallback-note">${esc(t("limited_records", {shown: records.length, total: totalRecords}))}</div>` : ""}
@@ -2221,15 +2185,9 @@ async function loadMoreSessionRecords(session, records, button) {
     </div>
   `;
 
-  document.querySelector("[data-viewer-frame]")?.addEventListener("load", event => {
-    event.currentTarget?.parentElement?.querySelector("[data-viewer-loading]")?.remove();
-  });
-
-  document.querySelectorAll("[data-tab]").forEach(button => {
-    button.addEventListener("click", () => {
-      state.activeTab = button.dataset.tab;
-      renderDetail(session, records);
-    });
+  setDetailTab(state.activeTab, session);
+  document.querySelector("[data-tab-toggle]")?.addEventListener("click", event => {
+    setDetailTab(event.currentTarget.dataset.tab, session);
   });
   document.querySelectorAll("[data-json-toggle]").forEach(button => {
     button.addEventListener("click", () => {
@@ -2251,13 +2209,54 @@ async function loadMoreSessionRecords(session, records, button) {
   });
 }
 
+function detailAlternateTab() {
+  return state.activeTab === "conversation" ? "raw" : "conversation";
+}
+
+function detailTabLabel(tab) {
+  return tab === "conversation" ? t("full_viewer") : t("tab_trace");
+}
+
+function updateDetailTabToggle() {
+  const button = document.querySelector("[data-tab-toggle]");
+  if (!button) return;
+  const alternateTab = detailAlternateTab();
+  button.dataset.tab = alternateTab;
+  button.textContent = detailTabLabel(alternateTab);
+}
+
+function setDetailTab(tab, session) {
+  state.activeTab = tab === "conversation" ? "conversation" : "raw";
+  $("#conversation-tab")?.classList.toggle("hidden", state.activeTab !== "conversation");
+  $("#raw-tab")?.classList.toggle("hidden", state.activeTab !== "raw");
+  if (state.activeTab === "conversation") ensureViewerFrame(session);
+  updateDetailTabToggle();
+}
+
+function ensureViewerFrame(session) {
+  const container = $("#conversation-tab");
+  if (!container || container.querySelector("[data-viewer-frame]")) return;
+  container.innerHTML = `
+    <div class="viewer-frame-wrap">
+      <div class="viewer-loading" data-viewer-loading>${loadingMarkup(t("loading_viewer"))}</div>
+      <iframe
+        class="viewer-frame"
+        data-viewer-frame
+        src="/api/sessions/${encodeURIComponent(session.id)}/html"
+        title="${esc(t("session_details", {agent: session.agent || t("session_detail")}))}"
+      ></iframe>
+    </div>
+  `;
+  container.querySelector("[data-viewer-frame]")?.addEventListener("load", event => {
+    event.currentTarget?.parentElement?.querySelector("[data-viewer-loading]")?.remove();
+  });
+}
+
 function updateDetailI18n(session) {
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
-	  document.querySelectorAll("[data-tab]").forEach(button => {
-	    button.textContent = button.dataset.tab === "conversation" ? t("full_viewer") : t("tab_trace");
-	  });
+	  updateDetailTabToggle();
   document.querySelectorAll("[data-detail-i18n]").forEach(element => {
     element.textContent = t(element.dataset.detailI18n);
   });
@@ -2458,9 +2457,6 @@ $("#status-filter").addEventListener("change", event => {
 	$("#delete-selected-sessions").addEventListener("click", () => {
 	  showDeleteSessionDialog(selectedDeletableSessions().map(session => session.id));
 	});
-	$("#back-to-list").addEventListener("click", () => {
-	  window.location.assign(dashboardListUrl());
-});
 $("#delete-session-cancel").addEventListener("click", () => hideDeleteSessionDialog());
 $("#delete-session-confirm").addEventListener("click", () => confirmDeleteSession().catch(console.error));
 $("#delete-session-modal").addEventListener("click", event => {

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiohttp
@@ -605,7 +605,10 @@ def test_dashboard_detail_navigation_uses_lazy_shell_route() -> None:
     assert "const limit = detailRecordFetchLimit(sessionId, preserveLoaded)" in template
     assert "state.detailRecordTotal = totalRecords" in template
     assert "state.detailFingerprint = sessionDetailFingerprint(session)" in template
-    assert 'state.activeTab === "conversation" ? `' in template
+    assert "function ensureViewerFrame(session)" in template
+    assert "data-tab-toggle" in template
+    assert 'container.querySelector("[data-viewer-frame]")' in template
+    assert "setDetailTab(event.currentTarget.dataset.tab, session)" in template
 
 
 def test_dashboard_template_exposes_session_delete_controls() -> None:
@@ -1004,7 +1007,7 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 assert resp.status == 200
                 html = await resp.text()
                 assert "session-list" in html
-                assert "back-to-list" in html
+                assert "back-to-list" not in html
                 assert "EMBEDDED_TRACE_COMPACT_DATA" not in html
                 assert "req_claude" not in html
                 assert "/api/sessions/${encodeURIComponent(session.id)}/html" in html
@@ -1088,6 +1091,137 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/bad/records") as resp:
                 assert resp.status == 404
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_session_detail_redacts_sensitive_display_records(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="agy", proxy_mode="reverse")
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-20T10:00:00+00:00",
+            "request_id": "req_auth",
+            "turn": 1,
+            "request": {
+                "method": "POST",
+                "path": (
+                    "/login?redirect_uri=%2Foauth%2Fcallback%3Faccess_token%3Dredirect-secret"
+                    "&access_token=path-secret&client_id=public-client"
+                ),
+                "url": "https://oauth.example/callback?id_token=url-secret&state=ok",
+                "body": (
+                    "client_id=public-client&client_secret=client-secret&refresh_token=refresh-secret"
+                    "&redirect_uri=/oauth/callback?access_token=nested-secret"
+                ),
+            },
+            "response": {
+                "status": 200,
+                "body": {
+                    "access_token": "access-secret",
+                    "usage": {"input_tokens": 3, "output_tokens": 1},
+                },
+            },
+        },
+    )
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/records") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                record = payload["records"][0]
+                assert "redirect-secret" not in record["request"]["path"]
+                assert "path-secret" not in record["request"]["path"]
+                assert "redirect_uri=%2Foauth%2Fcallback%3Faccess_token%3DREDACTED" in record["request"]["path"]
+                assert "access_token=REDACTED" in record["request"]["path"]
+                assert record["request"]["url"] == "https://oauth.example/callback?id_token=REDACTED&state=ok"
+                assert "client_secret=REDACTED" in record["request"]["body"]
+                assert "refresh_token=REDACTED" in record["request"]["body"]
+                assert "nested-secret" not in record["request"]["body"]
+                assert "access_token%3DREDACTED" in record["request"]["body"]
+                assert record["response"]["body"]["access_token"] == "REDACTED"
+                assert record["response"]["body"]["usage"]["input_tokens"] == 3
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/html") as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert "client-secret" not in html
+                assert "refresh-secret" not in html
+                assert "access-secret" not in html
+                assert "path-secret" not in html
+                assert "url-secret" not in html
+                assert "redirect-secret" not in html
+                assert "nested-secret" not in html
+                assert "REDACTED" in html
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/jsonl") as resp:
+                assert resp.status == 200
+                body = await resp.text()
+                assert "client-secret" in body
+                assert "refresh-secret" in body
+                assert "access-secret" in body
+                assert "path-secret" in body
+                assert "url-secret" in body
+                assert "redirect-secret" in body
+                assert "nested-secret" in body
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_summary_preview_fields_are_redacted(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-20T10:00:00+00:00",
+            "request_id": "req_summary",
+            "turn": 1,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "body": "client_id=public-client&client_secret=summary-secret&prompt=hi",
+            },
+            "response": {
+                "status": 200,
+                "body": "message=ok&refresh_token=response-secret",
+            },
+        },
+    )
+
+    cached = json.loads(store.load_session_row(session_id)["summary_json"])
+    listed = next(item for item in list_trace_sessions() if item["id"] == session_id)
+
+    assert "summary-secret" not in cached["first_user"]
+    assert "response-secret" not in cached["last_response"]
+    assert "summary-secret" not in listed["first_user"]
+    assert "response-secret" not in listed["last_response"]
+    assert "client_secret=REDACTED" in listed["first_user"]
+    assert "refresh_token=REDACTED" in listed["last_response"]
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/records") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert "summary-secret" not in payload["session"]["first_user"]
+                assert "response-secret" not in payload["session"]["last_response"]
+                assert "client_secret=REDACTED" in payload["session"]["first_user"]
+                assert "refresh_token=REDACTED" in payload["session"]["last_response"]
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/jsonl") as resp:
+                assert resp.status == 200
+                body = await resp.text()
+                assert "summary-secret" in body
+                assert "response-secret" in body
     finally:
         await server.stop()
 
@@ -1351,10 +1485,29 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 await page.wait_for_selector("#raw-tab .section", timeout=5000)
                 assert await page.locator(".header").count() == 1
                 assert await page.locator(".viewer-frame").count() == 0
-                assert await page.locator("#back-to-list").is_visible()
+                assert await page.locator("#back-to-list").count() == 0
                 assert await page.locator("#list-view.hidden").count() == 1
                 assert await page.locator("#raw-tab .section").count() == 10
                 assert await page.locator("[data-load-more]").count() == 1
+                tab_toggle = page.locator("[data-tab-toggle]")
+                assert await tab_toggle.inner_text() == "Full viewer"
+
+                await tab_toggle.click()
+                await page.wait_for_selector("#conversation-tab:not(.hidden) .viewer-frame", timeout=5000)
+                assert await page.locator(".viewer-frame").count() == 1
+                await page.locator(".viewer-frame").evaluate("(frame) => { frame.dataset.reuseMarker = 'kept'; }")
+                assert await tab_toggle.inner_text() == "Trace"
+
+                await tab_toggle.click()
+                await page.wait_for_selector("#raw-tab:not(.hidden) .section", timeout=5000)
+                assert await page.locator(".viewer-frame").count() == 1
+                assert await page.locator(".viewer-frame").get_attribute("data-reuse-marker") == "kept"
+                assert await tab_toggle.inner_text() == "Full viewer"
+
+                await tab_toggle.click()
+                await page.wait_for_selector("#conversation-tab:not(.hidden) .viewer-frame", timeout=5000)
+                assert await page.locator(".viewer-frame").count() == 1
+                assert await page.locator(".viewer-frame").get_attribute("data-reuse-marker") == "kept"
 
                 export_button = page.locator(".detail-inspector-bar .export-menu > summary")
                 assert await export_button.count() == 1
@@ -1502,6 +1655,11 @@ async def test_dashboard_delete_active_session_is_protected(trace_db) -> None:
     store = get_trace_store()
     session_id = store.create_session(client="claude", proxy_mode="reverse")
     store.append_record(session_id, _anthropic_record())
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET updated_at = ? WHERE id = ?", (datetime.now(timezone.utc).isoformat(), session_id)
+    )
+    conn.commit()
 
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()
@@ -1524,6 +1682,114 @@ async def test_dashboard_delete_active_session_is_protected(trace_db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_dashboard_lists_stale_active_session_as_complete(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(session_id, _anthropic_record())
+    stale_updated_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET updated_at = ?, summary_json = ? WHERE id = ?",
+        (
+            stale_updated_at,
+            json.dumps(
+                {
+                    "id": session_id,
+                    "status": "active",
+                    "agent": "Claude Code",
+                    "record_count": 1,
+                    "total_tokens": 51,
+                },
+                separators=(",", ":"),
+            ),
+            session_id,
+        ),
+    )
+    conn.commit()
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                stale_session = next(item for item in payload["sessions"] if item["id"] == session_id)
+                assert stale_session["active"] is False
+                assert stale_session["live"] is False
+                assert stale_session["status"] == "complete"
+
+        row = store.load_session_row(session_id)
+        assert row is not None
+        assert row["status"] == "complete"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_delete_stale_active_session_is_allowed(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(session_id, _anthropic_record())
+    stale_updated_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    conn = store._connect()
+    conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (stale_updated_at, session_id))
+    conn.commit()
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(f"http://127.0.0.1:{port}/api/sessions/{session_id}") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["deleted_sessions"] == 1
+                assert payload["deleted_records"] == 1
+
+        assert store.load_session_row(session_id) is None
+    finally:
+        await server.stop()
+
+
+def test_append_record_reactivates_stale_finalized_session(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(session_id, _anthropic_record())
+    stale_updated_at = "2026-05-20T08:00:00+00:00"
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET updated_at = ?, summary_json = ? WHERE id = ?",
+        (
+            stale_updated_at,
+            json.dumps(
+                {
+                    "id": session_id,
+                    "status": "active",
+                    "agent": "Claude Code",
+                    "record_count": 1,
+                },
+                separators=(",", ":"),
+            ),
+            session_id,
+        ),
+    )
+    conn.commit()
+
+    assert store.finalize_stale_active_sessions(now=datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)) == 1
+    assert store.load_session_row(session_id)["status"] == "complete"
+
+    resumed = _anthropic_record(turn=2)
+    resumed["timestamp"] = "2026-05-22T09:05:00+00:00"
+    store.append_record(session_id, resumed)
+
+    row = store.load_session_row(session_id)
+    assert row is not None
+    assert row["status"] == "active"
+    assert row["record_count"] == 2
+    assert json.loads(row["summary_json"])["status"] == "active"
+
+
+@pytest.mark.asyncio
 async def test_dashboard_bulk_delete_skips_active_sessions(trace_db) -> None:
     store = get_trace_store()
     first_id = store.create_session(client="claude", proxy_mode="reverse")
@@ -1534,6 +1800,14 @@ async def test_dashboard_bulk_delete_skips_active_sessions(trace_db) -> None:
     store.finalize_session(second_id, {"api_calls": 1})
     active_id = store.create_session(client="claude", proxy_mode="reverse")
     store.append_record(active_id, _anthropic_record(turn=3))
+    conn = store._connect()
+    conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (datetime.now(timezone.utc).isoformat(), active_id))
+    conn.commit()
+    stale_active_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(stale_active_id, _anthropic_record(turn=4))
+    stale_updated_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (stale_updated_at, stale_active_id))
+    conn.commit()
 
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()
@@ -1541,17 +1815,18 @@ async def test_dashboard_bulk_delete_skips_active_sessions(trace_db) -> None:
         async with aiohttp.ClientSession() as session:
             async with session.delete(
                 f"http://127.0.0.1:{port}/api/sessions",
-                json={"session_ids": [first_id, second_id, active_id, "missing"]},
+                json={"session_ids": [first_id, second_id, active_id, stale_active_id, "missing"]},
             ) as resp:
                 assert resp.status == 200
                 payload = await resp.json()
-                assert payload["deleted_sessions"] == 2
-                assert payload["deleted_records"] == 2
+                assert payload["deleted_sessions"] == 3
+                assert payload["deleted_records"] == 3
                 assert payload["skipped_active_sessions"] == [active_id]
                 assert payload["missing_sessions"] == ["missing"]
 
         assert store.load_session_row(first_id) is None
         assert store.load_session_row(second_id) is None
+        assert store.load_session_row(stale_active_id) is None
         assert store.load_session_row(active_id) is not None
     finally:
         await server.stop()
