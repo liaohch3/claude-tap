@@ -14,7 +14,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Iterable, Sequence
 
 _BEDROCK_HOST_RE = re.compile(
     r"(^|\.)("
@@ -900,7 +900,6 @@ def _read_codebuddy_endpoint_cache() -> str | None:
 
 
 _KIMI_CODE_MANAGED_PROVIDER = "managed:kimi-code"
-_KIMI_CODE_PROXY_HOST_MARKERS = ("kimi.com", "moonshot.ai", "moonshot.cn")
 _KIMI_CODE_SKIP_MIGRATION_MARKER = ".skip-migration-from-kimi-cli"
 _KIMI_CODE_MIGRATED_MARKER = ".migrated-to-kimi-code"
 _KIMI_CODE_SANDBOX_DIR_PREFIX = "claude_tap_kimi_code_"
@@ -1337,6 +1336,23 @@ def _translate_kimi_code_home_path(path: str, old_prefix: str, new_prefix: str) 
     return path
 
 
+def _iter_kimi_code_session_index_entries(path: Path) -> Iterable[dict[str, object]]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            entry = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(entry, dict):
+            yield entry
+
+
 def _materialize_kimi_code_session_index(source_home: Path, sandbox: Path) -> None:
     """Copy session_index into the sandbox with sessionDir paths under KIMI_CODE_HOME."""
     source_index = source_home / "session_index.jsonl"
@@ -1345,13 +1361,7 @@ def _materialize_kimi_code_session_index(source_home: Path, sandbox: Path) -> No
     sandbox_prefix = _normalize_kimi_code_fs_path(str(sandbox))
     lines_out: list[str] = []
     if source_index.is_file():
-        for line in source_index.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            entry = json.loads(stripped)
-            if not isinstance(entry, dict):
-                continue
+        for entry in _iter_kimi_code_session_index_entries(source_index):
             session_dir = entry.get("sessionDir")
             if isinstance(session_dir, str):
                 entry["sessionDir"] = _translate_kimi_code_home_path(session_dir, source_prefix, sandbox_prefix)
@@ -1374,13 +1384,7 @@ def _merge_kimi_code_session_index(source_home: Path, sandbox: Path) -> None:
     entries: dict[str, dict[str, object]] = {}
 
     def ingest_index(path: Path, *, from_sandbox: bool) -> None:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            entry = json.loads(stripped)
-            if not isinstance(entry, dict):
-                continue
+        for entry in _iter_kimi_code_session_index_entries(path):
             session_id = entry.get("sessionId")
             if not isinstance(session_id, str) or not session_id:
                 continue

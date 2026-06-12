@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from claude_tap.bedrock import bedrock_model_from_path
-from claude_tap.trace_store import TraceStore, get_trace_store
+from claude_tap.trace_store import SessionQuery, TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
 from claude_tap.viewer import _decode_bedrock_eventstream_events
 
@@ -33,6 +33,7 @@ CLIENT_LABELS = {
     "qoder": "Qoder",
 }
 DASHBOARD_SUMMARY_VERSION = 2
+VALID_SESSION_STATUSES = {"active", "complete", "error", "empty"}
 
 
 def read_dashboard_template() -> str:
@@ -45,17 +46,45 @@ def ensure_trace_store() -> TraceStore:
     return get_trace_store()
 
 
+def build_session_query(
+    *,
+    date: str = "",
+    status: str = "",
+    search: str = "",
+    agent: str = "",
+) -> SessionQuery:
+    """Build a SQLite-backed session query from dashboard filter values."""
+    normalized_date = date if date == "legacy" or _DATE_RE.match(date) else ""
+    normalized_status = status if status in VALID_SESSION_STATUSES else ""
+    agent_clients, agent_labels = _agent_filter_values(agent)
+    return SessionQuery(
+        date=normalized_date,
+        status=normalized_status,
+        search=search.strip(),
+        agent_clients=agent_clients,
+        agent_labels=agent_labels,
+    )
+
+
 def list_trace_sessions(
     current_session_id: str | None = None,
     *,
     live_record_count: int | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+    query: SessionQuery | None = None,
+    repair_stale_summaries: bool = True,
 ) -> list[dict[str, Any]]:
     """Return trace sessions sorted by most recent activity."""
     store = ensure_trace_store()
     try:
         sessions = [
             _apply_current_session_state(
-                _session_summary_from_row(store, row),
+                _session_summary_from_row(
+                    store,
+                    row,
+                    repair_stale_summary=repair_stale_summaries,
+                ),
                 current_session_id,
                 live_record_count=(
                     live_record_count
@@ -63,12 +92,28 @@ def list_trace_sessions(
                     else None
                 ),
             )
-            for row in store.list_session_rows()
+            for row in store.list_session_rows(limit=limit, offset=offset, query=query)
         ]
     except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
         return []
     sessions.sort(key=lambda item: (_timestamp_sort_value(item.get("updated_at")), item.get("id") or ""), reverse=True)
     return sessions
+
+
+def count_trace_sessions(query: SessionQuery | None = None) -> int:
+    """Return the number of stored trace sessions."""
+    try:
+        return ensure_trace_store().count_session_rows(query)
+    except (OSError, sqlite3.Error, ValueError):
+        return 0
+
+
+def sum_trace_session_records(query: SessionQuery | None = None) -> int:
+    """Return total stored records for matching trace sessions."""
+    try:
+        return ensure_trace_store().sum_session_records(query)
+    except (OSError, sqlite3.Error, ValueError):
+        return 0
 
 
 def list_trace_agents(
@@ -77,13 +122,28 @@ def list_trace_agents(
     live_record_count: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return agent buckets for the dashboard sidebar."""
-    sessions = list_trace_sessions(current_session_id, live_record_count=live_record_count)
     buckets: dict[str, dict[str, Any]] = {}
-    for session in sessions:
-        key = session["agent_key"]
-        bucket = buckets.setdefault(key, {"key": key, "label": session["agent"], "sessions": 0, "records": 0})
-        bucket["sessions"] += 1
-        bucket["records"] += session["record_count"]
+    try:
+        rows = ensure_trace_store().list_agent_buckets()
+    except (OSError, sqlite3.Error, ValueError):
+        rows = []
+    for row in rows:
+        raw_agent = str(row["agent"] or "Unknown")
+        label = CLIENT_LABELS.get(raw_agent.lower(), raw_agent)
+        key = _agent_key(label)
+        bucket = buckets.setdefault(key, {"key": key, "label": label, "sessions": 0, "records": 0})
+        bucket["sessions"] += int(row["sessions"] or 0)
+        bucket["records"] += int(row["records"] or 0)
+    if current_session_id and live_record_count is not None:
+        live_row = ensure_trace_store().load_session_row(current_session_id)
+        if live_row is not None:
+            live_agent = _infer_agent(
+                [], {"client": live_row["client"] or "", "proxy_mode": live_row["proxy_mode"] or ""}
+            )
+            key = _agent_key(live_agent)
+            bucket = buckets.get(key)
+            if bucket is not None:
+                bucket["records"] = max(int(bucket["records"] or 0), int(live_record_count or 0))
     return sorted(buckets.values(), key=lambda item: (item["label"].lower(), item["key"]))
 
 
@@ -107,7 +167,7 @@ def load_trace_session(
     if row is None:
         return None
     summary = _apply_current_session_state(
-        _session_summary_from_row(store, row),
+        _session_summary_from_row(store, row, allow_record_scan=False),
         current_session_id,
         live_record_count=(
             live_record_count
@@ -150,11 +210,13 @@ def merge_record_into_summary(
     usage = _record_usage(record)
     summary["record_count"] = record_count
     summary["turn_count"] = max(int(summary.get("turn_count") or 0), record_count)
-    summary["input_tokens"] = int(summary.get("input_tokens") or 0) + usage.get("input_tokens", 0)
-    summary["output_tokens"] = int(summary.get("output_tokens") or 0) + usage.get("output_tokens", 0)
-    summary["cache_read_tokens"] = int(summary.get("cache_read_tokens") or 0) + usage.get("cache_read_input_tokens", 0)
-    summary["cache_create_tokens"] = int(summary.get("cache_create_tokens") or 0) + usage.get(
-        "cache_creation_input_tokens", 0
+    summary["input_tokens"] = int(summary.get("input_tokens") or 0) + (usage.get("input_tokens") or 0)
+    summary["output_tokens"] = int(summary.get("output_tokens") or 0) + (usage.get("output_tokens") or 0)
+    summary["cache_read_tokens"] = int(summary.get("cache_read_tokens") or 0) + (
+        usage.get("cache_read_input_tokens") or 0
+    )
+    summary["cache_create_tokens"] = int(summary.get("cache_create_tokens") or 0) + (
+        usage.get("cache_creation_input_tokens") or 0
     )
     summary["total_tokens"] = (
         summary["input_tokens"]
@@ -232,25 +294,31 @@ def build_imported_session_summary(
     )
 
 
-def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, Any]:
+def _session_summary_from_row(
+    store: TraceStore,
+    row: sqlite3.Row,
+    *,
+    allow_record_scan: bool = False,
+    repair_stale_summary: bool = True,
+) -> dict[str, Any]:
     summary_json = row["summary_json"]
     if summary_json:
         try:
             cached = json.loads(summary_json)
         except json.JSONDecodeError:
             cached = None
-        if is_dashboard_summary_current(cached, row["id"]):
-            cached = dict(cached)
-            cached["active"] = row["status"] == "active"
-            if row["status"] != "active":
-                return cached
-            db_count = int(row["record_count"] or 0)
-            cached["updated_at"] = row["updated_at"] or cached.get("updated_at") or ""
-            cached["record_count"] = db_count
-            cached["turn_count"] = max(int(cached.get("turn_count") or 0), db_count)
-            if db_count > 0 and cached.get("status") != "error":
-                cached["status"] = "active"
-            return cached
+        if isinstance(cached, dict) and (not cached.get("id") or cached.get("id") == row["id"]):
+            if (
+                repair_stale_summary
+                and not is_dashboard_summary_current(cached, row["id"])
+                and row["status"] != "active"
+            ):
+                boundary_records = store.load_boundary_records(row["id"])
+                if boundary_records:
+                    summary = _summary_from_boundary_records(row, boundary_records, cached)
+                    store.store_summary(row["id"], summary)
+                    return summary
+            return _normalize_cached_session_summary(row, cached)
 
     record_count = int(row["record_count"] or 0)
     manifest_entry = {
@@ -275,6 +343,9 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
             store.store_summary(row["id"], summary)
         return summary
 
+    if not allow_record_scan:
+        return _minimal_session_summary_from_row(row)
+
     records = store.load_records(row["id"])
     summary = _summarize_session(
         session_id=row["id"],
@@ -291,6 +362,90 @@ def _session_summary_from_row(store: TraceStore, row: sqlite3.Row) -> dict[str, 
     summary["active"] = row["status"] == "active"
     if row["status"] != "active":
         store.store_summary(row["id"], summary)
+    return summary
+
+
+def _minimal_session_summary_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    record_count = int(row["record_count"] or 0)
+    manifest_entry = {
+        "client": row["client"] or "",
+        "proxy_mode": row["proxy_mode"] or "",
+    }
+    summary = _summarize_session(
+        session_id=row["id"],
+        date_key=row["date_key"] or "legacy",
+        legacy_rel_path=row["legacy_rel_path"],
+        records=[],
+        manifest_entry=manifest_entry,
+        status=row["status"] or ("empty" if record_count == 0 else "complete"),
+        started_at=row["started_at"] or "",
+        updated_at=row["updated_at"] or "",
+        is_current=row["status"] == "active",
+        record_count=record_count,
+    )
+    if record_count > 0 and summary["status"] == "empty":
+        summary["status"] = row["status"] if row["status"] in {"active", "complete", "error"} else "complete"
+    return summary
+
+
+def _summary_from_boundary_records(
+    row: sqlite3.Row,
+    records: list[dict[str, Any]],
+    cached: dict[str, Any],
+) -> dict[str, Any]:
+    summary = build_stored_session_summary(row, records)
+    for key in (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_create_tokens",
+        "total_tokens",
+        "duration_ms",
+        "turn_count",
+        "model",
+        "error",
+    ):
+        if cached.get(key):
+            summary[key] = cached[key]
+    summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
+    summary["record_count"] = int(row["record_count"] or summary.get("record_count") or 0)
+    summary["turn_count"] = max(int(summary.get("turn_count") or 0), summary["record_count"])
+    return summary
+
+
+def _normalize_cached_session_summary(row: sqlite3.Row, cached: dict[str, Any]) -> dict[str, Any]:
+    summary = _minimal_session_summary_from_row(row)
+    summary.update(cached)
+    summary["id"] = row["id"]
+    summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
+    summary["date"] = row["date_key"] if _DATE_RE.match(row["date_key"] or "") else "legacy"
+    summary["legacy_rel_path"] = row["legacy_rel_path"]
+    summary["started_at"] = row["started_at"] or summary.get("started_at") or ""
+    summary["updated_at"] = row["updated_at"] or summary.get("updated_at") or summary["started_at"]
+    summary["active"] = row["status"] == "active"
+    summary["live"] = False
+    db_count = int(row["record_count"] or 0)
+    summary["record_count"] = db_count
+    summary["turn_count"] = max(int(summary.get("turn_count") or 0), db_count)
+    row_status = row["status"] or ""
+    if row_status == "active" and db_count > 0 and summary.get("status") != "error":
+        summary["status"] = "active"
+    elif row_status in {"active", "complete", "error", "empty"}:
+        summary["status"] = row_status
+    elif db_count == 0:
+        summary["status"] = "empty"
+    elif summary.get("status") not in {"active", "complete", "error", "empty"}:
+        summary["status"] = "complete"
+    if not summary.get("agent"):
+        summary["agent"] = _infer_agent([], {"client": row["client"] or "", "proxy_mode": row["proxy_mode"] or ""})
+    summary["agent_key"] = _agent_key(str(summary.get("agent") or ""))
+    token_total = (
+        int(summary.get("input_tokens") or 0)
+        + int(summary.get("output_tokens") or 0)
+        + int(summary.get("cache_read_tokens") or 0)
+        + int(summary.get("cache_create_tokens") or 0)
+    )
+    summary["total_tokens"] = token_total if token_total else int(cached.get("total_tokens") or 0)
     return summary
 
 
@@ -340,10 +495,10 @@ def _summarize_session(
 
     for record in records:
         usage = _record_usage(record)
-        input_tokens += usage.get("input_tokens", 0)
-        output_tokens += usage.get("output_tokens", 0)
-        cache_read_tokens += usage.get("cache_read_input_tokens", 0)
-        cache_create_tokens += usage.get("cache_creation_input_tokens", 0)
+        input_tokens += usage.get("input_tokens") or 0
+        output_tokens += usage.get("output_tokens") or 0
+        cache_read_tokens += usage.get("cache_read_input_tokens") or 0
+        cache_create_tokens += usage.get("cache_creation_input_tokens") or 0
         model = _record_model(record)
         if model:
             models[model] = models.get(model, 0) + 1
@@ -593,6 +748,37 @@ def _record_path(record: dict[str, Any]) -> str:
 def _agent_key(agent: str) -> str:
     key = re.sub(r"[^a-z0-9]+", "-", agent.lower()).strip("-")
     return key or "unknown"
+
+
+def _agent_filter_values(agent_key: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    key = (agent_key or "").strip().lower()
+    if not key or key == "all":
+        return (), ()
+
+    clients: set[str] = set()
+    labels: set[str] = set()
+    for client, label in CLIENT_LABELS.items():
+        if _agent_key(label) == key:
+            clients.add(client)
+            labels.add(label)
+
+    # If no pre-defined CLIENT_LABELS matched this key, check actual DB buckets
+    if not clients and not labels and key != "unknown":
+        try:
+            rows = get_trace_store().list_agent_buckets()
+            for row in rows:
+                raw_agent = str(row["agent"] or "Unknown")
+                if _agent_key(raw_agent) == key:
+                    labels.add(raw_agent)
+                    clients.add(raw_agent)
+        except Exception:
+            labels.add(agent_key)
+            clients.add(agent_key)
+
+    if key == "unknown":
+        clients.update(("", "unknown"))
+        labels.add("Unknown")
+    return tuple(sorted(clients)), tuple(sorted(labels))
 
 
 def _preview_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:

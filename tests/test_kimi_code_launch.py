@@ -15,6 +15,7 @@ from claude_tap.cli_clients import (
     _detect_kimi_code_target,
     _kimi_code_migration_already_handled,
     _materialize_kimi_code_session_index,
+    _merge_kimi_code_session_index,
     _normalize_kimi_code_fs_path,
     _patch_kimi_code_config_text,
     _persist_kimi_code_sandbox,
@@ -692,6 +693,74 @@ def test_materialize_kimi_code_session_index_rewrites_session_dir(tmp_path: Path
     expected_dir = _normalize_kimi_code_fs_path(str(sandbox / "sessions" / "wd_demo_abcd1234" / "session_test-id"))
     assert index["sessionDir"] == expected_dir
     assert not index["sessionDir"].startswith("/private/")
+
+
+def test_materialize_kimi_code_session_index_skips_malformed_rows(tmp_path: Path) -> None:
+    source_home = tmp_path / "home"
+    sandbox = tmp_path / "sandbox"
+    source_home.mkdir()
+    sandbox.mkdir()
+    session_dir = source_home / "sessions" / "wd_demo_abcd1234" / "session_test-id"
+    session_dir.mkdir(parents=True)
+    entry = {
+        "sessionId": "session_test-id",
+        "sessionDir": str(session_dir),
+        "workDir": "/tmp/demo",
+    }
+    (source_home / "session_index.jsonl").write_text(
+        "{not json}\n" + json.dumps(entry) + "\n[1, 2, 3]\n",
+        encoding="utf-8",
+    )
+
+    _materialize_kimi_code_session_index(source_home, sandbox)
+
+    lines = (sandbox / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    index = json.loads(lines[0])
+    expected_dir = _normalize_kimi_code_fs_path(str(sandbox / "sessions" / "wd_demo_abcd1234" / "session_test-id"))
+    assert index["sessionId"] == "session_test-id"
+    assert index["sessionDir"] == expected_dir
+
+
+def test_merge_kimi_code_session_index_skips_malformed_rows(tmp_path: Path) -> None:
+    source_home = tmp_path / "home"
+    sandbox = tmp_path / "sandbox"
+    source_home.mkdir()
+    sandbox.mkdir()
+    source_session_dir = source_home / "sessions" / "wd_demo_source" / "session_source"
+    sandbox_session_dir = sandbox / "sessions" / "wd_demo_new" / "session_new"
+    source_session_dir.mkdir(parents=True)
+    sandbox_session_dir.mkdir(parents=True)
+    source_entry = {
+        "sessionId": "session_source",
+        "sessionDir": str(source_session_dir),
+        "workDir": "/tmp/source",
+    }
+    sandbox_entry = {
+        "sessionId": "session_new",
+        "sessionDir": str(sandbox_session_dir),
+        "workDir": "/tmp/new",
+    }
+    (source_home / "session_index.jsonl").write_text(
+        "{bad source row}\n" + json.dumps(source_entry) + "\n",
+        encoding="utf-8",
+    )
+    (sandbox / "session_index.jsonl").write_text(
+        "{bad sandbox row}\n" + json.dumps(sandbox_entry) + "\n",
+        encoding="utf-8",
+    )
+
+    _merge_kimi_code_session_index(source_home, sandbox)
+
+    entries = [
+        json.loads(line) for line in (source_home / "session_index.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    by_id = {entry["sessionId"]: entry for entry in entries}
+    assert set(by_id) == {"session_source", "session_new"}
+    assert by_id["session_source"]["sessionDir"] == _normalize_kimi_code_fs_path(str(source_session_dir))
+    assert by_id["session_new"]["sessionDir"] == _normalize_kimi_code_fs_path(
+        str(source_home / "sessions" / "wd_demo_new" / "session_new")
+    )
 
 
 def test_remap_kimi_code_sandbox_paths_rewrites_session_index_and_state(tmp_path: Path) -> None:

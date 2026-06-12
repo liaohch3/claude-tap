@@ -1,0 +1,235 @@
+{
+  "generated_at": "2026-06-11T16:21:00Z",
+  "notes": [
+    "Cross-agent traces were driven through real tmux TUI input, five user turns per client, ten tool calls requested per turn.",
+    "Codex main-vs-feature comparison used the same prompt template and workspace shape on separate real tmux sessions.",
+    "Feature raw comparison DB imported legacy .traces because the first launch omitted --tap-output-dir; normalized SQLite metrics use a VACUUMed single-session copy from the real captured target session."
+  ],
+  "cross_agent_tmux": {
+    "claude": {
+      "session_id": "d4ea3192-15be-44c6-97ea-44bcdf2ff907",
+      "client": "claude",
+      "status": "active",
+      "record_count": 62,
+      "tool_call_total": 50,
+      "records_with_tool_calls": 50,
+      "turn_first_records": {
+        "1": 2,
+        "2": 15,
+        "3": 27,
+        "4": 39,
+        "5": 51
+      },
+      "markers": {
+        "E2E_DONE_TURN_1": 50,
+        "E2E_DONE_TURN_2": 38,
+        "E2E_DONE_TURN_3": 26,
+        "E2E_DONE_TURN_4": 14,
+        "E2E_DONE_TURN_5": 2
+      },
+      "sqlite": {
+        "sqlite_bytes": 2953216,
+        "page_size": 4096,
+        "page_count": 721,
+        "freelist_count": 0,
+        "record_count": 62,
+        "record_payload_json_bytes": 2669792,
+        "blob_count": 35,
+        "blob_declared_bytes": 120104,
+        "blob_payload_json_bytes": 119892
+      },
+      "exports": {
+        "claude.compact.json": 2798133,
+        "claude.full.json": 9094888,
+        "claude.html": 3092394
+      },
+      "sqlite_checkpointed_bytes": 2953216
+    },
+    "codex": {
+      "session_id": "4a929180-711f-4c1e-bbaf-567a7d2f4b81",
+      "client": "codex",
+      "status": "complete",
+      "record_count": 57,
+      "tool_call_total": 50,
+      "records_with_tool_calls": 50,
+      "turn_first_records": {
+        "1": 3,
+        "2": 14,
+        "3": 25,
+        "4": 36,
+        "5": 47
+      },
+      "markers": {
+        "E2E_DONE_TURN_1": 1,
+        "E2E_DONE_TURN_2": 1,
+        "E2E_DONE_TURN_3": 1,
+        "E2E_DONE_TURN_4": 1,
+        "E2E_DONE_TURN_5": 1
+      },
+      "sqlite": {
+        "sqlite_bytes": 667648,
+        "page_size": 4096,
+        "page_count": 163,
+        "freelist_count": 0,
+        "record_count": 57,
+        "record_payload_json_bytes": 487923,
+        "blob_count": 14,
+        "blob_declared_bytes": 76383,
+        "blob_payload_json_bytes": 75170
+      },
+      "exports": {
+        "codex.compact.json": 566380,
+        "codex.full.json": 1045276,
+        "codex.html": 859019
+      },
+      "sqlite_checkpointed_bytes": 667648
+    },
+    "kimi": {
+      "session_id": "298b1c99-8bd1-493d-843a-a556d1385264",
+      "client": "kimi",
+      "status": "active",
+      "record_count": 55,
+      "tool_call_total": 50,
+      "records_with_tool_calls": 50,
+      "turn_first_records": {
+        "1": 1,
+        "2": 12,
+        "3": 23,
+        "4": 34,
+        "5": 45
+      },
+      "markers": {
+        "E2E_DONE_TURN_1": 92,
+        "E2E_DONE_TURN_2": 35,
+        "E2E_DONE_TURN_3": 24,
+        "E2E_DONE_TURN_4": 13,
+        "E2E_DONE_TURN_5": 2
+      },
+      "sqlite": {
+        "sqlite_bytes": 1155072,
+        "page_size": 4096,
+        "page_count": 282,
+        "freelist_count": 0,
+        "record_count": 55,
+        "record_payload_json_bytes": 951033,
+        "blob_count": 12,
+        "blob_declared_bytes": 64235,
+        "blob_payload_json_bytes": 62972
+      },
+      "exports": {
+        "kimi.compact.json": 1016815,
+        "kimi.full.json": 5160604,
+        "kimi.html": 1310669
+      },
+      "sqlite_checkpointed_bytes": 1155072
+    }
+  },
+  "codex_main_vs_feature": {
+    "main": {
+      "session_id": "6762a34e-f46f-40ef-8467-d1ac633f5b7b",
+      "client": "codex",
+      "status": "complete",
+      "record_count": 59,
+      "tool_call_total": 50,
+      "records_with_tool_calls": 50,
+      "turn_first_records": {
+        "1": 3,
+        "2": 15,
+        "3": 26,
+        "4": 37,
+        "5": 49
+      },
+      "markers": {
+        "E2E_DONE_TURN_1": 2,
+        "E2E_DONE_TURN_2": 2,
+        "E2E_DONE_TURN_3": 2,
+        "E2E_DONE_TURN_4": 1,
+        "E2E_DONE_TURN_5": 1
+      },
+      "sqlite": {
+        "sqlite_bytes": 884736,
+        "page_size": 4096,
+        "page_count": 216,
+        "freelist_count": 0,
+        "record_count": 59,
+        "record_payload_json_bytes": 741324,
+        "blob_count": 3,
+        "blob_declared_bytes": 47204,
+        "blob_payload_json_bytes": 47184
+      },
+      "exports": {
+        "codex-main.compact.json": 792065,
+        "codex-main.full.json": 1063869,
+        "codex-main.html": 1083814
+      },
+      "normalized_single_session_sqlite": {
+        "sqlite_bytes": 884736,
+        "page_size": 4096,
+        "page_count": 216,
+        "freelist_count": 0,
+        "record_count": 59,
+        "record_payload_json_bytes": 741324,
+        "blob_count": 3,
+        "blob_declared_bytes": 47204,
+        "blob_payload_json_bytes": 47184
+      },
+      "git_ref": "origin/main@8e89fff"
+    },
+    "feature": {
+      "session_id": "83d85947-2ab9-4349-a1b7-6a42d46c1c4a",
+      "client": "codex",
+      "status": "complete",
+      "record_count": 57,
+      "tool_call_total": 50,
+      "records_with_tool_calls": 50,
+      "turn_first_records": {
+        "1": 3,
+        "2": 14,
+        "3": 25,
+        "4": 36,
+        "5": 47
+      },
+      "markers": {
+        "E2E_DONE_TURN_1": 1,
+        "E2E_DONE_TURN_2": 1,
+        "E2E_DONE_TURN_3": 1,
+        "E2E_DONE_TURN_4": 1,
+        "E2E_DONE_TURN_5": 1
+      },
+      "sqlite": {
+        "sqlite_bytes": 7389184,
+        "page_size": 4096,
+        "page_count": 1804,
+        "freelist_count": 0,
+        "record_count": 57,
+        "record_payload_json_bytes": 486349,
+        "blob_count": 11,
+        "blob_declared_bytes": 73152,
+        "blob_payload_json_bytes": 71939
+      },
+      "exports": {
+        "codex-feature.compact.json": 561235,
+        "codex-feature.full.json": 1045254,
+        "codex-feature.html": 853883
+      },
+      "normalized_single_session_sqlite": {
+        "sqlite_bytes": 663552,
+        "page_size": 4096,
+        "page_count": 162,
+        "freelist_count": 0,
+        "record_count": 57,
+        "record_payload_json_bytes": 486349,
+        "blob_count": 11,
+        "blob_declared_bytes": 73152,
+        "blob_payload_json_bytes": 71939
+      },
+      "git_ref": "feat/message-content-compaction@50230b6+working-tree"
+    },
+    "savings_vs_main": {
+      "normalized_sqlite_percent": 25.0,
+      "html_percent": 21.21,
+      "compact_json_percent": 29.14,
+      "record_payload_json_percent": 34.39
+    }
+  }
+}
