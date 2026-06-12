@@ -66,11 +66,14 @@ def test_windows_pip_auto_update_is_replaced_with_manual_instructions(
         lambda _installer: pytest.fail("Windows pip installs must not update in the background"),
     )
 
-    _maybe_start_background_update(no_auto_update=False)
+    _maybe_start_background_update(
+        no_auto_update=False,
+        dashboard_stop_command="claude-tap dashboard stop --tap-live-port 3000 --tap-host 0.0.0.0",
+    )
 
     out = capsys.readouterr().out
     assert "Automatic updates are disabled for pip installs on Windows." in out
-    assert "claude-tap dashboard stop" in out
+    assert "claude-tap dashboard stop --tap-live-port 3000 --tap-host 0.0.0.0" in out
     assert f'"{sys.executable}" -m pip install --upgrade claude-tap' in out
     assert "claude-tap update" not in out
 

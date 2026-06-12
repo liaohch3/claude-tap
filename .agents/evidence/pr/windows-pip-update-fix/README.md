@@ -1,17 +1,20 @@
 # Windows pip update evidence
 
-`windows-session-update-prompt.png` records the output of the production
-installer detection and automatic-update decision on Windows:
+`dashboard-session.png` shows the real dashboard session created by the PR
+checkout on Windows. The session used an isolated local database and custom
+dashboard port:
 
 ```powershell
-.\.venv\Scripts\python.exe -c "import sys; from claude_tap.cli_update import _detect_installer, _maybe_start_background_update; print('Platform:', sys.platform); print('Python:', sys.executable); print('Detected installer:', _detect_installer()); print('Update available: 0.1.110 -> 99.0.0'); _maybe_start_background_update(no_auto_update=False)"
+$env:CLOUDTAP_DB = "D:\projects\goal\.tmp\pr319-evidence\claude-tap.sqlite3"
+.\.venv\Scripts\python.exe -m claude_tap --tap-no-launch --tap-no-open `
+  --tap-live-port 31927 `
+  --tap-output-dir D:\projects\goal\.tmp\pr319-evidence\.traces
 ```
 
-The command ran from the PR checkout in an isolated pip-installed virtual
-environment. It exercises the startup update decision that runs before the
-dashboard and trace viewer workflow. The output confirms that a Windows pip
-installation receives instructions to stop the shared dashboard and run pip
-through the current Python executable instead of starting a background pip
-process.
+The screenshot was captured from `http://127.0.0.1:31927` after the production
+startup path created the session and spawned the shared dashboard. It confirms
+that the dashboard process is active at the custom address that the update
+instructions must target. The isolated database and raw session data are not
+committed.
 
-No API keys, prompts, trace records, or user data are present.
+No API keys, prompts, or user data are present.

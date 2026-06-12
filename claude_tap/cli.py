@@ -229,9 +229,9 @@ async def async_main(args: argparse.Namespace):
 
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
+    dashboard_host = args.host
+    dashboard_port = resolve_dashboard_port(args.live_port)
     if args.live_viewer:
-        dashboard_host = args.host
-        dashboard_port = resolve_dashboard_port(args.live_port)
         try:
             dashboard_url_value, spawned = await ensure_shared_dashboard(
                 host=dashboard_host,
@@ -330,7 +330,10 @@ async def async_main(args: argparse.Namespace):
                 latest = await _check_pypi_version()
                 if latest and _version_tuple(latest) > _version_tuple(__version__):
                     print(f"⬆️  Update available: {__version__} → {latest}")
-                    _maybe_start_background_update(no_auto_update=args.no_auto_update)
+                    _maybe_start_background_update(
+                        no_auto_update=args.no_auto_update,
+                        dashboard_stop_command=_dashboard_stop_command(dashboard_host, dashboard_port),
+                    )
             except Exception:
                 pass
 

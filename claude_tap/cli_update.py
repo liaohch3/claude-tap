@@ -53,7 +53,11 @@ def _detect_installer() -> str:
     return "pip"
 
 
-def _maybe_start_background_update(*, no_auto_update: bool) -> None:
+def _maybe_start_background_update(
+    *,
+    no_auto_update: bool,
+    dashboard_stop_command: str = "claude-tap dashboard stop",
+) -> None:
     """Start a safe automatic update, or explain why it was skipped."""
     if no_auto_update:
         return
@@ -62,7 +66,7 @@ def _maybe_start_background_update(*, no_auto_update: bool) -> None:
     if sys.platform == "win32" and installer == "pip":
         print("   Automatic updates are disabled for pip installs on Windows.")
         print("   Exit all claude-tap sessions, then run:")
-        print("     claude-tap dashboard stop")
+        print(f"     {dashboard_stop_command}")
         print(f'     "{sys.executable}" -m pip install --upgrade claude-tap')
         return
 
