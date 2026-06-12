@@ -38,6 +38,7 @@ from claude_tap.certs import CertificateAuthority
 from claude_tap.proxy import (
     HOP_BY_HOP,
     _build_record,
+    _parse_request_body_for_trace,
     capture_only_content_type,
     capture_only_response,
     capture_only_stream_bytes,
@@ -489,11 +490,7 @@ class ForwardProxyServer:
         t0 = time.monotonic()
         log_prefix = f"[Turn {turn}]"
 
-        # Parse request body for logging
-        try:
-            req_body = json.loads(body) if body else None
-        except (json.JSONDecodeError, ValueError):
-            req_body = body.decode("utf-8", errors="replace") if body else None
+        req_body = _parse_request_body_for_trace(body)
 
         is_streaming = is_capture_only_streaming_request(path, req_body)
 

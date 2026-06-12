@@ -80,6 +80,27 @@ def filter_headers(headers: dict[str, str], *, redact_keys: bool = False) -> dic
     return out
 
 
+def _parse_request_body_for_trace(body: bytes) -> object:
+    """Parse a request body for trace storage without mutating upstream bytes."""
+    if not body:
+        return None
+
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return body.decode("utf-8", errors="replace")
+
+    if isinstance(parsed, str):
+        try:
+            inner = json.loads(parsed)
+        except (json.JSONDecodeError, ValueError):
+            return parsed
+        if isinstance(inner, dict):
+            return inner
+
+    return parsed
+
+
 # ---------------------------------------------------------------------------
 # Path allowlist – only forward requests to known API endpoints.
 # Scanners / crawlers hitting the proxy with paths like /etc/passwd, /swagger,
@@ -508,11 +529,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     req_id = f"req_{uuid.uuid4().hex[:12]}"
     t0 = time.monotonic()
 
-    # Parse request body
-    try:
-        req_body = json.loads(body) if body else None
-    except (json.JSONDecodeError, ValueError):
-        req_body = body.decode("utf-8", errors="replace") if body else None
+    req_body = _parse_request_body_for_trace(body)
 
     upstream_body = body
     if isinstance(req_body, dict):
