@@ -201,6 +201,7 @@ function applyFilter(preserveDetail) {
   filtered.sort((a, b) => compareTurns(captureTurnValue(a), captureTurnValue(b)));
   let totalTokens = 0, totalDuration = 0;
   let sumInput = 0, sumOutput = 0, sumCacheRead = 0, sumCacheCreate = 0;
+  let sumCacheDenominator = 0;
   filtered.forEach(e => {
     totalDuration += e.duration_ms || 0;
     const u = getUsage(e);
@@ -210,6 +211,13 @@ function applyFilter(preserveDetail) {
       sumOutput += u.output_tokens || 0;
       sumCacheRead += u.cache_read_input_tokens || 0;
       sumCacheCreate += u.cache_creation_input_tokens || 0;
+      if (u.cache_read_input_tokens) {
+        if (u._cache_read_in_input) {
+          sumCacheDenominator += u.input_tokens || 0;
+        } else {
+          sumCacheDenominator += (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+        }
+      }
     }
   });
   $('#stat-turns').textContent = filtered.length;
@@ -225,8 +233,8 @@ function applyFilter(preserveDetail) {
     else { $('#stat-cache-read-group').style.display = 'none'; }
     if (sumCacheCreate) { $('#stat-cache-write').textContent = sumCacheCreate.toLocaleString(); $('#stat-cache-write-group').style.display = 'flex'; }
     else { $('#stat-cache-write-group').style.display = 'none'; }
-    if (sumCacheRead && sumInput > 0) {
-      const hitRate = Math.round(sumCacheRead / sumInput * 100);
+    if (sumCacheRead && sumCacheDenominator > 0) {
+      const hitRate = Math.round(sumCacheRead / sumCacheDenominator * 100);
       $('#stat-cache-hit-rate').textContent = hitRate + '%';
       $('#stat-cache-hit-rate-group').style.display = 'flex';
     } else {

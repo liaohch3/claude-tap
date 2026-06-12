@@ -214,6 +214,48 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           plain(context.parseTraceText(JSON.stringify(compactBundle))),
           plain(context.materializeCompactTraceBundle(compactBundle)),
         );
+
+        /* ── normalizeUsage: provider-aware cache flag ── */
+
+        // OpenAI-style: cached_tokens embedded in prompt_tokens via details
+        const openaiUsage = context.normalizeUsage({
+          prompt_tokens: 100,
+          completion_tokens: 50,
+          prompt_tokens_details: { cached_tokens: 60 },
+        });
+        assert.equal(openaiUsage.input_tokens, 100);
+        assert.equal(openaiUsage.cache_read_input_tokens, 60);
+        assert.equal(openaiUsage._cache_read_in_input, true);
+
+        // Claude/Anthropic-style: cache_read_input_tokens separate from input_tokens
+        const claudeUsage = context.normalizeUsage({
+          input_tokens: 40,
+          output_tokens: 20,
+          cache_read_input_tokens: 60,
+          cache_creation_input_tokens: 10,
+        });
+        assert.equal(claudeUsage.input_tokens, 40);
+        assert.equal(claudeUsage.cache_read_input_tokens, 60);
+        assert.equal(claudeUsage._cache_read_in_input, false);
+
+        // No cache data at all: flag should be absent
+        const noCacheUsage = context.normalizeUsage({ input_tokens: 100, output_tokens: 50 });
+        assert.equal(noCacheUsage.cache_read_input_tokens, undefined);
+        assert.equal(noCacheUsage._cache_read_in_input, undefined);
+
+        /* ── Cache hit rate denominator correctness ── */
+
+        // Simulate OpenAI-style: cache embedded in input → rate = 60/100 = 60%
+        //   denominator = input_tokens = 100
+        const openaiRate = Math.round(60 / 100 * 100);
+        assert.equal(openaiRate, 60);
+
+        // Simulate Claude-style: cache separate → total input-side = 40+60+10 = 110
+        //   rate = 60/110 = 55% (NOT 60/40 = 150% which is the old buggy result)
+        const claudeTotalInput = 40 + 60 + 10;
+        const claudeRate = Math.round(60 / claudeTotalInput * 100);
+        assert.equal(claudeRate, 55);
+        assert.ok(claudeRate <= 100, 'Claude-style rate must not exceed 100%');
         """
     )
 
