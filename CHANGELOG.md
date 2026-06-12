@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.112] - 2026-06-12
+
+### Changed
+- fix: prevent Windows pip background update corruption (#319)
 ## [0.1.111] - 2026-06-12
 
 ### Changed
