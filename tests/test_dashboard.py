@@ -1103,6 +1103,7 @@ async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp
 
     server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
     port = await server.start()
+    auth = {"X-Claude-Tap-Dashboard-Token": server._dashboard_quit_token}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
@@ -1122,12 +1123,20 @@ async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/claude-resume") as resp:
                 assert resp.status == 200
 
+            # Without the same-origin dashboard token the write is refused.
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/sessions/{session_id}/install-resume",
+                json={"cwd": str(tmp_path)},
+            ) as resp:
+                assert resp.status == 403
+
             # B-side install: writes a fresh resumable session into the local store
             target = tmp_path / "proj"
             target.mkdir()
             async with session.post(
                 f"http://127.0.0.1:{port}/api/sessions/{session_id}/install-resume",
                 json={"cwd": str(target)},
+                headers=auth,
             ) as resp:
                 assert resp.status == 200
                 data = await resp.json()
@@ -1141,7 +1150,7 @@ async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp
             async with session.post(
                 f"http://127.0.0.1:{port}/api/sessions/{session_id}/install-resume",
                 data="[1, 2, 3]",
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **auth},
             ) as resp:
                 assert resp.status == 200
     finally:
@@ -1166,11 +1175,20 @@ async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkey
 
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()
+    auth = {"X-Claude-Tap-Dashboard-Token": server._dashboard_quit_token}
     try:
         async with aiohttp.ClientSession() as session:
+            # Without the same-origin dashboard token the import is refused.
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"content": document, "cwd": str(target)},
+            ) as resp:
+                assert resp.status == 403
+
             async with session.post(
                 f"http://127.0.0.1:{port}/api/import-resume",
                 json={"content": document, "cwd": str(target), "name": "My demo", "target": "claude"},
+                headers=auth,
             ) as resp:
                 assert resp.status == 200
                 data = await resp.json()
@@ -1186,6 +1204,7 @@ async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkey
             async with session.post(
                 f"http://127.0.0.1:{port}/api/import-resume",
                 json={"content": document, "cwd": str(target), "name": "Codex demo", "target": "codex"},
+                headers=auth,
             ) as resp:
                 assert resp.status == 200
                 data = await resp.json()
@@ -1201,6 +1220,7 @@ async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkey
             async with session.post(
                 f"http://127.0.0.1:{port}/api/import-resume",
                 json={"content": document, "cwd": str(target), "target": "gemini"},
+                headers=auth,
             ) as resp:
                 assert resp.status == 422
                 assert "unknown resume target" in (await resp.json())["error"]
@@ -1209,12 +1229,14 @@ async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkey
             async with session.post(
                 f"http://127.0.0.1:{port}/api/import-resume",
                 json={"content": "not jsonl\n", "cwd": str(target)},
+                headers=auth,
             ) as resp:
                 assert resp.status == 422
 
             async with session.post(
                 f"http://127.0.0.1:{port}/api/import-resume",
                 json={"cwd": str(target)},
+                headers=auth,
             ) as resp:
                 assert resp.status == 400
     finally:

@@ -99,5 +99,15 @@ def import_resume_main(argv: list[str] | None = None) -> int:
         return 1
 
     print(f"Installed {installed.message_count} messages -> {installed.path}")
-    print(f"Resume with:\n  cd {target_cwd} && {installed.resume_command}")
+    print(f"Resume with:\n  cd {_quote_cwd(target_cwd)} && {installed.resume_command}")
     return 0
+
+
+def _quote_cwd(path: str) -> str:
+    """Quote a directory for the printed resume command so spaces don't break it."""
+    if os.name == "nt":
+        # cmd.exe and PowerShell both accept a double-quoted path.
+        return f'"{path}"' if any(ch in path for ch in " &^()") else path
+    import shlex
+
+    return shlex.quote(path)

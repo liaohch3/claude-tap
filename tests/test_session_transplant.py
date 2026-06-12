@@ -367,6 +367,21 @@ def test_import_resume_main_installs_and_warns_on_cwd_divergence(tmp_path, capsy
     assert parse_jsonl_conversation(installed.read_text(encoding="utf-8")) == expected
 
 
+def test_import_resume_main_quotes_cwd_with_spaces(tmp_path, capsys) -> None:
+    src = tmp_path / "transplant.jsonl"
+    src.write_text(build_session_jsonl(_tool_conversation(), _det_env()), encoding="utf-8")
+    target = tmp_path / "My Project"
+    target.mkdir()
+
+    rc = import_resume_main([str(src), "--cwd", str(target), "--home", str(tmp_path / "home"), "--session-id", "sid"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    # the spaced path must be quoted so the printed `cd ...` command is valid
+    assert f"cd {target} " not in out
+    assert (f'cd "{target}"' in out) or (f"cd '{target}'" in out)
+
+
 def test_import_resume_main_no_warning_for_same_dir_written_differently(tmp_path, capsys) -> None:
     import os
 

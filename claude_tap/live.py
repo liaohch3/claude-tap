@@ -643,6 +643,23 @@ class LiveViewerServer:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    def _reject_untrusted_dashboard_write(self, request: web.Request) -> web.Response | None:
+        """Guard mutating dashboard endpoints against cross-origin or forged requests.
+
+        These endpoints write to the local Claude/Codex resume stores, so they
+        require the same same-origin Host/Origin check and token as
+        ``/dashboard/quit``; the token is only injected into the dashboard HTML
+        for trusted localhost requests.
+        """
+        if not _is_trusted_dashboard_token_request(request):
+            return _untrusted_dashboard_token_response()
+        if request.headers.get(_DASHBOARD_QUIT_TOKEN_HEADER) != self._dashboard_quit_token:
+            return web.json_response(
+                {"error": "This endpoint requires a same-origin dashboard token"},
+                status=403,
+            )
+        return None
+
     async def _handle_install_resume(self, request: web.Request) -> web.Response:
         """Install the session into the local Claude Code store as a fresh resumable copy."""
         from claude_tap.session_transplant import (
@@ -651,6 +668,8 @@ class LiveViewerServer:
             install_resume_session,
         )
 
+        if (rejected := self._reject_untrusted_dashboard_write(request)) is not None:
+            return rejected
         session_id = request.match_info["session_id"]
         store = ensure_trace_store()
         if store.load_session_row(session_id) is None:
@@ -688,6 +707,8 @@ class LiveViewerServer:
             parse_jsonl_conversation,
         )
 
+        if (rejected := self._reject_untrusted_dashboard_write(request)) is not None:
+            return rejected
         try:
             payload = await request.json()
         except (json.JSONDecodeError, ValueError):

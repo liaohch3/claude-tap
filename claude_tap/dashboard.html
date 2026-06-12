@@ -2226,7 +2226,7 @@ async function submitImportResume() {
     const content = await file.text();
     const data = await fetchJSON("/api/import-resume", {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
+      headers: {"Content-Type": "application/json", "X-Claude-Tap-Dashboard-Token": DASHBOARD_QUIT_TOKEN},
       body: JSON.stringify({
         content,
         cwd: $("#import-cwd").value.trim(),
@@ -2505,7 +2505,7 @@ async function installResumeSession(sessionId, button) {
     }
     const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/install-resume`, {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
+      headers: {"Content-Type": "application/json", "X-Claude-Tap-Dashboard-Token": DASHBOARD_QUIT_TOKEN},
       body: JSON.stringify({cwd: cwd.trim()}),
     });
     const data = await res.json().catch(() => ({}));
