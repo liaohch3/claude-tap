@@ -1094,6 +1094,179 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_dashboard_server_exports_and_installs_claude_resume(trace_db, tmp_path: Path, monkeypatch) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    _write_jsonl(trace_path, [_anthropic_record()])
+    # keep install off the real ~/.claude store
+    config_dir = tmp_path / "cfg" / ".claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    auth = {"X-Claude-Tap-Dashboard-Token": server._dashboard_quit_token}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                session_id = (await resp.json())["sessions"][0]["id"]
+
+            # A-side download: a resumable Claude Code session log
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/resume") as resp:
+                assert resp.status == 200
+                assert resp.content_type == "application/x-ndjson"
+                assert f'filename="resume_{session_id[:8]}.jsonl"' in resp.headers["Content-Disposition"]
+                lines = [json.loads(line) for line in (await resp.text()).splitlines() if line.strip()]
+                types = [line.get("type") for line in lines]
+                assert "user" in types and "assistant" in types
+                assert types[-1] == "last-prompt"
+
+            # keep the older route as a compatibility alias
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/claude-resume") as resp:
+                assert resp.status == 200
+
+            # Without the same-origin dashboard token the write is refused.
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/sessions/{session_id}/install-resume",
+                json={"cwd": str(tmp_path)},
+            ) as resp:
+                assert resp.status == 403
+
+            # B-side install: writes a fresh resumable session into the local store
+            target = tmp_path / "proj"
+            target.mkdir()
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/sessions/{session_id}/install-resume",
+                json={"cwd": str(target)},
+                headers=auth,
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["resume_command"].startswith("claude-tap --resume ")
+                assert data["message_count"] == 2
+                installed = Path(data["path"])
+                assert installed.exists()
+                assert installed.parent.parent == config_dir / "projects"
+
+            # a non-dict JSON body must not crash the handler (defaults cwd)
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/sessions/{session_id}/install-resume",
+                data="[1, 2, 3]",
+                headers={"Content-Type": "application/json", **auth},
+            ) as resp:
+                assert resp.status == 200
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_import_resume_endpoint(trace_db, tmp_path: Path, monkeypatch) -> None:
+    from claude_tap.session_transplant import TransplantEnv, build_session_jsonl
+
+    config_dir = tmp_path / "cfg" / ".claude"
+    codex_home = tmp_path / "cfg" / ".codex"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    conversation = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+    ]
+    document = build_session_jsonl(conversation, TransplantEnv(cwd=r"D:\src", session_id="orig"))
+    target = tmp_path / "proj"
+    target.mkdir()
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    auth = {"X-Claude-Tap-Dashboard-Token": server._dashboard_quit_token}
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Without the same-origin dashboard token the import is refused.
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"content": document, "cwd": str(target)},
+            ) as resp:
+                assert resp.status == 403
+
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"content": document, "cwd": str(target), "name": "My demo", "target": "claude"},
+                headers=auth,
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["message_count"] == 2
+                assert data["resume_command"].startswith("claude-tap --resume ")
+                installed = Path(data["path"])
+                assert installed.exists()
+                assert installed.parent.parent == config_dir / "projects"
+                # the custom name is written as an ai-title event
+                assert '"aiTitle": "My demo"' in installed.read_text(encoding="utf-8")
+
+            # the same portable file can be installed for Codex as a separate target
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"content": document, "cwd": str(target), "name": "Codex demo", "target": "codex"},
+                headers=auth,
+            ) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["target"] == "codex"
+                assert data["target_label"] == "Codex CLI"
+                assert data["resume_command"].startswith("claude-tap --tap-client codex -- resume ")
+                installed = Path(data["path"])
+                assert installed.exists()
+                assert installed.parent.parent.parent.parent == codex_home / "sessions"
+                index = codex_home / "session_index.jsonl"
+                assert '"thread_name": "Codex demo"' in index.read_text(encoding="utf-8")
+
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"content": document, "cwd": str(target), "target": "gemini"},
+                headers=auth,
+            ) as resp:
+                assert resp.status == 422
+                assert "unknown resume target" in (await resp.json())["error"]
+
+            # empty/garbage content is rejected, not 500
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"content": "not jsonl\n", "cwd": str(target)},
+                headers=auth,
+            ) as resp:
+                assert resp.status == 422
+
+            async with session.post(
+                f"http://127.0.0.1:{port}/api/import-resume",
+                json={"cwd": str(target)},
+                headers=auth,
+            ) as resp:
+                assert resp.status == 400
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_viewer_guards_resume_link_by_provider(trace_db, tmp_path: Path) -> None:
+    _write_jsonl(tmp_path / "2026-05-20" / "trace_080000.jsonl", [_anthropic_record()])
+    _write_jsonl(tmp_path / "2026-05-20" / "trace_090000.jsonl", [_antigravity_record()])
+    _seed_legacy(tmp_path)
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                sessions = (await resp.json())["sessions"]
+            by_agent = {item["agent"]: item["id"] for item in sessions}
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{by_agent['Claude Code']}/html") as resp:
+                assert "export/resume" in await resp.text()
+
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{by_agent['Antigravity']}/html") as resp:
+                assert "export/resume" not in await resp.text()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_session_filters_apply_before_paging(trace_db) -> None:
     store = get_trace_store()
     conn = store._connect()
@@ -1360,7 +1533,8 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 export_button = page.locator(".detail-inspector-bar .export-menu > summary")
                 assert await export_button.count() == 1
                 assert await export_button.inner_text() == "Export"
-                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 4
+                assert await page.locator("#viewer-actions > .viewer-action").count() == 0
+                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 6
                 hrefs = await page.locator(".detail-inspector-bar .export-menu-item").evaluate_all(
                     "(links) => links.map((link) => link.getAttribute('href'))"
                 )
@@ -1368,6 +1542,7 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert f"/api/sessions/{session_id}/export/compact" in hrefs
                 assert f"/api/sessions/{session_id}/export/log" in hrefs
                 assert f"/api/sessions/{session_id}/export/html" in hrefs
+                assert f"/api/sessions/{session_id}/export/resume" in hrefs
 
                 async with page.expect_download() as download_info:
                     await export_button.click()
@@ -1409,7 +1584,7 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                 await page.locator(".detail-inspector-bar .export-menu > summary").click()
                 menu = page.locator(".detail-inspector-bar .export-menu-list")
                 assert await menu.is_visible()
-                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 4
+                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 6
 
                 layout = await page.evaluate(
                     """() => {

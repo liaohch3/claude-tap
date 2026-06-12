@@ -106,9 +106,15 @@ def export_main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--format",
-        choices=["markdown", "json", "html", "compact", "prompt-md"],
+        choices=["markdown", "json", "html", "compact", "prompt-md", "resume", "claude-resume"],
         default=None,
         help="Output format (default: inferred from -o extension, or markdown)",
+    )
+    parser.add_argument(
+        "--cwd",
+        dest="cwd",
+        default=None,
+        help="Working directory to stamp on a portable resume export (default: current dir)",
     )
 
     args = parser.parse_args(argv)
@@ -222,6 +228,28 @@ def export_main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
+    elif fmt in {"resume", "claude-resume"}:
+        import os
+        import uuid
+
+        from claude_tap.session_transplant import (
+            TransplantEnv,
+            build_session_jsonl,
+            detect_claude_version,
+            extract_conversation,
+        )
+
+        try:
+            messages = extract_conversation(records)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        env = TransplantEnv(
+            cwd=args.cwd or os.getcwd(),
+            session_id=source_session_id or str(uuid.uuid4()),
+            version=detect_claude_version(),
+        )
+        output = build_session_jsonl(messages, env)
     elif fmt == "json":
         output = _export_json(_normalize_records_for_export(records))
     else:

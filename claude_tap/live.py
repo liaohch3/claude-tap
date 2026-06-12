@@ -199,7 +199,8 @@ class LiveViewerServer:
         if self.migrate_from is not None:
             migrate_legacy_traces(self.migrate_from)
 
-        app = web.Application()
+        # Resume imports upload a whole session log; lift the 1 MB body cap.
+        app = web.Application(client_max_size=64 * 1024 * 1024)
         if self.dashboard_mode:
             app.router.add_get("/", self._handle_dashboard_index)
         else:
@@ -225,6 +226,10 @@ class LiveViewerServer:
         app.router.add_get("/api/sessions/{session_id}/export/compact", self._handle_export_compact)
         app.router.add_get("/api/sessions/{session_id}/export/log", self._handle_export_log)
         app.router.add_get("/api/sessions/{session_id}/export/html", self._handle_export_html)
+        app.router.add_get("/api/sessions/{session_id}/export/resume", self._handle_export_claude_resume)
+        app.router.add_get("/api/sessions/{session_id}/export/claude-resume", self._handle_export_claude_resume)
+        app.router.add_post("/api/sessions/{session_id}/install-resume", self._handle_install_resume)
+        app.router.add_post("/api/import-resume", self._handle_import_resume)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -530,6 +535,8 @@ class LiveViewerServer:
         return await self._session_html_response(request.match_info["session_id"])
 
     async def _session_html_response(self, session_id: str) -> web.Response:
+        from claude_tap.session_transplant import has_transplantable_conversation
+
         store = ensure_trace_store()
         if store.load_session_row(session_id) is None:
             return web.Response(status=404, text="Session not found")
@@ -542,8 +549,12 @@ class LiveViewerServer:
                 "log": f"/api/sessions/{quote(session_id)}/export/log",
                 "html": f"/api/sessions/{quote(session_id)}/export/html",
             }
+            records = store.load_records(session_id)
+            # Resume export only applies to Anthropic-protocol (Claude Code) traffic.
+            if has_transplantable_conversation(records):
+                export_urls["claudeResume"] = f"/api/sessions/{quote(session_id)}/export/resume"
             _generate_html_viewer_from_compact_bundle(
-                build_compact_trace_bundle(store.load_records(session_id)),
+                build_compact_trace_bundle(records),
                 html_path,
                 display_trace_path=export_urls["compact"],
                 display_html_path=f"/dashboard/session/{quote(session_id)}",
@@ -602,6 +613,136 @@ class LiveViewerServer:
             content_type="text/plain",
             charset="utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    async def _handle_export_claude_resume(self, request: web.Request) -> web.Response:
+        """Download the session rebuilt as a portable resumable log."""
+        from claude_tap.session_transplant import (
+            TransplantEnv,
+            build_session_jsonl,
+            detect_claude_version,
+            extract_conversation,
+        )
+
+        session_id = request.match_info["session_id"]
+        store = ensure_trace_store()
+        if store.load_session_row(session_id) is None:
+            return web.Response(status=404, text="Session not found")
+        try:
+            messages = extract_conversation(store.load_records(session_id))
+        except ValueError as exc:
+            return web.Response(status=422, text=str(exc))
+        cwd = request.query.get("cwd") or "."
+        env = TransplantEnv(cwd=cwd, session_id=session_id, version=detect_claude_version())
+        body = build_session_jsonl(messages, env)
+        filename = f"resume_{session_id[:8]}.jsonl"
+        return web.Response(
+            text=body,
+            content_type="application/x-ndjson",
+            charset="utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    def _reject_untrusted_dashboard_write(self, request: web.Request) -> web.Response | None:
+        """Guard mutating dashboard endpoints against cross-origin or forged requests.
+
+        These endpoints write to the local Claude/Codex resume stores, so they
+        require the same same-origin Host/Origin check and token as
+        ``/dashboard/quit``; the token is only injected into the dashboard HTML
+        for trusted localhost requests.
+        """
+        if not _is_trusted_dashboard_token_request(request):
+            return _untrusted_dashboard_token_response()
+        if request.headers.get(_DASHBOARD_QUIT_TOKEN_HEADER) != self._dashboard_quit_token:
+            return web.json_response(
+                {"error": "This endpoint requires a same-origin dashboard token"},
+                status=403,
+            )
+        return None
+
+    async def _handle_install_resume(self, request: web.Request) -> web.Response:
+        """Install the session into the local Claude Code store as a fresh resumable copy."""
+        from claude_tap.session_transplant import (
+            detect_claude_version,
+            extract_conversation,
+            install_resume_session,
+        )
+
+        if (rejected := self._reject_untrusted_dashboard_write(request)) is not None:
+            return rejected
+        session_id = request.match_info["session_id"]
+        store = ensure_trace_store()
+        if store.load_session_row(session_id) is None:
+            return web.json_response({"error": "Session not found"}, status=404)
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        cwd = str(payload.get("cwd") or "").strip() or str(Path.cwd())
+        try:
+            messages = extract_conversation(store.load_records(session_id))
+            installed = install_resume_session(messages, cwd, version=detect_claude_version())
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=422)
+        except OSError as exc:
+            return web.json_response({"error": f"Could not write session: {exc}"}, status=500)
+        return web.json_response(
+            {
+                "session_id": installed.session_id,
+                "path": str(installed.path),
+                "cwd": cwd,
+                "resume_command": installed.resume_command,
+                "message_count": installed.message_count,
+            }
+        )
+
+    async def _handle_import_resume(self, request: web.Request) -> web.Response:
+        """Install an uploaded transplant/session JSONL into a supported local agent store."""
+        from claude_tap.session_transplant import (
+            detect_claude_version,
+            get_resume_target,
+            install_resume_session,
+            parse_jsonl_conversation,
+        )
+
+        if (rejected := self._reject_untrusted_dashboard_write(request)) is not None:
+            return rejected
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        content = payload.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return web.json_response({"error": "Missing session file content"}, status=400)
+        messages = parse_jsonl_conversation(content)
+        if not messages:
+            return web.json_response({"error": "No user/assistant messages found in file"}, status=422)
+        cwd = str(payload.get("cwd") or "").strip() or str(Path.cwd())
+        title = str(payload.get("name") or "").strip()
+        target = str(payload.get("target") or "claude").strip() or "claude"
+        try:
+            resume_target = get_resume_target(target)
+            installed = install_resume_session(
+                messages, cwd, target=target, version=detect_claude_version(), title=title
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=422)
+        except OSError as exc:
+            return web.json_response({"error": f"Could not write session: {exc}"}, status=500)
+        return web.json_response(
+            {
+                "session_id": installed.session_id,
+                "path": str(installed.path),
+                "cwd": cwd,
+                "resume_command": installed.resume_command,
+                "message_count": installed.message_count,
+                "target": installed.target,
+                "target_label": resume_target.label,
+            }
         )
 
     async def _handle_delete_session(self, request: web.Request) -> web.Response:

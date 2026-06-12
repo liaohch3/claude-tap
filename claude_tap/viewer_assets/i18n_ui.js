@@ -84,6 +84,9 @@ function renderViewerActions() {
   if (typeof exports.html === 'string' && exports.html) {
     links.push(`<a class="export-menu-item" href="${esc(exports.html)}" download>${esc(t('export_html'))}</a>`);
   }
+  if (typeof exports.claudeResume === 'string' && exports.claudeResume) {
+    links.push(`<a class="export-menu-item" href="${esc(exports.claudeResume)}" download>${esc(t('export_claude_resume'))}</a>`);
+  }
   if (!links.length) {
     wrap.innerHTML = '';
     wrap.style.display = 'none';
