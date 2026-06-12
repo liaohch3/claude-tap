@@ -28,6 +28,10 @@ class _FakeWriter:
         self.records.append(record)
         self.count += 1
 
+    async def write_next_turn(self, record: dict) -> None:
+        record["turn"] = self.count + 1
+        await self.write(record)
+
 
 def _frame(payload: dict) -> dict:
     return {"response": {"opcode": 1, "payloadData": json.dumps(payload)}}
@@ -312,6 +316,26 @@ async def test_cdp_recorder_assigns_sequential_responses_to_request_frames() -> 
 
     assert [record["request"]["body"]["model"] for record in writer.records] == ["model-0", "model-1"]
     assert [record["response"]["body"]["id"] for record in writer.records] == ["resp-0", "resp-1"]
+    assert [record["turn"] for record in writer.records] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_cdp_recorder_ignores_duplicate_completed_events_for_flushed_response() -> None:
+    writer = _FakeWriter()
+    recorder = CodexAppCdpRecorder(writer)
+
+    await recorder.handle_event("Network.webSocketCreated", {"requestId": "ws-dup", "url": "wss://api.test/v1"})
+    await recorder.handle_event(
+        "Network.webSocketFrameSent",
+        {"requestId": "ws-dup", **_frame({"type": "response.create", "model": "gpt", "input": []})},
+    )
+    completed = {"requestId": "ws-dup", **_frame({"type": "response.completed", "response": {"id": "resp-dup"}})}
+
+    await recorder.handle_event("Network.webSocketFrameReceived", completed)
+    await recorder.handle_event("Network.webSocketFrameReceived", completed)
+
+    assert len(writer.records) == 1
+    assert writer.records[0]["response"]["body"]["id"] == "resp-dup"
 
 
 @pytest.mark.asyncio
@@ -540,7 +564,7 @@ async def test_async_main_codexapp_starts_cdp_enrichment_by_default(monkeypatch:
     assert args.store_stream_events is False
     assert await async_main(args) == 0
     assert cancelled.is_set()
-    assert calls == [{"endpoint": "http://127.0.0.1:9238", "store_stream_events": True}]
+    assert calls == [{"endpoint": "http://127.0.0.1:9238", "store_stream_events": False}]
 
 
 def test_parse_args_codexapp_uses_default_cdp_endpoint_for_automatic_capture() -> None:

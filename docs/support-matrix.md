@@ -110,7 +110,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_build_codex_app_transcript_records_preserves_turn_context` — verifies Codex App session JSONL imports as viewer-friendly Responses records with usage, tools, and tool results
 - `test_import_codex_app_transcripts_appends_only_new_completed_records` — verifies Codex App transcript polling appends only new completed records
 - `test_cdp_recorder_writes_viewer_friendly_websocket_record` — verifies Codex App CDP WebSocket frames are reconstructed into viewer-friendly WebSocket records
-- `test_async_main_codexapp_starts_cdp_enrichment_by_default` — verifies `--tap-client codexapp` starts automatic CDP enrichment and stores raw WebSocket events for completeness
+- `test_async_main_codexapp_starts_cdp_enrichment_by_default` — verifies `--tap-client codexapp` starts automatic CDP enrichment while honoring the global raw stream event storage setting
 - `test_gemini_registered_in_client_configs` — verifies Gemini CLI registration and default forward mode
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs` — verifies Gemini forward proxy launch env
 - `test_run_client_gemini_reverse_sets_both_base_url_envs` — verifies Gemini reverse proxy base URL env injection

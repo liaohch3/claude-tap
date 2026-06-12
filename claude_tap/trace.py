@@ -38,15 +38,27 @@ class TraceWriter:
     async def write(self, record: dict) -> None:
         """Write a record and update statistics."""
         async with self._lock:
-            if self._metadata:
-                capture = record.get("capture") if isinstance(record.get("capture"), dict) else {}
-                record["capture"] = {**self._metadata, **capture}
-            self._store.append_record(self.session_id, record)
-            self.count += 1
-            self._update_stats(record)
+            self._write_locked(record)
 
         if self._live_server:
             await self._live_server.broadcast(record)
+
+    async def write_next_turn(self, record: dict) -> None:
+        """Assign the next trace turn under the writer lock, then write the record."""
+        async with self._lock:
+            record["turn"] = self.count + 1
+            self._write_locked(record)
+
+        if self._live_server:
+            await self._live_server.broadcast(record)
+
+    def _write_locked(self, record: dict) -> None:
+        if self._metadata:
+            capture = record.get("capture") if isinstance(record.get("capture"), dict) else {}
+            record["capture"] = {**self._metadata, **capture}
+        self._store.append_record(self.session_id, record)
+        self.count += 1
+        self._update_stats(record)
 
     def close(self) -> None:
         """Finalize the active session in SQLite."""

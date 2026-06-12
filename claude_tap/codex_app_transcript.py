@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +16,163 @@ from typing import Any
 from claude_tap.trace import TraceWriter
 
 CODEX_APP_TRANSPORT = "codex-app-transcript"
+CODEX_APP_TRANSCRIPT_DISCOVERY_INTERVAL = 5.0
+
+
+@dataclass
+class _TranscriptParser:
+    session_id: str
+    model: str = "codex-app"
+    instructions: str = ""
+    tools: list[dict[str, Any]] = field(default_factory=list)
+    cwd: str = ""
+    cli_version: str = ""
+    source: str = "codex-app"
+    history_input: list[dict[str, Any]] = field(default_factory=list)
+    pending_tool_results: list[dict[str, Any]] = field(default_factory=list)
+    current_output: list[dict[str, Any]] = field(default_factory=list)
+    current_started_at: str | None = None
+    response_count: int = 0
+
+    def feed(
+        self,
+        rows: Iterable[dict[str, Any]],
+        *,
+        start_turn: int,
+        include_incomplete: bool,
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+
+        def flush(timestamp: str | None, usage: dict[str, int] | None = None) -> None:
+            if not self.current_output:
+                self.history_input.extend(self.pending_tool_results)
+                self.pending_tool_results = []
+                return
+
+            self.response_count += 1
+            response_id = _response_id(self.session_id, self.response_count)
+            request_body: dict[str, Any] = {
+                "type": "response.create",
+                "model": self.model,
+                "input": _json_clone(self.history_input),
+            }
+            if self.instructions:
+                request_body["instructions"] = self.instructions
+            if self.tools:
+                request_body["tools"] = _json_clone(self.tools)
+            metadata = {
+                "codex_app_session_id": self.session_id,
+                "codex_app_source": self.source,
+            }
+            if self.cwd:
+                metadata["cwd"] = self.cwd
+            request_body["metadata"] = metadata
+
+            response_body: dict[str, Any] = {
+                "id": response_id,
+                "object": "response",
+                "status": "completed",
+                "model": self.model,
+                "output": _json_clone(self.current_output),
+            }
+            if usage:
+                response_body["usage"] = usage
+
+            headers = {"x-codex-app-session-id": self.session_id}
+            if self.cli_version:
+                headers["x-codex-version"] = self.cli_version
+
+            records.append(
+                {
+                    "timestamp": self.current_started_at or timestamp or datetime.now(timezone.utc).isoformat(),
+                    "request_id": f"codex_app_{uuid.uuid4().hex[:12]}",
+                    "turn": start_turn + self.response_count - 1,
+                    "duration_ms": 0,
+                    "transport": CODEX_APP_TRANSPORT,
+                    "upstream_base_url": "codex-app://sessions",
+                    "request": {
+                        "method": "CODEX_APP_TRANSCRIPT",
+                        "path": "/v1/responses",
+                        "headers": headers,
+                        "body": request_body,
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": {},
+                        "body": response_body,
+                    },
+                }
+            )
+            self.history_input.extend(_json_clone(self.current_output))
+            self.history_input.extend(self.pending_tool_results)
+            self.current_output = []
+            self.pending_tool_results = []
+            self.current_started_at = None
+
+        for row in rows:
+            timestamp = row.get("timestamp") if isinstance(row.get("timestamp"), str) else None
+            row_type = row.get("type")
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+
+            if row_type == "session_meta":
+                raw_session_id = payload.get("id")
+                if isinstance(raw_session_id, str) and raw_session_id:
+                    self.session_id = raw_session_id
+                cli_version_value = payload.get("cli_version")
+                if isinstance(cli_version_value, str):
+                    self.cli_version = cli_version_value
+                source_value = payload.get("source") or payload.get("originator") or payload.get("thread_source")
+                if isinstance(source_value, str) and source_value:
+                    self.source = source_value
+                self.instructions = _base_instruction_text(payload.get("base_instructions"))
+                self.tools = _normalize_tools(payload.get("dynamic_tools"))
+                cwd_value = payload.get("cwd")
+                if isinstance(cwd_value, str):
+                    self.cwd = cwd_value
+                continue
+
+            if row_type == "turn_context":
+                flush(timestamp)
+                model_value = payload.get("model")
+                if isinstance(model_value, str) and model_value:
+                    self.model = model_value
+                cwd_value = payload.get("cwd")
+                if isinstance(cwd_value, str):
+                    self.cwd = cwd_value
+                continue
+
+            if row_type == "event_msg" and payload.get("type") == "token_count":
+                flush(timestamp, _usage_from_token_event(payload))
+                continue
+
+            if row_type != "response_item":
+                continue
+
+            if _is_message_input(payload):
+                flush(timestamp)
+                self.history_input.append(_json_clone(payload))
+                continue
+            if _is_call_output(payload):
+                self.pending_tool_results.append(_json_clone(payload))
+                continue
+            if _is_model_output(payload):
+                if self.current_started_at is None:
+                    self.current_started_at = timestamp
+                self.current_output.append(_json_clone(payload))
+
+        if include_incomplete:
+            flush(None)
+
+        return records
+
+
+@dataclass
+class _TranscriptCursor:
+    parser: _TranscriptParser
+    offset: int = 0
+    partial_line: str = ""
 
 
 def codex_app_home(home: Path | None = None) -> Path:
@@ -46,6 +206,16 @@ def _json_clone(value: Any) -> Any:
     return json.loads(json.dumps(value))
 
 
+def _parse_jsonl_line(line: str) -> dict[str, Any] | None:
+    if not line.strip():
+        return None
+    try:
+        row = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return row if isinstance(row, dict) else None
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     try:
@@ -53,13 +223,50 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     except OSError:
         return rows
     for line in lines:
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict):
+        row = _parse_jsonl_line(line)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def _read_new_jsonl_rows(path: Path, cursor: _TranscriptCursor) -> list[dict[str, Any]]:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    if size < cursor.offset:
+        cursor.parser = _TranscriptParser(path.stem)
+        cursor.offset = 0
+        cursor.partial_line = ""
+
+    try:
+        with path.open("rb") as file_obj:
+            file_obj.seek(cursor.offset)
+            data = file_obj.read()
+            cursor.offset = file_obj.tell()
+    except OSError:
+        return []
+
+    if not data and not cursor.partial_line:
+        return []
+
+    text = data.decode("utf-8", errors="replace")
+    combined = cursor.partial_line + text
+    if not combined:
+        return []
+
+    lines = combined.splitlines()
+    cursor.partial_line = ""
+    if combined and not combined.endswith(("\n", "\r")) and lines:
+        candidate = lines[-1]
+        if _parse_jsonl_line(candidate) is None:
+            cursor.partial_line = candidate
+            lines = lines[:-1]
+
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        row = _parse_jsonl_line(line)
+        if row is not None:
             rows.append(row)
     return rows
 
@@ -157,144 +364,8 @@ def build_codex_app_transcript_records(
     rows = _read_jsonl(transcript_path)
     if not rows:
         return []
-
-    session_id = transcript_path.stem
-    model = "codex-app"
-    instructions = ""
-    tools: list[dict[str, Any]] = []
-    cwd = ""
-    cli_version = ""
-    source = "codex-app"
-    history_input: list[dict[str, Any]] = []
-    pending_tool_results: list[dict[str, Any]] = []
-    current_output: list[dict[str, Any]] = []
-    current_started_at: str | None = None
-    records: list[dict[str, Any]] = []
-
-    def flush(timestamp: str | None, usage: dict[str, int] | None = None) -> None:
-        nonlocal current_output, current_started_at, pending_tool_results
-        if not current_output:
-            history_input.extend(pending_tool_results)
-            pending_tool_results = []
-            return
-
-        response_index = len(records) + 1
-        response_id = _response_id(session_id, response_index)
-        request_body: dict[str, Any] = {
-            "type": "response.create",
-            "model": model,
-            "input": _json_clone(history_input),
-        }
-        if instructions:
-            request_body["instructions"] = instructions
-        if tools:
-            request_body["tools"] = _json_clone(tools)
-        metadata = {
-            "codex_app_session_id": session_id,
-            "codex_app_source": source,
-        }
-        if cwd:
-            metadata["cwd"] = cwd
-        request_body["metadata"] = metadata
-
-        response_body: dict[str, Any] = {
-            "id": response_id,
-            "object": "response",
-            "status": "completed",
-            "model": model,
-            "output": _json_clone(current_output),
-        }
-        if usage:
-            response_body["usage"] = usage
-
-        headers = {"x-codex-app-session-id": session_id}
-        if cli_version:
-            headers["x-codex-version"] = cli_version
-
-        records.append(
-            {
-                "timestamp": current_started_at or timestamp or datetime.now(timezone.utc).isoformat(),
-                "request_id": f"codex_app_{uuid.uuid4().hex[:12]}",
-                "turn": start_turn + len(records),
-                "duration_ms": 0,
-                "transport": CODEX_APP_TRANSPORT,
-                "upstream_base_url": "codex-app://sessions",
-                "request": {
-                    "method": "CODEX_APP_TRANSCRIPT",
-                    "path": "/v1/responses",
-                    "headers": headers,
-                    "body": request_body,
-                },
-                "response": {
-                    "status": 200,
-                    "headers": {},
-                    "body": response_body,
-                },
-            }
-        )
-        history_input.extend(_json_clone(current_output))
-        history_input.extend(pending_tool_results)
-        current_output = []
-        pending_tool_results = []
-        current_started_at = None
-
-    for row in rows:
-        timestamp = row.get("timestamp") if isinstance(row.get("timestamp"), str) else None
-        row_type = row.get("type")
-        payload = row.get("payload")
-        if not isinstance(payload, dict):
-            continue
-
-        if row_type == "session_meta":
-            raw_session_id = payload.get("id")
-            if isinstance(raw_session_id, str) and raw_session_id:
-                session_id = raw_session_id
-            cli_version_value = payload.get("cli_version")
-            if isinstance(cli_version_value, str):
-                cli_version = cli_version_value
-            source_value = payload.get("source") or payload.get("originator") or payload.get("thread_source")
-            if isinstance(source_value, str) and source_value:
-                source = source_value
-            instructions = _base_instruction_text(payload.get("base_instructions"))
-            tools = _normalize_tools(payload.get("dynamic_tools"))
-            cwd_value = payload.get("cwd")
-            if isinstance(cwd_value, str):
-                cwd = cwd_value
-            continue
-
-        if row_type == "turn_context":
-            flush(timestamp)
-            model_value = payload.get("model")
-            if isinstance(model_value, str) and model_value:
-                model = model_value
-            cwd_value = payload.get("cwd")
-            if isinstance(cwd_value, str):
-                cwd = cwd_value
-            continue
-
-        if row_type == "event_msg" and payload.get("type") == "token_count":
-            flush(timestamp, _usage_from_token_event(payload))
-            continue
-
-        if row_type != "response_item":
-            continue
-
-        if _is_message_input(payload):
-            flush(timestamp)
-            history_input.append(_json_clone(payload))
-            continue
-        if _is_call_output(payload):
-            pending_tool_results.append(_json_clone(payload))
-            continue
-        if _is_model_output(payload):
-            if current_started_at is None:
-                current_started_at = timestamp
-            current_output.append(_json_clone(payload))
-
-    if include_incomplete:
-        flush(None)
-
-    return records
+    parser = _TranscriptParser(transcript_path.stem)
+    return parser.feed(rows, start_turn=start_turn, include_incomplete=include_incomplete)
 
 
 async def import_codex_app_transcripts(
@@ -302,27 +373,29 @@ async def import_codex_app_transcripts(
     *,
     since: float,
     home: Path | None = None,
-    state: dict[Path, int] | None = None,
+    state: dict[Path, _TranscriptCursor] | None = None,
     include_incomplete: bool = True,
+    transcript_paths: Iterable[Path] | None = None,
 ) -> int:
     """Append new Codex App transcript records to the active trace."""
     imported = 0
     state = state if state is not None else {}
-    start_turn = writer.count + 1
-    for transcript_path in find_codex_app_transcripts(since=since, home=home):
-        records = build_codex_app_transcript_records(
-            transcript_path,
-            start_turn=start_turn,
+    paths = (
+        list(transcript_paths) if transcript_paths is not None else find_codex_app_transcripts(since=since, home=home)
+    )
+    for transcript_path in paths:
+        cursor = state.get(transcript_path)
+        if not isinstance(cursor, _TranscriptCursor):
+            cursor = _TranscriptCursor(parser=_TranscriptParser(transcript_path.stem))
+            state[transcript_path] = cursor
+        records = cursor.parser.feed(
+            _read_new_jsonl_rows(transcript_path, cursor),
+            start_turn=1,
             include_incomplete=include_incomplete,
         )
-        seen = state.get(transcript_path, 0)
-        if seen > len(records):
-            seen = 0
-        for record in records[seen:]:
-            await writer.write(record)
+        for record in records:
+            await writer.write_next_turn(record)
             imported += 1
-        state[transcript_path] = len(records)
-        start_turn += max(0, len(records) - seen)
     return imported
 
 
@@ -332,25 +405,41 @@ async def watch_codex_app_transcripts(
     since: float,
     home: Path | None = None,
     poll_interval: float = 1.0,
+    discovery_interval: float = CODEX_APP_TRANSCRIPT_DISCOVERY_INTERVAL,
 ) -> None:
     """Poll Codex App session files and append completed transcript records."""
-    state: dict[Path, int] = {}
+    state: dict[Path, _TranscriptCursor] = {}
+    transcript_paths: list[Path] = []
+    last_discovery = 0.0
     try:
         while True:
+            now = time.monotonic()
+            if not transcript_paths or now - last_discovery >= discovery_interval:
+                known = set(transcript_paths)
+                for path in find_codex_app_transcripts(since=since, home=home):
+                    if path not in known:
+                        transcript_paths.append(path)
+                        known.add(path)
+                last_discovery = now
             await import_codex_app_transcripts(
                 writer,
                 since=since,
                 home=home,
                 state=state,
                 include_incomplete=False,
+                transcript_paths=transcript_paths,
             )
             await asyncio.sleep(poll_interval)
     except asyncio.CancelledError:
+        for path in find_codex_app_transcripts(since=since, home=home):
+            if path not in transcript_paths:
+                transcript_paths.append(path)
         await import_codex_app_transcripts(
             writer,
             since=since,
             home=home,
             state=state,
             include_incomplete=True,
+            transcript_paths=transcript_paths,
         )
         raise

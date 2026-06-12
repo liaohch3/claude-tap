@@ -46,6 +46,7 @@ class _CdpSocketState:
     response_requests: dict[str, list[str]] = field(default_factory=dict)
     response_events: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     response_started_at: dict[str, float] = field(default_factory=dict)
+    flushed_response_ids: set[str] = field(default_factory=set)
     active_response_id: str | None = None
 
 
@@ -233,6 +234,8 @@ class CodexAppCdpRecorder:
             response_id = state.active_response_id
         if response_id is None:
             return
+        if response_id in state.flushed_response_ids:
+            return
 
         self._ensure_response_bucket(state, response_id)
         state.response_events[response_id].append(event)
@@ -287,7 +290,8 @@ class CodexAppCdpRecorder:
             endpoint=self._endpoint,
             error=error,
         )
-        await self._writer.write(record)
+        await self._writer.write_next_turn(record)
+        state.flushed_response_ids.add(response_id)
         if state.active_response_id == response_id:
             state.active_response_id = None
 

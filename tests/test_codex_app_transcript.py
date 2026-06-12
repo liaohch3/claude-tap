@@ -288,7 +288,7 @@ async def test_import_codex_app_transcripts_appends_only_new_completed_records(t
     store = get_trace_store()
     session_id = store.create_session(client="codexapp", proxy_mode="transcript")
     writer = TraceWriter(session_id, store=store, metadata={"client": "codexapp", "proxy_mode": "transcript"})
-    state: dict[Path, int] = {}
+    state = {}
 
     imported = await import_codex_app_transcripts(
         writer,
@@ -298,6 +298,8 @@ async def test_import_codex_app_transcripts_appends_only_new_completed_records(t
         include_incomplete=False,
     )
     assert imported == 1
+    first_offset = state[transcript].offset
+    assert state[transcript].parser.response_count == 1
 
     imported = await import_codex_app_transcripts(
         writer,
@@ -319,8 +321,11 @@ async def test_import_codex_app_transcripts_appends_only_new_completed_records(t
     writer.close()
 
     assert imported == 1
+    assert state[transcript].offset > first_offset
+    assert state[transcript].parser.response_count == 2
     records = store.load_records(session_id)
     assert len(records) == 2
+    assert [record["turn"] for record in records] == [1, 2]
     assert records[0]["capture"] == {"client": "codexapp", "proxy_mode": "transcript"}
     assert records[1]["response"]["body"]["usage"]["output_tokens"] == 4
 
@@ -347,7 +352,7 @@ async def test_import_codex_app_transcripts_resets_state_when_file_shrinks(trace
     writer.close()
 
     assert imported == 1
-    assert state[transcript] == 1
+    assert state[transcript].parser.response_count == 1
     assert len(store.load_records(session_id)) == 1
 
 

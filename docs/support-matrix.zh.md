@@ -104,7 +104,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_build_codex_app_transcript_records_preserves_turn_context`：验证 Codex App session JSONL 会导入为 viewer 友好的 Responses 记录，并保留 usage、tools 和 tool results
 - `test_import_codex_app_transcripts_appends_only_new_completed_records`：验证 Codex App transcript 轮询只追加新的已完成记录
 - `test_cdp_recorder_writes_viewer_friendly_websocket_record`：验证 Codex App CDP WebSocket frame 会重建为 viewer 友好的 WebSocket 记录
-- `test_async_main_codexapp_starts_cdp_enrichment_by_default`：验证 `--tap-client codexapp` 默认启动 CDP 补充采集，并保留原始 WebSocket event 以尽量完整
+- `test_async_main_codexapp_starts_cdp_enrichment_by_default`：验证 `--tap-client codexapp` 默认启动 CDP 补充采集，并遵循全局原始 stream event 存储设置
 - `test_gemini_registered_in_client_configs`：验证 Gemini CLI 注册和默认 forward 模式
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs`：验证 Gemini forward proxy 启动环境变量
 - `test_run_client_gemini_reverse_sets_both_base_url_envs`：验证 Gemini reverse proxy base URL 环境变量注入

@@ -287,7 +287,7 @@ async def async_main(args: argparse.Namespace):
                 watch_codex_app_cdp(
                     writer,
                     endpoint=getattr(args, "codexapp_cdp_endpoint", CODEX_APP_CDP_DEFAULT_ENDPOINT),
-                    store_stream_events=True,
+                    store_stream_events=args.store_stream_events,
                 )
             )
         else:
