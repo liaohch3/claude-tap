@@ -73,17 +73,21 @@ function normalizeChatMessageForDisplay(msg) {
   return { ...msg, content };
 }
 
+function looksLikeGeminiRequest(value) {
+  return !!(value && typeof value === 'object' && (
+    Array.isArray(value.contents)
+    || !!value.systemInstruction
+  ));
+}
+
 function geminiRequest(body) {
-  return body?.request && typeof body.request === 'object' ? body.request : {};
+  if (!body || typeof body !== 'object') return {};
+  if (looksLikeGeminiRequest(body.request)) return body.request;
+  return looksLikeGeminiRequest(body) ? body : {};
 }
 
 function isGeminiRequestBody(body) {
-  const req = geminiRequest(body);
-  return !!req && (
-    Array.isArray(req.contents) ||
-    !!req.systemInstruction ||
-    Array.isArray(req.tools)
-  );
+  return looksLikeGeminiRequest(geminiRequest(body));
 }
 
 function geminiTextFromParts(parts) {
