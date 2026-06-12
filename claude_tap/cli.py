@@ -483,12 +483,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # With model and full auto-approval\n"
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
             "\n"
-            "kimi cli:\n"
-            "  # Uses KIMI_BASE_URL and forwards to Kimi Code by default\n"
+            "kimi cli (legacy kimi-cli; uses shell KIMI_BASE_URL):\n"
             "  claude-tap --tap-client kimi\n"
             "  claude-tap --tap-client kimi -- --thinking\n"
-            "  # Use Moonshot Open Platform instead of Kimi Code\n"
             "  claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1\n"
+            "\n"
+            "kimi-code cli (MoonshotAI/kimi-code; patches ~/.kimi-code/config.toml via sandbox):\n"
+            "  claude-tap --tap-client kimi-code\n"
+            "  claude-tap --tap-client kimi-code -- --thinking\n"
+            "  claude-tap --tap-client kimi-code --tap-target https://api.moonshot.ai/v1\n"
             "\n"
             "gemini cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client gemini -- -p "hello"\n'
@@ -595,7 +598,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex/kimi/codebuddy, "
+            "Default depends on the client: 'reverse' for claude/codex/kimi/kimi-code/codebuddy, "
             "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder."
         ),
     )
@@ -706,6 +709,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.target is None:
         if args.client == "codex":
             args.target = _detect_codex_target(claude_args)
+        elif args.client == "kimi-code":
+            args.target = TARGET_DETECTORS["kimi-code"](claude_args)
         elif args.client == "openclaw":
             args.target = TARGET_DETECTORS["openclaw"](claude_args)
         else:
