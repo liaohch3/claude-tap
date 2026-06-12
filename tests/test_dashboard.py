@@ -123,6 +123,36 @@ def _seed_legacy(tmp_path: Path) -> None:
     migrate_legacy_traces(tmp_path)
 
 
+def _seed_dashboard_summary(
+    *,
+    session_id: str,
+    agent: str,
+    status: str,
+    record_count: int,
+    first_user: str,
+    updated_at: str,
+    date_key: str,
+) -> str:
+    return json.dumps(
+        {
+            "id": session_id,
+            "summary_version": DASHBOARD_SUMMARY_VERSION,
+            "date": date_key,
+            "agent": agent,
+            "status": status,
+            "record_count": record_count,
+            "turn_count": record_count,
+            "updated_at": updated_at,
+            "first_user": first_user,
+            "last_response": "",
+            "model": "gpt-5.5",
+            "total_tokens": 0,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def test_dashboard_lists_sessions_across_agents(trace_db, tmp_path: Path) -> None:
     claude_trace = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     agy_trace = tmp_path / "2026-05-20" / "trace_090000.jsonl"
@@ -166,6 +196,27 @@ def test_dashboard_indexes_sessions_in_sqlite(trace_db, tmp_path: Path) -> None:
     assert payload["records"][0]["turn"] == 1
 
 
+def test_dashboard_summarizes_null_usage_token_fields(trace_db, tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_082000.jsonl"
+    record = _anthropic_record()
+    record["response"]["body"]["usage"] = {
+        "input_tokens": 42,
+        "output_tokens": 9,
+        "cache_read_input_tokens": None,
+        "cache_creation_input_tokens": None,
+    }
+    _write_jsonl(trace_path, [record])
+    _seed_legacy(tmp_path)
+
+    summary = list_trace_sessions()[0]
+
+    assert summary["input_tokens"] == 42
+    assert summary["output_tokens"] == 9
+    assert summary["cache_read_tokens"] == 0
+    assert summary["cache_create_tokens"] == 0
+    assert summary["total_tokens"] == 51
+
+
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])
@@ -177,6 +228,128 @@ def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path
     assert payload is not None
     assert payload["session"]["record_count"] == 3
     assert [record["turn"] for record in payload["records"]] == [2]
+
+
+def test_dashboard_lists_stale_cached_summary_without_record_scan(trace_db, monkeypatch) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn = store._connect()
+    conn.execute(
+        """
+        UPDATE sessions
+        SET status = 'active',
+            record_count = 25,
+            summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "agent": "Claude Code",
+                    "agent_key": "claude-code",
+                    "record_count": 25,
+                    "total_tokens": 500,
+                    "first_user": "Cached prompt",
+                },
+                separators=(",", ":"),
+            ),
+            session_id,
+        ),
+    )
+    conn.commit()
+
+    def fail_load_records(*_args, **_kwargs):
+        raise AssertionError("list view must not load full records")
+
+    monkeypatch.setattr(store, "load_records", fail_load_records)
+
+    summary = list_trace_sessions()[0]
+
+    assert summary["id"] == session_id
+    assert summary["record_count"] == 25
+    assert summary["status"] == "active"
+    assert summary["first_user"] == "Cached prompt"
+
+
+def test_dashboard_lists_uncached_session_without_record_scan(trace_db, monkeypatch) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', record_count = 7, summary_json = NULL WHERE id = ?",
+        (session_id,),
+    )
+    conn.commit()
+
+    def fail_load_records(*_args, **_kwargs):
+        raise AssertionError("list view must not load full records")
+
+    monkeypatch.setattr(store, "load_records", fail_load_records)
+
+    summary = list_trace_sessions()[0]
+
+    assert summary["id"] == session_id
+    assert summary["record_count"] == 7
+    assert summary["agent"] == "Codex"
+    assert summary["status"] == "complete"
+
+
+def test_dashboard_agent_buckets_use_aggregate_query(trace_db, monkeypatch) -> None:
+    store = get_trace_store()
+    codex_id = store.create_session(client="codex", proxy_mode="reverse")
+    claude_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn = store._connect()
+    conn.execute(
+        """
+        UPDATE sessions
+        SET status = 'complete', record_count = 3, summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            _seed_dashboard_summary(
+                session_id=codex_id,
+                agent="Codex",
+                status="complete",
+                record_count=3,
+                first_user="Codex prompt",
+                updated_at="2026-06-01T10:00:00+00:00",
+                date_key="2026-06-01",
+            ),
+            codex_id,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE sessions
+        SET status = 'complete', record_count = 2, summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            _seed_dashboard_summary(
+                session_id=claude_id,
+                agent="Claude Code",
+                status="complete",
+                record_count=2,
+                first_user="Claude prompt",
+                updated_at="2026-06-01T11:00:00+00:00",
+                date_key="2026-06-01",
+            ),
+            claude_id,
+        ),
+    )
+    conn.commit()
+
+    def fail_list_session_rows(*_args, **_kwargs):
+        raise AssertionError("agent buckets must not load every session row")
+
+    monkeypatch.setattr(store, "list_session_rows", fail_list_session_rows)
+
+    agents = list_trace_agents()
+
+    assert [(agent["label"], agent["sessions"], agent["records"]) for agent in agents] == [
+        ("Claude Code", 1, 2),
+        ("Codex", 1, 3),
+    ]
 
 
 def test_dashboard_detail_reads_from_sqlite(trace_db, tmp_path: Path) -> None:
@@ -407,7 +580,7 @@ def test_dashboard_rejects_missing_session_ids(trace_db) -> None:
     assert load_trace_session("not-a-valid-session-id") is None
 
 
-def test_dashboard_detail_navigation_uses_standalone_viewer_route() -> None:
+def test_dashboard_detail_navigation_uses_lazy_shell_route() -> None:
     template = read_dashboard_template()
 
     assert "function sessionDetailUrl(sessionId)" in template
@@ -416,31 +589,57 @@ def test_dashboard_detail_navigation_uses_standalone_viewer_route() -> None:
     assert "detailRecordTotal: 0" in template
     assert 'detailFingerprint: ""' in template
     assert "detailSession: null" in template
+    assert 'activeTab: "raw"' in template
     assert "function detailRecordFetchLimit(sessionId, preserveLoaded)" in template
     assert "function sessionDetailFingerprint(session)" in template
     assert "function updateDetailSessionSummary(session)" in template
     assert "function updateDetailI18n(session)" in template
-    assert "if (!selected || !state.detailSessionId || refreshDetail)" in template
+    assert 'params.set("search", search)' in template
+    assert 'params.set("agent", state.selectedAgent)' in template
+    assert "function refreshForFilters()" in template
+    assert 'state.view === "detail" && state.selectedSessionId' in template
+    assert "const detailLoaded = state.detailSessionId === state.selectedSessionId" in template
     assert "updateDetailSessionSummary(selected)" in template
     assert "updateDetailI18n(state.detailSession)" in template
     assert "knownTotal > previousTotal && previousTotal <= loadedRecords" in template
     assert "const limit = detailRecordFetchLimit(sessionId, preserveLoaded)" in template
     assert "state.detailRecordTotal = totalRecords" in template
     assert "state.detailFingerprint = sessionDetailFingerprint(session)" in template
+    assert 'state.activeTab === "conversation" ? `' in template
 
 
 def test_dashboard_template_exposes_session_delete_controls() -> None:
     template = read_dashboard_template()
 
     assert 'data-i18n="table_actions"' in template
+    assert 'id="edit-sessions"' in template
+    assert 'id="select-all-sessions"' in template
+    assert 'id="delete-selected-sessions"' in template
+    assert "data-select-session" in template
     assert "delete-session-modal" in template
-    assert "data-delete-session" in template
+    assert "data-delete-session" not in template
     assert "delete_active_session_title" in template
     assert "session.active" in template
     assert "function isSessionRowActionTarget(target)" in template
     assert "event.target !== row" in template
     assert "function confirmDeleteSession()" in template
+    assert "body: JSON.stringify({session_ids: sessionIds})" in template
     assert 'method: "DELETE"' in template
+
+
+def test_dashboard_template_exposes_quit_control() -> None:
+    template = read_dashboard_template()
+
+    assert 'id="dashboard-quit"' in template
+    assert "quit_dashboard_confirm" in template
+    assert "Stop dashboard service" in template
+    assert "function quitDashboard()" in template
+    assert 'const DASHBOARD_QUIT_TOKEN = "";' in template
+    assert "const DASHBOARD_CAN_STOP = false;" in template
+    assert '"X-Claude-Tap-Dashboard-Token": DASHBOARD_QUIT_TOKEN' in template
+    assert "let dashboardEvents = null;" in template
+    assert "function closeDashboardEvents()" in template
+    assert "if (state.quittingDashboard) return;" in template
 
 
 def test_dashboard_summarize_session_and_migration(trace_db, tmp_path: Path) -> None:
@@ -764,6 +963,7 @@ def test_dashboard_preview_skips_auxiliary_auth_records(trace_db, tmp_path: Path
 
     assert summary["first_user"] == "Gemini dashboard prompt"
     assert summary["last_response"] == "Gemini dashboard response."
+    assert summary["status"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -804,19 +1004,11 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
             async with session.get(f"http://127.0.0.1:{port}/dashboard/session/{session_id}") as resp:
                 assert resp.status == 200
                 html = await resp.text()
-                assert "EMBEDDED_TRACE_COMPACT_DATA" in html
-                assert "req_claude" in html
-                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/compact";' in html
-                assert f'const __TRACE_HTML_PATH__ = "/dashboard/session/{session_id}";' in html
-                assert f"session-{session_id[:8]}.jsonl" not in html
-                assert f"session-{session_id[:8]}.html" not in html
-                assert "__TRACE_SESSION_EXPORTS__" in html
-                assert f"/api/sessions/{session_id}/export/jsonl" in html
-                assert f"/api/sessions/{session_id}/export/compact" in html
-                assert f"/api/sessions/{session_id}/export/log" in html
-                assert f"/api/sessions/{session_id}/export/html" in html
-                assert "session-list" not in html
-                assert "back-to-list" not in html
+                assert "session-list" in html
+                assert "back-to-list" in html
+                assert "EMBEDDED_TRACE_COMPACT_DATA" not in html
+                assert "req_claude" not in html
+                assert "/api/sessions/${encodeURIComponent(session.id)}/html" in html
 
             async with session.get(f"http://127.0.0.1:{port}/api/agents") as resp:
                 assert resp.status == 200
@@ -902,6 +1094,100 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_dashboard_session_filters_apply_before_paging(trace_db) -> None:
+    store = get_trace_store()
+    conn = store._connect()
+    for index in range(120):
+        session_id = store.create_session(
+            client="claude",
+            proxy_mode="reverse",
+            started_at=datetime(2026, 6, 1, 12, index % 60, tzinfo=timezone.utc),
+        )
+        updated_at = f"2026-06-01T12:{index % 60:02d}:{index // 60:02d}+00:00"
+        conn.execute(
+            """
+            UPDATE sessions
+            SET status = 'complete',
+                record_count = 1,
+                updated_at = ?,
+                date_key = '2026-06-01',
+                summary_json = ?
+            WHERE id = ?
+            """,
+            (
+                updated_at,
+                _seed_dashboard_summary(
+                    session_id=session_id,
+                    agent="Claude Code",
+                    status="complete",
+                    record_count=1,
+                    first_user=f"Noise prompt {index}",
+                    updated_at=updated_at,
+                    date_key="2026-06-01",
+                ),
+                session_id,
+            ),
+        )
+    target_id = store.create_session(
+        client="codex",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 5, 1, 8, 0, tzinfo=timezone.utc),
+    )
+    conn.execute(
+        """
+        UPDATE sessions
+        SET status = 'error',
+            record_count = 7,
+            started_at = '2026-05-01T08:00:00+00:00',
+            updated_at = '2026-05-01T08:00:00+00:00',
+            date_key = '2026-05-01',
+            summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            _seed_dashboard_summary(
+                session_id=target_id,
+                agent="Codex",
+                status="error",
+                record_count=7,
+                first_user="Find me past the first page",
+                updated_at="2026-05-01T08:00:00+00:00",
+                date_key="2026-05-01",
+            ),
+            target_id,
+        ),
+    )
+    conn.commit()
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions?limit=100") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["total"] == 121
+                assert payload["total_records"] == 127
+                assert target_id not in {item["id"] for item in payload["sessions"]}
+
+            for query in (
+                "search=Find%20me%20past",
+                "date=2026-05-01",
+                "status=error",
+                "agent=codex",
+            ):
+                async with session.get(f"http://127.0.0.1:{port}/api/sessions?limit=10&{query}") as resp:
+                    assert resp.status == 200
+                    payload = await resp.json()
+                    assert payload["total"] == 1
+                    assert payload["total_records"] == 7
+                    assert [item["id"] for item in payload["sessions"]] == [target_id]
+                    assert "2026-05-01" in payload["dates"]
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_server_sse_events(trace_db) -> None:
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()
@@ -914,7 +1200,9 @@ async def test_dashboard_server_sse_events(trace_db) -> None:
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
                 assert resp.status == 200
-                assert await resp.json() == {"sessions": []}
+                payload = await resp.json()
+                assert payload["sessions"] == []
+                assert payload["total"] == 0
 
             async with session.get(f"http://127.0.0.1:{port}/api/sessions/anything/records") as resp:
                 assert resp.status == 404
@@ -930,6 +1218,114 @@ async def test_dashboard_server_sse_events(trace_db) -> None:
                 assert await asyncio.wait_for(resp.content.readline(), timeout=1) == b"event: refresh\n"
                 refresh_data = await asyncio.wait_for(resp.content.readline(), timeout=1)
                 assert b'"type":"refresh"' in refresh_data
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_server_quit_route_stops_dashboard(trace_db) -> None:
+    from claude_tap.shared_dashboard import is_dashboard_healthy, wait_for_dashboard_stopped
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"http://127.0.0.1:{port}/dashboard") as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert f'const DASHBOARD_QUIT_TOKEN = "{server._dashboard_quit_token}";' in html
+                assert "const DASHBOARD_CAN_STOP = true;" in html
+
+            async with session.post(f"http://127.0.0.1:{port}/dashboard/quit") as resp:
+                assert resp.status == 403
+                payload = await resp.json()
+                assert payload["ok"] is False
+
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
+                assert resp.status == 200
+                health = await resp.json()
+                assert health["quit_token"] == server._dashboard_quit_token
+
+            async with session.post(
+                f"http://127.0.0.1:{port}/dashboard/quit",
+                headers={"X-Claude-Tap-Dashboard-Token": health["quit_token"]},
+            ) as resp:
+                assert resp.status == 200
+                assert await resp.json() == {"ok": True}
+
+        assert await wait_for_dashboard_stopped("127.0.0.1", port, timeout=2.0) is True
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is False
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_quit_token_requires_trusted_host_and_origin(trace_db) -> None:
+    from claude_tap.shared_dashboard import is_dashboard_healthy
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                f"http://127.0.0.1:{port}/dashboard",
+                headers={"Host": f"attacker.example:{port}", "Origin": f"http://attacker.example:{port}"},
+            ) as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert 'const DASHBOARD_QUIT_TOKEN = "";' in html
+                assert "const DASHBOARD_CAN_STOP = false;" in html
+                assert "session-list" in html
+
+            async with session.get(
+                f"http://127.0.0.1:{port}/dashboard/health",
+                headers={"Host": f"attacker.example:{port}", "Origin": f"http://attacker.example:{port}"},
+            ) as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["ok"] is True
+                assert payload["dashboard_mode"] is True
+                assert "quit_token" not in payload
+
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
+                assert resp.status == 200
+                health = await resp.json()
+                token = health["quit_token"]
+
+            for headers in (
+                {"Host": f"attacker.example:{port}", "X-Claude-Tap-Dashboard-Token": token},
+                {
+                    "Origin": f"http://attacker.example:{port}",
+                    "X-Claude-Tap-Dashboard-Token": token,
+                },
+                {
+                    "Origin": f"http://127.0.0.1:{port + 1}",
+                    "X-Claude-Tap-Dashboard-Token": token,
+                },
+            ):
+                async with session.post(f"http://127.0.0.1:{port}/dashboard/quit", headers=headers) as resp:
+                    assert resp.status == 403
+                    payload = await resp.json()
+                    assert payload["ok"] is False
+
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is True
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_quit_route_rejects_non_dashboard_server(trace_db) -> None:
+    server = LiveViewerServer(port=0, dashboard_mode=False)
+    port = await server.start()
+    try:
+        timeout = aiohttp.ClientTimeout(total=3)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"http://127.0.0.1:{port}/dashboard/quit") as resp:
+                assert resp.status == 403
+                payload = await resp.json()
+                assert payload["ok"] is False
     finally:
         await server.stop()
 
@@ -953,18 +1349,19 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                     f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
                     wait_until="domcontentloaded",
                 )
-                await page.wait_for_selector(".sidebar-item", timeout=5000)
+                await page.wait_for_selector("#raw-tab .section", timeout=5000)
                 assert await page.locator(".header").count() == 1
                 assert await page.locator(".viewer-frame").count() == 0
-                assert await page.locator("#back-to-list").count() == 0
-                assert await page.locator("#session-list").count() == 0
-                assert await page.locator(".sidebar-item").count() >= 10
-                export_button = page.locator("#viewer-actions .export-menu > summary")
+                assert await page.locator("#back-to-list").is_visible()
+                assert await page.locator("#list-view.hidden").count() == 1
+                assert await page.locator("#raw-tab .section").count() == 10
+                assert await page.locator("[data-load-more]").count() == 1
+
+                export_button = page.locator(".detail-inspector-bar .export-menu > summary")
                 assert await export_button.count() == 1
                 assert await export_button.inner_text() == "Export"
-                assert await page.locator("#viewer-actions > .viewer-action").count() == 0
-                assert await page.locator("#viewer-actions .export-menu-item").count() == 4
-                hrefs = await page.locator("#viewer-actions .export-menu-item").evaluate_all(
+                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 4
+                hrefs = await page.locator(".detail-inspector-bar .export-menu-item").evaluate_all(
                     "(links) => links.map((link) => link.getAttribute('href'))"
                 )
                 assert f"/api/sessions/{session_id}/export/jsonl" in hrefs
@@ -974,7 +1371,7 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
 
                 async with page.expect_download() as download_info:
                     await export_button.click()
-                    await page.locator('#viewer-actions .export-menu-item[href$="/export/html"]').click()
+                    await page.locator('.detail-inspector-bar .export-menu-item[href$="/export/html"]').click()
                 download = await download_info.value
                 assert download.suggested_filename == f"trace_{session_id[:8]}.html"
                 download_path = await download.path()
@@ -1007,17 +1404,17 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                     f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
                     wait_until="domcontentloaded",
                 )
-                await page.wait_for_selector("#viewer-actions .export-menu > summary", timeout=5000)
+                await page.wait_for_selector(".detail-inspector-bar .export-menu > summary", timeout=5000)
 
-                await page.locator("#viewer-actions .export-menu > summary").click()
-                menu = page.locator("#viewer-actions .export-menu-list")
+                await page.locator(".detail-inspector-bar .export-menu > summary").click()
+                menu = page.locator(".detail-inspector-bar .export-menu-list")
                 assert await menu.is_visible()
-                assert await page.locator("#viewer-actions .export-menu-item").count() == 4
+                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 4
 
                 layout = await page.evaluate(
                     """() => {
-                      const actions = document.querySelector('#viewer-actions');
-                      const menu = document.querySelector('#viewer-actions .export-menu-list');
+                      const actions = document.querySelector('.detail-inspector-bar .action-bar');
+                      const menu = document.querySelector('.detail-inspector-bar .export-menu-list');
                       const actionsBox = actions.getBoundingClientRect();
                       const menuBox = menu.getBoundingClientRect();
                       const actionStyles = getComputedStyle(actions);
@@ -1025,6 +1422,8 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                       return {
                         actionsBottom: actionsBox.bottom,
                         menuBottom: menuBox.bottom,
+                        menuRight: menuBox.right,
+                        viewportWidth: window.innerWidth,
                         menuHeight: menuBox.height,
                         overflowX: actionStyles.overflowX,
                         menuPosition: menuStyles.position,
@@ -1032,9 +1431,9 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                     }"""
                 )
                 assert layout["overflowX"] == "visible"
-                assert layout["menuPosition"] == "static"
                 assert layout["menuHeight"] > 80
-                assert layout["menuBottom"] <= layout["actionsBottom"] + 1
+                assert layout["menuRight"] <= layout["viewportWidth"]
+                assert layout["menuBottom"] > layout["actionsBottom"]
             finally:
                 await browser.close()
     finally:
@@ -1042,7 +1441,7 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
 
 
 @pytest.mark.asyncio
-async def test_dashboard_delete_button_keyboard_focuses_confirmation_dialog(trace_db) -> None:
+async def test_dashboard_bulk_delete_edit_mode_focuses_confirmation_dialog(trace_db) -> None:
     playwright = pytest.importorskip("playwright.async_api")
     store = get_trace_store()
     session_id = store.create_session(client="claude", proxy_mode="reverse")
@@ -1057,21 +1456,24 @@ async def test_dashboard_delete_button_keyboard_focuses_confirmation_dialog(trac
             try:
                 page = await browser.new_page()
                 await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
-                delete_button = page.locator(f'[data-delete-session="{session_id}"]')
-                await delete_button.wait_for(state="visible", timeout=5000)
+                assert await page.locator("[data-delete-session]").count() == 0
 
-                for key in ("Enter", "Space"):
-                    await delete_button.focus()
-                    await page.keyboard.press(key)
-                    await page.wait_for_selector("#delete-session-modal:not(.hidden)", timeout=5000)
-                    assert page.url == f"http://127.0.0.1:{port}/dashboard"
-                    assert await page.evaluate("document.activeElement && document.activeElement.id") == (
-                        "delete-session-cancel"
-                    )
+                await page.locator("#edit-sessions").click()
+                checkbox = page.locator(f'[data-select-session="{session_id}"]')
+                await checkbox.wait_for(state="visible", timeout=5000)
+                await checkbox.check()
+                assert await page.locator("#bulk-selected-count").inner_text() == "1 selected"
 
-                    await page.keyboard.press("Enter")
-                    await page.wait_for_selector("#delete-session-modal.hidden", state="attached", timeout=5000)
-                    assert await page.locator(f'[data-session="{session_id}"]').count() == 1
+                await page.locator("#delete-selected-sessions").click()
+                await page.wait_for_selector("#delete-session-modal:not(.hidden)", timeout=5000)
+                assert page.url == f"http://127.0.0.1:{port}/dashboard"
+                assert await page.evaluate("document.activeElement && document.activeElement.id") == (
+                    "delete-session-cancel"
+                )
+
+                await page.locator("#delete-session-confirm").click()
+                await page.wait_for_selector("#delete-session-modal.hidden", state="attached", timeout=5000)
+                await page.wait_for_selector(f'[data-session="{session_id}"]', state="detached", timeout=5000)
             finally:
                 await browser.close()
     finally:
@@ -1118,6 +1520,40 @@ async def test_dashboard_delete_active_session_is_protected(trace_db) -> None:
                 payload = await resp.json()
                 assert payload["error"] == "Active session cannot be deleted"
         assert store.load_session_row(session_id) is not None
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_bulk_delete_skips_active_sessions(trace_db) -> None:
+    store = get_trace_store()
+    first_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(first_id, _anthropic_record())
+    store.finalize_session(first_id, {"api_calls": 1})
+    second_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(second_id, _anthropic_record(turn=2))
+    store.finalize_session(second_id, {"api_calls": 1})
+    active_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(active_id, _anthropic_record(turn=3))
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(
+                f"http://127.0.0.1:{port}/api/sessions",
+                json={"session_ids": [first_id, second_id, active_id, "missing"]},
+            ) as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["deleted_sessions"] == 2
+                assert payload["deleted_records"] == 2
+                assert payload["skipped_active_sessions"] == [active_id]
+                assert payload["missing_sessions"] == ["missing"]
+
+        assert store.load_session_row(first_id) is None
+        assert store.load_session_row(second_id) is None
+        assert store.load_session_row(active_id) is not None
     finally:
         await server.stop()
 
@@ -1181,3 +1617,192 @@ async def test_trace_writer_persists_records_to_sqlite(trace_db) -> None:
 
     assert len(records) == 1
     assert records[0]["capture"]["client"] == "claude"
+
+
+def test_get_session_aggregates(trace_db) -> None:
+    from claude_tap.trace_store import SessionQuery
+
+    store = get_trace_store()
+    conn = store._connect()
+
+    # 1. Active session with no error
+    active_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn.execute(
+        "UPDATE sessions SET status = 'active', record_count = 5, summary_json = ? WHERE id = ?",
+        (
+            json.dumps({"agent": "Claude Code", "status": "active", "total_tokens": 120}, separators=(",", ":")),
+            active_id,
+        ),
+    )
+
+    # 2. Active session with error in summary_json
+    active_err_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn.execute(
+        "UPDATE sessions SET status = 'active', record_count = 2, summary_json = ? WHERE id = ?",
+        (
+            json.dumps({"agent": "Claude Code", "status": "error", "total_tokens": 80}, separators=(",", ":")),
+            active_err_id,
+        ),
+    )
+
+    # 3. Completed session with error status
+    completed_err_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn.execute(
+        "UPDATE sessions SET status = 'error', record_count = 10, summary_json = ? WHERE id = ?",
+        (
+            json.dumps({"agent": "Claude Code", "status": "error", "total_tokens": 300}, separators=(",", ":")),
+            completed_err_id,
+        ),
+    )
+
+    conn.commit()
+
+    # Check global aggregates
+    aggregates = store.get_session_aggregates()
+    assert aggregates["total_sessions"] == 3
+    assert aggregates["total_records"] == 17
+    assert aggregates["total_tokens"] == 500
+    assert aggregates["total_errors"] == 2  # active_err_id and completed_err_id
+
+    # Check query-based status filtering for active status
+    active_query = SessionQuery(status="active")
+    active_aggs = store.get_session_aggregates(active_query)
+    assert active_aggs["total_sessions"] == 1  # only active_id
+
+    # Check query-based status filtering for error status
+    error_query = SessionQuery(status="error")
+    error_aggs = store.get_session_aggregates(error_query)
+    assert error_aggs["total_sessions"] == 2  # active_err_id and completed_err_id
+
+
+def test_agent_filter_values_resolves_custom_agents(trace_db) -> None:
+    from claude_tap.dashboard import _agent_filter_values
+
+    store = get_trace_store()
+    conn = store._connect()
+
+    # Create a session with a custom agent client "My-Agent"
+    custom_id = store.create_session(client="My-Agent", proxy_mode="reverse")
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', record_count = 1, summary_json = ? WHERE id = ?",
+        (
+            json.dumps({"agent": "My-Agent", "status": "complete", "total_tokens": 10}, separators=(",", ":")),
+            custom_id,
+        ),
+    )
+    conn.commit()
+
+    clients, labels = _agent_filter_values("my-agent")
+    assert "My-Agent" in clients
+    assert "My-Agent" in labels
+
+
+@pytest.mark.asyncio
+async def test_search_uncached_records_fallback(trace_db) -> None:
+    from claude_tap.trace_store import SessionQuery
+
+    store = get_trace_store()
+    conn = store._connect()
+
+    # Create a session with NULL summary_json (uncached) but records with a specific text in payload_json
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "claude", "proxy_mode": "reverse"})
+    try:
+        await writer.write(
+            {
+                "timestamp": "2026-05-20T10:15:00+00:00",
+                "request": {"method": "POST", "path": "/v1/messages", "body": "unusual_secret_string"},
+                "response": {"status": 200, "body": {}},
+            }
+        )
+    finally:
+        writer.close()
+
+    # Force summary_json to be NULL to simulate uncached session
+    conn.execute("UPDATE sessions SET summary_json = NULL WHERE id = ?", (session_id,))
+    conn.commit()
+
+    search_query = SessionQuery(search="unusual_secret_string")
+    sessions = store.list_session_rows(query=search_query)
+    assert len(sessions) == 1
+    assert sessions[0]["id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_kimi_code_model_probe_error_does_not_mark_successful_session_failed(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="kimi-code", proxy_mode="reverse")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "kimi-code", "proxy_mode": "reverse"})
+    try:
+        await writer.write(
+            {
+                "timestamp": "2026-06-09T08:00:00+00:00",
+                "request": {"method": "GET", "path": "/models", "body": {}},
+                "response": {"status": 401, "body": {"error": "missing bearer token"}},
+            }
+        )
+        await writer.write(
+            {
+                "timestamp": "2026-06-09T08:00:02+00:00",
+                "request": {
+                    "method": "POST",
+                    "path": "/chat/completions",
+                    "body": {"model": "kimi-code/kimi-for-coding", "messages": [{"role": "user", "content": "ping"}]},
+                },
+                "response": {
+                    "status": 200,
+                    "body": {
+                        "model": "kimi-code/kimi-for-coding",
+                        "choices": [{"message": {"content": "pong"}}],
+                        "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+                    },
+                },
+            }
+        )
+    finally:
+        writer.close()
+
+    conn = store._connect()
+    row = conn.execute("SELECT status, summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    summary = json.loads(row["summary_json"])
+    payload = load_trace_session(session_id)
+
+    assert row["status"] == "complete"
+    assert summary["status"] == "complete"
+    assert payload is not None
+    assert payload["session"]["status"] == "complete"
+    assert payload["session"]["error"] == ""
+    assert payload["session"]["first_user"] == "ping"
+    assert payload["session"]["last_response"] == "pong"
+
+
+@pytest.mark.asyncio
+async def test_kimi_code_model_probe_error_marks_probe_only_session_failed(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="kimi-code", proxy_mode="reverse")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "kimi-code", "proxy_mode": "reverse"})
+    try:
+        await writer.write(
+            {
+                "timestamp": "2026-06-09T08:00:00+00:00",
+                "request": {"method": "GET", "path": "/models", "body": {}},
+                "response": {"status": 401, "body": {"error": "missing bearer token"}},
+            }
+        )
+    finally:
+        writer.close()
+
+    conn = store._connect()
+    row = conn.execute("SELECT status, summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    summary = json.loads(row["summary_json"])
+
+    assert row["status"] == "error"
+    assert summary["status"] == "error"
+
+    conn.execute("UPDATE sessions SET summary_json = NULL WHERE id = ?", (session_id,))
+    conn.commit()
+    payload = load_trace_session(session_id)
+
+    assert payload is not None
+    assert payload["session"]["status"] == "error"
+    assert payload["session"]["error"] == "missing bearer token"

@@ -1,0 +1,54 @@
+{
+  "scenario": "real_tmux_codex_5_turn_tool_call_storage_compaction",
+  "trace_session_id": "db5a1ad5-525e-4d25-89bb-22a9efe39df8",
+  "codex_cli_version_seen_in_tui": "0.135.0",
+  "model_seen_in_tui": "gpt-5.5",
+  "prompt_method": "tmux paste-buffer + send-keys into one interactive Codex TUI session",
+  "workspace": "/var/tmp/claude-tap-codex-tmux-compaction-315/workspace",
+  "trace_db": "/var/tmp/claude-tap-codex-tmux-compaction-315/trace.sqlite3",
+  "outputs": {
+    "full_json": "/var/tmp/claude-tap-codex-tmux-compaction-315/out/tmux-real-full.json",
+    "compact_bundle": "/var/tmp/claude-tap-codex-tmux-compaction-315/out/tmux-real.ctap.json",
+    "html": "/var/tmp/claude-tap-codex-tmux-compaction-315/out/tmux-real.html"
+  },
+  "tmux_user_turns": 5,
+  "declared_shell_tool_calls_by_turn": [
+    12,
+    11,
+    12,
+    12,
+    14
+  ],
+  "function_calls_from_trace": 61,
+  "records": 67,
+  "request_messages_seen": 0,
+  "request_input": {
+    "total_items": 68,
+    "records_with_nonempty_input": 66,
+    "max_items_in_one_request": 3
+  },
+  "sqlite": {
+    "record_count": 67,
+    "payload_json_bytes": 383285,
+    "blob_count": 17,
+    "blob_size_bytes": 98535,
+    "blob_payload_json_bytes": 97336,
+    "compact_total_bytes": 481820
+  },
+  "sizes": {
+    "full_canonical_jsonl_bytes": 5006342,
+    "export_full_json_bytes": 1278071,
+    "compact_bundle_bytes": 483986,
+    "html_bytes": 775702
+  },
+  "savings": {
+    "sqlite_compact_vs_full_canonical_ratio": 0.096242,
+    "sqlite_compact_vs_full_canonical_smaller_percent": 90.38,
+    "compact_bundle_vs_export_full_json_ratio": 0.378685,
+    "compact_bundle_vs_export_full_json_smaller_percent": 62.13
+  },
+  "roundtrip": {
+    "compact_bundle_materializes_to_full_records": true,
+    "materialized_record_count": 67
+  }
+}

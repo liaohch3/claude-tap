@@ -684,10 +684,32 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   entries = expandWebSocketResponseEntries(compactRecords);
                   applyFilter(true);
                   selectEntry(0);
-                  const blobRef = parsed.records[0].record.request.body.instructions;
+                  const compactPayload = parsed.records[0];
+                  const compactRecord = compactPayload.record;
+                  const refPath = parseCompactRefPath(compactPayload.__claude_tap_compact_record__.refs[0].path);
+                  const blobRef = compactRecord.request.body.instructions;
                   isCompactBlobRef(blobRef);
-                  materializeCompactValue(blobRef, parsed.blobs, new Map());
-                  materializeCompactRecord(parsed.records[0], parsed.blobs, new Map());
+                  loadCompactBlobRef(blobRef, parsed.blobs, new Map());
+                  materializeCompactRefPath(compactRecord, refPath, parsed.blobs, new Map());
+                  materializeCompactRecord(compactPayload, parsed.blobs, new Map());
+                  const legacyPayload = {
+                    __claude_tap_compact_record__: {
+                      version: 1,
+                      encoding: 'json-blob-ref',
+                    },
+                    record: {
+                      request: {
+                        body: {
+                          instructions: blobRef,
+                          input: [blobRef],
+                        },
+                      },
+                      response: { body: {} },
+                    },
+                  };
+                  getCompactPath(legacyPayload.record, ['request', 'body', 'instructions']);
+                  legacyCompactRefPaths(legacyPayload.record);
+                  materializeCompactRecord(legacyPayload, parsed.blobs, new Map());
                 }""",
                 compact_bundle_path.read_text(encoding="utf-8"),
             )

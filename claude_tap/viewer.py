@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
@@ -391,18 +392,29 @@ def _parse_sse_data_frames(body: object) -> list[dict]:
     return events
 
 
+def _looks_like_gemini_request(value: object) -> bool:
+    return isinstance(value, dict) and (
+        isinstance(value.get("contents"), list) or isinstance(value.get("systemInstruction"), dict)
+    )
+
+
 def _gemini_request(body: dict) -> dict:
     req = body.get("request")
-    return req if isinstance(req, dict) else {}
+    if _looks_like_gemini_request(req):
+        return req
+    return body if _looks_like_gemini_request(body) else {}
 
 
 def _is_gemini_request_body(body: dict) -> bool:
     req = _gemini_request(body)
-    return bool(req) and (
-        isinstance(req.get("contents"), list)
-        or isinstance(req.get("systemInstruction"), dict)
-        or isinstance(req.get("tools"), list)
-    )
+    return _looks_like_gemini_request(req)
+
+
+def _model_from_path(path: object) -> str:
+    if not isinstance(path, str):
+        return ""
+    match = re.search(r"/models?/([^:?/]+)", path)
+    return match.group(1) if match else ""
 
 
 def _gemini_text_from_parts(parts: object) -> str:
@@ -823,7 +835,7 @@ def _extract_metadata(record_json: str) -> dict | None:
     msgs = _extract_request_messages(body)
 
     # Tool names from request
-    tools = body.get("tools") or _extract_gemini_tools(body)
+    tools = _extract_gemini_tools(body) or body.get("tools") or []
     tool_names = [_tool_display_name(t) for t in tools if isinstance(t, dict)]
 
     # Response tool names (tool_use blocks in response content)
@@ -865,7 +877,7 @@ def _extract_metadata(record_json: str) -> dict | None:
         "transport": r.get("transport", ""),
         "method": req.get("method", ""),
         "path": req.get("path", ""),
-        "model": body.get("model", ""),
+        "model": body.get("model", "") or _model_from_path(req.get("path", "")),
         "request_generate": _first_bool(
             body.get("generate"),
             *(event_body.get("generate") for event_body in request_event_bodies if isinstance(event_body, dict)),

@@ -1295,7 +1295,7 @@ def test_parse_args(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tmp_path):
+async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tmp_path, capsys):
     """Default live viewer starts, and --tap-no-open controls browser opening."""
     from claude_tap import async_main, parse_args
     from claude_tap.live import LiveViewerServer
@@ -1332,6 +1332,42 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
     assert len(opened_urls) == 1
     assert all(url.startswith("http://127.0.0.1:") for url in opened_urls)
     assert migration_calls == []
+    output = capsys.readouterr().out
+    assert "Stop dashboard: claude-tap dashboard stop" in output
+
+
+@pytest.mark.asyncio
+async def test_async_main_stop_hint_includes_custom_dashboard_address(monkeypatch, tmp_path, capsys):
+    """The dashboard stop hint should target the actual shared dashboard address."""
+    from claude_tap import async_main, parse_args
+
+    async def fake_run_client(*args, **kwargs):
+        return 0
+
+    async def fake_ensure_shared_dashboard(*, host, port, output_dir, open_browser, open_browser_fn):
+        return f"http://127.0.0.1:{port}", False
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", fake_ensure_shared_dashboard)
+
+    args = parse_args(
+        [
+            "--tap-output-dir",
+            str(tmp_path),
+            "--tap-live-port",
+            "3000",
+            "--tap-host",
+            "0.0.0.0",
+            "--tap-no-update-check",
+        ]
+    )
+
+    code = await async_main(args)
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert "Stop dashboard: claude-tap dashboard stop --tap-live-port 3000 --tap-host 0.0.0.0" in output
 
 
 @pytest.mark.asyncio
@@ -1957,6 +1993,113 @@ def test_kimi_multiturn_tool_calls_reverse_proxy():
         _cleanup(trace_dir, fake_bin_dir, "kimi_multiturn")
 
 
+FAKE_KIMI_CODE_SCRIPT = r"""#!/usr/bin/env python3
+# Fake Kimi Code CLI: read base_url from KIMI_CODE_HOME/config.toml
+import json, os, sys, tomllib, urllib.request
+from pathlib import Path
+
+home = Path(os.environ["KIMI_CODE_HOME"])
+config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+provider = config["providers"]["managed:kimi-code"]
+base = provider["base_url"].rstrip("/")
+url = f"{base}/chat/completions"
+
+req_body = json.dumps({
+    "model": "kimi-k2-turbo-preview",
+    "messages": [{"role": "user", "content": "Reply with exactly: HELLO_KIMI_CODE"}],
+    "stream": True,
+}).encode()
+req = urllib.request.Request(url, data=req_body, headers={
+    "Content-Type": "application/json",
+    "Authorization": "Bearer kimi-test-key-12345678",
+})
+try:
+    with urllib.request.urlopen(req) as resp:
+        chunks = resp.read().decode()
+        print(f"[fake-kimi-code] status={resp.status} stream-bytes={len(chunks)}")
+except Exception as e:
+    print(f"[fake-kimi-code] Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("[fake-kimi-code] Done.")
+"""
+
+
+def test_kimi_code_client_reverse_proxy():
+    """Test --tap-client kimi-code in reverse mode using KIMI_CODE_HOME sandbox."""
+
+    async def handler(request):
+        body = await request.json()
+        assert request.path == "/chat/completions"
+        assert body["model"] == "kimi-k2-turbo-preview"
+        from aiohttp import web
+
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        chunks = [
+            {
+                "id": "kimi_code_chat_1",
+                "model": body["model"],
+                "choices": [{"delta": {"role": "assistant", "reasoning_content": "Need exact text."}}],
+            },
+            {
+                "id": "kimi_code_chat_1",
+                "model": body["model"],
+                "choices": [{"delta": {"content": "HELLO_KIMI_CODE"}}],
+            },
+            {
+                "id": "kimi_code_chat_1",
+                "model": body["model"],
+                "choices": [
+                    {
+                        "delta": {},
+                        "finish_reason": "stop",
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 2,
+                            "total_tokens": 15,
+                            "cached_tokens": 5,
+                        },
+                    }
+                ],
+            },
+        ]
+        for chunk in chunks:
+            await resp.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        await resp.write_eof()
+        return resp
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_kimi_code_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_kimi_code_")
+    fake_kimi = Path(fake_bin_dir) / "kimi"
+    fake_kimi.write_text(FAKE_KIMI_CODE_SCRIPT)
+    fake_kimi.chmod(fake_kimi.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19246, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19246,
+            tap_client="kimi-code",
+        )
+
+        assert proc.returncode == 0, f"kimi-code mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        records = read_trace_records(trace_dir)
+        assert len(records) == 1
+        record = records[0]
+        assert record["request"]["path"] == "/chat/completions"
+        assert record["upstream_base_url"] == "http://127.0.0.1:19246"
+        assert record["response"]["body"]["content"][1]["text"] == "HELLO_KIMI_CODE"
+        assert "KIMI_CODE_HOME=" in proc.stdout
+        assert "KIMI_CODE_BASE_URL=http://127.0.0.1:" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "kimi_code")
+
+
 ## ---------------------------------------------------------------------------
 ## Test 6b: test_codex_zstd_request_body — proxy decompresses zstd request bodies
 ## ---------------------------------------------------------------------------
@@ -2095,6 +2238,92 @@ def test_filter_headers():
     print("  OK: short key masked")
 
     print("\n  test_filter_headers PASSED")
+
+
+## ---------------------------------------------------------------------------
+## Test: double-serialized request body decoding
+## ---------------------------------------------------------------------------
+
+
+def test_double_serialized_request_body():
+    """Verify proxy decodes double-serialized JSON request bodies into dicts."""
+    import socket
+
+    received_bodies: list[object] = []
+
+    async def handler(request):
+        body = await request.json()
+        received_bodies.append(body)
+        from aiohttp import web
+
+        return web.json_response(
+            {
+                "id": "msg_test",
+                "type": "message",
+                "content": [{"type": "text", "text": "OK"}],
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+                "model": "claude-test",
+            }
+        )
+
+    # Build a fake claude script that sends a double-serialized body
+    double_serial_script = r'''#!/usr/bin/env python3
+"""Fake claude CLI — sends a double-serialized JSON body."""
+import json, os, sys, urllib.request
+
+base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+url = f"{base}/v1/messages"
+inner = {"model": "claude-test", "messages": [{"role": "user", "content": "hi"}]}
+# Double-serialize: the outer JSON is a string wrapping the real object
+payload = json.dumps(json.dumps(inner)).encode()
+
+req = urllib.request.Request(url, data=payload, headers={
+    "Content-Type": "application/json",
+    "x-api-key": "sk-test",
+})
+try:
+    resp = urllib.request.urlopen(req)
+    print(resp.read().decode())
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_double_serial_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_double_serial_")
+    fake_claude = Path(fake_bin_dir) / "claude"
+    fake_claude.write_text(double_serial_script)
+    fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IEXEC)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        upstream_port = sock.getsockname()[1]
+    stop = _start_fake_upstream(upstream_port, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            upstream_port,
+        )
+
+        assert proc.returncode == 0, f"double-serial test failed: stdout={proc.stdout} stderr={proc.stderr}"
+        assert len(received_bodies) == 1
+        assert isinstance(received_bodies[0], str)
+        upstream_body = json.loads(received_bodies[0])
+        assert upstream_body["model"] == "claude-test"
+
+        # Verify the trace record stored the body as a dict, not a string
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1
+        req_body = records[0]["request"]["body"]
+        assert isinstance(req_body, dict), f"Expected dict body, got {type(req_body)}: {req_body!r}"
+        assert req_body["model"] == "claude-test"
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "claude")
+
+    print("\n  test_double_serialized_request_body PASSED")
 
 
 ## ---------------------------------------------------------------------------
@@ -2699,6 +2928,7 @@ def test_parse_dashboard_args():
     from claude_tap import parse_dashboard_args
 
     a = parse_dashboard_args([])
+    assert a.command is None
     assert a.output_dir == "./.traces"
     assert a.live_port == 0
     assert a.host == "127.0.0.1"
@@ -2711,6 +2941,14 @@ def test_parse_dashboard_args():
     assert a.live_port == 3000
     assert a.host == "0.0.0.0"
     assert a.open_viewer is False
+
+    a = parse_dashboard_args(["stop", "--tap-live-port", "3000"])
+    assert a.command == "stop"
+    assert a.live_port == 3000
+
+    a = parse_dashboard_args(["quit", "--tap-live-port", "3000"])
+    assert a.command == "quit"
+    assert a.live_port == 3000
 
     print("  test_parse_dashboard_args PASSED")
 
@@ -4021,6 +4259,50 @@ async def test_dashboard_main_serves_viewer(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_main_bind_all_opens_loopback_url(monkeypatch, tmp_path):
+    """A bind-all dashboard should open through loopback so token checks pass."""
+    import socket
+    from unittest.mock import AsyncMock
+
+    import aiohttp
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    opened_urls: list[str] = []
+    monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=False))
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        dashboard_port = sock.getsockname()[1]
+
+    args = parse_dashboard_args(
+        ["--tap-output-dir", str(tmp_path), "--tap-live-port", str(dashboard_port), "--tap-host", "0.0.0.0"]
+    )
+    task = asyncio.create_task(dashboard_main(args))
+    try:
+        for _ in range(50):
+            if opened_urls:
+                break
+            await asyncio.sleep(0.05)
+        assert opened_urls, "dashboard should open the browser"
+        assert opened_urls[0].startswith("http://127.0.0.1:")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(opened_urls[0]) as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert "session-list" in html
+                assert "DASHBOARD_QUIT_TOKEN" in html
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
 async def test_dashboard_main_opens_reused_dashboard(monkeypatch, tmp_path):
     """The standalone dashboard command should honor browser opens when reusing a server."""
     from unittest.mock import AsyncMock
@@ -4039,3 +4321,75 @@ async def test_dashboard_main_opens_reused_dashboard(monkeypatch, tmp_path):
     assert await dashboard_main(args) == 0
     assert opened_urls == ["http://127.0.0.1:23456"]
     assert migration_calls == [tmp_path]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_stops_running_dashboard(monkeypatch, tmp_path):
+    """The dashboard stop command should stop an existing dashboard."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+    stop_dashboard = AsyncMock(return_value=True)
+    monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
+
+    args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 0
+    stop_dashboard.assert_awaited_once_with("127.0.0.1", 23456)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_quit_alias_stops_running_dashboard(monkeypatch, tmp_path):
+    """The dashboard quit alias should route to the same stop flow."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+    stop_dashboard = AsyncMock(return_value=True)
+    monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
+
+    args = parse_dashboard_args(["quit", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 0
+    stop_dashboard.assert_awaited_once_with("127.0.0.1", 23456)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_stop_reports_missing_dashboard(monkeypatch, tmp_path):
+    """The dashboard stop command should fail clearly when no dashboard is running."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=False))
+    stop_dashboard = AsyncMock(return_value=True)
+    monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
+
+    args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 1
+    stop_dashboard.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_stop_reports_stop_failure(monkeypatch, tmp_path):
+    """The dashboard stop command should report stop failures after health succeeds."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+    stop_dashboard = AsyncMock(return_value=False)
+    monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
+
+    args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 1
+    stop_dashboard.assert_awaited_once_with("127.0.0.1", 23456)

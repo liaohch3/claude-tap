@@ -52,6 +52,8 @@ def test_parse_args_accepts_every_registered_client(monkeypatch, tmp_path) -> No
 @pytest.mark.asyncio
 async def test_run_client_kimi_reverse_sets_kimi_base_url(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    for key in ("MOONSHOT_BASE_URL", "OPENAI_BASE_URL", "OPENROUTER_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

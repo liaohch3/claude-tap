@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import shlex
 
 # Keep the stdlib module object available as claude_tap.cli.shutil for
 # existing tests and private integrations that monkeypatch shutil.which there.
@@ -49,6 +50,7 @@ from claude_tap.cli_update import (
     _build_update_command,
     _check_pypi_version,
     _detect_installer,
+    _maybe_start_background_update,
     _start_background_update,
     _version_tuple,
     parse_update_args,
@@ -66,6 +68,7 @@ from claude_tap.shared_dashboard import (
     is_dashboard_healthy,
     is_legacy_dashboard_healthy,
     resolve_dashboard_port,
+    stop_shared_dashboard,
 )
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
@@ -109,6 +112,7 @@ _CLI_COMPAT_EXPORTS = (
     _read_settings_env_base_url,
     _selected_codex_provider_base_url,
     _settings_arg,
+    _start_background_update,
     _toml_dotted_key_segment,
     parse_update_args,
 )
@@ -121,6 +125,15 @@ def _open_browser(url: str) -> None:
 
 async def _is_dashboard_reusable(host: str, port: int) -> bool:
     return await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port)
+
+
+def _dashboard_stop_command(host: str, port: int) -> str:
+    parts = ["claude-tap", "dashboard", "stop"]
+    if port != DEFAULT_DASHBOARD_PORT:
+        parts.extend(["--tap-live-port", str(port)])
+    if host != "127.0.0.1":
+        parts.extend(["--tap-host", host])
+    return " ".join(shlex.quote(part) for part in parts)
 
 
 _CLAUDE_EXECUTABLE_NAMES = {"claude", "claude.exe", "claude.cmd", "claude.bat"}
@@ -216,9 +229,9 @@ async def async_main(args: argparse.Namespace):
 
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
+    dashboard_host = args.host
+    dashboard_port = resolve_dashboard_port(args.live_port)
     if args.live_viewer:
-        dashboard_host = args.host
-        dashboard_port = resolve_dashboard_port(args.live_port)
         try:
             dashboard_url_value, spawned = await ensure_shared_dashboard(
                 host=dashboard_host,
@@ -317,10 +330,10 @@ async def async_main(args: argparse.Namespace):
                 latest = await _check_pypi_version()
                 if latest and _version_tuple(latest) > _version_tuple(__version__):
                     print(f"⬆️  Update available: {__version__} → {latest}")
-                    if not args.no_auto_update:
-                        installer = _detect_installer()
-                        _start_background_update(installer)
-                        print(f"   Downloading update in background ({installer})...")
+                    _maybe_start_background_update(
+                        no_auto_update=args.no_auto_update,
+                        dashboard_stop_command=_dashboard_stop_command(dashboard_host, dashboard_port),
+                    )
             except Exception:
                 pass
 
@@ -402,6 +415,7 @@ async def async_main(args: argparse.Namespace):
         print(f"   Database: {resolve_db_path()}")
         if dashboard_url_value:
             print(f"   Dashboard: {dashboard_url_value}")
+            print(f"   Stop dashboard: {_dashboard_stop_command(dashboard_host, dashboard_port)}")
 
         if prompt_export_rc is not None:
             if prompt_export_rc != 0:
@@ -471,12 +485,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # With model and full auto-approval\n"
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
             "\n"
-            "kimi cli:\n"
-            "  # Uses KIMI_BASE_URL and forwards to Kimi Code by default\n"
+            "kimi cli (legacy kimi-cli; uses shell KIMI_BASE_URL):\n"
             "  claude-tap --tap-client kimi\n"
             "  claude-tap --tap-client kimi -- --thinking\n"
-            "  # Use Moonshot Open Platform instead of Kimi Code\n"
             "  claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1\n"
+            "\n"
+            "kimi-code cli (MoonshotAI/kimi-code; patches ~/.kimi-code/config.toml via sandbox):\n"
+            "  claude-tap --tap-client kimi-code\n"
+            "  claude-tap --tap-client kimi-code -- --thinking\n"
+            "  claude-tap --tap-client kimi-code --tap-target https://api.moonshot.ai/v1\n"
             "\n"
             "gemini cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client gemini -- -p "hello"\n'
@@ -542,6 +559,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "\n"
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
+            "  claude-tap dashboard stop                  Stop the shared dashboard service\n"
             "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
             "\n"
             "trust local CA:\n"
@@ -582,7 +600,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex/kimi/codebuddy, "
+            "Default depends on the client: 'reverse' for claude/codex/kimi/kimi-code/codebuddy, "
             "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder."
         ),
     )
@@ -693,6 +711,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.target is None:
         if args.client == "codex":
             args.target = _detect_codex_target(claude_args)
+        elif args.client == "kimi-code":
+            args.target = TARGET_DETECTORS["kimi-code"](claude_args)
         elif args.client == "openclaw":
             args.target = TARGET_DETECTORS["openclaw"](claude_args)
         else:
@@ -722,6 +742,12 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="claude-tap dashboard",
         description="Open a local claude-tap dashboard for browsing trace history.",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["stop", "quit"],
+        help="Use 'stop' or 'quit' to stop a running dashboard service instead of starting one",
     )
     parser.add_argument(
         "--tap-output-dir",
@@ -755,10 +781,21 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def dashboard_main(args: argparse.Namespace) -> int:
     """Run the standalone dashboard until interrupted."""
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     host = args.host
     port = resolve_dashboard_port(args.live_port)
+    if args.command in {"stop", "quit"}:
+        if not await is_dashboard_healthy(host, port, require_current_db=False):
+            print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
+            return 1
+        if not await stop_shared_dashboard(host, port):
+            print(f"Unable to stop claude-tap dashboard on {dashboard_url(host, port)}")
+            return 1
+        print(f"Stopped claude-tap dashboard on {dashboard_url(host, port)}")
+        return 0
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     if await _is_dashboard_reusable(host, port):
         migrate_legacy_traces(output_dir)
         url = dashboard_url(host, port)
@@ -794,8 +831,7 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         _open_browser(server.url)
 
     try:
-        while True:
-            await asyncio.sleep(3600)
+        await server.wait_stopped()
     except asyncio.CancelledError:
         pass
     finally:
