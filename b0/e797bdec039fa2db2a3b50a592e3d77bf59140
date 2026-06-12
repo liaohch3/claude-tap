@@ -1,0 +1,21 @@
+README.md
+  s_dc3cf7190e850a::t_d40287ffd75f81 504-507
+README_zh.md
+  s_dc3cf7190e850a::t_d40287ffd75f81 501-504
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "b0e797bdec039fa2db2a3b50a592e3d77bf59140",
+  "prompts": {},
+  "sessions": {
+    "s_dc3cf7190e850a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e3fb3-d9d0-7cb1-a30b-9c2b352ed439",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
