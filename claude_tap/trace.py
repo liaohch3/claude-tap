@@ -35,6 +35,8 @@ class TraceWriter:
         self._metadata = metadata or {}
         self._store = store or get_trace_store()
         self._has_error = False
+        self._has_auxiliary_status_probe_error = False
+        self._has_primary_success = False
 
     async def write(self, record: dict) -> None:
         """Write a record and update statistics."""
@@ -73,13 +75,21 @@ class TraceWriter:
         response = record.get("response")
         if isinstance(response, dict):
             status = response.get("status")
-            if isinstance(status, int) and status >= 400 and not _is_auxiliary_status_probe(record):
-                self._has_error = True
+            if isinstance(status, int):
+                is_probe = _is_auxiliary_status_probe(record)
+                if status >= 400:
+                    if is_probe:
+                        self._has_auxiliary_status_probe_error = True
+                    else:
+                        self._has_error = True
+                elif status >= 200 and not is_probe:
+                    self._has_primary_success = True
             if isinstance(response.get("error"), str) and response["error"]:
                 self._has_error = True
 
     def get_summary(self) -> dict:
         """Return a summary of the trace statistics."""
+        has_error = self._has_error or (self._has_auxiliary_status_probe_error and not self._has_primary_success)
         return {
             "api_calls": self.count,
             "input_tokens": self.total_input_tokens,
@@ -87,7 +97,7 @@ class TraceWriter:
             "cache_read_tokens": self.total_cache_read_tokens,
             "cache_create_tokens": self.total_cache_create_tokens,
             "models_used": self.models_used,
-            "has_error": self._has_error,
+            "has_error": has_error,
         }
 
 

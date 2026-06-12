@@ -144,6 +144,31 @@ type = "kimi"
     assert _detect_kimi_code_target(["-m", "selected"]) == "https://api.kimi.com/coding/v1"
 
 
+def test_detect_kimi_code_target_ignores_inactive_model_base_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "kimi-code-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        """
+default_model = "selected"
+
+[models.selected]
+provider = "managed:kimi-code"
+model = "kimi-for-coding"
+
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://selected.example.com/coding/v1"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+    monkeypatch.setenv("KIMI_MODEL_BASE_URL", "https://stale.example.com/v1")
+
+    assert _detect_kimi_code_target() == "https://selected.example.com/coding/v1"
+
+
 def test_detect_kimi_code_target_reads_config_file_arg(tmp_path: Path) -> None:
     override_config = tmp_path / "override.toml"
     override_config.write_text(
@@ -367,6 +392,60 @@ async def test_run_client_kimi_code_reverse_rewrites_model_env_override(
 
 
 @pytest.mark.asyncio
+async def test_run_client_kimi_code_reverse_drops_inactive_model_base_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+    home = tmp_path / "source-home"
+    home.mkdir()
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+    monkeypatch.setenv("KIMI_MODEL_BASE_URL", "https://stale.example.com/v1")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/kimi")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["--prompt", "hi"], client="kimi-code", proxy_mode="reverse")
+
+    assert code == 0
+    env = captured["env"]
+    assert "KIMI_MODEL_BASE_URL" not in env
+    assert env["KIMI_BASE_URL"] == "http://127.0.0.1:43123"
+
+
+@pytest.mark.asyncio
+async def test_run_client_kimi_code_reverse_does_not_proxy_non_kimi_model_env_without_base_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+    home = tmp_path / "source-home"
+    home.mkdir()
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+    monkeypatch.setenv("KIMI_MODEL_NAME", "claude-env")
+    monkeypatch.setenv("KIMI_MODEL_PROVIDER_TYPE", "anthropic")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/kimi")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["--prompt", "hi"], client="kimi-code", proxy_mode="reverse")
+
+    assert code == 0
+    env = captured["env"]
+    assert "KIMI_MODEL_BASE_URL" not in env
+    assert env["KIMI_MODEL_NAME"] == "claude-env"
+    assert env["KIMI_BASE_URL"] == "http://127.0.0.1:43123"
+
+
+@pytest.mark.asyncio
 async def test_run_client_kimi_code_model_arg_clears_model_env_override(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -576,6 +655,10 @@ def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
     plugins_dir = home / "plugins"
     plugins_dir.mkdir()
     (plugins_dir / "installed.json").write_text("[]", encoding="utf-8")
+    skills_dir = home / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "custom-skill.md").write_text("skill", encoding="utf-8")
+    (home / "AGENTS.md").write_text("agent instructions", encoding="utf-8")
     (home / "mcp.json").write_text("{}", encoding="utf-8")
     (home / "tui.toml").write_text('theme = "dark"\n', encoding="utf-8")
     (home / "config.toml").write_text(
@@ -590,6 +673,10 @@ def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
         assert (sandbox / "sessions").resolve() == sessions_dir.resolve()
         assert (sandbox / "plugins").is_symlink()
         assert (sandbox / "plugins").resolve() == plugins_dir.resolve()
+        assert (sandbox / "skills").is_symlink()
+        assert (sandbox / "skills").resolve() == skills_dir.resolve()
+        assert (sandbox / "AGENTS.md").is_symlink()
+        assert (sandbox / "AGENTS.md").resolve() == (home / "AGENTS.md").resolve()
         assert (sandbox / "mcp.json").is_symlink()
         assert (sandbox / "mcp.json").resolve() == (home / "mcp.json").resolve()
         assert (sandbox / "tui.toml").is_symlink()
@@ -614,6 +701,10 @@ def test_prepare_kimi_code_reverse_sandbox_copies_when_symlinks_fail(
     plugins_dir = home / "plugins"
     plugins_dir.mkdir()
     (plugins_dir / "installed.json").write_text('["old-plugin"]', encoding="utf-8")
+    skills_dir = home / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "custom-skill.md").write_text("old skill", encoding="utf-8")
+    (home / "AGENTS.md").write_text("old instructions", encoding="utf-8")
     sessions_dir = home / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "abc.jsonl").write_text("{}", encoding="utf-8")
@@ -636,6 +727,8 @@ def test_prepare_kimi_code_reverse_sandbox_copies_when_symlinks_fail(
         assert (sandbox / "oauth" / "kimi-code").read_text(encoding="utf-8") == "oauth-token"
         assert (sandbox / "credentials" / "kimi-code.json").is_file()
         assert (sandbox / "plugins" / "installed.json").is_file()
+        assert (sandbox / "skills" / "custom-skill.md").is_file()
+        assert (sandbox / "AGENTS.md").is_file()
         assert (sandbox / "sessions" / "abc.jsonl").is_file()
         assert (sandbox / "mcp.json").is_file()
         assert (sandbox / "tui.toml").is_file()
@@ -643,12 +736,16 @@ def test_prepare_kimi_code_reverse_sandbox_copies_when_symlinks_fail(
         (sandbox / "oauth" / "new-login").write_text("persisted", encoding="utf-8")
         (sandbox / "credentials" / "stale.json").unlink()
         (sandbox / "plugins" / "installed.json").write_text('["new-plugin"]', encoding="utf-8")
+        (sandbox / "skills" / "custom-skill.md").write_text("new skill", encoding="utf-8")
+        (sandbox / "AGENTS.md").write_text("new instructions", encoding="utf-8")
         (sandbox / "tui.toml").write_text('theme = "light"\n', encoding="utf-8")
         _persist_kimi_code_sandbox(home, sandbox)
 
         assert (home / "oauth" / "new-login").read_text(encoding="utf-8") == "persisted"
         assert not (home / "credentials" / "stale.json").exists()
         assert (home / "plugins" / "installed.json").read_text(encoding="utf-8") == '["new-plugin"]'
+        assert (home / "skills" / "custom-skill.md").read_text(encoding="utf-8") == "new skill"
+        assert (home / "AGENTS.md").read_text(encoding="utf-8") == "new instructions"
         assert (home / "tui.toml").read_text(encoding="utf-8") == 'theme = "light"\n'
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)

@@ -192,7 +192,7 @@ def merge_record_into_summary(
         "proxy_mode": row["proxy_mode"] or "",
     }
     if summary is None or summary.get("id") != row["id"]:
-        return _summarize_session(
+        initial_summary = _summarize_session(
             session_id=row["id"],
             date_key=row["date_key"] or "legacy",
             legacy_rel_path=row["legacy_rel_path"],
@@ -204,6 +204,10 @@ def merge_record_into_summary(
             is_current=True,
             record_count=record_count,
         )
+        if _is_auxiliary_status_error_record(record):
+            initial_summary["status"] = "active"
+            initial_summary["error"] = ""
+        return initial_summary
 
     summary = dict(summary)
     summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
@@ -242,7 +246,7 @@ def merge_record_into_summary(
     if _is_session_error_record(record):
         summary["status"] = "error"
         summary["error"] = summary.get("error") or _first_error([record])
-    else:
+    elif summary.get("status") != "error":
         summary["status"] = "active"
     return summary
 
@@ -308,10 +312,11 @@ def _session_summary_from_row(
         except json.JSONDecodeError:
             cached = None
         if isinstance(cached, dict) and (not cached.get("id") or cached.get("id") == row["id"]):
+            needs_error_repair = row["status"] == "error" and not cached.get("error")
             if (
                 repair_stale_summary
-                and not is_dashboard_summary_current(cached, row["id"])
                 and row["status"] != "active"
+                and (not is_dashboard_summary_current(cached, row["id"]) or needs_error_repair)
             ):
                 boundary_records = store.load_boundary_records(row["id"])
                 if boundary_records:
@@ -344,6 +349,23 @@ def _session_summary_from_row(
         return summary
 
     if not allow_record_scan:
+        if row["status"] == "error":
+            records = store.load_records(row["id"])
+            if records:
+                summary = _summarize_session(
+                    session_id=row["id"],
+                    date_key=row["date_key"] or "legacy",
+                    legacy_rel_path=row["legacy_rel_path"],
+                    records=records,
+                    manifest_entry=manifest_entry,
+                    status=row["status"] or "error",
+                    started_at=row["started_at"] or "",
+                    updated_at=row["updated_at"] or "",
+                    is_current=False,
+                    record_count=record_count,
+                )
+                store.store_summary(row["id"], summary)
+                return summary
         return _minimal_session_summary_from_row(row)
 
     records = store.load_records(row["id"])
@@ -508,7 +530,10 @@ def _summarize_session(
             turns.add(turn)
 
     error_records = [record for record in records if _is_session_error_record(record)]
-    has_error = bool(error_records)
+    auxiliary_error_records = [record for record in records if _is_auxiliary_status_error_record(record)]
+    has_error = bool(error_records) or (
+        bool(auxiliary_error_records) and not any(_is_successful_primary_record(record) for record in records)
+    )
     if has_error:
         resolved_status = "error"
     elif is_current and records:
@@ -518,6 +543,7 @@ def _summarize_session(
     else:
         resolved_status = status if status in {"active", "complete", "error", "empty"} else "complete"
 
+    error_display_records = error_records or (auxiliary_error_records if has_error else [])
     preview_records = _preview_records(records)
     count = record_count if record_count is not None else len(records)
     return {
@@ -543,7 +569,7 @@ def _summarize_session(
         "model": _top_key(models) or _record_model(last_record) or "unknown",
         "first_user": _first_user_preview(preview_records),
         "last_response": _last_response_preview(preview_records),
-        "error": _first_error(error_records),
+        "error": _first_error(error_display_records),
     }
 
 
@@ -843,6 +869,16 @@ def _is_session_error_record(record: dict[str, Any]) -> bool:
         return True
     status_code = _response_status(record)
     return status_code >= 400 and not _is_auxiliary_record(record)
+
+
+def _is_auxiliary_status_error_record(record: dict[str, Any]) -> bool:
+    status_code = _response_status(record)
+    return status_code >= 400 and _is_auxiliary_record(record)
+
+
+def _is_successful_primary_record(record: dict[str, Any]) -> bool:
+    status_code = _response_status(record)
+    return 200 <= status_code < 400 and not _is_auxiliary_record(record)
 
 
 def _first_user_preview(records: list[dict[str, Any]]) -> str:

@@ -362,17 +362,18 @@ async def run_client(
             kimi_code_sandbox, _patched_providers, kimi_code_source_home, cmd_args = _prepare_kimi_code_reverse_sandbox(
                 port, cmd_args
             )
-            if _kimi_code_model_arg(cmd_args):
+            has_kimi_code_model_arg = bool(_kimi_code_model_arg(cmd_args))
+            if has_kimi_code_model_arg:
                 env.pop("KIMI_MODEL_NAME", None)
+                env.pop("KIMI_MODEL_BASE_URL", None)
+            elif not _has_active_kimi_code_model_env():
                 env.pop("KIMI_MODEL_BASE_URL", None)
             reverse_env = {
                 "KIMI_CODE_HOME": str(kimi_code_sandbox),
                 "KIMI_CODE_BASE_URL": cfg.reverse_base_url(port),
                 "KIMI_BASE_URL": cfg.reverse_base_url(port),
             }
-            if not _kimi_code_model_arg(cmd_args) and (
-                os.environ.get("KIMI_MODEL_NAME") or os.environ.get("KIMI_MODEL_BASE_URL")
-            ):
+            if not has_kimi_code_model_arg and _should_proxy_kimi_code_model_env():
                 reverse_env["KIMI_MODEL_BASE_URL"] = cfg.reverse_base_url(port)
         elif client == "openclaw":
             reverse_env = _openclaw_reverse_env(port, cmd_args)
@@ -1032,6 +1033,19 @@ def _kimi_code_config_for_args(cmd_args: Sequence[str] = ()) -> dict[str, object
     return _read_kimi_code_config()
 
 
+def _has_active_kimi_code_model_env() -> bool:
+    return bool(os.environ.get("KIMI_MODEL_NAME", "").strip())
+
+
+def _should_proxy_kimi_code_model_env() -> bool:
+    if not _has_active_kimi_code_model_env():
+        return False
+    if os.environ.get("KIMI_MODEL_BASE_URL", "").strip():
+        return True
+    provider_type = os.environ.get("KIMI_MODEL_PROVIDER_TYPE", "").strip().lower()
+    return provider_type in {"", "kimi"}
+
+
 def _kimi_code_provider_base_url(provider: dict[str, object]) -> str | None:
     base_url = provider.get("base_url")
     if isinstance(base_url, str) and base_url.strip():
@@ -1270,7 +1284,9 @@ _KIMI_CODE_SANDBOX_LINKS: tuple[tuple[str, bool], ...] = (
     ("oauth", True),
     ("credentials", True),
     ("plugins", True),
+    ("skills", True),
     ("sessions", True),
+    ("AGENTS.md", False),
     ("mcp.json", False),
     ("tui.toml", False),
 )
@@ -1567,7 +1583,10 @@ def _detect_kimi_code_target(cmd_args: Sequence[str] = ()) -> str:
         if base_url:
             return base_url
 
-    for env_key in ("KIMI_MODEL_BASE_URL", "KIMI_BASE_URL", "KIMI_CODE_BASE_URL"):
+    env_keys = ["KIMI_BASE_URL", "KIMI_CODE_BASE_URL"]
+    if _has_active_kimi_code_model_env():
+        env_keys.insert(0, "KIMI_MODEL_BASE_URL")
+    for env_key in env_keys:
         base_url = os.environ.get(env_key, "").strip()
         if base_url:
             return base_url

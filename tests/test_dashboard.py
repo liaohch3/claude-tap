@@ -1774,3 +1774,35 @@ async def test_kimi_code_model_probe_error_does_not_mark_successful_session_fail
     assert payload["session"]["error"] == ""
     assert payload["session"]["first_user"] == "ping"
     assert payload["session"]["last_response"] == "pong"
+
+
+@pytest.mark.asyncio
+async def test_kimi_code_model_probe_error_marks_probe_only_session_failed(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="kimi-code", proxy_mode="reverse")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "kimi-code", "proxy_mode": "reverse"})
+    try:
+        await writer.write(
+            {
+                "timestamp": "2026-06-09T08:00:00+00:00",
+                "request": {"method": "GET", "path": "/models", "body": {}},
+                "response": {"status": 401, "body": {"error": "missing bearer token"}},
+            }
+        )
+    finally:
+        writer.close()
+
+    conn = store._connect()
+    row = conn.execute("SELECT status, summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    summary = json.loads(row["summary_json"])
+
+    assert row["status"] == "error"
+    assert summary["status"] == "error"
+
+    conn.execute("UPDATE sessions SET summary_json = NULL WHERE id = ?", (session_id,))
+    conn.commit()
+    payload = load_trace_session(session_id)
+
+    assert payload is not None
+    assert payload["session"]["status"] == "error"
+    assert payload["session"]["error"] == "missing bearer token"
