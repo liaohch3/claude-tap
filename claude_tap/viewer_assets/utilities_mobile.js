@@ -47,14 +47,14 @@ function promptJumpToTurn() {
   const turnNum = parseInt(input, 10);
   if (isNaN(turnNum)) return;
   // Find the filtered entry with matching turn number
-  const idx = filtered.findIndex(e => e.turn === turnNum);
+  const idx = filtered.findIndex(e => Number(displayTurnValue(e)) === turnNum);
   if (idx >= 0) {
     selectEntry(idx);
   } else {
     // Find closest turn
     let closestIdx = 0, closestDist = Infinity;
     filtered.forEach((e, i) => {
-      const dist = Math.abs((e.turn || 0) - turnNum);
+      const dist = Math.abs((Number(displayTurnValue(e)) || 0) - turnNum);
       if (dist < closestDist) { closestDist = dist; closestIdx = i; }
     });
     selectEntry(closestIdx);

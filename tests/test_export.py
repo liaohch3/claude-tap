@@ -121,6 +121,10 @@ def test_export_compact_trace_is_standalone_and_html_renderable(tmp_path, capsys
     compact_path = tmp_path / "trace.ctap.json"
     html_path = tmp_path / "trace.html"
     repeated_tools = [{"type": "function", "name": "shell", "description": "tool schema " * 200}]
+    repeated_input = {
+        "role": "user",
+        "content": [{"type": "input_text", "text": "shared compact input payload " * 200}],
+    }
     records = []
     for turn in range(1, 4):
         records.append(
@@ -132,7 +136,7 @@ def test_export_compact_trace_is_standalone_and_html_renderable(tmp_path, capsys
                         "model": "gpt-5.5",
                         "instructions": "shared instructions " * 200,
                         "tools": repeated_tools,
-                        "input": [{"role": "user", "content": f"turn {turn}"}],
+                        "input": [repeated_input, {"role": "user", "content": f"turn {turn}"}],
                     }
                 },
                 "response": {
@@ -150,6 +154,8 @@ def test_export_compact_trace_is_standalone_and_html_renderable(tmp_path, capsys
     compact_text = compact_path.read_text(encoding="utf-8")
     assert "__claude_tap_compact_trace__" in compact_text
     assert "__claude_tap_blob_ref__" in compact_text
+    assert "shared compact input payload" in compact_text
+    assert compact_text.count('"role":"user","content":[{"type":"input_text","text":"shared compact') == 1
     assert len(compact_text.encode("utf-8")) < len(raw_jsonl.encode("utf-8")) * 0.5
     assert load_compact_trace(compact_text) == records
 
@@ -157,6 +163,7 @@ def test_export_compact_trace_is_standalone_and_html_renderable(tmp_path, capsys
     html = html_path.read_text(encoding="utf-8")
     assert "EMBEDDED_TRACE_COMPACT_DATA" in html
     assert "turn 3" in html
+    assert "shared compact input payload" in html
     assert f"Exported 3 turns to {compact_path}" in capsys.readouterr().out
 
 

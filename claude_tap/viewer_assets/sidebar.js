@@ -14,7 +14,7 @@ function compareSidebarModelOrder(a, b) {
   if (pa !== pb) return pa - pb;
   const modelDiff = ma.localeCompare(mb);
   if (modelDiff) return modelDiff;
-  return compareTurns(a.turn, b.turn);
+  return compareTurns(captureTurnValue(a), captureTurnValue(b));
 }
 function modelColor(m) {
   const l = m.toLowerCase();
@@ -257,7 +257,7 @@ function isTitleGenerationEntry(entry) {
 }
 
 function sessionRootTurn(entry) {
-  const rootTurn = parseInt(String(entry?.turn ?? '').split('.')[0], 10);
+  const rootTurn = parseInt(String(captureTurnValue(entry) ?? '').split('.')[0], 10);
   return isNaN(rootTurn) ? null : rootTurn;
 }
 
@@ -286,13 +286,13 @@ function sessionKeyForEntry(entry, currentGroup) {
     };
   }
   if (currentGroup) return { key: currentGroup.key, userText: '', userIndex: currentGroup.userIndex, metadataOnly, rootTurn };
-  const rootTurnText = String(entry?.turn ?? '').split('.')[0];
+  const rootTurnText = String(captureTurnValue(entry) ?? '').split('.')[0];
   if (rootTurnText) return { key: 'turn:' + rootTurnText, userText: '', userIndex: -1, metadataOnly, rootTurn };
   return { key: 'request:' + (entry?.request_id || ''), userText: '', userIndex: -1, metadataOnly, rootTurn: null };
 }
 
 function sessionTurnDiscriminator(entry) {
-  const rootTurn = String(entry?.turn ?? '').split('.')[0];
+  const rootTurn = String(captureTurnValue(entry) ?? '').split('.')[0];
   if (rootTurn) return 'turn:' + rootTurn;
   return 'request:' + (entry?.request_id || '');
 }
@@ -501,7 +501,7 @@ function createSidebarItem(e, i) {
   const errorDot = failed ? `<span class="si-error-dot" title="HTTP ${statusCode}"></span>` : '';
   item.innerHTML = `
     <div class="si-row1">
-      <span class="si-turn-wrap"><span class="si-turn">${t('turn')} ${e.turn || '?'}</span>${errorDot}</span>
+      <span class="si-turn-wrap"><span class="si-turn">${t('turn')} ${displayTurnLabel(e)}</span>${errorDot}</span>
       ${taskBadgeHtml}
       <span class="si-model" style="background:${badge.bg};color:${badge.fg}">${esc(shortModel)}</span>
     </div>
@@ -673,7 +673,7 @@ function updatePositionIndicator() {
   }
   pi.style.display = 'flex';
   const entry = filtered[activeIdx];
-  const turnNum = entry.turn || (activeIdx + 1);
+  const turnNum = displayTurnLabel(entry);
   const pos = activeIdx + 1;
   const total = filtered.length;
   const pct = total > 1 ? ((pos - 1) / (total - 1)) * 100 : 0;
@@ -782,7 +782,7 @@ function selectEntry(idx, opts) {
     // Just update sidebar highlight, keep detail as-is
   } else {
     const entry = filtered[idx];
-    const resolved = entry._isStub ? getFullEntry(entry) : entry;
+    const resolved = resolveEntryForDetail(entry);
     renderDetail(resolved);
   }
   if (virtualMode) {

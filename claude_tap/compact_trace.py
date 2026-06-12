@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from hashlib import sha256
 from typing import Any
 
@@ -18,6 +19,10 @@ COMPACT_BLOB_PATHS = (
     ("request", "body", "tools"),
     ("response", "body", "instructions"),
     ("response", "body", "tools"),
+)
+COMPACT_ITEM_BLOB_PATHS = (
+    ("request", "body", "input"),
+    ("request", "body", "messages"),
 )
 
 
@@ -87,7 +92,15 @@ def decode_compact_record_payload(payload: Any, load_blob: Any) -> dict[str, Any
         return payload
     if marker.get("version") != COMPACT_RECORD_VERSION:
         raise RuntimeError(f"Unsupported compact trace record version: {marker.get('version')}")
-    record = _materialize_blob_refs(payload.get("record"), load_blob)
+    record = payload.get("record")
+    refs = marker.get("refs")
+    if not isinstance(record, dict):
+        return None
+    ref_paths = _ref_paths_from_marker_refs(refs)
+    if not ref_paths:
+        ref_paths = _legacy_compact_ref_paths(record)
+    for path in ref_paths:
+        record = _materialize_blob_ref_path(record, path, load_blob)
     return record if isinstance(record, dict) else None
 
 
@@ -109,23 +122,7 @@ def json_blob_payload(value: Any) -> tuple[str, int, str]:
 
 
 def _encode_compact_record(record: dict[str, Any], blobs: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    compact_record = record
-    refs: list[dict[str, object]] = []
-    for path in COMPACT_BLOB_PATHS:
-        value = _get_path(compact_record, path)
-        if value is None:
-            continue
-        ref = _store_bundle_blob(blobs, value)
-        if ref is None:
-            continue
-        compact_record = _replace_path(compact_record, path, ref)
-        refs.append(
-            {
-                "path": "/" + "/".join(path),
-                "hash": ref[BLOB_REF_MARKER]["hash"],
-                "bytes": ref[BLOB_REF_MARKER]["bytes"],
-            }
-        )
+    compact_record, refs = compact_record_blobs(record, lambda value: _store_bundle_blob(blobs, value))
     if not refs:
         return compact_record
     return {
@@ -136,6 +133,52 @@ def _encode_compact_record(record: dict[str, Any], blobs: dict[str, dict[str, An
         },
         "record": compact_record,
     }
+
+
+def compact_record_blobs(
+    record: dict[str, Any],
+    store_blob: Callable[[Any], dict[str, Any] | None],
+) -> tuple[dict[str, Any], list[dict[str, object]]]:
+    """Replace large repeated record fields and list items with blob refs."""
+    compact_record = record
+    refs: list[dict[str, object]] = []
+    for path in COMPACT_BLOB_PATHS:
+        value = _get_path(compact_record, path)
+        if value is None:
+            continue
+        ref = store_blob(value)
+        if ref is None:
+            continue
+        compact_record = _replace_path(compact_record, path, ref)
+        refs.append(
+            {
+                "path": "/" + "/".join(path),
+                "hash": ref[BLOB_REF_MARKER]["hash"],
+                "bytes": ref[BLOB_REF_MARKER]["bytes"],
+            }
+        )
+    for path in COMPACT_ITEM_BLOB_PATHS:
+        value = _get_path(compact_record, path)
+        if not isinstance(value, list):
+            continue
+        compact_items: list[Any] | None = None
+        for index, item in enumerate(value):
+            ref = store_blob(item)
+            if ref is None:
+                continue
+            if compact_items is None:
+                compact_items = list(value)
+            compact_items[index] = ref
+            refs.append(
+                {
+                    "path": "/" + "/".join((*path, str(index))),
+                    "hash": ref[BLOB_REF_MARKER]["hash"],
+                    "bytes": ref[BLOB_REF_MARKER]["bytes"],
+                }
+            )
+        if compact_items is not None:
+            compact_record = _replace_path(compact_record, path, compact_items)
+    return compact_record, refs
 
 
 def _store_bundle_blob(blobs: dict[str, dict[str, Any]], value: Any) -> dict[str, Any] | None:
@@ -156,14 +199,75 @@ def _load_bundle_blob(ref: dict[str, Any], blobs: dict[str, Any], blob_cache: di
     return blob_cache[hash_value]
 
 
-def _materialize_blob_refs(value: Any, load_blob: Any) -> Any:
-    if is_blob_ref(value):
-        return load_blob(value[BLOB_REF_MARKER])
+def _parse_ref_path(path: Any) -> tuple[str, ...] | None:
+    if not isinstance(path, str) or not path.startswith("/"):
+        return None
+    return tuple(part.replace("~1", "/").replace("~0", "~") for part in path.removeprefix("/").split("/"))
+
+
+def _ref_paths_from_marker_refs(refs: Any) -> list[tuple[str, ...]]:
+    if not isinstance(refs, list):
+        return []
+    paths: list[tuple[str, ...]] = []
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        path = _parse_ref_path(ref.get("path"))
+        if path is not None:
+            paths.append(path)
+    return paths
+
+
+def _legacy_compact_ref_paths(record: dict[str, Any]) -> list[tuple[str, ...]]:
+    paths: list[tuple[str, ...]] = []
+    for path in COMPACT_BLOB_PATHS:
+        if is_blob_ref(_get_path(record, path)):
+            paths.append(path)
+    for path in COMPACT_ITEM_BLOB_PATHS:
+        value = _get_path(record, path)
+        if not isinstance(value, list):
+            continue
+        paths.extend((*path, str(index)) for index, item in enumerate(value) if is_blob_ref(item))
+    return paths
+
+
+def _materialize_blob_ref_path(root: dict[str, Any], path: tuple[str, ...], load_blob: Any) -> dict[str, Any]:
+    value, changed = _replace_blob_ref_at_path(root, path, load_blob)
+    return value if changed and isinstance(value, dict) else root
+
+
+def _replace_blob_ref_at_path(value: Any, path: tuple[str, ...], load_blob: Any) -> tuple[Any, bool]:
+    if not path:
+        if is_blob_ref(value):
+            return load_blob(value[BLOB_REF_MARKER]), True
+        return value, False
+
+    key = path[0]
     if isinstance(value, dict):
-        return {key: _materialize_blob_refs(item, load_blob) for key, item in value.items()}
+        if key not in value:
+            return value, False
+        replacement, changed = _replace_blob_ref_at_path(value[key], path[1:], load_blob)
+        if not changed:
+            return value, False
+        updated = dict(value)
+        updated[key] = replacement
+        return updated, True
+
     if isinstance(value, list):
-        return [_materialize_blob_refs(item, load_blob) for item in value]
-    return value
+        try:
+            index = int(key)
+        except ValueError:
+            return value, False
+        if index < 0 or index >= len(value):
+            return value, False
+        replacement, changed = _replace_blob_ref_at_path(value[index], path[1:], load_blob)
+        if not changed:
+            return value, False
+        updated = list(value)
+        updated[index] = replacement
+        return updated, True
+
+    return value, False
 
 
 def _get_path(root: dict[str, Any], path: tuple[str, ...]) -> Any:

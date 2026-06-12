@@ -13,7 +13,7 @@
 
 Website: [Local AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · Guide: [How to view agent traces locally](docs/guides/agent-trace-viewer.md)
 
-It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
+It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [OpenClaw](https://github.com/openclaw/openclaw), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
 
 <p align="center">
   <img src="docs/demo.gif" alt="claude-tap demo showing a real Codex trace" width="100%">
@@ -41,23 +41,41 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
   </tr>
 </table>
 
+## Built with claude-tap
+
+<table>
+  <tr>
+    <td width="55%">
+      <strong><a href="https://github.com/WEIFENG2333/phistory">Phistory</a></strong> archives versioned system prompt snapshots from agent CLIs such as Claude Code, Codex, Kimi, opencode, and Pi. It uses claude-tap's capture-only prompt export to preserve raw HTTP trace evidence and generate comparison-friendly prompt snapshots.
+      <br><br>
+      <a href="https://phistory.cc/">Open the prompt diff viewer</a> · <a href="https://github.com/WEIFENG2333/phistory">View repository</a>
+    </td>
+    <td width="45%" align="center">
+      <a href="https://phistory.cc/">
+        <img src="https://raw.githubusercontent.com/WEIFENG2333/phistory/main/docs/screenshot.png" alt="Phistory prompt diff viewer" width="420">
+      </a>
+    </td>
+  </tr>
+</table>
+
 ## Why use it
 
 - 👀 **See the exact context**: inspect prompts, messages, tool definitions, tool calls, tool results, reconstructed streaming responses, and token usage.
 - 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
 - 📦 **Share one portable artifact**: each run writes a local trace session that can be exported to a self-contained HTML viewer for review or archiving.
 - 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
-- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
+- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
 
 ## Supported Clients
 
 | Client | Typical use |
 |--------|-------------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, or Claude-compatible gateways such as DeepSeek / GLM |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, Claude-compatible gateways such as DeepSeek / GLM, or local proxy upstreams such as CC Switch |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API key mode or ChatGPT subscription OAuth |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
-| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Kimi Code or Moonshot Open Platform |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Legacy kimi-cli and the newer Kimi Code CLI |
 | [OpenCode](https://opencode.ai) | Multi-provider OpenCode sessions |
+| [OpenClaw](https://github.com/openclaw/openclaw) | Multi-provider OpenClaw sessions |
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi sessions, including OpenAI Codex OAuth providers |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Multi-provider Hermes TUI or gateway sessions |
 | [Cursor CLI](https://cursor.com/cli) | Cursor Agent sessions plus readable local transcript import |
@@ -99,6 +117,9 @@ claude-tap --tap-client gemini -- -p "hello"
 # Kimi CLI
 claude-tap --tap-client kimi
 
+# New Kimi Code CLI
+claude-tap --tap-client kimi-code
+
 # Pi
 claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
 
@@ -133,6 +154,8 @@ claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 `claude-tap` auto-detects custom Claude Code upstreams from `ANTHROPIC_BASE_URL`
 or `ANTHROPIC_BEDROCK_BASE_URL` in your environment or Claude settings. Use
 `--tap-target` only when you want to override that detected target.
+
+Local proxy upstreams are supported too: if a tool such as [CC Switch](https://github.com/farion1231/cc-switch) points Claude Code at a local `ANTHROPIC_BASE_URL`, `claude-tap` detects that value from Claude settings and records the traffic before forwarding it upstream. Use `claude-tap` in place of `claude`, such as `claude-tap -- <claude-args>`; no separate `--tap-client` value is needed.
 
 For the Claude Code VS Code extension, set `Claude Code: Claude Process Wrapper` to `claude-tap`; on Windows, use the full `claude-tap.exe` path if VS Code cannot find it.
 
@@ -231,14 +254,16 @@ claude-tap --tap-client codex -- --full-auto
 <details>
 <summary>Kimi CLI examples</summary>
 
-Kimi CLI uses reverse proxy mode by default through `KIMI_BASE_URL`. Prompt export mode also sets common provider base URL env vars so capture-only runs can catch whichever provider the local Kimi config selects without routing a real upstream request.
+Use `--tap-client kimi` for legacy kimi-cli, or `--tap-client kimi-code` for the newer Kimi Code CLI. Both use reverse proxy mode by default.
 
 ```bash
 claude-tap --tap-client kimi
 claude-tap --tap-client kimi -- --thinking
-
-# Use Moonshot Open Platform instead of Kimi Code
 claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1
+
+claude-tap --tap-client kimi-code
+claude-tap --tap-client kimi-code -- --thinking
+claude-tap --tap-client kimi-code --tap-target https://api.moonshot.ai/v1
 ```
 
 </details>
@@ -273,7 +298,7 @@ claude-tap --tap-client opencode
 # Live viewer is enabled by default
 claude-tap --tap-client opencode
 
-# Reverse mode — single Anthropic provider via ANTHROPIC_BASE_URL
+# Reverse mode — only works when using Anthropic provider (single ANTHROPIC_BASE_URL)
 claude-tap --tap-client opencode --tap-proxy-mode reverse
 ```
 
@@ -315,8 +340,8 @@ claude-tap --tap-client hermes
 # would not go through the proxy and no traces would be recorded.
 claude-tap --tap-client hermes -- gateway start
 
-# Reverse mode is opt-in for OpenAI-compatible Hermes env config via OPENAI_BASE_URL.
-# Prompt export mode also probes common provider env vars without routing real upstream.
+# Reverse mode is opt-in and only useful when ~/.hermes is configured with an
+# OpenAI-compatible provider that reads OPENAI_BASE_URL.
 claude-tap --tap-client hermes --tap-proxy-mode reverse
 ```
 
@@ -403,6 +428,9 @@ claude-tap --tap-no-live
 # Browse saved traces without launching a client
 claude-tap dashboard
 
+# Stop the shared dashboard service
+claude-tap dashboard stop
+
 # Regenerate a self-contained HTML viewer from JSONL
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
@@ -445,7 +473,7 @@ When used as VSCode Claude Code's `claudeProcessWrapper`, claude-tap honors the 
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch: claude (default), agy, codex, gemini, kimi, opencode, pi, hermes, cursor, qoder, or codebuddy
+--tap-client CLIENT      Client to launch: claude (default), agy, codex, gemini, kimi, kimi-code, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer while the client runs (default: on)
 --tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)
@@ -459,7 +487,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/codebuddy, forward for agy/gemini/opencode/pi/hermes/cursor/qoder)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/kimi-code/openclaw/codebuddy, forward for agy/gemini/opencode/pi/hermes/cursor/qoder)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 
@@ -504,6 +532,10 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 </details>
 
 ## Community
+
+### Ecosystem
+
+- [Phistory](https://github.com/WEIFENG2333/phistory) archives versioned system prompt snapshots from agent CLIs such as Claude Code, Codex, Kimi, opencode, and Pi. It uses claude-tap's capture-only prompt export to preserve raw HTTP trace evidence and generate comparison-friendly prompt snapshots.
 
 ### Star History
 

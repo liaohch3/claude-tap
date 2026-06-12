@@ -1,0 +1,28 @@
+{
+  "format": "message-content-compaction-v1",
+  "real_trace": {
+    "source": ".traces/codex-tools-20260509/2026-05-09/trace_081725.jsonl",
+    "records": 1,
+    "raw_canonical_jsonl_bytes": 561233,
+    "sqlite_payload_json_bytes": 450216,
+    "sqlite_blob_payload_bytes": 89977,
+    "sqlite_compact_payload_bytes": 540193,
+    "sqlite_compact_ratio": 0.9625,
+    "blob_count": 5,
+    "jsonl_roundtrip": true,
+    "compact_bundle_bytes": 542175,
+    "compact_bundle_roundtrip": true
+  },
+  "long_history_stress": {
+    "records": 80,
+    "raw_canonical_jsonl_bytes": 8902421,
+    "sqlite_payload_json_bytes": 431422,
+    "sqlite_blob_payload_bytes": 184926,
+    "sqlite_compact_payload_bytes": 616348,
+    "sqlite_compact_ratio": 0.0692,
+    "blob_count": 30,
+    "jsonl_roundtrip": true,
+    "compact_bundle_bytes": 619978,
+    "compact_bundle_roundtrip": true
+  }
+}

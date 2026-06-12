@@ -18,6 +18,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+## [0.1.113] - 2026-06-12
+
+### Changed
+- docs: add Phistory ecosystem showcase (#321)
+## [0.1.112] - 2026-06-12
+
+### Changed
+- fix: prevent Windows pip background update corruption (#319)
+## [0.1.111] - 2026-06-12
+
+### Changed
+- feat: add Kimi Code tap client
+## [0.1.110] - 2026-06-12
+
+### Changed
+- Add bulk session deletion and lazy dashboard paging (#298)
+## [0.1.109] - 2026-06-12
+
+### Changed
+- perf: compact repeated message content in traces
+## [0.1.108] - 2026-06-10
+
+### Changed
+- fix: render direct Gemini native traces (#312)
+## [0.1.107] - 2026-06-10
+
+### Changed
+- fix: keep Gemini native traces visible
+## [0.1.106] - 2026-06-10
+
+### Changed
+- feat: clarify shared dashboard lifecycle controls (#293)
+## [0.1.105] - 2026-06-09
+
+### Changed
+- fix: guard against None values in usage token fields causing dashboard 500 (#303)
+## [0.1.104] - 2026-06-09
+
+### Changed
+- Document local proxy upstream support
+## [0.1.103] - 2026-06-08
+
+### Changed
+- Fix Codex display turn numbering (#266)
 ## [0.1.102] - 2026-06-06
 
 ### Changed
