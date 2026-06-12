@@ -1186,6 +1186,66 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
 
 
 @pytest.mark.asyncio
+async def test_dashboard_mobile_session_list_uses_cards_without_horizontal_overflow(trace_db, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    first_trace = tmp_path / "2026-05-20" / "trace_080000.jsonl"
+    second_trace = tmp_path / "2026-05-20" / "trace_081500.jsonl"
+    _write_jsonl(first_trace, [_anthropic_record(turn=1), _anthropic_record(turn=2)])
+    _write_jsonl(second_trace, [_antigravity_record()])
+    _seed_legacy(tmp_path)
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 390, "height": 820})
+                await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
+                await page.wait_for_selector(".session-row", timeout=5000)
+
+                for width in (320, 375, 414, 768):
+                    await page.set_viewport_size({"width": width, "height": 820})
+                    layout = await page.evaluate(
+                        """() => {
+                          const row = document.querySelector('.session-row');
+                          const table = document.querySelector('.session-table');
+                          const actions = document.querySelector('.row-actions');
+                          const first = document.querySelector('.first-message');
+                          const firstLabel = document.querySelector('.session-first-cell');
+                          const refresh = document.querySelector('#refresh');
+                          const rowBox = row.getBoundingClientRect();
+                          return {
+                            overflowX: document.documentElement.scrollWidth - window.innerWidth,
+                            rowDisplay: getComputedStyle(row).display,
+                            rowLeft: rowBox.left,
+                            rowRight: rowBox.right,
+                            tableMinWidth: getComputedStyle(table).minWidth,
+                            actionsDisplay: getComputedStyle(actions).display,
+                            firstWhiteSpace: getComputedStyle(first).whiteSpace,
+                            firstLabel: getComputedStyle(firstLabel, '::before').content,
+                            refreshText: refresh.textContent.trim(),
+                            refreshLabel: refresh.getAttribute('aria-label'),
+                          };
+                        }"""
+                    )
+                    assert layout["overflowX"] <= 2
+                    assert layout["rowDisplay"] == "grid"
+                    assert layout["rowLeft"] >= -1
+                    assert layout["rowRight"] <= width + 1
+                    assert layout["tableMinWidth"] == "0px"
+                    assert layout["actionsDisplay"] == "grid"
+                    assert layout["firstWhiteSpace"] == "normal"
+                    assert "First Message" in layout["firstLabel"]
+                    assert layout["refreshText"] != "R"
+                    assert layout["refreshLabel"] == "Refresh"
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_delete_button_keyboard_focuses_confirmation_dialog(trace_db) -> None:
     playwright = pytest.importorskip("playwright.async_api")
     store = get_trace_store()

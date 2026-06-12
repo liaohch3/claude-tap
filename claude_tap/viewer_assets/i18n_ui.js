@@ -167,7 +167,10 @@ function renderEmptyTraceState() {
   filtered = [];
   activeIdx = -1;
   $('#sidebar-wrap').style.display = 'none';
+  $('#sidebar-wrap').classList.remove('has-trace-list');
+  $('#sidebar-wrap').classList.remove('mobile-hidden');
   $('#detail').style.display = 'none';
+  $('#detail').classList.remove('mobile-fullwidth');
   $('#stats').style.display = 'none';
   $('#path-filter').style.display = 'none';
   renderTracePathBar();

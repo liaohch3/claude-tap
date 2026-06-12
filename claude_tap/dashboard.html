@@ -74,11 +74,16 @@
 }
 
 *,*::before,*::after { margin: 0; padding: 0; box-sizing: border-box; }
+html {
+  width: 100%;
+  overflow-x: clip;
+}
 body {
   font-family: var(--sans);
   background: var(--bg);
   color: var(--text);
   height: 100vh;
+  width: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -864,21 +869,373 @@ pre {
 }
 
 @media (max-width: 900px) {
-  body { overflow: auto; height: auto; min-height: 100vh; }
-  .header { flex-wrap: wrap; padding: 10px 12px; }
-  .stats { order: 4; width: 100%; flex-wrap: wrap; margin-left: 0; }
-  .trace-path-bar { display: none; }
-  .main { overflow: visible; padding: 12px; }
-  .dashboard-title-row { flex-wrap: wrap; }
-  .dashboard-clock { width: 100%; margin-left: 0; }
-  .control-panel { grid-template-columns: 1fr; }
-  .overview-card { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-  .table-scroll { max-height: none; }
-  .detail-page-head { align-items: flex-start; }
-  .viewer-frame-wrap { height: 78vh; min-height: 520px; }
+  body {
+    height: auto;
+    min-height: 100dvh;
+    overflow-y: auto;
+    overflow-x: clip;
+  }
+  .header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 10px;
+  }
+  .header .logo {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+  }
+  .header .logo span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .header .divider {
+    display: none;
+  }
+  .theme-toggle,
+  .lang-select {
+    grid-row: 1;
+    min-height: 36px;
+  }
+  .theme-toggle {
+    grid-column: 2;
+    justify-self: end;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    padding-inline: 0;
+  }
+  .lang-select {
+    grid-column: 3;
+    justify-self: end;
+    min-width: 92px;
+    max-width: 112px;
+  }
+  .path-filter {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .path-filter::-webkit-scrollbar {
+    display: none;
+  }
+  .filter-chip {
+    flex: 0 0 auto;
+    min-height: 30px;
+  }
+  .stats {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    width: 100%;
+    margin-left: 0;
+    gap: 6px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .stats::-webkit-scrollbar {
+    display: none;
+  }
+  .stats .stat-group,
+  .live-status {
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg);
+  }
+  .trace-path-bar {
+    display: none;
+  }
+  .main {
+    overflow: visible;
+    padding: 10px;
+  }
+  body.detail-route .main {
+    padding-top: 10px;
+  }
+  .dashboard-title-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+  .dashboard-title {
+    font-size: 13px;
+  }
+  .dashboard-clock {
+    width: 100%;
+    margin-left: 0;
+    font-size: 11px;
+    letter-spacing: .08em;
+  }
+  .control-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+    gap: 8px;
+  }
+  .control-field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    align-items: start;
+  }
+  .control-label {
+    font-size: 11px;
+  }
+  .session-search {
+    grid-column: 1 / 3;
+  }
+  .history-select,
+  .session-search input {
+    min-height: 38px;
+  }
+  .history-refresh {
+    grid-column: 3;
+    min-width: 42px;
+    min-height: 38px;
+    padding: 0 10px;
+  }
+  .overview-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    min-height: 0;
+    padding: 12px;
+    margin-bottom: 10px;
+    border-radius: 8px;
+  }
+  .metric {
+    min-width: 0;
+  }
+  .metric-label {
+    font-size: 10px;
+    letter-spacing: .04em;
+  }
+  .metric-value {
+    margin-top: 6px;
+    font-size: 18px;
+  }
+  .table-panel {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .table-scroll {
+    max-height: none;
+    overflow: visible;
+  }
+  .session-table {
+    display: block;
+    min-width: 0;
+  }
+  .session-table thead {
+    display: none;
+  }
+  .session-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+  .session-table tr.session-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 9px 12px;
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid #cfd8e7;
+    border-radius: 8px;
+    background: var(--bg-card);
+    box-shadow: var(--shadow-sm);
+  }
+  [data-theme="dark"] .session-table tr.session-row {
+    border-color: var(--border);
+  }
+  .session-table tr.session-row.active {
+    box-shadow: inset 3px 0 0 var(--blue), var(--shadow-sm);
+  }
+  .session-row.active td:first-child {
+    box-shadow: none;
+  }
+  .session-table td {
+    min-width: 0;
+    padding: 0;
+    border-bottom: 0;
+  }
+  .session-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text-tertiary);
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+  .session-start-cell {
+    grid-column: 1 / 2;
+    grid-row: 1;
+  }
+  .session-status-cell {
+    grid-column: 2 / 3;
+    grid-row: 1;
+    justify-self: end;
+  }
+  .session-status-cell::before {
+    display: none !important;
+  }
+  .session-first-cell {
+    grid-column: 1 / -1;
+  }
+  .session-actions-cell {
+    grid-column: 1 / -1;
+  }
+  .first-message {
+    display: -webkit-box;
+    max-width: none;
+    overflow: hidden;
+    white-space: normal;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .model-pill,
+  .agent-pill,
+  .token-pill,
+  .status-pill {
+    max-width: 100%;
+    min-height: 28px;
+  }
+  .model-pill {
+    justify-content: flex-start;
+  }
+  .row-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+  .row-action {
+    min-height: 42px;
+    width: 100%;
+  }
+  .loading-cell,
+  .table-empty {
+    display: block;
+    padding: 22px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+  }
+  .detail-page-head {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    align-items: flex-start;
+    gap: 8px;
+    margin: -10px -10px 10px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .back-btn {
+    min-height: 38px;
+    flex: 0 0 auto;
+  }
+  .detail-subtitle {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .viewer-frame-wrap {
+    height: calc(100dvh - 112px);
+    min-height: 460px;
+    border-radius: 8px;
+  }
+  .detail-inspector-bar {
+    gap: 6px;
+    padding: 6px;
+  }
+  .detail-tabs {
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .detail-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .detail-tab {
+    flex: 0 0 auto;
+    min-height: 36px;
+  }
+  .action-bar {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+  .act-btn {
+    min-height: 36px;
+  }
   .action-bar .export-menu-list {
     left: 0;
     right: auto;
+  }
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 10px;
+  }
+  .confirm-dialog {
+    width: 100%;
+    max-height: calc(100dvh - 20px);
+    overflow: auto;
+    padding: 16px;
+  }
+  .confirm-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .confirm-btn {
+    min-height: 42px;
+  }
+}
+
+@media (max-width: 420px) {
+  .header {
+    grid-template-columns: minmax(0, 1fr) 38px 78px;
+  }
+  .theme-toggle {
+    min-width: 38px;
+    padding-inline: 0;
+  }
+  .lang-select {
+    min-width: 78px;
+    padding-inline: 6px;
+  }
+  .overview-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 10px;
+  }
+  .metric-value {
+    font-size: 16px;
+  }
+  .session-table tr.session-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .session-status-cell {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-self: start;
   }
 }
 </style>
@@ -935,7 +1292,7 @@ pre {
       <div class="session-search" role="search">
         <input id="search" type="search" placeholder="Search messages, agents, models, paths..." data-i18n-placeholder="search_placeholder">
       </div>
-      <button id="refresh" class="history-refresh" title="Refresh" data-i18n-title="refresh">R</button>
+      <button id="refresh" class="history-refresh" title="Refresh" aria-label="Refresh" data-i18n-title="refresh" data-i18n-aria-label="refresh">&#8635;</button>
     </div>
 
     <section class="overview-card" aria-label="Dashboard summary">
@@ -1282,6 +1639,9 @@ function applyI18n() {
   document.querySelectorAll("[data-i18n-title]").forEach(element => {
     element.setAttribute("title", t(element.dataset.i18nTitle));
   });
+  document.querySelectorAll("[data-i18n-aria-label]").forEach(element => {
+    element.setAttribute("aria-label", t(element.dataset.i18nAriaLabel));
+  });
   document.querySelectorAll("[data-i18n-placeholder]").forEach(element => {
     element.setAttribute("placeholder", t(element.dataset.i18nPlaceholder));
   });
@@ -1615,14 +1975,14 @@ function sessionRow(session) {
     : t("delete_session");
   return `
     <tr class="session-row ${state.selectedSessionId === session.id ? "active" : ""}" data-session="${esc(session.id)}" tabindex="0">
-      <td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
-      <td><div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></td>
-      <td><span class="trace-count">${fmtNumber(session.record_count)}</span></td>
-      <td><span class="token-pill">${fmtNumber(session.total_tokens)}</span></td>
-      <td><span class="model-pill" title="${esc(session.model || t("unknown"))}">${esc(session.model || t("unknown"))}</span></td>
-      <td><span class="agent-pill">${esc(session.agent || t("unknown"))}</span></td>
-      <td><span class="status-pill ${status.className}">${esc(status.label)}</span></td>
-      <td>
+      <td class="mono-cell session-start-cell" data-label="${esc(t("table_start_time"))}">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
+      <td class="session-first-cell" data-label="${esc(t("table_first_message"))}"><div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></td>
+      <td class="session-traces-cell" data-label="${esc(t("table_traces"))}"><span class="trace-count">${fmtNumber(session.record_count)}</span></td>
+      <td class="session-tokens-cell" data-label="${esc(t("table_tokens"))}"><span class="token-pill">${fmtNumber(session.total_tokens)}</span></td>
+      <td class="session-model-cell" data-label="${esc(t("table_model"))}"><span class="model-pill" title="${esc(session.model || t("unknown"))}">${esc(session.model || t("unknown"))}</span></td>
+      <td class="session-agent-cell" data-label="${esc(t("table_agent"))}"><span class="agent-pill">${esc(session.agent || t("unknown"))}</span></td>
+      <td class="session-status-cell" data-label="${esc(t("table_status"))}"><span class="status-pill ${status.className}">${esc(status.label)}</span></td>
+      <td class="session-actions-cell" data-label="${esc(t("table_actions"))}">
         <div class="row-actions">
           <button class="row-action" type="button" data-open-session="${esc(session.id)}" aria-label="${esc(t("view_details"))}" aria-busy="${isLoading ? "true" : "false"}" ${isLoading ? "disabled" : ""}>${esc(isLoading ? t("loading_session") : t("details"))}</button>
           <button class="row-action danger" type="button" data-delete-session="${esc(session.id)}" aria-label="${esc(deleteTitle)}" title="${esc(deleteTitle)}" aria-busy="${isDeleting ? "true" : "false"}" ${deleteDisabled ? "disabled" : ""}>${esc(isDeleting ? t("deleting_session") : t("delete_session"))}</button>

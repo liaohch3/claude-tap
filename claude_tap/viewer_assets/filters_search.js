@@ -5,6 +5,7 @@ function getPath(e) { return (e.request?.path || '/unknown').replace(/\?.*$/, ''
 function renderApp(preserveDetail) {
   $('#drop-zone').style.display = 'none';
   $('#sidebar-wrap').style.display = 'flex';
+  $('#sidebar-wrap').classList.add('has-trace-list');
   $('#search-bar').style.display = '';
   $('#sidebar-sort').style.display = '';
   $('#position-indicator').style.display = '';
