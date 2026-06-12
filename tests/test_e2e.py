@@ -2033,7 +2033,7 @@ def test_filter_headers():
 
 def test_double_serialized_request_body():
     """Verify proxy decodes double-serialized JSON request bodies into dicts."""
-    received_bodies: list[dict] = []
+    received_bodies: list[object] = []
 
     async def handler(request):
         body = await request.json()
@@ -2078,18 +2078,21 @@ except Exception as e:
     fake_claude = Path(fake_bin_dir) / "claude"
     fake_claude.write_text(double_serial_script)
     fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IEXEC)
-    stop = _start_fake_upstream(19244, handler)
+    stop = _start_fake_upstream(19246, handler)
 
     try:
-        proc = _run_tap(
+        proc = _run_claude_tap(
+            Path(__file__).parent,
             trace_dir,
             fake_bin_dir,
-            target_port=19244,
+            19246,
         )
 
         assert proc.returncode == 0, f"double-serial test failed: stdout={proc.stdout} stderr={proc.stderr}"
         assert len(received_bodies) == 1
-        assert received_bodies[0]["model"] == "claude-test"
+        assert isinstance(received_bodies[0], str)
+        upstream_body = json.loads(received_bodies[0])
+        assert upstream_body["model"] == "claude-test"
 
         # Verify the trace record stored the body as a dict, not a string
         records = read_trace_records(trace_dir)

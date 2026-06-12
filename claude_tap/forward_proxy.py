@@ -37,6 +37,7 @@ from claude_tap.certs import CertificateAuthority
 from claude_tap.proxy import (
     HOP_BY_HOP,
     _build_record,
+    _parse_request_body_for_trace,
     filter_headers,
 )
 from claude_tap.sse import SSEReassembler
@@ -479,19 +480,7 @@ class ForwardProxyServer:
         t0 = time.monotonic()
         log_prefix = f"[Turn {turn}]"
 
-        # Parse request body for logging
-        try:
-            req_body = json.loads(body) if body else None
-            # Guard against double-serialized JSON (body is a JSON string wrapping the real object)
-            if isinstance(req_body, str):
-                try:
-                    inner = json.loads(req_body)
-                    if isinstance(inner, dict):
-                        req_body = inner
-                except (json.JSONDecodeError, ValueError):
-                    pass
-        except (json.JSONDecodeError, ValueError):
-            req_body = body.decode("utf-8", errors="replace") if body else None
+        req_body = _parse_request_body_for_trace(body)
 
         is_streaming = False
         if isinstance(req_body, dict):
