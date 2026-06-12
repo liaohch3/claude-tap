@@ -178,7 +178,10 @@ def _windows_deferred_pip_update(cmd: list[str]) -> int:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(script)
     except Exception:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
         try:
             os.unlink(script_path)
         except OSError:

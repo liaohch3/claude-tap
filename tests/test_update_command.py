@@ -145,6 +145,36 @@ class TestIsEditableInstall:
         self._patch_install_roots(monkeypatch, sp)
         assert _is_editable_install() is False
 
+    def test_distribution_raises_falls_back_to_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If importlib.metadata.distribution raises, path-based heuristic is used."""
+        import importlib.metadata
+
+        import claude_tap as _pkg
+
+        sp = r"C:\Python311\Lib\site-packages"
+        monkeypatch.setattr(_pkg, "__file__", rf"{sp}\claude_tap\__init__.py")
+        monkeypatch.setattr(
+            importlib.metadata,
+            "distribution",
+            lambda _name: (_ for _ in ()).throw(importlib.metadata.PackageNotFoundError()),
+        )
+        self._patch_install_roots(monkeypatch, sp)
+        assert _is_editable_install() is False
+
+    def test_path_check_exception_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If both PEP 610 and path-based checks raise, returns False."""
+        import importlib.metadata
+
+        import claude_tap as _pkg
+
+        monkeypatch.setattr(importlib.metadata, "distribution", lambda _name: (_ for _ in ()).throw(Exception("fail")))
+        monkeypatch.setattr(_pkg, "__file__", None)
+        # Make sysconfig.get_paths raise so the path-based check also fails
+        import sysconfig
+
+        monkeypatch.setattr(sysconfig, "get_paths", lambda: (_ for _ in ()).throw(RuntimeError("broken")))
+        assert _is_editable_install() is False
+
 
 class _FakeDist:
     """Minimal importlib.metadata.Distribution stand-in."""
@@ -189,6 +219,35 @@ def test_build_update_command_returns_none_when_uv_missing(monkeypatch: pytest.M
 
 def test_build_update_command_uses_current_python_for_pip() -> None:
     assert _build_update_command("pip") == [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
+
+
+def test_build_update_command_raises_on_unsupported_installer() -> None:
+    """Passing an unsupported installer string raises ValueError."""
+    with pytest.raises(ValueError, match="unsupported installer"):
+        _build_update_command("homebrew")
+
+
+# ---------------------------------------------------------------------------
+# _start_background_update
+# ---------------------------------------------------------------------------
+
+
+def test_start_background_update_returns_none_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If subprocess.Popen raises, _start_background_update returns None."""
+    from claude_tap.cli import _start_background_update
+
+    monkeypatch.setattr("claude_tap.cli_update.shutil.which", lambda _: None)
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: (_ for _ in ()).throw(OSError("broken")))
+    # With pip installer, _build_update_command doesn't call which, so Popen is invoked
+    assert _start_background_update("pip") is None
+
+
+def test_start_background_update_returns_none_when_cmd_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If _build_update_command returns None (uv missing), _start_background_update returns None."""
+    from claude_tap.cli import _start_background_update
+
+    monkeypatch.setattr("claude_tap.cli_update.shutil.which", lambda _: None)
+    assert _start_background_update("uv") is None
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +356,18 @@ def test_update_main_uv_on_windows_still_uses_subprocess_run(
     result = update_main(["--installer", "uv"])
     assert result == 0
     assert captured["cmd"] == [r"C:\uv\uv.exe", "tool", "upgrade", "claude-tap"]
+
+
+def test_update_main_handles_oserror(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """update_main returns 1 and prints error when subprocess.run raises OSError."""
+    monkeypatch.setattr("claude_tap.cli_update.sys.platform", "linux")
+    monkeypatch.setattr("claude_tap.cli.sys.platform", "linux")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: (_ for _ in ()).throw(OSError("no such command")))
+
+    result = update_main(["--installer", "pip"])
+    assert result == 1
+    err = capsys.readouterr().err
+    assert "failed to run update command" in err
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +567,28 @@ class TestWindowsDeferredPipUpdate:
 
         monkeypatch.setattr("claude_tap.cli_update.sys.platform", "win32")
         monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: (_ for _ in ()).throw(OSError("fail")))
+
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
+        result = _windows_deferred_pip_update(cmd)
+        assert result == 1
+
+    def test_returns_1_on_fdopen_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If writing the temp script fails, _windows_deferred_pip_update returns 1 and cleans up."""
+        from claude_tap.cli_update import _windows_deferred_pip_update
+
+        monkeypatch.setattr("claude_tap.cli_update.sys.platform", "win32")
+
+        # Make os.fdopen raise an exception to simulate write failure
+
+        def fake_fdopen(fd, *args, **kwargs):
+            # Close the fd first to avoid leaking
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise OSError("disk full")
+
+        monkeypatch.setattr("claude_tap.cli_update.os.fdopen", fake_fdopen)
 
         cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "claude-tap"]
         result = _windows_deferred_pip_update(cmd)
