@@ -573,6 +573,9 @@ def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
     sessions_dir = home / "sessions"
     sessions_dir.mkdir(parents=True)
     (sessions_dir / "abc.jsonl").write_text("{}", encoding="utf-8")
+    plugins_dir = home / "plugins"
+    plugins_dir.mkdir()
+    (plugins_dir / "installed.json").write_text("[]", encoding="utf-8")
     (home / "mcp.json").write_text("{}", encoding="utf-8")
     (home / "tui.toml").write_text('theme = "dark"\n', encoding="utf-8")
     (home / "config.toml").write_text(
@@ -585,6 +588,8 @@ def test_prepare_kimi_code_reverse_sandbox_links_sessions_and_mcp(
     try:
         assert (sandbox / "sessions").is_symlink()
         assert (sandbox / "sessions").resolve() == sessions_dir.resolve()
+        assert (sandbox / "plugins").is_symlink()
+        assert (sandbox / "plugins").resolve() == plugins_dir.resolve()
         assert (sandbox / "mcp.json").is_symlink()
         assert (sandbox / "mcp.json").resolve() == (home / "mcp.json").resolve()
         assert (sandbox / "tui.toml").is_symlink()
@@ -605,6 +610,10 @@ def test_prepare_kimi_code_reverse_sandbox_copies_when_symlinks_fail(
     credentials_dir = home / "credentials"
     credentials_dir.mkdir()
     (credentials_dir / "kimi-code.json").write_text('{"access_token":"test"}', encoding="utf-8")
+    (credentials_dir / "stale.json").write_text('{"access_token":"old"}', encoding="utf-8")
+    plugins_dir = home / "plugins"
+    plugins_dir.mkdir()
+    (plugins_dir / "installed.json").write_text('["old-plugin"]', encoding="utf-8")
     sessions_dir = home / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "abc.jsonl").write_text("{}", encoding="utf-8")
@@ -626,15 +635,20 @@ def test_prepare_kimi_code_reverse_sandbox_copies_when_symlinks_fail(
         assert not (sandbox / "oauth").is_symlink()
         assert (sandbox / "oauth" / "kimi-code").read_text(encoding="utf-8") == "oauth-token"
         assert (sandbox / "credentials" / "kimi-code.json").is_file()
+        assert (sandbox / "plugins" / "installed.json").is_file()
         assert (sandbox / "sessions" / "abc.jsonl").is_file()
         assert (sandbox / "mcp.json").is_file()
         assert (sandbox / "tui.toml").is_file()
 
         (sandbox / "oauth" / "new-login").write_text("persisted", encoding="utf-8")
+        (sandbox / "credentials" / "stale.json").unlink()
+        (sandbox / "plugins" / "installed.json").write_text('["new-plugin"]', encoding="utf-8")
         (sandbox / "tui.toml").write_text('theme = "light"\n', encoding="utf-8")
         _persist_kimi_code_sandbox(home, sandbox)
 
         assert (home / "oauth" / "new-login").read_text(encoding="utf-8") == "persisted"
+        assert not (home / "credentials" / "stale.json").exists()
+        assert (home / "plugins" / "installed.json").read_text(encoding="utf-8") == '["new-plugin"]'
         assert (home / "tui.toml").read_text(encoding="utf-8") == 'theme = "light"\n'
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)

@@ -1269,6 +1269,7 @@ def _persist_kimi_code_config_edits(sandbox: Path) -> None:
 _KIMI_CODE_SANDBOX_LINKS: tuple[tuple[str, bool], ...] = (
     ("oauth", True),
     ("credentials", True),
+    ("plugins", True),
     ("sessions", True),
     ("mcp.json", False),
     ("tui.toml", False),
@@ -1305,8 +1306,13 @@ def _persist_kimi_code_sandbox(source_home: Path, sandbox: Path) -> None:
             continue
         dest = source_home / name
         if is_dir:
-            dest.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(path, dest, dirs_exist_ok=True)
+            if dest.exists():
+                if dest.is_dir() and not dest.is_symlink():
+                    shutil.rmtree(dest)
+                else:
+                    dest.unlink()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(path, dest)
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, dest)
