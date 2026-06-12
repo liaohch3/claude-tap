@@ -1,0 +1,21 @@
+claude_tap/cli_clients.py
+  s_e64ac242088496::t_920fcce0fee056 1272,1309-1315
+tests/test_kimi_code_launch.py
+  s_e64ac242088496::t_5ba8b03af8390e 576-578,591-592,613-616,638,644-645,650-651
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "3904fc9688579bd33b420fb2962533d6052df8b9",
+  "prompts": {},
+  "sessions": {
+    "s_e64ac242088496": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e6389-af35-7fd3-b131-7b993a82840b",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
