@@ -1,0 +1,32 @@
+claude_tap/cli_clients.py
+  s_e64ac242088496::t_9fa2291a5757b7 365-366,369-370,376,1287,1289
+  s_e64ac242088496::t_c0b9c49639a515 1036-1048,1586-1589
+claude_tap/dashboard.py
+  s_e64ac242088496::t_e10c3162b665e4 546,572
+  s_e64ac242088496::t_acb995135f305f 319,352-368
+  s_e64ac242088496::t_0b2d45038ffdd0 533-536,874-881
+  s_e64ac242088496::t_aba5920ea7b343 195,207-210,249,315
+tests/test_kimi_code_launch.py
+  s_e64ac242088496::t_a6ec1e2f8898d0 147-171,394-444
+  s_e64ac242088496::t_5d253e0232f381 658-661,676-679,704-707,730-731,739-740,747-748
+tests/test_dashboard.py
+  s_e64ac242088496::t_6b1cc77bfcf8d5 1777-1808
+claude_tap/trace.py
+  s_e64ac242088496::t_b4433bec600609 38-39,78-86,92,100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "3c023bd50ab2b25bf8af4847e9cd926779db48cf",
+  "prompts": {},
+  "sessions": {
+    "s_e64ac242088496": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e6389-af35-7fd3-b131-7b993a82840b",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
