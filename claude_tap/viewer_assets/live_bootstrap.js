@@ -29,7 +29,7 @@ function initLiveMode() {
 
       liveRecords.push(record);
       if (!viewingDate) {
-        entries.push(...expandLiveWebSocketResponseEntries([record]));
+        entries.push(...normalizeDisplayTurns(expandLiveWebSocketResponseEntries([record]), false));
         updateLiveStatus('connected', entries.length);
         clearTimeout(liveRenderTimer);
         liveRenderTimer = setTimeout(() => renderApp(true), 50);
@@ -127,7 +127,7 @@ async function onDateChange(value) {
   if (value === 'live') {
     viewingDate = null;
     activePaths.clear();
-    entries = expandLiveWebSocketResponseEntries(liveRecords.slice(), true);
+    entries = normalizeDisplayTurns(expandLiveWebSocketResponseEntries(liveRecords.slice(), true), true);
     if (entries.length) renderApp(true);
     else renderLiveWaitingState();
     return;
@@ -136,7 +136,7 @@ async function onDateChange(value) {
   try {
     const resp = await fetch('/api/traces/' + encodeURIComponent(value));
     activePaths.clear();
-    entries = expandWebSocketResponseEntries(await resp.json());
+    entries = normalizeDisplayTurns(expandWebSocketResponseEntries(await resp.json()), true);
     renderApp();
   } catch (e) {
     console.error('Failed to load traces for date:', value, e);
@@ -168,7 +168,7 @@ async function deleteSelectedTraceDate() {
     await fetchDates('live');
     viewingDate = null;
     activePaths.clear();
-    entries = expandLiveWebSocketResponseEntries(liveRecords.slice(), true);
+    entries = normalizeDisplayTurns(expandLiveWebSocketResponseEntries(liveRecords.slice(), true), true);
     if (entries.length) renderApp(true);
     else renderLiveWaitingState();
   } catch (e) {
@@ -190,23 +190,78 @@ function isCompactBlobRef(value) {
     typeof value.__claude_tap_blob_ref__.hash === 'string';
 }
 
-function materializeCompactValue(value, blobs, cache) {
-  if (isCompactBlobRef(value)) {
-    const ref = value.__claude_tap_blob_ref__;
-    if (!cache.has(ref.hash)) {
-      const blob = blobs[ref.hash];
-      if (!blob || blob.kind !== (ref.kind || 'json')) throw new Error(`Missing compact trace blob: ${ref.hash}`);
-      cache.set(ref.hash, blob.payload);
-    }
-    return cache.get(ref.hash);
+function loadCompactBlobRef(value, blobs, cache) {
+  const ref = value.__claude_tap_blob_ref__;
+  if (!cache.has(ref.hash)) {
+    const blob = blobs[ref.hash];
+    if (!blob || blob.kind !== (ref.kind || 'json')) throw new Error(`Missing compact trace blob: ${ref.hash}`);
+    cache.set(ref.hash, blob.payload);
   }
-  if (Array.isArray(value)) return value.map(item => materializeCompactValue(item, blobs, cache));
-  if (value && typeof value === 'object') {
-    const out = {};
-    for (const [key, item] of Object.entries(value)) out[key] = materializeCompactValue(item, blobs, cache);
+  return cache.get(ref.hash);
+}
+
+function parseCompactRefPath(path) {
+  if (typeof path !== 'string' || !path.startsWith('/')) return null;
+  return path.slice(1).split('/').map(part => part.replaceAll('~1', '/').replaceAll('~0', '~'));
+}
+
+function materializeCompactRefPath(value, path, blobs, cache) {
+  if (!path.length) return isCompactBlobRef(value) ? loadCompactBlobRef(value, blobs, cache) : value;
+  const [key, ...rest] = path;
+  if (Array.isArray(value)) {
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0 || index >= value.length) return value;
+    const replacement = materializeCompactRefPath(value[index], rest, blobs, cache);
+    if (replacement === value[index]) return value;
+    const out = value.slice();
+    out[index] = replacement;
     return out;
   }
+  if (value && typeof value === 'object') {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) return value;
+    const replacement = materializeCompactRefPath(value[key], rest, blobs, cache);
+    if (replacement === value[key]) return value;
+    return { ...value, [key]: replacement };
+  }
   return value;
+}
+
+const LEGACY_COMPACT_BLOB_PATHS = [
+  ['request', 'body', 'instructions'],
+  ['request', 'body', 'tools'],
+  ['response', 'body', 'instructions'],
+  ['response', 'body', 'tools'],
+];
+
+const LEGACY_COMPACT_ITEM_BLOB_PATHS = [
+  ['request', 'body', 'input'],
+  ['request', 'body', 'messages'],
+];
+
+function getCompactPath(value, path) {
+  let node = value;
+  for (const key of path) {
+    if (!node || typeof node !== 'object' || Array.isArray(node) || !Object.prototype.hasOwnProperty.call(node, key)) {
+      return undefined;
+    }
+    node = node[key];
+  }
+  return node;
+}
+
+function legacyCompactRefPaths(record) {
+  const paths = [];
+  for (const path of LEGACY_COMPACT_BLOB_PATHS) {
+    if (isCompactBlobRef(getCompactPath(record, path))) paths.push(path);
+  }
+  for (const path of LEGACY_COMPACT_ITEM_BLOB_PATHS) {
+    const value = getCompactPath(record, path);
+    if (!Array.isArray(value)) continue;
+    value.forEach((item, index) => {
+      if (isCompactBlobRef(item)) paths.push([...path, String(index)]);
+    });
+  }
+  return paths;
 }
 
 function materializeCompactRecord(payload, blobs, cache) {
@@ -214,7 +269,16 @@ function materializeCompactRecord(payload, blobs, cache) {
   const marker = payload.__claude_tap_compact_record__;
   if (!marker) return payload;
   if (marker.version !== 1) throw new Error(`Unsupported compact trace record version: ${marker.version}`);
-  const record = materializeCompactValue(payload.record, blobs, cache);
+  let record = payload.record;
+  let refPaths = Array.isArray(marker.refs)
+    ? marker.refs.map(ref => parseCompactRefPath(ref && ref.path)).filter(Boolean)
+    : [];
+  if (!refPaths.length && record && typeof record === 'object' && !Array.isArray(record)) {
+    refPaths = legacyCompactRefPaths(record);
+  }
+  for (const path of refPaths) {
+    record = materializeCompactRefPath(record, path, blobs, cache);
+  }
   return record && typeof record === 'object' && !Array.isArray(record) ? record : null;
 }
 
@@ -245,7 +309,7 @@ function parseTraceText(text) {
 }
 
 if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
-  entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? expandLiveWebSocketResponseEntries(EMBEDDED_TRACE_DATA, true) : [];
+  entries = typeof EMBEDDED_TRACE_DATA !== 'undefined' ? normalizeDisplayTurns(expandLiveWebSocketResponseEntries(EMBEDDED_TRACE_DATA, true), true) : [];
   document.addEventListener('DOMContentLoaded', () => {
     initCommonUi();
     initLiveMode();
@@ -256,7 +320,7 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
     }
   });
 } else if (typeof EMBEDDED_TRACE_COMPACT_DATA !== 'undefined') {
-  entries = expandWebSocketResponseEntries(materializeCompactTraceBundle(EMBEDDED_TRACE_COMPACT_DATA) || []);
+  entries = normalizeDisplayTurns(expandWebSocketResponseEntries(materializeCompactTraceBundle(EMBEDDED_TRACE_COMPACT_DATA) || []), true);
   document.addEventListener('DOMContentLoaded', () => {
     initCommonUi();
     if (entries.length) renderApp();
@@ -265,14 +329,14 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
 } else if (typeof EMBEDDED_TRACE_META !== 'undefined') {
   // Lazy mode: build stub entries from metadata
   lazyMode = true;
-  entries = EMBEDDED_TRACE_META.map((meta, i) => buildStubEntry(meta, i));
+  entries = normalizeDisplayTurns(EMBEDDED_TRACE_META.map((meta, i) => buildStubEntry(meta, i)), true);
   document.addEventListener('DOMContentLoaded', () => {
     initCommonUi();
     if (entries.length) renderApp();
     else renderEmptyTraceState();
   });
 } else if (typeof EMBEDDED_TRACE_DATA !== 'undefined') {
-  entries = expandWebSocketResponseEntries(EMBEDDED_TRACE_DATA);
+  entries = normalizeDisplayTurns(expandWebSocketResponseEntries(EMBEDDED_TRACE_DATA), true);
   document.addEventListener('DOMContentLoaded', () => {
     initCommonUi();
     if (entries.length) renderApp();
@@ -288,7 +352,7 @@ if (typeof LIVE_MODE !== 'undefined' && LIVE_MODE) {
 function loadFile(file) {
   const reader = new FileReader();
   reader.onload = () => {
-    entries = expandWebSocketResponseEntries(parseTraceText(reader.result));
+    entries = normalizeDisplayTurns(expandWebSocketResponseEntries(parseTraceText(reader.result)), true);
     if (!entries.length) { alert('No valid entries found / 未找到有效条目'); return; }
     renderApp();
   };

@@ -29,7 +29,7 @@ function _msgHash(msg) {
 }
 
 function _getMsgHashes(entry) {
-  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  const resolved = resolveEntryForDetail(entry);
   const msgs = getMessages(resolved?.request?.body);
   return msgs.map(_msgHash);
 }
@@ -43,17 +43,17 @@ function _isPrefixOf(shorter, longer) {
 }
 
 function responseIdForDiff(entry) {
-  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  const resolved = resolveEntryForDetail(entry);
   return getResponsePayload(resolved)?.id || resolved?.response?.body?.id || '';
 }
 
 function previousResponseIdForDiff(entry) {
-  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  const resolved = resolveEntryForDetail(entry);
   return resolved?.request?.body?.previous_response_id || getResponsePayload(resolved)?.previous_response_id || '';
 }
 
 function codexThreadKey(entry) {
-  const resolved = entry?._isStub ? getFullEntry(entry) : entry;
+  const resolved = resolveEntryForDetail(entry);
   const metadata = resolved?.request?.body?.client_metadata || {};
   let turnMetadata = metadata['x-codex-turn-metadata'];
   if (typeof turnMetadata === 'string') {
@@ -185,7 +185,7 @@ function _buildDiffTargetOptions(curIdx) {
   for (let i = curIdx - 1; i >= 0; i--) {
     const e = filtered[i];
     const model = e?.request?.body?.model || 'unknown';
-    const turn = e.turn || (i + 1);
+    const turn = displayTurnLabel(e);
     if (!modelGroups[model]) modelGroups[model] = [];
     modelGroups[model].push({ label: `${t('turn')} ${turn}`, filteredIdx: i, model });
   }
@@ -221,8 +221,8 @@ function showDiffForIdx(curIdx, triggerBtn, manualPrevIdx) {
   // Remove existing overlay if any
   document.querySelector('.diff-overlay')?.remove();
 
-  const prevEntry = filtered[prevIdx]._isStub ? getFullEntry(filtered[prevIdx]) : filtered[prevIdx];
-  const curEntry = filtered[curIdx]._isStub ? getFullEntry(filtered[curIdx]) : filtered[curIdx];
+  const prevEntry = resolveEntryForDetail(filtered[prevIdx]);
+  const curEntry = resolveEntryForDetail(filtered[curIdx]);
   const oldBody = prevEntry.request?.body || {};
   const newBody = curEntry.request?.body || {};
   const diff = structuralDiff(oldBody, newBody);
@@ -254,7 +254,7 @@ function showDiffForIdx(curIdx, triggerBtn, manualPrevIdx) {
   overlay.innerHTML = `<div class="diff-modal">
     <div class="diff-header">
       <button class="diff-nav-btn diff-nav-prev">&#9664;</button>
-      <span class="diff-title">${t('turn')} ${filtered[prevIdx].turn || '?'} &rarr; ${t('turn')} ${filtered[curIdx].turn || '?'}</span>
+      <span class="diff-title">${t('turn')} ${displayTurnLabel(filtered[prevIdx])} &rarr; ${t('turn')} ${displayTurnLabel(filtered[curIdx])}</span>
       <button class="diff-nav-btn diff-nav-next" ${hasNext ? '' : 'disabled'}>&#9654;</button>
       ${selectHtml}
       <button class="diff-close">&#10005;</button>

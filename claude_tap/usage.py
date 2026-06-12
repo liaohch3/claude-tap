@@ -12,7 +12,7 @@ def normalize_usage(usage: object) -> dict:
     if not isinstance(usage, dict):
         return {}
 
-    normalized = dict(usage)
+    normalized = {k: v for k, v in usage.items() if v is not None}
 
     input_tokens = normalized.get("input_tokens")
     output_tokens = normalized.get("output_tokens")

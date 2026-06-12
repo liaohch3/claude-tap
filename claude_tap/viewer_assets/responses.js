@@ -4,6 +4,10 @@ function isCodexResponsesWebSocketEntry(entry) {
   return path.endsWith('/backend-api/codex/responses') || path.endsWith('/v1/responses') || path === '/responses';
 }
 
+function isResponsesPath(path) {
+  return path === '/responses' || path === '/v1/responses' || path.endsWith('/backend-api/codex/responses');
+}
+
 function getResponseIdFromEvent(event) {
   const data = getEventData(event);
   return data?.response?.id || data?.item?.id || data?.item_id || '';
@@ -386,10 +390,12 @@ function buildWebSocketResponseEntry(entry, groups, idx, priorHistoryInput = [])
   const completedAt = completed.completed_at;
   const durationMs = createdAt && completedAt ? Math.max(0, (completedAt - createdAt) * 1000) : entry.duration_ms;
   const splitFromSingleRecord = groups.length > 1;
+  const captureTurn = splitFromSingleRecord ? `${entry.turn || '?'}.${idx + 1}` : entry.turn;
   return {
     ...cloneJson(entry),
     request_id: splitFromSingleRecord ? `${entry.request_id || 'ws'}:${idx + 1}` : entry.request_id,
-    turn: splitFromSingleRecord ? `${entry.turn || '?'}.${idx + 1}` : entry.turn,
+    turn: captureTurn,
+    capture_turn: captureTurn,
     duration_ms: durationMs,
     timestamp: createdAt ? new Date(createdAt * 1000).toISOString() : entry.timestamp,
     derived_from_websocket: splitFromSingleRecord || entry.derived_from_websocket === true,
@@ -522,5 +528,63 @@ let liveWebSocketResponseHistoryById = createWebSocketResponseHistoryStore();
 function expandLiveWebSocketResponseEntries(rawEntries, reset = false) {
   if (reset) liveWebSocketResponseHistoryById = createWebSocketResponseHistoryStore();
   return expandWebSocketResponseEntries(rawEntries, liveWebSocketResponseHistoryById);
+}
+
+let nextDisplayTurn = 1;
+const DISPLAY_TURN_PRIMARY_PATH_PREFIXES = ['/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
+
+function displayTurnPath(entry) {
+  return (entry?.request?.path || '/unknown').replace(/\?.*$/, '');
+}
+
+function isDisplayTurnCandidate(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  const path = displayTurnPath(entry);
+  if (path.includes('/count_tokens') || path.endsWith('/models') || path.includes('/models?')) return false;
+  if (isResponsesPath(path) && !isDisplayableResponsesEntry(entry)) return false;
+  if (entry.derived_from_websocket) return true;
+  if (isResponsesPath(path)) {
+    return true;
+  }
+  if (path.startsWith('/model/') && (path.endsWith('/invoke') || path.endsWith('/invoke-with-response-stream'))) {
+    return true;
+  }
+  return DISPLAY_TURN_PRIMARY_PATH_PREFIXES.some(prefix => path.startsWith(prefix));
+}
+
+function normalizeDisplayTurns(rawEntries, reset = true) {
+  if (reset) nextDisplayTurn = 1;
+  return (rawEntries || []).map(entry => {
+    if (!entry || typeof entry !== 'object') return entry;
+    if (entry.capture_turn === undefined && entry.turn !== undefined) entry.capture_turn = entry.turn;
+    if (!isDisplayTurnCandidate(entry)) {
+      if (reset) delete entry.display_turn;
+      return entry;
+    }
+    if (reset || entry.display_turn === undefined) {
+      entry.display_turn = nextDisplayTurn;
+    }
+    const assignedTurn = Number(entry.display_turn);
+    nextDisplayTurn = Number.isFinite(assignedTurn) ? Math.max(nextDisplayTurn, assignedTurn + 1) : nextDisplayTurn + 1;
+    return entry;
+  });
+}
+
+function displayTurnValue(entry) {
+  return entry?.display_turn ?? entry?.turn;
+}
+
+function displayTurnLabel(entry) {
+  const value = displayTurnValue(entry);
+  return value === undefined || value === null || value === '' ? '?' : value;
+}
+
+function isNavigableTraceEntry(entry) {
+  if (isResponsesPath(displayTurnPath(entry)) && !isDisplayableResponsesEntry(entry)) return false;
+  return true;
+}
+
+function captureTurnValue(entry) {
+  return entry?.capture_turn ?? entry?.turn;
 }
 

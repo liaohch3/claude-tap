@@ -12,11 +12,13 @@ from claude_tap.shared_dashboard import (
     _dashboard_spawn_lock,
     _spawn_dashboard_subprocess,
     _sync_dashboard_healthy_for_current_db,
+    dashboard_connect_host,
     dashboard_url,
     ensure_shared_dashboard,
     is_dashboard_healthy,
     is_legacy_dashboard_healthy,
     resolve_dashboard_port,
+    stop_shared_dashboard,
 )
 from claude_tap.trace_store import resolve_db_path
 
@@ -51,7 +53,14 @@ def test_resolve_dashboard_port_ignores_invalid_env(monkeypatch: pytest.MonkeyPa
 
 
 def test_dashboard_url() -> None:
+    assert dashboard_connect_host("localhost") == "localhost"
+    assert dashboard_connect_host(" ") == "127.0.0.1"
+    assert dashboard_connect_host("0.0.0.0") == "127.0.0.1"
+    assert dashboard_connect_host("::") == "::1"
+    assert dashboard_connect_host("[::]") == "::1"
     assert dashboard_url("127.0.0.1", 1234) == "http://127.0.0.1:1234"
+    assert dashboard_url("0.0.0.0", 1234) == "http://127.0.0.1:1234"
+    assert dashboard_url("::", 1234) == "http://[::1]:1234"
     assert dashboard_url("::1", 1234) == "http://[::1]:1234"
     assert dashboard_url("[::1]", 1234) == "http://[::1]:1234"
 
@@ -193,11 +202,130 @@ async def test_is_dashboard_healthy_real_server(monkeypatch: pytest.MonkeyPatch,
         async with aiohttp.ClientSession() as session:
             async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
                 assert resp.status == 200
-                assert await resp.json() == {"ok": True, "db_path": str(resolve_db_path())}
+                payload = await resp.json()
+                assert payload["ok"] is True
+                assert payload["db_path"] == str(resolve_db_path())
+                assert payload["dashboard_mode"] is True
+                assert isinstance(payload["quit_token"], str)
+                assert payload["quit_token"]
         assert await is_dashboard_healthy("127.0.0.1", port) is True
         assert await wait_for_dashboard_healthy("127.0.0.1", port, timeout=1.0) is True
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_shared_dashboard_stops_real_server(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from claude_tap.live import LiveViewerServer
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        assert await stop_shared_dashboard("127.0.0.1", port) is True
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is False
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_bind_all_dashboard_uses_loopback_for_local_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from claude_tap.live import LiveViewerServer
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+
+    server = LiveViewerServer(port=0, host="0.0.0.0", migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        assert server.url == f"http://127.0.0.1:{port}"
+        assert await is_dashboard_healthy("0.0.0.0", port) is True
+        assert await stop_shared_dashboard("0.0.0.0", port) is True
+        assert await is_dashboard_healthy("0.0.0.0", port, require_current_db=False) is False
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_shared_dashboard_requires_health_token() -> None:
+    quit_called = False
+
+    async def health(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True})
+
+    async def quit_dashboard(request: web.Request) -> web.Response:
+        nonlocal quit_called
+        quit_called = True
+        return web.json_response({"ok": True})
+
+    app = web.Application()
+    app.router.add_get("/dashboard/health", health)
+    app.router.add_post("/dashboard/quit", quit_dashboard)
+    runner, port = await _start_test_app(app)
+    try:
+        assert await stop_shared_dashboard("127.0.0.1", port) is False
+        assert quit_called is False
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_stop_shared_dashboard_rejects_unhealthy_or_forbidden_server() -> None:
+    async def unhealthy(request: web.Request) -> web.Response:
+        return web.json_response({"ok": False}, status=500)
+
+    unhealthy_app = web.Application()
+    unhealthy_app.router.add_get("/dashboard/health", unhealthy)
+    unhealthy_runner, unhealthy_port = await _start_test_app(unhealthy_app)
+    try:
+        assert await stop_shared_dashboard("127.0.0.1", unhealthy_port) is False
+    finally:
+        await unhealthy_runner.cleanup()
+
+    async def health(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True, "quit_token": "test-token"})
+
+    async def forbidden_quit(request: web.Request) -> web.Response:
+        assert request.headers["X-Claude-Tap-Dashboard-Token"] == "test-token"
+        return web.json_response({"ok": False}, status=403)
+
+    forbidden_app = web.Application()
+    forbidden_app.router.add_get("/dashboard/health", health)
+    forbidden_app.router.add_post("/dashboard/quit", forbidden_quit)
+    forbidden_runner, forbidden_port = await _start_test_app(forbidden_app)
+    try:
+        assert await stop_shared_dashboard("127.0.0.1", forbidden_port) is False
+    finally:
+        await forbidden_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_stop_shared_dashboard_handles_post_client_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import aiohttp
+
+    async def healthy(*_args: object, **_kwargs: object) -> tuple[int, dict[str, str]]:
+        return 200, {"quit_token": "test-token"}
+
+    class FailingSession:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FailingSession":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        def post(self, *_args: object, **_kwargs: object) -> object:
+            raise aiohttp.ClientError("post failed")
+
+    monkeypatch.setattr("claude_tap.shared_dashboard._dashboard_get_status_and_payload", healthy)
+    monkeypatch.setattr("claude_tap.shared_dashboard.aiohttp.ClientSession", FailingSession)
+
+    assert await stop_shared_dashboard("127.0.0.1", 19527) is False
 
 
 @pytest.mark.asyncio

@@ -191,15 +191,43 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
             },
           },
           records: [{
-            __claude_tap_compact_record__: { version: 1 },
+            __claude_tap_compact_record__: {
+              version: 1,
+              refs: [{ path: '/request', hash: 'hash_1', bytes: 100 }],
+            },
             record: {
               turn: 1,
               request: {
                 __claude_tap_blob_ref__: { version: 1, kind: 'json', hash: 'hash_1' },
               },
-              response: { status: 200, body: { output: [] } },
+              response: {
+                status: 200,
+                body: {
+                  output: [{
+                    type: 'message',
+                    content: [{
+                      type: 'output_text',
+                      text: 'marker-shaped user payload',
+                      metadata: {
+                        __claude_tap_blob_ref__: {
+                          version: 1,
+                          kind: 'json',
+                          hash: 'user-controlled-marker-shape',
+                        },
+                      },
+                    }],
+                  }],
+                },
+              },
             },
           }],
+        };
+        const fakeUserMarker = {
+          __claude_tap_blob_ref__: {
+            version: 1,
+            kind: 'json',
+            hash: 'user-controlled-marker-shape',
+          },
         };
         assert.deepEqual(plain(context.materializeCompactTraceBundle(compactBundle)), [{
           turn: 1,
@@ -208,12 +236,88 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
             path: '/v1/responses',
             body: { input: [{ role: 'user', content: 'compact prompt' }] },
           },
-          response: { status: 200, body: { output: [] } },
+          response: {
+            status: 200,
+            body: {
+              output: [{
+                type: 'message',
+                content: [{
+                  type: 'output_text',
+                  text: 'marker-shaped user payload',
+                  metadata: fakeUserMarker,
+                }],
+              }],
+            },
+          },
         }]);
         assert.deepEqual(
           plain(context.parseTraceText(JSON.stringify(compactBundle))),
           plain(context.materializeCompactTraceBundle(compactBundle)),
         );
+
+        const legacyCompactBundle = {
+          __claude_tap_compact_trace__: { version: 1 },
+          blobs: {
+            hash_legacy_instructions: {
+              kind: 'json',
+              payload: 'legacy compact instructions',
+            },
+            hash_legacy_input: {
+              kind: 'json',
+              payload: {
+                role: 'user',
+                content: [{ type: 'input_text', text: 'legacy compact input item' }],
+              },
+            },
+          },
+          records: [{
+            __claude_tap_compact_record__: {
+              version: 1,
+              encoding: 'json-blob-ref',
+            },
+            record: {
+              turn: 2,
+              request: {
+                body: {
+                  instructions: {
+                    __claude_tap_blob_ref__: { version: 1, kind: 'json', hash: 'hash_legacy_instructions' },
+                  },
+                  input: [
+                    {
+                      __claude_tap_blob_ref__: { version: 1, kind: 'json', hash: 'hash_legacy_input' },
+                    },
+                    {
+                      role: 'user',
+                      content: [{ type: 'input_text', text: 'keep marker shape' }],
+                      metadata: fakeUserMarker,
+                    },
+                  ],
+                },
+              },
+              response: { body: { output: [] } },
+            },
+          }],
+        };
+        assert.deepEqual(plain(context.materializeCompactTraceBundle(legacyCompactBundle)), [{
+          turn: 2,
+          request: {
+            body: {
+              instructions: 'legacy compact instructions',
+              input: [
+                {
+                  role: 'user',
+                  content: [{ type: 'input_text', text: 'legacy compact input item' }],
+                },
+                {
+                  role: 'user',
+                  content: [{ type: 'input_text', text: 'keep marker shape' }],
+                  metadata: fakeUserMarker,
+                },
+              ],
+            },
+          },
+          response: { body: { output: [] } },
+        }]);
         """
     )
 

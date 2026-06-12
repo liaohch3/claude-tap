@@ -13,7 +13,7 @@ function renderApp(preserveDetail) {
   $('#stats').style.display = '';
   $('#path-filter').style.display = '';
   const pathCounts = {};
-  entries.forEach(e => { const p = getPath(e); pathCounts[p] = (pathCounts[p] || 0) + 1; });
+  entries.filter(isNavigableTraceEntry).forEach(e => { const p = getPath(e); pathCounts[p] = (pathCounts[p] || 0) + 1; });
   const paths = Object.keys(pathCounts).sort();
   if (activePaths.size === 0) {
     /* If the trace has main conversation paths, hide auxiliary setup calls by default. */
@@ -116,7 +116,7 @@ let pathFilterExpanded = false;
  *   secondary – useful auxiliary APIs (MCP, models, token counting), collapsed behind "+N more"
  *   noise     – plugin manifests, bot APIs, asset downloads, version checks — hidden by default
  */
-const PRIMARY_PATH_PREFIXES = ['/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
+const PRIMARY_PATH_PREFIXES = ['/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1beta/models', '/v1alpha/models', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
 const SECONDARY_PATH_PREFIXES = ['/v1/mcp', '/v1/models', '/v1/embeddings', '/v1/files', '/responses', '/models', '/chat/completions', '/completions', '/files', '/search', '/fetch', '/usages', '/feedback'];
 function isBedrockInvokePath(p) {
   return p.startsWith('/model/') && (p.endsWith('/invoke') || p.endsWith('/invoke-with-response-stream'));
@@ -188,7 +188,7 @@ function compareTurns(a, b) {
 }
 
 function applyFilter(preserveDetail) {
-  filtered = entries.filter(e => activePaths.has(getPath(e)));
+  filtered = entries.filter(e => isNavigableTraceEntry(e) && activePaths.has(getPath(e)));
   if (searchQuery) filtered = filtered.filter(e => matchSearch(e, searchQuery));
   if (activeTools) {
     filtered = filtered.filter(e => {
@@ -198,7 +198,7 @@ function applyFilter(preserveDetail) {
       return rc.some(b => b.type === 'tool_use' && activeTools.has(b.name));
     });
   }
-  filtered.sort((a, b) => compareTurns(a.turn, b.turn));
+  filtered.sort((a, b) => compareTurns(captureTurnValue(a), captureTurnValue(b)));
   let totalTokens = 0, totalDuration = 0;
   let sumInput = 0, sumOutput = 0, sumCacheRead = 0, sumCacheCreate = 0;
   filtered.forEach(e => {
@@ -313,7 +313,7 @@ function matchSearch(e, q) {
     if (path.toLowerCase().includes(q)) return true;
     const sys = e.request?.body?.system || '';
     if (sys.toLowerCase().includes(q)) return true;
-    const turn = String(e.turn || '');
+    const turn = String(displayTurnLabel(e));
     if (turn.includes(q)) return true;
     const tools = e.request?.body?.tools || [];
     for (const td of tools) {
@@ -394,8 +394,11 @@ function closeGlobalSearch() {
 function normalizeFiltersForGlobalSearch() {
   // Global search must be able to move across all entries.
   let changed = false;
-  const allPaths = new Set(entries.map(getPath));
-  if (activePaths.size !== allPaths.size) { activePaths = allPaths; changed = true; }
+  const allPaths = new Set(entries.filter(isNavigableTraceEntry).map(getPath));
+  if (activePaths.size !== allPaths.size || [...allPaths].some(p => !activePaths.has(p))) {
+    activePaths = allPaths;
+    changed = true;
+  }
   if (activeTools) { activeTools = null; changed = true; }
   if (searchQuery) {
     searchQuery = '';
@@ -524,6 +527,7 @@ function recalcGlobalSearchMatches() {
   const counts = [];
   let total = 0;
   entries.forEach(entry => {
+    if (!isNavigableTraceEntry(entry)) return;
     const c = countMatchesInText(getEntrySearchText(entry), queries);
     if (c > 0) counts.push({ requestId: entry.request_id, count: c });
     total += c;

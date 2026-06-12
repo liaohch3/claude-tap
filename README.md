@@ -53,7 +53,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 
 | Client | Typical use |
 |--------|-------------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, or Claude-compatible gateways such as DeepSeek / GLM |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, Claude-compatible gateways such as DeepSeek / GLM, or local proxy upstreams such as CC Switch |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API key mode or ChatGPT subscription OAuth |
 | [Codex App](https://openai.com/codex/) | Local Codex App sessions imported from `CODEX_HOME` or `~/.codex`; automatic best-effort CDP WebSocket enrichment |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
@@ -137,6 +137,8 @@ claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 `claude-tap` auto-detects custom Claude Code upstreams from `ANTHROPIC_BASE_URL`
 or `ANTHROPIC_BEDROCK_BASE_URL` in your environment or Claude settings. Use
 `--tap-target` only when you want to override that detected target.
+
+Local proxy upstreams are supported too: if a tool such as [CC Switch](https://github.com/farion1231/cc-switch) points Claude Code at a local `ANTHROPIC_BASE_URL`, `claude-tap` detects that value from Claude settings and records the traffic before forwarding it upstream. Use `claude-tap` in place of `claude`, such as `claude-tap -- <claude-args>`; no separate `--tap-client` value is needed.
 
 For the Claude Code VS Code extension, set `Claude Code: Claude Process Wrapper` to `claude-tap`; on Windows, use the full `claude-tap.exe` path if VS Code cannot find it.
 
@@ -423,6 +425,9 @@ claude-tap --tap-no-live
 
 # Browse saved traces without launching a client
 claude-tap dashboard
+
+# Stop the shared dashboard service
+claude-tap dashboard stop
 
 # Regenerate a self-contained HTML viewer from JSONL
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html

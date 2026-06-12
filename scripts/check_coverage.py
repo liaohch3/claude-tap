@@ -536,7 +536,25 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   if (entries.length) {
                     sessionTurnDiscriminator(entries[0]);
                     sessionKeyForEntry(entries[0], null);
+                    matchSearch(entries[0], '1');
+                    const originalPrompt = window.prompt;
+                    window.prompt = () => '1';
+                    promptJumpToTurn();
+                    window.prompt = originalPrompt;
+                    _buildDiffTargetOptions(Math.min(1, filtered.length - 1));
+                    if (filtered.length > 1) showDiffForIdx(1, null, 0);
                   }
+                  const stubEntry = buildStubEntry({
+                    turn: '2.2',
+                    transport: 'websocket',
+                    method: 'WEBSOCKET',
+                    path: '/v1/responses',
+                    model: 'gpt-5.5',
+                    request_generate: true,
+                    response_output_count: 1,
+                    output_tokens: 1,
+                  }, 0);
+                  normalizeDisplayTurns([stubEntry], true);
                   const imageBlock = {
                     type: 'image',
                     source: {
@@ -666,10 +684,32 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   entries = expandWebSocketResponseEntries(compactRecords);
                   applyFilter(true);
                   selectEntry(0);
-                  const blobRef = parsed.records[0].record.request.body.instructions;
+                  const compactPayload = parsed.records[0];
+                  const compactRecord = compactPayload.record;
+                  const refPath = parseCompactRefPath(compactPayload.__claude_tap_compact_record__.refs[0].path);
+                  const blobRef = compactRecord.request.body.instructions;
                   isCompactBlobRef(blobRef);
-                  materializeCompactValue(blobRef, parsed.blobs, new Map());
-                  materializeCompactRecord(parsed.records[0], parsed.blobs, new Map());
+                  loadCompactBlobRef(blobRef, parsed.blobs, new Map());
+                  materializeCompactRefPath(compactRecord, refPath, parsed.blobs, new Map());
+                  materializeCompactRecord(compactPayload, parsed.blobs, new Map());
+                  const legacyPayload = {
+                    __claude_tap_compact_record__: {
+                      version: 1,
+                      encoding: 'json-blob-ref',
+                    },
+                    record: {
+                      request: {
+                        body: {
+                          instructions: blobRef,
+                          input: [blobRef],
+                        },
+                      },
+                      response: { body: {} },
+                    },
+                  };
+                  getCompactPath(legacyPayload.record, ['request', 'body', 'instructions']);
+                  legacyCompactRefPaths(legacyPayload.record);
+                  materializeCompactRecord(legacyPayload, parsed.blobs, new Map());
                 }""",
                 compact_bundle_path.read_text(encoding="utf-8"),
             )
