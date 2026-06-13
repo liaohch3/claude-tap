@@ -597,10 +597,18 @@ class TraceStore:
             "deleted_logs": deleted_logs,
         }
 
-    def cleanup_old_sessions(self, max_sessions: int, *, protected_session_id: str | None = None) -> int:
+    def cleanup_old_sessions(
+        self,
+        max_sessions: int,
+        *,
+        protected_session_id: str | None = None,
+        protected_session_ids: set[str] | None = None,
+    ) -> int:
         if max_sessions <= 0:
             return 0
-        protected = {protected_session_id} if protected_session_id else set()
+        protected = set(protected_session_ids or set())
+        if protected_session_id:
+            protected.add(protected_session_id)
         with self._write_lock:
             conn = self._connect()
             rows = conn.execute(

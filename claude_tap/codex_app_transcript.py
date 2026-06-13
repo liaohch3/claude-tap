@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_tap.trace import TraceWriter
+from claude_tap.trace_store import TraceStore, get_trace_store
 
 CODEX_APP_TRANSPORT = "codex-app-transcript"
 CODEX_APP_TRANSCRIPT_DISCOVERY_INTERVAL = 5.0
@@ -179,6 +180,76 @@ class _TranscriptCursor:
     parser: _TranscriptParser
     offset: int = 0
     partial_line: str = ""
+
+
+class CodexAppTranscriptSessionRegistry:
+    """Own one trace writer per Codex App transcript/query."""
+
+    def __init__(
+        self,
+        *,
+        store: TraceStore | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        self._store = store or get_trace_store()
+        self._metadata = metadata or {}
+        self._writers: dict[Path, TraceWriter] = {}
+        self._session_ids: dict[Path, str] = {}
+
+    @property
+    def session_ids(self) -> tuple[str, ...]:
+        return tuple(self._session_ids.values())
+
+    async def write_next_turn(self, transcript_path: Path, record: dict[str, Any]) -> None:
+        writer = self._writer_for_record(transcript_path, record)
+        await writer.write_next_turn(record)
+
+    def close(self) -> None:
+        for writer in self._writers.values():
+            writer.close()
+
+    def get_summary(self) -> dict[str, Any]:
+        summary = {
+            "api_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_create_tokens": 0,
+            "models_used": {},
+            "has_error": False,
+        }
+        models: dict[str, int] = {}
+        for writer in self._writers.values():
+            item = writer.get_summary()
+            summary["api_calls"] += int(item["api_calls"])
+            summary["input_tokens"] += int(item["input_tokens"])
+            summary["output_tokens"] += int(item["output_tokens"])
+            summary["cache_read_tokens"] += int(item["cache_read_tokens"])
+            summary["cache_create_tokens"] += int(item["cache_create_tokens"])
+            summary["has_error"] = bool(summary["has_error"] or item["has_error"])
+            for model, count in item["models_used"].items():
+                models[model] = models.get(model, 0) + count
+        summary["models_used"] = models
+        return summary
+
+    def _writer_for_record(self, transcript_path: Path, record: dict[str, Any]) -> TraceWriter:
+        writer = self._writers.get(transcript_path)
+        if writer is not None:
+            return writer
+
+        metadata = dict(self._metadata)
+        codex_app_session_id = _record_codex_app_session_id(record)
+        if codex_app_session_id:
+            metadata["codex_app_session_id"] = codex_app_session_id
+        session_id = self._store.create_session(
+            client=metadata.get("client", "codexapp"),
+            proxy_mode=metadata.get("proxy_mode", "transcript"),
+            started_at=_record_datetime(record),
+        )
+        writer = TraceWriter(session_id, metadata=metadata, store=self._store)
+        self._writers[transcript_path] = writer
+        self._session_ids[transcript_path] = session_id
+        return writer
 
 
 def codex_app_home(home: Path | None = None) -> Path:
@@ -360,6 +431,30 @@ def _response_id(session_id: str, index: int) -> str:
     return f"resp_codexapp_{session_id.replace('-', '')[:20]}_{index}"
 
 
+def _record_codex_app_session_id(record: dict[str, Any]) -> str:
+    request = record.get("request")
+    headers = request.get("headers") if isinstance(request, dict) else {}
+    body = request.get("body") if isinstance(request, dict) else {}
+    metadata = body.get("metadata") if isinstance(body, dict) else {}
+    value = metadata.get("codex_app_session_id") if isinstance(metadata, dict) else None
+    if not isinstance(value, str) or not value:
+        value = headers.get("x-codex-app-session-id") if isinstance(headers, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def _record_datetime(record: dict[str, Any]) -> datetime | None:
+    timestamp = record.get("timestamp")
+    if not isinstance(timestamp, str) or not timestamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def build_codex_app_transcript_records(
     transcript_path: Path,
     *,
@@ -405,6 +500,37 @@ async def import_codex_app_transcripts(
     return imported
 
 
+async def import_codex_app_transcripts_to_sessions(
+    registry: CodexAppTranscriptSessionRegistry,
+    *,
+    since: float,
+    home: Path | None = None,
+    state: dict[Path, _TranscriptCursor] | None = None,
+    include_incomplete: bool = True,
+    transcript_paths: Iterable[Path] | None = None,
+) -> int:
+    """Append new Codex App transcript records into one trace session per query."""
+    imported = 0
+    state = state if state is not None else {}
+    paths = (
+        list(transcript_paths) if transcript_paths is not None else find_codex_app_transcripts(since=since, home=home)
+    )
+    for transcript_path in paths:
+        cursor = state.get(transcript_path)
+        if not isinstance(cursor, _TranscriptCursor):
+            cursor = _TranscriptCursor(parser=_TranscriptParser(transcript_path.stem))
+            state[transcript_path] = cursor
+        records = cursor.parser.feed(
+            _read_new_jsonl_rows(transcript_path, cursor),
+            start_turn=1,
+            include_incomplete=include_incomplete,
+        )
+        for record in records:
+            await registry.write_next_turn(transcript_path, record)
+            imported += 1
+    return imported
+
+
 async def watch_codex_app_transcripts(
     writer: TraceWriter,
     *,
@@ -442,6 +568,52 @@ async def watch_codex_app_transcripts(
                 transcript_paths.append(path)
         await import_codex_app_transcripts(
             writer,
+            since=since,
+            home=home,
+            state=state,
+            include_incomplete=True,
+            transcript_paths=transcript_paths,
+        )
+        raise
+
+
+async def watch_codex_app_transcripts_to_sessions(
+    registry: CodexAppTranscriptSessionRegistry,
+    *,
+    since: float,
+    home: Path | None = None,
+    poll_interval: float = 1.0,
+    discovery_interval: float = CODEX_APP_TRANSCRIPT_DISCOVERY_INTERVAL,
+) -> None:
+    """Poll Codex App transcripts and keep each app query in its own trace session."""
+    state: dict[Path, _TranscriptCursor] = {}
+    transcript_paths: list[Path] = []
+    last_discovery = 0.0
+    try:
+        while True:
+            now = time.monotonic()
+            if not transcript_paths or now - last_discovery >= discovery_interval:
+                known = set(transcript_paths)
+                for path in find_codex_app_transcripts(since=since, home=home):
+                    if path not in known:
+                        transcript_paths.append(path)
+                        known.add(path)
+                last_discovery = now
+            await import_codex_app_transcripts_to_sessions(
+                registry,
+                since=since,
+                home=home,
+                state=state,
+                include_incomplete=True,
+                transcript_paths=transcript_paths,
+            )
+            await asyncio.sleep(poll_interval)
+    except asyncio.CancelledError:
+        for path in find_codex_app_transcripts(since=since, home=home):
+            if path not in transcript_paths:
+                transcript_paths.append(path)
+        await import_codex_app_transcripts_to_sessions(
+            registry,
             since=since,
             home=home,
             state=state,

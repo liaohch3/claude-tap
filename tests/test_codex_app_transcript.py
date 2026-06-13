@@ -9,10 +9,12 @@ import pytest
 
 from claude_tap.codex_app_transcript import (
     CODEX_APP_TRANSPORT,
+    CodexAppTranscriptSessionRegistry,
     build_codex_app_transcript_records,
     codex_app_home,
     find_codex_app_transcripts,
     import_codex_app_transcripts,
+    import_codex_app_transcripts_to_sessions,
     watch_codex_app_transcripts,
 )
 from claude_tap.trace import TraceWriter
@@ -409,6 +411,54 @@ async def test_import_codex_app_transcripts_resets_state_when_file_shrinks(trace
     assert imported == 1
     assert state[transcript].parser.response_count == 1
     assert len(store.load_records(session_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_import_codex_app_transcripts_to_sessions_splits_codex_queries(trace_db, tmp_path: Path) -> None:
+    first = tmp_path / ".codex" / "sessions" / "2026" / "06" / "07" / "first.jsonl"
+    second = tmp_path / ".codex" / "sessions" / "2026" / "06" / "07" / "second.jsonl"
+    first_rows = _session_rows()
+    second_rows = _session_rows()
+    first_rows[0]["payload"]["id"] = "codex-query-alpha"
+    first_rows[3]["payload"]["content"][0]["text"] = "write runtime wiki"
+    second_rows[0]["payload"]["id"] = "codex-query-beta"
+    second_rows[3]["payload"]["content"][0]["text"] = "add Codex App listener"
+    _write_jsonl(first, first_rows[:8])
+    _write_jsonl(second, second_rows[:8])
+
+    from claude_tap.trace_store import SessionQuery, get_trace_store
+
+    store = get_trace_store()
+    registry = CodexAppTranscriptSessionRegistry(
+        store=store,
+        metadata={"client": "codexapp", "proxy_mode": "transcript"},
+    )
+
+    imported = await import_codex_app_transcripts_to_sessions(
+        registry,
+        since=0,
+        home=tmp_path,
+        include_incomplete=False,
+    )
+    registry.close()
+
+    assert imported == 2
+    rows = store.list_session_rows(query=SessionQuery(agent_clients=("codexapp",)))
+    assert len(rows) == 2
+    records_by_session = {row["id"]: store.load_records(row["id"]) for row in rows}
+    assert sorted(len(records) for records in records_by_session.values()) == [1, 1]
+    prompts = sorted(
+        records[0]["request"]["body"]["input"][1]["content"][0]["text"] for records in records_by_session.values()
+    )
+    assert prompts == ["add Codex App listener", "write runtime wiki"]
+    app_session_ids = sorted(
+        records[0]["request"]["body"]["metadata"]["codex_app_session_id"] for records in records_by_session.values()
+    )
+    assert app_session_ids == ["codex-query-alpha", "codex-query-beta"]
+    capture_app_session_ids = sorted(
+        records[0]["capture"]["codex_app_session_id"] for records in records_by_session.values()
+    )
+    assert capture_app_session_ids == ["codex-query-alpha", "codex-query-beta"]
 
 
 @pytest.mark.asyncio

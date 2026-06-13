@@ -552,12 +552,15 @@ async def test_async_main_codexapp_starts_cdp_enrichment_by_default(monkeypatch:
             cancelled.set()
             raise
 
-    async def fake_watch_codex_app_transcripts(*args: object, **kwargs: object) -> None:
+    async def fake_watch_codex_app_transcripts_to_sessions(*args: object, **kwargs: object) -> None:
         await asyncio.wait_for(started.wait(), timeout=1)
 
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "codexapp-auto-cdp.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.watch_codex_app_cdp", fake_watch_codex_app_cdp)
-    monkeypatch.setattr("claude_tap.cli.watch_codex_app_transcripts", fake_watch_codex_app_transcripts)
+    monkeypatch.setattr(
+        "claude_tap.cli.watch_codex_app_transcripts_to_sessions",
+        fake_watch_codex_app_transcripts_to_sessions,
+    )
 
     args = parse_args(["--tap-client", "codexapp", "--tap-no-live", "--tap-no-open", "--tap-max-traces", "0"])
 

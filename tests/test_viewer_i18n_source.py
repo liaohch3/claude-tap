@@ -30,6 +30,13 @@ def test_viewer_i18n_json_has_complete_language_key_sets() -> None:
             assert entries[lang][key]
 
 
+def test_viewer_session_sort_label_uses_query_language() -> None:
+    entries = _load_viewer_i18n()
+
+    assert entries["en"]["sort_session"] == "Query"
+    assert entries["zh-CN"]["sort_session"] == "用户输入"
+
+
 def test_read_viewer_template_embeds_i18n_before_main_script() -> None:
     html = _read_viewer_template()
 

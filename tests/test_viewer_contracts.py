@@ -2192,26 +2192,26 @@ def test_viewer_sidebar_order_can_switch_between_model_turn_and_session_sequence
     assert model_state["buttons"] == [
         {"mode": "model", "label": "Model", "active": True},
         {"mode": "turn", "label": "Turn", "active": False},
-        {"mode": "session", "label": "Session", "active": False},
+        {"mode": "session", "label": "Query", "active": False},
     ]
     assert model_state["groups"] == ["aws.claude-opus-4.6", "aws.claude-sonnet-4.6", "other-model"]
     assert model_state["turns"] == ["Turn 3", "Turn 2", "Turn 1"]
     assert turn_state["buttons"] == [
         {"mode": "model", "label": "Model", "active": False},
         {"mode": "turn", "label": "Turn", "active": True},
-        {"mode": "session", "label": "Session", "active": False},
+        {"mode": "session", "label": "Query", "active": False},
     ]
     assert turn_state["groupCount"] == 0
     assert turn_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
     assert session_state["buttons"] == [
         {"mode": "model", "label": "Model", "active": False},
         {"mode": "turn", "label": "Turn", "active": False},
-        {"mode": "session", "label": "Session", "active": True},
+        {"mode": "session", "label": "Query", "active": True},
     ]
     assert session_state["groups"] == [
-        "Session 1 - First sidebar task",
-        "Session 2 - Second sidebar task",
-        "Session 3 - Second sidebar task",
+        "Query 1 - First sidebar task",
+        "Query 2 - Second sidebar task",
+        "Query 3 - Second sidebar task",
     ]
     assert session_state["counts"] == ["1", "1", "1"]
     assert session_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
@@ -2237,9 +2237,9 @@ def test_viewer_session_order_groups_claude_code_tool_loop_rounds(tmp_path: Path
 
     assert errors == []
     assert state["groups"] == [
-        "Session 1 - Check configured MCP settings",
-        "Session 2 - Diagnose portfolio holdings",
-        "Session 3 - Add portfolio positions",
+        "Query 1 - Check configured MCP settings",
+        "Query 2 - Diagnose portfolio holdings",
+        "Query 3 - Add portfolio positions",
     ]
     assert state["counts"] == ["3", "2", "2"]
     assert state["turns"] == ["Turn 1", "Turn 2", "Turn 3", "Turn 4", "Turn 5", "Turn 6", "Turn 7"]
@@ -2273,7 +2273,7 @@ def test_viewer_session_order_groups_large_codex_app_sessions_in_virtual_mode(tm
 
     assert errors == []
     assert state["virtualMode"] is True
-    assert state["groups"] == ["Session 1 - Write Codex App runtime wiki"]
+    assert state["groups"] == ["Query 1 - Write Codex App runtime wiki"]
     assert state["counts"] == ["30"]
     assert state["virtualGroups"] == ["Write Codex App runtime wiki", "Investigate live dashboard capture"]
     assert state["virtualCounts"] == ["30", "30"]
@@ -3176,9 +3176,9 @@ def test_viewer_session_identical_prompts_image_tags_and_early_title_generation(
 
     assert errors == []
     assert state["groups"] == [
-        "Session 1 - 继续",
-        "Session 2 - 继续",
-        "Session 3 - Analyze the flowchart",
+        "Query 1 - 继续",
+        "Query 2 - 继续",
+        "Query 3 - Analyze the flowchart",
     ]
     assert state["counts"] == ["2", "2", "1"]
 

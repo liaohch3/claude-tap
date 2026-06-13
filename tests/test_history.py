@@ -307,6 +307,26 @@ def test_cleanup_trace_sessions_skips_protected_and_continues(trace_db) -> None:
     assert remaining == {session_ids[0], session_ids[-1]}
 
 
+def test_cleanup_trace_sessions_skips_protected_session_set(trace_db) -> None:
+    store = get_trace_store()
+    session_ids = [
+        store.create_session(
+            client="codexapp",
+            proxy_mode="transcript",
+            started_at=datetime(2026, 5, 1, 12, index, tzinfo=timezone.utc),
+        )
+        for index in range(5)
+    ]
+    for session_id in session_ids:
+        store.finalize_session(session_id, {"api_calls": 1})
+
+    removed = cleanup_trace_sessions(2, protected_session_ids={session_ids[0], session_ids[1]})
+
+    assert removed == 3
+    remaining = {row["id"] for row in store.list_session_rows()}
+    assert remaining == {session_ids[0], session_ids[1]}
+
+
 def test_cleanup_trace_sessions_skips_active_sessions(trace_db) -> None:
     store = get_trace_store()
     now = datetime.now(timezone.utc)
