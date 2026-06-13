@@ -5,6 +5,7 @@
 const sectionCollapseState = {};
 let detailViewMode = 'default';
 let traceFormatMode = 'json';
+let detailLoadToken = 0;
 
 function saveSectionStates() {
   const d = $('#detail');
@@ -44,7 +45,7 @@ function setDetailViewMode(mode) {
   detailViewMode = mode;
   const entry = filtered[activeIdx];
   if (!entry) return;
-  renderDetail(resolveEntryForDetail(entry));
+  renderDetailForEntry(entry);
 }
 
 function detailTabButton(mode, label) {
@@ -64,7 +65,7 @@ function setTraceFormatMode(mode) {
   traceFormatMode = mode;
   const entry = filtered[activeIdx];
   if (!entry) return;
-  renderDetail(resolveEntryForDetail(entry));
+  renderDetailForEntry(entry);
 }
 
 function renderTraceFormatControls() {
@@ -77,6 +78,25 @@ function renderTraceFormatControls() {
     const active = traceFormatMode === mode;
     return `<button type="button" data-format="${mode}" class="trace-format-btn ${active ? 'active' : ''}" aria-pressed="${active ? 'true' : 'false'}" onclick="setTraceFormatMode('${mode}')">${esc(label)}</button>`;
   }).join('')}</div>`;
+}
+
+async function renderDetailForEntry(entry) {
+  if (!shouldFetchRemoteEntry(entry)) {
+    renderDetail(resolveEntryForDetail(entry));
+    return;
+  }
+  const token = ++detailLoadToken;
+  currentDetailRequestId = entry.request_id;
+  $('#detail').innerHTML = '<div class="empty-state" role="status" aria-live="polite"></div>';
+  try {
+    const resolved = await resolveEntryForDetailAsync(entry);
+    if (token !== detailLoadToken) return;
+    renderDetail(resolved);
+  } catch (err) {
+    console.error('Failed to load trace record:', err);
+    if (token !== detailLoadToken) return;
+    renderDetail(resolveEntryForDetail(entry));
+  }
 }
 
 function renderDetail(e) {

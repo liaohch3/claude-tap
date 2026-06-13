@@ -3,6 +3,7 @@ const LAZY_THRESHOLD = 50;
 let lazyMode = false;
 let rawLines = null; // array of raw JSON strings, populated on first access
 const entryCache = new Map(); // index -> parsed full entry
+const remoteEntryPromises = new Map(); // index -> pending record fetch
 
 function getRawLines() {
   if (rawLines) return rawLines;
@@ -13,6 +14,10 @@ function getRawLines() {
   el.remove();
   rawLines = text.split('\n').filter(l => l.trim());
   return rawLines;
+}
+
+function hasEmbeddedRawLines() {
+  return !!rawLines || !!document.getElementById('trace-raw');
 }
 
 function buildStubEntry(meta, rawIdx) {
@@ -115,15 +120,55 @@ function getFullEntry(entry) {
   }
 }
 
-function resolveEntryForDetail(entry) {
-  if (!entry || !entry._isStub) return entry;
+function shouldFetchRemoteEntry(entry) {
+  return !!(entry && entry._isStub && TRACE_RECORDS_API && !hasEmbeddedRawLines());
+}
+
+function remoteRecordUrl(idx) {
+  const sep = TRACE_RECORDS_API.includes('?') ? '&' : '?';
+  return `${TRACE_RECORDS_API}${sep}offset=${encodeURIComponent(idx)}&limit=1`;
+}
+
+async function fetchRemoteEntry(entry) {
+  if (!shouldFetchRemoteEntry(entry)) return getFullEntry(entry);
+  const idx = entry._rawIdx;
+  if (entryCache.has(idx)) return entryCache.get(idx);
+  if (!remoteEntryPromises.has(idx)) {
+    remoteEntryPromises.set(idx, fetch(remoteRecordUrl(idx))
+      .then(async resp => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const payload = await resp.json();
+        const record = Array.isArray(payload.records) ? payload.records[0] : null;
+        if (!record || typeof record !== 'object') return entry;
+        entryCache.set(idx, record);
+        return record;
+      })
+      .catch(err => {
+        remoteEntryPromises.delete(idx);
+        throw err;
+      }));
+  }
+  return remoteEntryPromises.get(idx);
+}
+
+function withDisplayFields(full, entry) {
   return {
-    ...getFullEntry(entry),
+    ...full,
     display_turn: entry.display_turn,
     capture_turn: entry.capture_turn,
     record_index: entry.record_index,
     websocket_response_index: entry.websocket_response_index,
   };
+}
+
+function resolveEntryForDetail(entry) {
+  if (!entry || !entry._isStub) return entry;
+  return withDisplayFields(getFullEntry(entry), entry);
+}
+
+async function resolveEntryForDetailAsync(entry) {
+  if (!entry || !entry._isStub) return entry;
+  return withDisplayFields(await fetchRemoteEntry(entry), entry);
 }
 
 /* ─── Virtual scroll state ─── */
@@ -144,5 +189,6 @@ const globalSearchState = {
 };
 const TRACE_JSONL_PATH = typeof __TRACE_JSONL_PATH__ !== 'undefined' ? __TRACE_JSONL_PATH__ : '';
 const TRACE_HTML_PATH = typeof __TRACE_HTML_PATH__ !== 'undefined' ? __TRACE_HTML_PATH__ : '';
+const TRACE_RECORDS_API = typeof __TRACE_RECORDS_API__ !== 'undefined' ? __TRACE_RECORDS_API__ : '';
 const CLAUDE_TAP_VERSION = typeof __CLAUDE_TAP_VERSION__ !== 'undefined' ? __CLAUDE_TAP_VERSION__ : '';
 const TRACE_SESSION_EXPORTS = typeof __TRACE_SESSION_EXPORTS__ !== 'undefined' ? __TRACE_SESSION_EXPORTS__ : null;

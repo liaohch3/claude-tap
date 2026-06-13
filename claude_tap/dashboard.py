@@ -51,6 +51,8 @@ _SENSITIVE_KEY_NAMES = {
     "token",
     "xapikey",
 }
+_FORM_KEY_RE = re.compile(r"^[A-Za-z0-9_.\-\[\]]{1,128}$")
+_MAX_TEXT_REDACTION_DEPTH = 8
 
 
 def read_dashboard_template() -> str:
@@ -858,7 +860,7 @@ def _redact_sensitive_value(value: Any, key: str = "") -> Any:
     return value
 
 
-def _redact_sensitive_text(value: str) -> str:
+def _redact_sensitive_text(value: str, depth: int = 0) -> str:
     stripped = value.strip()
     if not stripped:
         return value
@@ -871,35 +873,35 @@ def _redact_sensitive_text(value: str) -> str:
             redacted = _redact_sensitive_value(parsed)
             if redacted != parsed:
                 return json.dumps(redacted, ensure_ascii=False, separators=(",", ":"))
-    redacted_url = _redact_url_query(value)
+    redacted_url = _redact_url_query(value, depth)
     if redacted_url is not None:
         return redacted_url
-    redacted_form = _redact_form_text(value)
+    redacted_form = _redact_form_text(value, depth)
     return value if redacted_form is None else redacted_form
 
 
-def _redact_url_query(value: str) -> str | None:
+def _redact_url_query(value: str, depth: int = 0) -> str | None:
     if "?" not in value:
         return None
     parsed = urlsplit(value)
     if not parsed.query or not _looks_like_url_or_path(value, parsed.path):
         return None
-    redacted_query = _redact_query_string(parsed.query)
+    redacted_query = _redact_query_string(parsed.query, depth)
     if redacted_query is None:
         return None
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, redacted_query, parsed.fragment))
 
 
-def _redact_form_text(value: str) -> str | None:
+def _redact_form_text(value: str, depth: int = 0) -> str | None:
     if "=" not in value:
         return None
     pairs = parse_qsl(value, keep_blank_values=True)
-    if not pairs:
+    if not pairs or not all(_looks_like_form_key(item_key) for item_key, _item_value in pairs):
         return None
     redacted_pairs = [
         (
             item_key,
-            _REDACTED_VALUE if _is_sensitive_key(item_key) else _redact_sensitive_text(item_value),
+            _REDACTED_VALUE if _is_sensitive_key(item_key) else _redact_nested_sensitive_text(item_value, depth),
         )
         for item_key, item_value in pairs
     ]
@@ -908,14 +910,14 @@ def _redact_form_text(value: str) -> str | None:
     return urlencode(redacted_pairs)
 
 
-def _redact_query_string(query: str) -> str | None:
+def _redact_query_string(query: str, depth: int = 0) -> str | None:
     pairs = parse_qsl(query, keep_blank_values=True)
     if not pairs:
         return None
     redacted_pairs = [
         (
             item_key,
-            _REDACTED_VALUE if _is_sensitive_key(item_key) else _redact_sensitive_text(item_value),
+            _REDACTED_VALUE if _is_sensitive_key(item_key) else _redact_nested_sensitive_text(item_value, depth),
         )
         for item_key, item_value in pairs
     ]
@@ -927,6 +929,23 @@ def _redact_query_string(query: str) -> str | None:
 def _looks_like_url_or_path(value: str, path: str) -> bool:
     parsed = urlsplit(value)
     return bool(parsed.scheme or parsed.netloc or value.startswith(("/", "?")) or ("/" in path and "=" not in path))
+
+
+def _looks_like_form_key(key: str) -> bool:
+    return bool(key and _FORM_KEY_RE.fullmatch(key))
+
+
+def _redact_nested_sensitive_text(value: str, depth: int) -> str:
+    if depth >= _MAX_TEXT_REDACTION_DEPTH or not _may_contain_sensitive_text(value):
+        return value
+    return _redact_sensitive_text(value, depth + 1)
+
+
+def _may_contain_sensitive_text(value: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", value.lower())
+    return any(name in normalized for name in _SENSITIVE_KEY_NAMES) or any(
+        marker in normalized for marker in ("token", "secret", "password")
+    )
 
 
 def _is_sensitive_key(key: str) -> bool:

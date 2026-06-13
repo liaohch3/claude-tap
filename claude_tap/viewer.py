@@ -877,14 +877,21 @@ def _first_user_text(messages: list[dict]) -> str:
 
 
 def _extract_metadata(record_json: str) -> dict | None:
-    """Extract sidebar-relevant metadata from a raw JSON record string.
-
-    Returns a lightweight dict with only the fields needed for sidebar
-    rendering, filtering, and search — avoiding full parse of large records.
-    """
+    """Extract sidebar-relevant metadata from a raw JSON record string."""
     try:
         r = json.loads(record_json)
     except (json.JSONDecodeError, TypeError):
+        return None
+    return _extract_metadata_from_record(r)
+
+
+def _extract_metadata_from_record(r: dict) -> dict | None:
+    """Extract sidebar metadata from a raw record without embedding full payloads.
+
+    The returned dict contains only fields needed for sidebar rendering,
+    filtering, and search previews.
+    """
+    if not isinstance(r, dict):
         return None
 
     req = _dict_or_empty(r.get("request"))
@@ -1075,6 +1082,43 @@ def _generate_html_viewer_from_compact_bundle(
         f"const EMBEDDED_TRACE_COMPACT_DATA = {compact_js};\n"
         f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
         f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
+        f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
+    )
+
+    html = _read_viewer_template()
+    html = html.replace(
+        VIEWER_SCRIPT_ANCHOR,
+        f"<script>\n{data_js}</script>\n{VIEWER_SCRIPT_ANCHOR}",
+        1,
+    )
+    html_path.write_text(html, encoding="utf-8")
+
+
+def _generate_html_viewer_from_metadata(
+    metadata: list[dict],
+    html_path: Path,
+    *,
+    display_trace_path: str | Path,
+    display_html_path: str | Path,
+    records_api_path: str | Path,
+) -> None:
+    """Write an online viewer that fetches full records on demand."""
+    if not VIEWER_TEMPLATE_PATH.exists():
+        return
+
+    trace_path_label = str(display_trace_path)
+    html_path_label = str(display_html_path)
+    records_api_label = str(records_api_path)
+    meta_js = json.dumps(metadata, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    jsonl_path_js = json.dumps(trace_path_label)
+    html_path_js = json.dumps(html_path_label)
+    records_api_js = json.dumps(records_api_label)
+    version_js = json.dumps(CLAUDE_TAP_VERSION)
+    data_js = (
+        f"const EMBEDDED_TRACE_META = {meta_js};\n"
+        f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
+        f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
+        f"const __TRACE_RECORDS_API__ = {records_api_js};\n"
         f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
     )
 

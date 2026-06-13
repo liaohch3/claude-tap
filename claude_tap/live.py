@@ -14,7 +14,6 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
-from claude_tap.compact_trace import build_compact_trace_bundle
 from claude_tap.dashboard import (
     build_session_query,
     dashboard_trace_snapshot,
@@ -23,7 +22,7 @@ from claude_tap.dashboard import (
     list_trace_sessions,
     load_trace_session,
     read_dashboard_template,
-    redact_dashboard_records,
+    redact_dashboard_summary,
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
 from claude_tap.shared_dashboard import dashboard_url
@@ -31,8 +30,9 @@ from claude_tap.trace_store import get_trace_store, resolve_db_path
 from claude_tap.viewer import (
     VIEWER_SCRIPT_ANCHOR,
     VIEWER_TEMPLATE_PATH,
+    _extract_metadata_from_record,
     _generate_html_viewer,
-    _generate_html_viewer_from_compact_bundle,
+    _generate_html_viewer_from_metadata,
     _read_viewer_template,
 )
 
@@ -550,11 +550,17 @@ class LiveViewerServer:
                 "log": f"/api/sessions/{quote(session_id)}/export/log",
                 "html": f"/api/sessions/{quote(session_id)}/export/html",
             }
-            _generate_html_viewer_from_compact_bundle(
-                build_compact_trace_bundle(redact_dashboard_records(store.load_records(session_id))),
+            metadata = [
+                redact_dashboard_summary(item)
+                for record in store.load_records(session_id)
+                if (item := _extract_metadata_from_record(record)) is not None
+            ]
+            _generate_html_viewer_from_metadata(
+                metadata,
                 html_path,
                 display_trace_path=export_urls["compact"],
                 display_html_path=f"/dashboard/session/{quote(session_id)}",
+                records_api_path=f"/api/sessions/{quote(session_id)}/records",
             )
             if not html_path.exists():
                 return web.Response(status=500, text="Failed to generate session viewer")

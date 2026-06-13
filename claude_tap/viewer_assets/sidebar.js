@@ -846,8 +846,7 @@ function selectEntry(idx, opts) {
     // Just update sidebar highlight, keep detail as-is
   } else {
     const entry = filtered[idx];
-    const resolved = resolveEntryForDetail(entry);
-    renderDetail(resolved);
+    renderDetailForEntry(entry);
   }
   if (virtualMode) {
     vsScrollToIdx(idx);

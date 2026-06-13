@@ -1029,7 +1029,9 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
             ) as resp:
                 assert resp.status == 200
                 html = await resp.text()
-                assert "EMBEDDED_TRACE_COMPACT_DATA" in html
+                assert "EMBEDDED_TRACE_META" in html
+                assert "const EMBEDDED_TRACE_COMPACT_DATA =" not in html
+                assert f'const __TRACE_RECORDS_API__ = "/api/sessions/{session_id}/records";' in html
                 assert "req_claude" in html
                 assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/compact";' in html
                 assert f'const __TRACE_HTML_PATH__ = "/dashboard/session/{session_id}";' in html
@@ -1170,6 +1172,66 @@ async def test_dashboard_session_detail_redacts_sensitive_display_records(trace_
                 assert "url-secret" in body
                 assert "redirect-secret" in body
                 assert "nested-secret" in body
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_session_html_uses_remote_records_for_long_codex_prompt(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codexapp", proxy_mode="transcript")
+    long_prompt = ("sandbox_permissions=" * 1200) + "done"
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-06-13T09:00:00+00:00",
+            "request_id": "req_codex_app",
+            "turn": 1,
+            "request": {
+                "method": "CODEX_APP_TRANSCRIPT",
+                "path": "/v1/responses",
+                "headers": {"x-codex-app-session-id": "019ec061-b6cd-74b0-abdf-1d51267d1355"},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "developer",
+                            "content": [{"type": "input_text", "text": long_prompt}],
+                        },
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Add Codex App listening"}],
+                        },
+                    ],
+                },
+            },
+            "response": {"status": 200, "body": {"usage": {"input_tokens": 100, "output_tokens": 20}}},
+        },
+    )
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/html") as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert len(html) < 500_000
+                assert "EMBEDDED_TRACE_META" in html
+                assert "__TRACE_RECORDS_API__" in html
+                assert "const EMBEDDED_TRACE_COMPACT_DATA =" not in html
+                assert long_prompt not in html
+                assert "Add Codex App listening" in html
+
+            async with session.get(
+                f"http://127.0.0.1:{port}/api/sessions/{session_id}/records?offset=0&limit=1"
+            ) as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+                assert payload["records"][0]["request"]["body"]["input"][0]["content"][0]["text"] == long_prompt
     finally:
         await server.stop()
 
@@ -1496,6 +1558,10 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 await tab_toggle.click()
                 await page.wait_for_selector("#conversation-tab:not(.hidden) .viewer-frame", timeout=5000)
                 assert await page.locator(".viewer-frame").count() == 1
+                frame = page.frame_locator(".viewer-frame")
+                await frame.locator(".sidebar-item").first.wait_for(timeout=5000)
+                await frame.locator("#detail .section").first.wait_for(timeout=5000)
+                assert not await frame.locator("#drop-zone").is_visible()
                 await page.locator(".viewer-frame").evaluate("(frame) => { frame.dataset.reuseMarker = 'kept'; }")
                 assert await tab_toggle.inner_text() == "Trace"
 
