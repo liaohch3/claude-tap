@@ -236,7 +236,7 @@ claude-tap --tap-client codex -- --full-auto
 <details>
 <summary>Codex App 监听示例</summary>
 
-Codex App 会话会从 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 下的本地 JSONL 文件导入。这个模式不会启动 Codex，也不会创建网络代理；它会保持一个 claude-tap dashboard session，并在 Codex App 完成一轮后追加可查看的记录。
+Codex App 会话会从 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 下的本地 JSONL 文件导入。这个模式不会启动 Codex，也不会创建网络代理；它会保持一个 claude-tap dashboard session，并在 Codex App 运行中或完成后追加可查看的记录。
 
 ```bash
 # 监听本地 Codex App 会话，并在 dashboard 中查看

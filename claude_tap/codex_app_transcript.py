@@ -43,7 +43,12 @@ class _TranscriptParser:
     ) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
 
-        def flush(timestamp: str | None, usage: dict[str, int] | None = None) -> None:
+        def flush(
+            timestamp: str | None,
+            usage: dict[str, int] | None = None,
+            *,
+            status: str = "completed",
+        ) -> None:
             if not self.current_output:
                 self.history_input.extend(self.pending_tool_results)
                 self.pending_tool_results = []
@@ -71,7 +76,7 @@ class _TranscriptParser:
             response_body: dict[str, Any] = {
                 "id": response_id,
                 "object": "response",
-                "status": "completed",
+                "status": status,
                 "model": self.model,
                 "output": _json_clone(self.current_output),
             }
@@ -82,27 +87,28 @@ class _TranscriptParser:
             if self.cli_version:
                 headers["x-codex-version"] = self.cli_version
 
-            records.append(
-                {
-                    "timestamp": self.current_started_at or timestamp or datetime.now(timezone.utc).isoformat(),
-                    "request_id": f"codex_app_{uuid.uuid4().hex[:12]}",
-                    "turn": start_turn + self.response_count - 1,
-                    "duration_ms": 0,
-                    "transport": CODEX_APP_TRANSPORT,
-                    "upstream_base_url": "codex-app://sessions",
-                    "request": {
-                        "method": "CODEX_APP_TRANSCRIPT",
-                        "path": "/v1/responses",
-                        "headers": headers,
-                        "body": request_body,
-                    },
-                    "response": {
-                        "status": 200,
-                        "headers": {},
-                        "body": response_body,
-                    },
-                }
-            )
+            record: dict[str, Any] = {
+                "timestamp": self.current_started_at or timestamp or datetime.now(timezone.utc).isoformat(),
+                "request_id": f"codex_app_{uuid.uuid4().hex[:12]}",
+                "turn": start_turn + self.response_count - 1,
+                "duration_ms": 0,
+                "transport": CODEX_APP_TRANSPORT,
+                "upstream_base_url": "codex-app://sessions",
+                "request": {
+                    "method": "CODEX_APP_TRANSCRIPT",
+                    "path": "/v1/responses",
+                    "headers": headers,
+                    "body": request_body,
+                },
+                "response": {
+                    "status": 200,
+                    "headers": {},
+                    "body": response_body,
+                },
+            }
+            if status != "completed":
+                record["capture"] = {"codex_app_partial": True}
+            records.append(record)
             self.history_input.extend(_json_clone(self.current_output))
             self.history_input.extend(self.pending_tool_results)
             self.current_output = []
@@ -163,7 +169,7 @@ class _TranscriptParser:
                 self.current_output.append(_json_clone(payload))
 
         if include_incomplete:
-            flush(None)
+            flush(None, status="in_progress")
 
         return records
 
@@ -407,7 +413,7 @@ async def watch_codex_app_transcripts(
     poll_interval: float = 1.0,
     discovery_interval: float = CODEX_APP_TRANSCRIPT_DISCOVERY_INTERVAL,
 ) -> None:
-    """Poll Codex App session files and append completed transcript records."""
+    """Poll Codex App session files and append live transcript records."""
     state: dict[Path, _TranscriptCursor] = {}
     transcript_paths: list[Path] = []
     last_discovery = 0.0
@@ -426,7 +432,7 @@ async def watch_codex_app_transcripts(
                 since=since,
                 home=home,
                 state=state,
-                include_incomplete=False,
+                include_incomplete=True,
                 transcript_paths=transcript_paths,
             )
             await asyncio.sleep(poll_interval)

@@ -331,6 +331,61 @@ async def test_import_codex_app_transcripts_appends_only_new_completed_records(t
 
 
 @pytest.mark.asyncio
+async def test_import_codex_app_transcripts_can_append_live_incomplete_records(trace_db, tmp_path: Path) -> None:
+    transcript = tmp_path / ".codex" / "sessions" / "2026" / "06" / "07" / "rollout.jsonl"
+    rows = _session_rows()
+    _write_jsonl(transcript, rows[:5])
+
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    session_id = store.create_session(client="codexapp", proxy_mode="transcript")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "codexapp", "proxy_mode": "transcript"})
+    state = {}
+
+    imported = await import_codex_app_transcripts(
+        writer,
+        since=0,
+        home=tmp_path,
+        state=state,
+        include_incomplete=True,
+    )
+    assert imported == 1
+
+    imported = await import_codex_app_transcripts(
+        writer,
+        since=0,
+        home=tmp_path,
+        state=state,
+        include_incomplete=True,
+    )
+    assert imported == 0
+
+    _write_jsonl(transcript, rows[:8])
+    imported = await import_codex_app_transcripts(
+        writer,
+        since=0,
+        home=tmp_path,
+        state=state,
+        include_incomplete=True,
+    )
+    writer.close()
+
+    assert imported == 1
+    records = store.load_records(session_id)
+    assert len(records) == 2
+    assert records[0]["response"]["body"]["status"] == "in_progress"
+    assert records[0]["capture"] == {
+        "client": "codexapp",
+        "proxy_mode": "transcript",
+        "codex_app_partial": True,
+    }
+    assert records[0]["response"]["body"]["output"][0]["content"][0]["text"] == "I will inspect it."
+    assert records[1]["response"]["body"]["status"] == "completed"
+    assert records[1]["response"]["body"]["usage"]["output_tokens"] == 5
+
+
+@pytest.mark.asyncio
 async def test_import_codex_app_transcripts_resets_state_when_file_shrinks(trace_db, tmp_path: Path) -> None:
     transcript = tmp_path / ".codex" / "sessions" / "2026" / "06" / "07" / "rollout.jsonl"
     _write_jsonl(transcript, _session_rows()[:8])
@@ -384,4 +439,5 @@ async def test_watch_codex_app_transcripts_flushes_incomplete_record_on_cancel(t
 
     records = store.load_records(session_id)
     assert len(records) == 1
+    assert records[0]["response"]["body"]["status"] == "in_progress"
     assert records[0]["response"]["body"]["output"][0]["content"][0]["text"] == "I will inspect it."

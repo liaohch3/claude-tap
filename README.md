@@ -237,7 +237,7 @@ claude-tap --tap-client codex -- --full-auto
 <details>
 <summary>Codex App listener examples</summary>
 
-Codex App sessions are imported from local JSONL files under `CODEX_HOME/sessions` or `~/.codex/sessions`. This mode does not launch Codex or create a network proxy; it keeps a claude-tap dashboard session open and appends completed Codex App turns as they appear.
+Codex App sessions are imported from local JSONL files under `CODEX_HOME/sessions` or `~/.codex/sessions`. This mode does not launch Codex or create a network proxy; it keeps a claude-tap dashboard session open and appends in-progress and completed Codex App records as they appear.
 
 ```bash
 # Listen to local Codex App sessions and inspect them in the dashboard
