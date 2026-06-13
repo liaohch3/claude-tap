@@ -50,6 +50,7 @@ from claude_tap.cli_update import (
     _build_update_command,
     _check_pypi_version,
     _detect_installer,
+    _maybe_start_background_update,
     _start_background_update,
     _version_tuple,
     parse_update_args,
@@ -113,6 +114,7 @@ _CLI_COMPAT_EXPORTS = (
     _read_settings_env_base_url,
     _selected_codex_provider_base_url,
     _settings_arg,
+    _start_background_update,
     _toml_dotted_key_segment,
     parse_update_args,
 )
@@ -231,9 +233,9 @@ async def async_main(args: argparse.Namespace):
 
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
+    dashboard_host = args.host
+    dashboard_port = resolve_dashboard_port(args.live_port)
     if args.live_viewer:
-        dashboard_host = args.host
-        dashboard_port = resolve_dashboard_port(args.live_port)
         try:
             dashboard_url_value, spawned = await ensure_shared_dashboard(
                 host=dashboard_host,
@@ -359,10 +361,10 @@ async def async_main(args: argparse.Namespace):
                     latest = await _check_pypi_version()
                     if latest and _version_tuple(latest) > _version_tuple(__version__):
                         print(f"⬆️  Update available: {__version__} → {latest}")
-                        if not args.no_auto_update:
-                            installer = _detect_installer()
-                            _start_background_update(installer)
-                            print(f"   Downloading update in background ({installer})...")
+                        _maybe_start_background_update(
+                            no_auto_update=args.no_auto_update,
+                            dashboard_stop_command=_dashboard_stop_command(dashboard_host, dashboard_port),
+                        )
                 except Exception:
                     pass
 
@@ -525,12 +527,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # Listen to local Codex App session JSONL files under CODEX_HOME / ~/.codex\n"
             "  claude-tap --tap-client codexapp\n"
             "\n"
-            "kimi cli:\n"
-            "  # Uses KIMI_BASE_URL and forwards to Kimi Code by default\n"
+            "kimi cli (legacy kimi-cli; uses shell KIMI_BASE_URL):\n"
             "  claude-tap --tap-client kimi\n"
             "  claude-tap --tap-client kimi -- --thinking\n"
-            "  # Use Moonshot Open Platform instead of Kimi Code\n"
             "  claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1\n"
+            "\n"
+            "kimi-code cli (MoonshotAI/kimi-code; patches ~/.kimi-code/config.toml via sandbox):\n"
+            "  claude-tap --tap-client kimi-code\n"
+            "  claude-tap --tap-client kimi-code -- --thinking\n"
+            "  claude-tap --tap-client kimi-code --tap-target https://api.moonshot.ai/v1\n"
             "\n"
             "gemini cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client gemini -- -p "hello"\n'
@@ -637,7 +642,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex/kimi/codebuddy, "
+            "Default depends on the client: 'reverse' for claude/codex/kimi/kimi-code/openclaw/codebuddy, "
             "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder. "
             "codexapp is transcript-only and does not use this option."
         ),
@@ -760,6 +765,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.target is None:
         if args.client == "codex":
             args.target = _detect_codex_target(claude_args)
+        elif args.client == "kimi-code":
+            args.target = TARGET_DETECTORS["kimi-code"](claude_args)
         elif args.client == "openclaw":
             args.target = TARGET_DETECTORS["openclaw"](claude_args)
         else:

@@ -28,6 +28,7 @@ CLIENT_LABELS = {
     "gemini": "Gemini",
     "hermes": "Hermes",
     "kimi": "Kimi",
+    "kimi-code": "Kimi Code",
     "opencode": "OpenCode",
     "pi": "Pi",
     "qoder": "Qoder",
@@ -192,7 +193,7 @@ def merge_record_into_summary(
         "proxy_mode": row["proxy_mode"] or "",
     }
     if summary is None or summary.get("id") != row["id"]:
-        return _summarize_session(
+        initial_summary = _summarize_session(
             session_id=row["id"],
             date_key=row["date_key"] or "legacy",
             legacy_rel_path=row["legacy_rel_path"],
@@ -204,6 +205,10 @@ def merge_record_into_summary(
             is_current=True,
             record_count=record_count,
         )
+        if _is_auxiliary_status_error_record(record):
+            initial_summary["status"] = "active"
+            initial_summary["error"] = ""
+        return initial_summary
 
     summary = dict(summary)
     summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
@@ -239,11 +244,10 @@ def merge_record_into_summary(
     if not summary.get("agent"):
         summary["agent"] = _infer_agent([record], manifest_entry)
         summary["agent_key"] = _agent_key(summary["agent"])
-    status_code = _response_status(record)
-    if status_code >= 400 or _record_error(record):
+    if _is_session_error_record(record):
         summary["status"] = "error"
         summary["error"] = summary.get("error") or _first_error([record])
-    else:
+    elif summary.get("status") != "error":
         summary["status"] = "active"
     return summary
 
@@ -309,10 +313,11 @@ def _session_summary_from_row(
         except json.JSONDecodeError:
             cached = None
         if isinstance(cached, dict) and (not cached.get("id") or cached.get("id") == row["id"]):
+            needs_error_repair = row["status"] == "error" and not cached.get("error")
             if (
                 repair_stale_summary
-                and not is_dashboard_summary_current(cached, row["id"])
                 and row["status"] != "active"
+                and (not is_dashboard_summary_current(cached, row["id"]) or needs_error_repair)
             ):
                 boundary_records = store.load_boundary_records(row["id"])
                 if boundary_records:
@@ -345,6 +350,23 @@ def _session_summary_from_row(
         return summary
 
     if not allow_record_scan:
+        if row["status"] == "error":
+            records = store.load_records(row["id"])
+            if records:
+                summary = _summarize_session(
+                    session_id=row["id"],
+                    date_key=row["date_key"] or "legacy",
+                    legacy_rel_path=row["legacy_rel_path"],
+                    records=records,
+                    manifest_entry=manifest_entry,
+                    status=row["status"] or "error",
+                    started_at=row["started_at"] or "",
+                    updated_at=row["updated_at"] or "",
+                    is_current=False,
+                    record_count=record_count,
+                )
+                store.store_summary(row["id"], summary)
+                return summary
         return _minimal_session_summary_from_row(row)
 
     records = store.load_records(row["id"])
@@ -491,7 +513,6 @@ def _summarize_session(
     agent = _infer_agent(records, manifest_entry)
     input_tokens = output_tokens = cache_read_tokens = cache_create_tokens = 0
     models: dict[str, int] = {}
-    statuses: list[int] = []
     duration_ms = 0
     turns: set[int] = set()
 
@@ -504,15 +525,16 @@ def _summarize_session(
         model = _record_model(record)
         if model:
             models[model] = models.get(model, 0) + 1
-        status_code = _response_status(record)
-        if status_code:
-            statuses.append(status_code)
         duration_ms += _duration_ms(record)
         turn = record.get("turn")
         if isinstance(turn, int):
             turns.add(turn)
 
-    has_error = any(code >= 400 for code in statuses) or any(_record_error(record) for record in records)
+    error_records = [record for record in records if _is_session_error_record(record)]
+    auxiliary_error_records = [record for record in records if _is_auxiliary_status_error_record(record)]
+    has_error = bool(error_records) or (
+        bool(auxiliary_error_records) and not any(_is_successful_primary_record(record) for record in records)
+    )
     if has_error:
         resolved_status = "error"
     elif is_current and records:
@@ -522,6 +544,7 @@ def _summarize_session(
     else:
         resolved_status = status if status in {"active", "complete", "error", "empty"} else "complete"
 
+    error_display_records = error_records or (auxiliary_error_records if has_error else [])
     preview_records = _preview_records(records)
     count = record_count if record_count is not None else len(records)
     return {
@@ -547,7 +570,7 @@ def _summarize_session(
         "model": _top_key(models) or _record_model(last_record) or "unknown",
         "first_user": _first_user_preview(preview_records),
         "last_response": _last_response_preview(preview_records),
-        "error": _first_error(records),
+        "error": _first_error(error_display_records),
     }
 
 
@@ -813,6 +836,8 @@ def _is_primary_model_record(record: dict[str, Any]) -> bool:
 
 def _is_auxiliary_record(record: dict[str, Any]) -> bool:
     path = _record_path(record).lower()
+    if _is_model_probe_path(path):
+        return True
     auxiliary_fragments = (
         "/token",
         "oauth",
@@ -830,6 +855,31 @@ def _is_auxiliary_record(record: dict[str, Any]) -> bool:
         "fetchuserinfo",
     )
     return any(fragment in path for fragment in auxiliary_fragments)
+
+
+def _is_model_probe_path(path: str) -> bool:
+    clean_path = path.split("?", 1)[0].rstrip("/")
+    if clean_path in {"/models", "/v1/models", "/v1alpha/models", "/v1beta/models"}:
+        return True
+    match = re.fullmatch(r"/(?:v1/)?models/([^/:]+)", clean_path)
+    return match is not None
+
+
+def _is_session_error_record(record: dict[str, Any]) -> bool:
+    if _record_error(record):
+        return True
+    status_code = _response_status(record)
+    return status_code >= 400 and not _is_auxiliary_record(record)
+
+
+def _is_auxiliary_status_error_record(record: dict[str, Any]) -> bool:
+    status_code = _response_status(record)
+    return status_code >= 400 and _is_auxiliary_record(record)
+
+
+def _is_successful_primary_record(record: dict[str, Any]) -> bool:
+    status_code = _response_status(record)
+    return 200 <= status_code < 400 and not _is_auxiliary_record(record)
 
 
 def _first_user_preview(records: list[dict[str, Any]]) -> str:
