@@ -1,0 +1,1819 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat View - Claude Tap</title>
+<style>
+/* ========== Reset & Base ========== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #ededed;
+  color: #1a1a1a;
+  min-height: 100vh;
+  line-height: 1.6;
+}
+a { color: inherit; text-decoration: none; }
+
+/* ========== Overview Bar ========== */
+/* Highlight flash for nav jump */
+@keyframes highlightFlash {
+  0% { background-color: rgba(59, 130, 246, 0.15); }
+  100% { background-color: transparent; }
+}
+.highlight-flash { animation: highlightFlash 2s ease-out; }
+[data-theme="dark"] .highlight-flash {
+  animation-name: highlightFlashDark;
+}
+@keyframes highlightFlashDark {
+  0% { background-color: rgba(88, 166, 255, 0.2); }
+  100% { background-color: transparent; }
+}
+
+.overview-bar {
+  position: sticky; top: 0; z-index: 100;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 12px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.06);
+  font-size: 13px;
+}
+.overview-bar .back-link {
+  font-size: 18px; font-weight: 700; color: #3b82f6;
+  margin-right: 8px; white-space: nowrap;
+  text-decoration: none; cursor: pointer;
+}
+.overview-bar .back-link:hover { color: #2563eb; }
+.overview-bar .agent-name {
+  font-weight: 700; font-size: 14px; white-space: nowrap;
+}
+.overview-bar .model-name {
+  color: #6b7280; font-size: 12px;
+  background: #f3f4f6; padding: 2px 8px; border-radius: 10px;
+  white-space: nowrap;
+}
+.overview-bar .status-badge {
+  font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 10px;
+  text-transform: uppercase; white-space: nowrap;
+}
+.overview-bar .status-badge.live { background: #22c55e; color: #fff; }
+.overview-bar .status-badge.ok { background: #22c55e; color: #fff; }
+.overview-bar .status-badge.complete { background: #22c55e; color: #fff; }
+.overview-bar .status-badge.error { background: #ef4444; color: #fff; }
+.overview-bar .status-badge.active { background: #f59e0b; color: #fff; }
+.overview-bar .status-badge.empty { background: #9ca3af; color: #fff; }
+.overview-bar .token-info {
+  margin-left: auto; display: flex; gap: 14px; flex-wrap: wrap; white-space: nowrap;
+  font-size: 12px; color: #6b7280;
+}
+.overview-bar .token-info span { white-space: nowrap; }
+.overview-bar .token-info .val { font-weight: 600; color: #374151; }
+
+/* ========== Main Layout ========== */
+.main-layout {
+  display: flex; flex: 1;
+  min-height: 0;
+}
+
+/* ========== Sidebar Nav ========== */
+.sidebar {
+  width: 350px; flex-shrink: 0;
+  position: sticky; top: 48px;
+  align-self: flex-start;
+  height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: #f5f5f5;
+  border-right: 1px solid #e0e0e0;
+  padding: 12px 0;
+  z-index: 50;
+}
+.sidebar-title {
+  font-size: 12px; font-weight: 700; color: #9ca3af;
+  text-transform: uppercase; letter-spacing: 1px;
+  padding: 0 14px 8px 14px;
+}
+.nav-item {
+  display: block;
+  padding: 6px 14px;
+  font-size: 13px; color: #4b5563;
+  text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  line-height: 1.4;
+}
+.nav-item:hover { background: #e5e7eb; }
+.nav-item.active {
+  background: #dbeafe;
+  border-left-color: #3b82f6;
+  color: #1e40af;
+  font-weight: 600;
+}
+.nav-item .nav-turn {
+  font-size: 10px; color: #9ca3af; margin-right: 4px;
+  font-weight: 400;
+}
+.nav-num {
+  display: inline-block; min-width: 22px; text-align: center;
+  font-size: 10px; font-weight: 600; color: #6b7280;
+  background: #e5e7eb; border: 1px solid #d1d5db;
+  border-radius: 4px; padding: 0 4px; line-height: 16px;
+  margin-right: 4px;
+}
+[data-theme="dark"] .nav-num {
+  color: #c9d1d9; background: #21262d; border-color: #30363d;
+}
+.sidebar-toggle {
+  display: none;
+  position: fixed; left: 8px; bottom: 20px; z-index: 200;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: #3b82f6; color: #fff; border: none;
+  font-size: 16px; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  align-items: center; justify-content: center;
+}
+
+/* ========== Chat Area ========== */
+.chat-area {
+  flex: 1; max-width: 860px;
+  padding: 20px 16px 40px 16px;
+  margin: 0 auto;
+}
+
+/* ========== Turn Divider ========== */
+.turn-divider {
+  text-align: center;
+  margin: 28px 0 20px 0;
+}
+.turn-divider .pill {
+  display: inline-block;
+  padding: 3px 14px;
+  font-size: 11px; color: #9ca3af;
+  background: rgba(0,0,0,0.04);
+  border-radius: 10px;
+  letter-spacing: 0.5px;
+}
+
+/* ========== Message Row ========== */
+.msg-row {
+  position: relative;
+  display: flex; flex-direction: column;
+  margin-bottom: 10px;
+  scroll-margin-top: 60px;
+}
+.msg-row.user { align-items: flex-end; }
+.msg-row.assistant { align-items: flex-start; }
+.msg-row.tool_result { align-items: flex-end; }
+
+/* ========== Role Label ========== */
+.role-label {
+  font-size: 11px; font-weight: 600;
+  padding: 1px 8px; border-radius: 8px;
+  margin-bottom: 4px;
+  display: inline-block; letter-spacing: 0.3px;
+}
+.msg-row.user .role-label { background: #bbf7d0; color: #166534; }
+.msg-row.assistant .role-label { background: #bfdbfe; color: #1e40af; }
+.msg-row.thinking .role-label { background: #ede9fe; color: #6d28d9; }
+
+/* ========== Bubble Base ========== */
+.bubble {
+  position: relative;
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  transition: max-height 0.35s ease;
+}
+.msg-row.user .bubble {
+  background: #95ec69;
+  color: #1a1a1a;
+  border-top-right-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+.msg-row.assistant .bubble {
+  background: #fff;
+  color: #1a1a1a;
+  border-top-left-radius: 2px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+/* ========== Bubble Arrows ========== */
+.msg-row.user .bubble::after {
+  content: "";
+  position: absolute; top: 0; right: -6px;
+  width: 0; height: 0;
+  border-left: 7px solid #95ec69;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+}
+.msg-row.assistant .bubble::before {
+  content: "";
+  position: absolute; top: 0; left: -6px;
+  width: 0; height: 0;
+  border-right: 7px solid #fff;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+}
+
+/* ========== Collapsed & Folding ========== */
+.bubble.collapsed {
+  max-height: 80px;
+  overflow: hidden;
+  position: relative;
+}
+/* Gradient fade at bottom when collapsed — pure CSS, no button inside */
+.bubble.collapsed::after {
+  content: "";
+  position: absolute; bottom: 0; left: 0; right: 0;
+  height: 36px;
+  pointer-events: none;
+  z-index: 1;
+}
+.msg-row.user .bubble.collapsed::after      { background: linear-gradient(transparent, #95ec69); }
+.msg-row.assistant .bubble.collapsed::after  { background: linear-gradient(transparent, #fff); }
+.msg-row.thinking .bubble.collapsed::after   { background: linear-gradient(transparent, #f5f3ff); }
+.msg-row.tool_use .bubble.collapsed::after   { background: linear-gradient(transparent, #eff6ff); }
+.msg-row.tool_result .bubble.collapsed::after { background: linear-gradient(transparent, #d4edda); }
+
+/* Label row — holds role label + fold toggle button */
+.label-row {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 4px;
+}
+.label-row .role-label { margin-bottom: 0; }
+.request-id {
+  font-size: 10px; font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  color: #9ca3af; margin-left: 8px;
+}
+[data-theme="dark"] .request-id { color: #6b7280; }
+/* Fold toggle button — always at top, visible without scrolling */
+.fold-toggle {
+  font-size: 11px; font-weight: 600;
+  color: #3b82f6;
+  background: transparent;
+  border: 1px solid #bfdbfe;
+  cursor: pointer;
+  padding: 1px 8px; border-radius: 10px;
+  transition: background 0.15s;
+}
+.fold-toggle:hover { background: #eff6ff; }
+
+/* ========== Expanded Float ========== */
+.bubble.expanded {
+  position: absolute;
+  max-height: none;
+  overflow: visible;
+  z-index: 10;
+}
+/* 还原左右对齐 */
+.msg-row.user .bubble.expanded,
+.msg-row.tool_result .bubble.expanded {
+  right: 0;
+}
+.msg-row.assistant .bubble.expanded,
+.msg-row.thinking .bubble.expanded,
+.msg-row.tool_use .bubble.expanded {
+  left: 0;
+}
+
+/* Raw JSON modal */
+.raw-btn {
+  font-size: 10px; font-weight: 700;
+  color: #9ca3af; background: transparent;
+  border: 1px solid #e5e7eb;
+  cursor: pointer; padding: 1px 6px; border-radius: 8px;
+  transition: all 0.15s;
+}
+.raw-btn:hover { color: #3b82f6; border-color: #3b82f6; background: #eff6ff; }
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+  animation: fadeIn 0.15s ease;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.modal-box {
+  background: #fff; border-radius: 12px;
+  width: min(90vw, 820px); max-height: 85vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+  animation: slideUp 0.2s ease;
+}
+@keyframes slideUp { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid #e5e7eb;
+  font-size: 14px; font-weight: 700; color: #374151;
+}
+.modal-close {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: none; background: #f3f4f6; color: #6b7280;
+  font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.modal-close:hover { background: #e5e7eb; color: #374151; }
+.modal-body {
+  padding: 14px 18px; overflow-y: auto; flex: 1;
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+  color: #374151; background: #fafafa;
+}
+.modal-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid #e5e7eb;
+  padding: 0 18px; background: #fafafa;
+}
+.modal-tab {
+  padding: 10px 16px; font-size: 13px; font-weight: 500;
+  border: none; background: transparent; color: #6b7280;
+  cursor: pointer; border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+.modal-tab:hover { color: #374151; }
+.modal-tab.active { color: #3b82f6; border-bottom-color: #3b82f6; font-weight: 600; }
+.modal-tab-body { display: none; }
+.modal-tab-body.active { display: block; }
+
+/* ========== Markdown Tab (assistant bubble) ========== */
+.md-tabs {
+  display: flex; gap: 4px; margin-bottom: 6px;
+  border-bottom: 1px solid #e5e7eb; padding-bottom: 4px;
+}
+.md-tab {
+  font-size: 11px; font-weight: 500;
+  padding: 2px 10px; border-radius: 8px;
+  border: 1px solid transparent; background: transparent;
+  color: #9ca3af; cursor: pointer;
+  transition: all 0.15s;
+}
+.md-tab:hover { color: #374151; background: #f3f4f6; }
+.md-tab.active { color: #3b82f6; background: #dbeafe; border-color: #bfdbfe; font-weight: 600; }
+.md-body { display: none; }
+.md-body.active { display: block; }
+.md-raw {
+  white-space: pre-wrap; word-break: break-word;
+  font-size: 14px; line-height: 1.65;
+}
+.md-rendered { font-size: 14px; line-height: 1.7; }
+.md-rendered h1, .md-rendered h2, .md-rendered h3, .md-rendered h4 {
+  font-weight: 700; margin: 12px 0 6px 0; line-height: 1.3;
+}
+.md-rendered h1 { font-size: 1.3em; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+.md-rendered h2 { font-size: 1.15em; }
+.md-rendered h3 { font-size: 1.05em; }
+.md-rendered h4 { font-size: 1em; color: #6b7280; }
+.md-rendered p { margin: 4px 0 8px 0; }
+.md-rendered p:last-child { margin-bottom: 0; }
+.md-rendered code {
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 0.88em; background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 4px;
+}
+.md-rendered pre {
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 0.82em; background: #f6f8fa; border: 1px solid #e5e7eb;
+  border-radius: 6px; padding: 10px 12px; overflow-x: auto;
+  margin: 8px 0; line-height: 1.5; white-space: pre;
+}
+.md-rendered ul, .md-rendered ol { padding-left: 20px; margin: 6px 0; }
+.md-rendered li { margin: 2px 0; }
+.md-rendered blockquote {
+  border-left: 3px solid #d1d5db; padding-left: 10px;
+  color: #6b7280; margin: 8px 0;
+}
+.md-rendered a { color: #3b82f6; text-decoration: underline; }
+.md-rendered hr { border: none; border-top: 1px solid #e5e7eb; margin: 12px 0; }
+.md-rendered strong { font-weight: 700; }
+.md-rendered em { font-style: italic; }
+.md-rendered table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 0.9em; }
+.md-rendered th, .md-rendered td {
+  border: 1px solid #e5e7eb; padding: 5px 8px; text-align: left;
+}
+.md-rendered th { background: #f3f4f6; font-weight: 600; }
+.md-rendered tr:nth-child(even) { background: #fafafa; }
+
+/* Dark mode modal */
+[data-theme="dark"] .raw-btn { border-color: #30363d; color: #8b949e; }
+[data-theme="dark"] .raw-btn:hover { color: #58a6ff; border-color: #58a6ff; background: #1e3a5f; }
+[data-theme="dark"] .modal-overlay { background: rgba(0,0,0,0.7); }
+[data-theme="dark"] .modal-box { background: #161b22; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+[data-theme="dark"] .modal-header { border-bottom-color: #30363d; color: #c9d1d9; }
+[data-theme="dark"] .modal-close { background: #21262d; color: #8b949e; }
+[data-theme="dark"] .modal-close:hover { background: #30363d; color: #c9d1d9; }
+[data-theme="dark"] .modal-body { background: #0d1117; color: #c9d1d9; }
+[data-theme="dark"] .modal-tabs { background: #0d1117; border-bottom-color: #30363d; }
+[data-theme="dark"] .modal-tab { color: #8b949e; }
+[data-theme="dark"] .modal-tab:hover { color: #c9d1d9; }
+[data-theme="dark"] .modal-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+
+/* JSON Tree Viewer */
+.json-tree { word-break: break-word; white-space: normal; }
+.json-node-header { cursor: pointer; user-select: none; }
+.json-node-header:hover { background: rgba(0,0,0,0.03); }
+.json-toggle { display: inline-block; width: 16px; font-size: 10px; color: #9ca3af; flex-shrink: 0; }
+.json-summary { color: #9ca3af; font-size: 11px; margin-left: 6px; font-style: italic; }
+.json-node-children { padding-left: 16px; border-left: 1px solid #e5e7eb; margin-left: 7px; }
+.json-close { padding-left: 7px; }
+.json-key { color: #881391; }
+.json-string { color: #0a7b3c; }
+.json-number { color: #175fcf; }
+.json-boolean { color: #c45b00; }
+.json-null { color: #9ca3af; font-style: italic; }
+.json-empty { color: #9ca3af; }
+
+[data-theme="dark"] .json-node-header:hover { background: rgba(255,255,255,0.04); }
+[data-theme="dark"] .json-node-children { border-left-color: #30363d; }
+[data-theme="dark"] .json-key { color: #d2a8ff; }
+[data-theme="dark"] .json-string { color: #7ee787; }
+[data-theme="dark"] .json-number { color: #79c0ff; }
+[data-theme="dark"] .json-boolean { color: #ffa657; }
+
+/* ========== Tool Use Bubble ========== */
+.msg-row.tool_use .bubble {
+  background: #eff6ff;
+  color: #1a1a1a;
+  border-left: 3px solid #3b82f6;
+  border-top-left-radius: 2px;
+  border-top-right-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 13px;
+}
+.msg-row.tool_use .role-label { background: #dbeafe; color: #1e40af; }
+/* ========== Tool Result Bubble ========== */
+.msg-row.tool_result .bubble {
+  background: #d4edda;
+  color: #1a1a1a;
+  border-top-right-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 13px;
+}
+.msg-row.tool_result .bubble::after {
+  content: "";
+  position: absolute; top: 0; right: -6px;
+  width: 0; height: 0;
+  border-left: 7px solid #d4edda;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+}
+.msg-row.tool_result .role-label { background: #c6f6d5; color: #22543d; }
+/* ========== Thinking Bubble ========== */
+.msg-row.thinking .bubble {
+  background: #f5f3ff;
+  color: #1a1a1a;
+  border-left: 3px solid #8b5cf6;
+  border-top-left-radius: 2px;
+  border-top-right-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+/* ========== Loading / Empty / Error ========== */
+.state-msg {
+  text-align: center; margin-top: 80px;
+  font-size: 15px; color: #9ca3af;
+}
+.state-msg .spinner {
+  display: inline-block; width: 28px; height: 28px;
+  border: 3px solid #e5e7eb; border-top-color: #3b82f6;
+  border-radius: 50%; animation: spin 0.7s linear infinite;
+  margin-bottom: 10px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.state-msg .err-text { color: #ef4444; }
+
+/* ========== Dark Mode ========== */
+[data-theme="dark"] body {
+  background: #0d1117;
+  color: #c9d1d9;
+}
+[data-theme="dark"] .overview-bar {
+  background: #161b22;
+  border-bottom-color: #30363d;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.3);
+}
+[data-theme="dark"] .overview-bar .model-name {
+  color: #8b949e; background: #21262d;
+}
+[data-theme="dark"] .overview-bar .token-info { color: #8b949e; }
+[data-theme="dark"] .overview-bar .token-info .val { color: #c9d1d9; }
+[data-theme="dark"] .msg-row.user .bubble {
+  background: #1a5c2a; color: #e6e6e6;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+[data-theme="dark"] .msg-row.assistant .bubble {
+  background: #161b22; color: #c9d1d9;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+[data-theme="dark"] .msg-row.user .bubble::after {
+  border-left-color: #1a5c2a;
+}
+[data-theme="dark"] .msg-row.assistant .bubble::before {
+  border-right-color: #161b22;
+}
+[data-theme="dark"] .msg-row.user .bubble.collapsed::after      { background: linear-gradient(transparent, #1a5c2a); }
+[data-theme="dark"] .msg-row.assistant .bubble.collapsed::after  { background: linear-gradient(transparent, #161b22); }
+[data-theme="dark"] .msg-row.thinking .bubble.collapsed::after   { background: linear-gradient(transparent, #1e1b2e); }
+[data-theme="dark"] .msg-row.tool_use .bubble.collapsed::after   { background: linear-gradient(transparent, #0f1b2d); }
+[data-theme="dark"] .msg-row.tool_result .bubble.collapsed::after { background: linear-gradient(transparent, #0d2818); }
+[data-theme="dark"] .fold-toggle { border-color: #30363d; color: #58a6ff; }
+[data-theme="dark"] .fold-toggle:hover { background: #1e3a5f; }
+[data-theme="dark"] .msg-row.tool_use .bubble {
+  background: #0f1b2d;
+  color: #c9d1d9;
+  border-left-color: #3b82f6;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+[data-theme="dark"] .msg-row.tool_use .role-label { background: #1e3a5f; color: #93c5fd; }
+[data-theme="dark"] .msg-row.tool_result .bubble {
+  background: #0d2818;
+  color: #c9d1d9;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+[data-theme="dark"] .msg-row.tool_result .bubble::after {
+  border-left-color: #0d2818;
+}
+[data-theme="dark"] .msg-row.tool_result .role-label { background: #1a3a25; color: #6ee7b7; }
+[data-theme="dark"] .msg-row.thinking .bubble {
+  background: #1e1b2e;
+  color: #c9d1d9;
+  border-left-color: #7c3aed;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+[data-theme="dark"] .msg-row.user .role-label { background: #1a5c2a; color: #4ade80; }
+[data-theme="dark"] .msg-row.assistant .role-label { background: #1e3a5f; color: #93c5fd; }
+[data-theme="dark"] .msg-row.thinking .role-label { background: #3b1f6e; color: #c4b5fd; }
+[data-theme="dark"] .turn-divider .pill {
+  color: #6e7681; background: rgba(255,255,255,0.04);
+}
+[data-theme="dark"] .state-msg .spinner { border-color: #30363d; border-top-color: #58a6ff; }
+[data-theme="dark"] .sidebar {
+  background: #161b22;
+  border-right-color: #30363d;
+}
+[data-theme="dark"] .nav-item { color: #8b949e; }
+[data-theme="dark"] .nav-item:hover { background: #21262d; }
+[data-theme="dark"] .nav-item.active {
+  background: #0d2137;
+  border-left-color: #58a6ff;
+  color: #79c0ff;
+}
+[data-theme="dark"] .md-tab:hover { color: #c9d1d9; background: #21262d; }
+[data-theme="dark"] .md-tab.active { color: #58a6ff; background: #0d2137; border-color: #1e3a5f; }
+[data-theme="dark"] .md-raw { color: #c9d1d9; }
+[data-theme="dark"] .md-rendered { color: #c9d1d9; }
+[data-theme="dark"] .md-rendered h1 { border-bottom-color: #30363d; }
+[data-theme="dark"] .md-rendered h4 { color: #8b949e; }
+[data-theme="dark"] .md-rendered code { background: rgba(255,255,255,0.08); }
+[data-theme="dark"] .md-rendered pre { background: #161b22; border-color: #30363d; }
+[data-theme="dark"] .md-rendered blockquote { border-left-color: #30363d; color: #8b949e; }
+[data-theme="dark"] .md-rendered a { color: #58a6ff; }
+[data-theme="dark"] .md-rendered hr { border-top-color: #30363d; }
+[data-theme="dark"] .md-rendered th { background: #21262d; }
+[data-theme="dark"] .md-rendered th, [data-theme="dark"] .md-rendered td { border-color: #30363d; }
+[data-theme="dark"] .md-rendered tr:nth-child(even) { background: #161b22; }
+[data-theme="dark"] .sidebar-toggle { background: #58a6ff; color: #0d1117; }
+
+/* ========== New Message Notice ========== */
+.new-msg-notice {
+  position: fixed; bottom: 24px; right: 24px;
+  z-index: 300;
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 14px;
+  background: #3b82f6; color: #fff;
+  border: none; border-radius: 20px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(59,130,246,0.35);
+  animation: noticePulse 1.6s ease infinite;
+  transition: transform 0.15s;
+}
+.new-msg-notice:hover { transform: scale(1.05); }
+.new-msg-notice .notice-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #fff;
+  animation: noticeDot 0.6s ease alternate infinite;
+}
+@keyframes noticePulse {
+  0%, 100% { box-shadow: 0 4px 16px rgba(59,130,246,0.35); }
+  50% { box-shadow: 0 4px 28px rgba(59,130,246,0.6); }
+}
+@keyframes noticeDot {
+  from { opacity: 0.3; transform: scale(0.8); }
+  to { opacity: 1; transform: scale(1.2); }
+}
+[data-theme="dark"] .new-msg-notice {
+  box-shadow: 0 4px 20px rgba(59,130,246,0.45);
+}
+
+/* ========== Responsive ========== */
+@media (max-width: 900px) {
+  .sidebar {
+    position: fixed; left: 0; top: 48px;
+    height: calc(100vh - 48px);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 150;
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-toggle { display: flex; }
+  .chat-area { max-width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<!-- Overview Bar -->
+<div class="overview-bar" id="overview-bar">
+  <a class="back-link" href="/dashboard" title="返回仪表盘">&larr;</a>
+  <span class="agent-name" id="ov-agent">--</span>
+  <span class="model-name" id="ov-model">--</span>
+  <span class="status-badge" id="ov-status">--</span>
+  <div class="token-info">
+    <span>输入: <span class="val" id="ov-input">0</span></span>
+    <span>输出: <span class="val" id="ov-output">0</span></span>
+    <span>缓存: <span class="val" id="ov-cache">0</span></span>
+  </div>
+</div>
+
+<!-- Main Layout: Sidebar + Chat -->
+<div class="main-layout">
+
+<!-- Sidebar Nav -->
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-title">消息导航</div>
+  <div id="nav-list"></div>
+</nav>
+<button class="sidebar-toggle" id="sidebar-toggle" title="消息导航" aria-label="打开消息导航">☰</button>
+
+<!-- Chat Area -->
+<div class="chat-area" id="chat-area"></div>
+
+</div><!-- .main-layout -->
+
+<script>
+(function() {
+
+/* ========== Dark Mode Detection ========== */
+(function initTheme() {
+  var stored = localStorage.getItem("claude-tap-theme");
+  var dark = false;
+  if (stored === "dark") {
+    dark = true;
+  } else if (stored === "light") {
+    dark = false;
+  } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+    dark = true;
+  }
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+})();
+
+/* ========== Text Extraction Helpers ========== */
+function requestUserText(body) {
+  if (!body || typeof body !== "object") return "";
+  var msgs = body.messages;
+  if (Array.isArray(msgs)) {
+    for (var i = msgs.length - 1; i >= 0; i--) {
+      var m = msgs[i];
+      if (!m || m.role !== "user") continue;
+      var content = m.content;
+      if (typeof content === "string" && content.trim()) return content.trim();
+      if (!Array.isArray(content)) continue;
+
+      // Skip messages that contain tool_result blocks (not real user input)
+      var hasToolResult = false;
+      for (var j = 0; j < content.length; j++) {
+        if (content[j] && content[j].type === "tool_result") { hasToolResult = true; break; }
+      }
+      if (hasToolResult) continue;
+
+      // Collect text blocks — exclude system-generated XML wrappers
+      var parts = [];
+      for (var k = 0; k < content.length; k++) {
+        var part = content[k];
+        if (!part) continue;
+        if (part.type === "text" && typeof part.text === "string") {
+          var t = part.text.trim();
+          if (!t) continue;
+          // Skip system-generated XML blocks: system-reminder, command-message, command-name, etc.
+          if (t.charAt(0) === "<" && t.indexOf("</") > 0 && t.indexOf(">") > 0) continue;
+          parts.push(t);
+        }
+      }
+      var joined = parts.join("\n").trim();
+      if (joined) return joined;
+    }
+  }
+  if (typeof body.input === "string" && body.input.trim()) return body.input.trim();
+  return "";
+}
+
+/* Return the raw JSON of the last valid user message in this record (for the "原始" button) */
+function getRawUserMessage(record) {
+  var req = record && record.request ? record.request : null;
+  var body = req && req.body ? req.body : null;
+  if (!body || typeof body !== "object") return null;
+  var msgs = body.messages;
+  if (!Array.isArray(msgs)) return null;
+  var all = msgs;
+  var last = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+  return { all: all, last: last, record: record };
+}
+
+/* Return the raw response data for the assistant JSON button */
+function getRawAssistantResponse(record) {
+  var resp = record && record.response ? record.response : null;
+  var body = resp && resp.body ? resp.body : null;
+  var content = body && body.content ? body.content : null;
+  // Format compatible with showRawModal: all=content blocks, last=full body, record=full record
+  return { all: content || body, last: body || resp, record: record };
+}
+
+/* Extract a short nav title from the user message: command name if present, otherwise truncated text */
+function requestUserNavTitle(record) {
+  var req = record && record.request ? record.request : null;
+  var body = req && req.body ? req.body : null;
+  if (!body || typeof body !== "object") return "";
+  var msgs = body.messages;
+  if (!Array.isArray(msgs)) {
+    if (typeof body.input === "string" && body.input.trim()) return body.input.trim().slice(0, 60);
+    return "";
+  }
+  for (var i = msgs.length - 1; i >= 0; i--) {
+    var m = msgs[i];
+    if (!m || m.role !== "user") continue;
+    var content = m.content;
+    if (!Array.isArray(content)) continue;
+
+    // Skip tool_result messages
+    var hasTR = false;
+    for (var j = 0; j < content.length; j++) {
+      if (content[j] && content[j].type === "tool_result") { hasTR = true; break; }
+    }
+    if (hasTR) continue;
+
+    // Look for command-name to extract the actual user-typed command
+    for (var k = 0; k < content.length; k++) {
+      var part = content[k];
+      if (!part || part.type !== "text" || typeof part.text !== "string") continue;
+      var cm = part.text.match(/<command-name>\s*\/?(\S+?)\s*<\/command-name>/);
+      if (cm) return "/" + cm[1];
+    }
+
+    // Fall back to first non-XML text block, truncated
+    for (var k = 0; k < content.length; k++) {
+      var part = content[k];
+      if (!part || part.type !== "text" || typeof part.text !== "string") continue;
+      var t = part.text.trim();
+      if (!t) continue;
+      if (t.charAt(0) === "<" && t.indexOf("</") > 0 && t.indexOf(">") > 0) continue;
+      // Take first meaningful line, cap at 50 chars
+      var firstLine = t.split("\n")[0].trim();
+      if (firstLine.length > 80) firstLine = firstLine.slice(0, 77) + "...";
+      if (firstLine) return firstLine;
+    }
+  }
+  if (typeof body.input === "string" && body.input.trim()) return body.input.trim().slice(0, 60);
+  return "";
+}
+
+function extractUniqueUserMessages(records) {
+  var items = [];
+  if (!records || records.length === 0) return items;
+
+  var seen = {};
+
+  // Iterate all records (old→new) — each record carries full message history,
+  // so later records may have compacted away earlier user messages.
+  for (var r = 0; r < records.length; r++) {
+    var rec = records[r];
+    var body = rec.request && rec.request.body ? rec.request.body : null;
+    var msgs = body && body.messages ? body.messages : null;
+    if (!Array.isArray(msgs)) continue;
+
+    for (var i = 0; i < msgs.length; i++) {
+      var m = msgs[i];
+      if (!m || m.role !== "user") continue;
+      var content = m.content;
+
+      // Skip messages that contain tool_result blocks (not real user input)
+      if (Array.isArray(content)) {
+        var hasToolResult = false;
+        for (var j = 0; j < content.length; j++) {
+          if (content[j] && content[j].type === "tool_result") { hasToolResult = true; break; }
+        }
+        if (hasToolResult) continue;
+      }
+
+      var fullText;
+      if (typeof content === "string") {
+        fullText = content.trim();
+        if (!fullText) continue;
+      } else if (Array.isArray(content)) {
+        var parts = [];
+        for (var k = 0; k < content.length; k++) {
+          var part = content[k];
+          if (!part) continue;
+          if (part.type === "text" && typeof part.text === "string") {
+            var t = part.text.trim();
+            if (!t) continue;
+            if (t.charAt(0) === "<" && t.indexOf("</") > 0 && t.indexOf(">") > 0) continue;
+            parts.push(t);
+          }
+        }
+        fullText = parts.join("\n").trim();
+        if (!fullText) continue;
+      } else {
+        continue;
+      }
+
+      var key = fullText.slice(0, 200);
+      if (seen[key]) continue;
+      seen[key] = true;
+
+      var navTitle = fullText.split("\n")[0].trim();
+      if (!navTitle) navTitle = fullText.slice(0, 30);
+      if (navTitle.length > 80) navTitle = navTitle.slice(0, 77) + "...";
+
+      items.push({ fullText: fullText, navTitle: navTitle, id: "user-msg-" + items.length });
+    }
+  }
+
+  return items;
+}
+
+function responseText(record) {
+  if (!record || typeof record !== "object") return "";
+  var response = record.response;
+  // Direct response body
+  var body = (response && response.body) ? response.body : null;
+
+  // body.content - direct string content
+  if (body && typeof body.content === "string" && body.content.trim()) {
+    return body.content.trim();
+  }
+
+  // body.content array (Anthropic Messages format: [{type:"text",text:"..."}, {type:"thinking",thinking:"..."}])
+  if (body && Array.isArray(body.content)) {
+    var texts = [];
+    for (var ii = 0; ii < body.content.length; ii++) {
+      var block = body.content[ii];
+      if (!block) continue;
+      // Skip thinking blocks, only collect text blocks
+      if (block.type === "text" && typeof block.text === "string") {
+        texts.push(block.text);
+      }
+    }
+    var joined = texts.join("\n").trim();
+    if (joined) return joined;
+  }
+
+  // body.choices[].message.content (OpenAI style)
+  if (body && Array.isArray(body.choices)) {
+    for (var i = 0; i < body.choices.length; i++) {
+      var choice = body.choices[i];
+      if (choice && choice.message && typeof choice.message.content === "string" && choice.message.content.trim()) {
+        return choice.message.content.trim();
+      }
+      if (choice && typeof choice.text === "string" && choice.text.trim()) {
+        return choice.text.trim();
+      }
+      if (choice && choice.delta && typeof choice.delta.content === "string" && choice.delta.content.trim()) {
+        return choice.delta.content.trim();
+      }
+    }
+  }
+
+  // body.output
+  if (body && typeof body.output === "string" && body.output.trim()) {
+    return body.output.trim();
+  }
+
+  // Direct response.content
+  if (response && typeof response.content === "string" && response.content.trim()) {
+    return response.content.trim();
+  }
+
+  return "";
+}
+
+function extractThinking(record) {
+  if (!record || typeof record !== "object") return "";
+  var response = record.response;
+  var body = (response && response.body) ? response.body : null;
+  if (!body || !Array.isArray(body.content)) return "";
+
+  var thoughts = [];
+  for (var i = 0; i < body.content.length; i++) {
+    var block = body.content[i];
+    if (!block) continue;
+    if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) {
+      thoughts.push(block.thinking.trim());
+    }
+  }
+  return thoughts.join("\n");
+}
+
+function extractToolUses(record) {
+  if (!record || typeof record !== "object") return null;
+  var response = record.response;
+  var body = (response && response.body) ? response.body : null;
+  if (!body || !Array.isArray(body.content)) return null;
+
+  var uses = [];
+  for (var i = 0; i < body.content.length; i++) {
+    var block = body.content[i];
+    if (!block) continue;
+    if (block.type === "tool_use" && block.name) {
+      uses.push({ name: block.name, input: block.input || {}, id: block.id || "" });
+    }
+  }
+  return uses.length > 0 ? uses : null;
+}
+
+function extractToolResults(record) {
+  if (!record || typeof record !== "object") return null;
+  var req = record.request;
+  var body = (req && req.body) ? req.body : null;
+  if (!body || !Array.isArray(body.messages)) return null;
+
+  var results = [];
+  for (var i = body.messages.length - 1; i >= 0; i--) {
+    var msg = body.messages[i];
+    if (!msg || msg.role !== "user") continue;
+    var content = msg.content;
+    if (!Array.isArray(content)) continue;
+    for (var j = 0; j < content.length; j++) {
+      var block = content[j];
+      if (!block) continue;
+      if (block.type === "tool_result") {
+        var resultText = "";
+        if (typeof block.content === "string") {
+          resultText = block.content;
+        } else if (Array.isArray(block.content)) {
+          var parts = [];
+          for (var k = 0; k < block.content.length; k++) {
+            var c = block.content[k];
+            if (c && c.type === "text" && typeof c.text === "string") {
+              parts.push(c.text);
+            }
+          }
+          resultText = parts.join("\n");
+        }
+        results.push({
+          tool_use_id: block.tool_use_id || "",
+          content: resultText,
+          is_error: !!block.is_error
+        });
+      }
+    }
+    if (results.length > 0) break;
+  }
+  return results.length > 0 ? results : null;
+}
+
+/* ========== Render Helpers ========== */
+function escHtml(s) {
+  if (!s) return "";
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/* ========== Lightweight Markdown Renderer ========== */
+function renderMarkdown(text) {
+  if (!text) return "";
+
+  // Phase 0: protect fenced code blocks (BEFORE HTML escaping)
+  var blocks = [];
+  var t = text.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+    var idx = blocks.length;
+    var langAttr = lang ? ' data-lang="' + escHtml(lang) + '"' : '';
+    blocks.push('<pre' + langAttr + '><code>' + code.replace(/&/g,"&amp;").replace(/</g,"&lt;") + '</code></pre>');
+    return '\x00C' + idx + '\x00';
+  });
+
+  // Phase 1: protect inline code (BEFORE HTML escaping)
+  var inlines = [];
+  t = t.replace(/`([^`]+)`/g, function(_, code) {
+    var idx = inlines.length;
+    inlines.push('<code>' + code.replace(/&/g,"&amp;").replace(/</g,"&lt;") + '</code>');
+    return '\x00I' + idx + '\x00';
+  });
+
+  // Phase 2: escape HTML (only non-code content)
+  var html = escHtml(t);
+
+  // Phase 3: tables (must be on their own, with | in every line and separator row)
+  html = html.replace(/(?:^|\n)(\|[^\n]+\|\n\|[-:| ]+\|\n(?:\|[^\n]+\|\n?)*)/g, function(_, tableBlock) {
+    var lines = tableBlock.trim().split('\n');
+    if (lines.length < 2) return _;
+    var headerCells = lines[0].split('|').filter(function(c) { return c.trim(); });
+    var thead = '<tr>' + headerCells.map(function(c) { return '<th>' + c.trim() + '</th>'; }).join('') + '</tr>';
+    var rows = [];
+    for (var ri = 2; ri < lines.length; ri++) {
+      var cells = lines[ri].split('|').filter(function(c) { return c.trim(); });
+      rows.push('<tr>' + cells.map(function(c) { return '<td>' + c.trim() + '</td>'; }).join('') + '</tr>');
+    }
+    return '\n<table><thead>' + thead + '</thead><tbody>' + rows.join('') + '</tbody></table>\n';
+  });
+
+  // Phase 4: block-level processing — headings, hr, blockquotes, lists
+  var lines = html.split('\n');
+  var out = [];
+  var inUl = false, inOl = false;
+
+  for (var li = 0; li < lines.length; li++) {
+    var line = lines[li];
+
+    var hMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (hMatch) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      var level = hMatch[1].length;
+      out.push('<h' + level + '>' + hMatch[2] + '</h' + level + '>');
+      continue;
+    }
+
+    if (/^(-{3,}|\*{3,})\s*$/.test(line)) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      out.push('<hr>');
+      continue;
+    }
+
+    if (/^&gt;/.test(line)) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      out.push('<blockquote><p>' + line.replace(/^&gt;\s?/, '') + '</p></blockquote>');
+      continue;
+    }
+
+    var ulMatch = line.match(/^(\s*)[-*]\s+(.+)$/);
+    if (ulMatch) {
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      if (!inUl) { out.push('<ul>'); inUl = true; }
+      out.push('<li>' + ulMatch[2] + '</li>');
+      continue;
+    }
+
+    var olMatch = line.match(/^(\s*)\d+\.\s+(.+)$/);
+    if (olMatch) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (!inOl) { out.push('<ol>'); inOl = true; }
+      out.push('<li>' + olMatch[2] + '</li>');
+      continue;
+    }
+
+    if (inUl) { out.push('</ul>'); inUl = false; }
+    if (inOl) { out.push('</ol>'); inOl = false; }
+
+    if (!line.trim()) {
+      out.push('');
+      continue;
+    }
+
+    out.push(line);
+  }
+  if (inUl) { out.push('</ul>'); }
+  if (inOl) { out.push('</ol>'); }
+
+  html = out.join('\n');
+
+  // Phase 5: wrap paragraphs — split by double newlines, skip existing HTML blocks
+  var chunks = html.split(/\n\n+/);
+  var result = [];
+  for (var ci = 0; ci < chunks.length; ci++) {
+    var chunk = chunks[ci].trim();
+    if (!chunk) continue;
+    if (/^<(\/)?(h[1-6]|table|thead|tbody|tr|th|td|ul|ol|li|blockquote|pre|hr|div|p)\b|^<code\b/.test(chunk)) {
+      result.push(chunk);
+    } else {
+      result.push('<p>' + chunk.replace(/\n/g, '<br>') + '</p>');
+    }
+  }
+  html = result.join('\n');
+
+  // Phase 6: inline formatting
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/(?<!\w)\*([^*\n]+?)\*(?!\w)/g, '<em>$1</em>');
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%">');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+  // Phase 7: restore code placeholders
+  html = html.replace(/\x00C(\d+)\x00/g, function(_, i) { return blocks[parseInt(i)] || ''; });
+  html = html.replace(/\x00I(\d+)\x00/g, function(_, i) { return inlines[parseInt(i)] || ''; });
+
+  return html;
+}
+
+function formatTs(ts) {
+  if (!ts) return "";
+  try {
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return ts;
+    var pad = function(n) { return String(n).padStart(2, "0"); };
+    return [
+      d.getFullYear(),
+      pad(d.getMonth() + 1),
+      pad(d.getDate()),
+    ].join("-") + " " + [
+      pad(d.getHours()),
+      pad(d.getMinutes()),
+    ].join(":");
+  } catch(e) {
+    return ts;
+  }
+}
+
+function fmtNum(n) {
+  if (n == null) return "0";
+  return Number(n).toLocaleString();
+}
+
+/* ========== Overview Bar ========== */
+function renderOverview(session) {
+  if (!session) return;
+  document.getElementById("ov-agent").textContent = session.agent || "--";
+  document.getElementById("ov-model").textContent = session.model || "--";
+
+  var badge = document.getElementById("ov-status");
+  var status = (session.status || "").toLowerCase();
+  badge.textContent = status || "--";
+  badge.className = "status-badge";
+  if (status === "active" || status === "live") badge.classList.add("active");
+  else if (status === "complete" || status === "ok") badge.classList.add("ok");
+  else if (status === "error") badge.classList.add("error");
+  else if (status === "empty") badge.classList.add("empty");
+  else badge.classList.add("ok");
+
+  document.getElementById("ov-input").textContent = fmtNum(session.input_tokens);
+  document.getElementById("ov-output").textContent = fmtNum(session.output_tokens);
+  var cacheTotal = (session.cache_read_tokens || 0) + (session.cache_create_tokens || 0);
+  document.getElementById("ov-cache").textContent = fmtNum(cacheTotal);
+}
+
+/* ========== Build Chat Bubbles ========== */
+var FOLD_THRESHOLD = 200;
+
+function needsFold(text) {
+  return text.length > FOLD_THRESHOLD;
+}
+
+
+function buildBubble(msgRow, text, role, toolName, msgId, rawData, requestId) {
+  var wrapper = document.createElement("div");
+  var roleClass;
+  if (role === "user") roleClass = "user";
+  else if (role === "thinking") roleClass = "thinking";
+  else if (role === "tool_use") roleClass = "tool_use";
+  else if (role === "tool_result") roleClass = "tool_result";
+  else roleClass = "assistant";
+  wrapper.className = "msg-row " + roleClass;
+  if (msgId) wrapper.id = msgId;
+
+  // Label row: role label + optional fold toggle
+  var labelRow = document.createElement("div");
+  labelRow.className = "label-row";
+
+  // JSON button first (always at the start of label row)
+  if ((role === "user" || role === "thinking") && rawData) {
+    var rawBtn = document.createElement("button");
+    rawBtn.className = "raw-btn";
+    rawBtn.textContent = "JSON";
+    rawBtn.title = "查看原始消息";
+    rawBtn.addEventListener("click", function(e) {
+      e.stopPropagation();
+      showRawModal(rawData);
+    });
+    labelRow.appendChild(rawBtn);
+  }
+
+  // Request ID next
+  if (requestId && (role === "user" || role === "thinking")) {
+    var reqIdSpan = document.createElement("span");
+    reqIdSpan.className = "request-id";
+    reqIdSpan.textContent = requestId;
+    labelRow.appendChild(reqIdSpan);
+  }
+
+  // Role label
+  var label = document.createElement("span");
+  label.className = "role-label";
+  if (role === "user") {
+    label.textContent = "You";
+  } else if (role === "thinking") {
+    label.textContent = "思考";
+  } else if (role === "tool_use") {
+    label.textContent = toolName || "Tool";
+  } else if (role === "tool_result") {
+    label.textContent = toolName ? ("结果: " + toolName) : "工具结果";
+  } else {
+    label.textContent = "Claude";
+  }
+  labelRow.appendChild(label);
+
+  var bubble = document.createElement("div");
+  bubble.className = "bubble";
+  if (role === "assistant") {
+    // Markdown tab switcher
+    var mdTabs = document.createElement("div");
+    mdTabs.className = "md-tabs";
+
+    var renderedTab = document.createElement("button");
+    renderedTab.className = "md-tab";
+    renderedTab.textContent = "渲染";
+
+    var rawTab = document.createElement("button");
+    rawTab.className = "md-tab active";
+    rawTab.textContent = "原文";
+
+    var renderedBody = document.createElement("div");
+    renderedBody.className = "md-body md-rendered";
+    // lazy: innerHTML populated on first click of "渲染" tab
+
+    var rawBody = document.createElement("div");
+    rawBody.className = "md-body md-raw active";
+    rawBody.textContent = text;
+
+    (function() {
+      var rTab = renderedTab, wTab = rawTab, rBody = renderedBody, wBody = rawBody;
+      var rendered = false;
+      rTab.addEventListener("click", function() {
+        rTab.classList.add("active"); wTab.classList.remove("active");
+        rBody.classList.add("active"); wBody.classList.remove("active");
+        if (!rendered) {
+          rendered = true;
+          rBody.innerHTML = renderMarkdown(text);
+        }
+      });
+      wTab.addEventListener("click", function() {
+        wTab.classList.add("active"); rTab.classList.remove("active");
+        wBody.classList.add("active"); rBody.classList.remove("active");
+      });
+    })();
+
+    mdTabs.appendChild(renderedTab);
+    mdTabs.appendChild(rawTab);
+    bubble.appendChild(mdTabs);
+    bubble.appendChild(renderedBody);
+    bubble.appendChild(rawBody);
+  } else {
+    bubble.textContent = text;
+  }
+
+  var folded = (role === "thinking" || role === "tool_use" || role === "tool_result") ? true : needsFold(text);
+  if (folded) {
+    bubble.classList.add("collapsed");
+
+    var toggleBtn = document.createElement("button");
+    toggleBtn.className = "fold-toggle";
+    toggleBtn.textContent = "▼ 展开";
+    function expandBubble() {
+      wrapper.style.minHeight = wrapper.offsetHeight + "px";
+      bubble.style.top = bubble.offsetTop + "px";
+      bubble.classList.remove("collapsed");
+      bubble.classList.add("expanded");
+      toggleBtn.textContent = "▲ 收起";
+    }
+    function collapseBubble() {
+      bubble.classList.add("collapsed");
+      bubble.classList.remove("expanded");
+      bubble.style.top = "";
+      wrapper.style.minHeight = "";
+      toggleBtn.textContent = "▼ 展开";
+    }
+
+    toggleBtn.addEventListener("click", function(e) {
+      e.stopPropagation();
+      hoverExpanded = false;
+      if (bubble.classList.contains("collapsed")) {
+        expandBubble();
+      } else {
+        collapseBubble();
+      }
+    });
+    labelRow.appendChild(toggleBtn);
+
+    var hoverExpanded = false;
+    bubble.addEventListener("mouseenter", function() {
+      if (bubble.classList.contains("collapsed")) {
+        expandBubble();
+        hoverExpanded = true;
+      }
+    });
+    bubble.addEventListener("mouseleave", function() {
+      if (hoverExpanded) {
+        collapseBubble();
+        hoverExpanded = false;
+      }
+    });
+  }
+
+  wrapper.appendChild(labelRow);
+  wrapper.appendChild(bubble);
+  msgRow.appendChild(wrapper);
+}
+function buildTurnDivider(msgRow, turnNum, ts) {
+  var div = document.createElement("div");
+  div.className = "turn-divider";
+
+  var pill = document.createElement("span");
+  pill.className = "pill";
+  var timeStr = formatTs(ts);
+  pill.textContent = (timeStr ? timeStr + " · " : "") + "Turn " + turnNum;
+  div.appendChild(pill);
+  msgRow.appendChild(div);
+}
+
+/* ========== Render Records ========== */
+var BATCH_SIZE = 8;
+var renderState = null;
+
+function processBatch(area, records, onDone) {
+  var state = renderState;
+  var fragment = document.createDocumentFragment();
+
+  for (var count = 0; count < BATCH_SIZE && state.i < records.length; count++, state.i++) {
+    var rec = records[state.i];
+    var req = rec.request;
+    var reqBody = req && req.body ? req.body : null;
+
+    var userText = requestUserText(reqBody);
+    var asstText = responseText(rec);
+    var thinkingText = extractThinking(rec);
+    var toolUses = extractToolUses(rec);
+    var toolResults = extractToolResults(rec);
+
+    var turnNum = rec.turn;
+    if (turnNum !== undefined && turnNum !== null && turnNum !== state.lastTurn) {
+      buildTurnDivider(fragment, turnNum, rec.timestamp);
+      state.lastTurn = turnNum;
+    }
+
+    if (userText) {
+      var rawData = getRawUserMessage(rec);
+      var reqId = rec.request_id || null;
+      var existingId = state.textToId[userText.slice(0, 200)];
+      if (existingId) {
+        buildBubble(fragment, userText, "user", null, existingId, rawData, reqId);
+      } else {
+        buildBubble(fragment, userText, "user", null, null, rawData, reqId);
+      }
+    }
+    if (toolResults) {
+      for (var tr = 0; tr < toolResults.length; tr++) {
+        var trItem = toolResults[tr];
+        var tid = trItem.tool_use_id;
+        if (state.seen[tid]) continue;
+        state.seen[tid] = true;
+        var trLabel = tid.split("_").slice(-1)[0] || "";
+        buildBubble(fragment, trItem.content, "tool_result", trLabel);
+      }
+    }
+    if (thinkingText) {
+      var thinkRaw = getRawAssistantResponse(rec);
+      var thinkReqId = rec.request_id || null;
+      buildBubble(fragment, thinkingText, "thinking", null, null, thinkRaw, thinkReqId);
+    }
+    if (toolUses) {
+      for (var t = 0; t < toolUses.length; t++) {
+        var tu = toolUses[t];
+        var tuText = JSON.stringify(tu.input, null, 2);
+        buildBubble(fragment, tuText, "tool_use", tu.name + " (" + tu.id + ")");
+      }
+    }
+    if (asstText) {
+      buildBubble(fragment, asstText, "assistant");
+    }
+  }
+
+  area.appendChild(fragment);
+
+  if (state.i < records.length) {
+    // Update progress hint
+    var pct = Math.round(state.i / records.length * 100);
+    document.getElementById("chat-area").setAttribute("data-progress", pct + "%");
+    setTimeout(function() { processBatch(area, records, onDone); }, 0);
+  } else {
+    document.getElementById("chat-area").removeAttribute("data-progress");
+    if (onDone) onDone();
+  }
+}
+
+function renderChat(session, records) {
+  renderOverview(session);
+
+  var area = document.getElementById("chat-area");
+  area.innerHTML = "";
+
+  if (!records || records.length === 0) {
+    area.innerHTML = '<div class="state-msg">暂无记录</div>';
+    return;
+  }
+
+  // Build unique user message lookup from full conversation history
+  var uniqueMsgs = extractUniqueUserMessages(records);
+  var textToId = {};
+  var navItems = [];
+  for (var u = 0; u < uniqueMsgs.length; u++) {
+    var um = uniqueMsgs[u];
+    var key = um.fullText.slice(0, 200);
+    textToId[key] = um.id;
+    navItems.push({ id: um.id, text: um.navTitle });
+  }
+
+  renderState = { i: 0, lastTurn: -1, seen: {}, navItems: navItems, textToId: textToId };
+  renderNav(navItems);
+  processBatch(area, records, function() {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  });
+}
+
+/* ========== Raw JSON Modal ========== */
+function showRawModal(data) {
+  if (!data || !data.all) return;
+  var overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+
+  var box = document.createElement("div");
+  box.className = "modal-box";
+
+  var header = document.createElement("div");
+  header.className = "modal-header";
+  header.innerHTML = '<span>原始消息 (Raw JSON)</span>';
+
+  var closeBtn = document.createElement("button");
+  closeBtn.className = "modal-close";
+  closeBtn.textContent = "×";
+  closeBtn.addEventListener("click", function() { overlay.remove(); });
+  header.appendChild(closeBtn);
+  box.appendChild(header);
+
+  // Tab bar
+  var tabBar = document.createElement("div");
+  tabBar.className = "modal-tabs";
+
+  var tab1 = document.createElement("button");
+  tab1.className = "modal-tab active";
+  tab1.textContent = "全部消息 (" + data.all.length + ")";
+
+  var tab2 = document.createElement("button");
+  tab2.className = "modal-tab";
+  tab2.textContent = "最后一条";
+
+  var tab3 = document.createElement("button");
+  tab3.className = "modal-tab";
+  tab3.textContent = "完整记录";
+
+  tab1.addEventListener("click", function() {
+    tab1.classList.add("active");
+    tab2.classList.remove("active");
+    tab3.classList.remove("active");
+    body1.classList.add("active");
+    body2.classList.remove("active");
+    body3.classList.remove("active");
+  });
+  tab2.addEventListener("click", function() {
+    tab2.classList.add("active");
+    tab1.classList.remove("active");
+    tab3.classList.remove("active");
+    body2.classList.add("active");
+    body1.classList.remove("active");
+    body3.classList.remove("active");
+  });
+
+  tab3.addEventListener("click", function() {
+    tab3.classList.add("active");
+    tab1.classList.remove("active");
+    tab2.classList.remove("active");
+    body3.classList.add("active");
+    body1.classList.remove("active");
+    body2.classList.remove("active");
+  });
+
+  tabBar.appendChild(tab1);
+  tabBar.appendChild(tab2);
+  tabBar.appendChild(tab3);
+  box.appendChild(tabBar);
+
+  // Tab bodies
+  var body1 = document.createElement("div");
+  body1.className = "modal-body modal-tab-body active";
+  body1.appendChild(renderJsonTree(data.all));
+
+  var body2 = document.createElement("div");
+  body2.className = "modal-body modal-tab-body";
+  body2.appendChild(data.last ? renderJsonTree(data.last) : document.createTextNode("（无）"));
+
+  var body3 = document.createElement("div");
+  body3.className = "modal-body modal-tab-body";
+  body3.appendChild(data.record ? renderJsonTree(data.record) : document.createTextNode("（无）"));
+
+  box.appendChild(body1);
+  box.appendChild(body2);
+  box.appendChild(body3);
+
+  overlay.appendChild(box);
+
+  // Close on overlay click
+  overlay.addEventListener("click", function(e) {
+    if (e.target === overlay) overlay.remove();
+  });
+  // Close on Escape
+  var onKey = function(e) {
+    if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", onKey); }
+  };
+  document.addEventListener("keydown", onKey);
+
+  document.body.appendChild(overlay);
+}
+
+function safeStringify(obj) {
+  try { return JSON.stringify(obj, null, 2); } catch(e) { return String(obj); }
+}
+
+function renderJsonTree(obj) {
+  var root = document.createElement("div");
+  root.className = "json-tree";
+  root.appendChild(buildJsonNode(obj));
+  return root;
+}
+
+function buildJsonNode(val) {
+  if (isJsonPrimitive(val)) return buildJsonPrimitive(val);
+
+  var isArr = Array.isArray(val);
+  var keys = isArr ? null : Object.keys(val);
+  var count = isArr ? val.length : (keys ? keys.length : 0);
+  var openB = isArr ? "[" : "{";
+  var closeB = isArr ? "]" : "}";
+
+  if (count === 0) {
+    var s = document.createElement("span");
+    s.className = "json-empty";
+    s.textContent = openB + closeB;
+    return s;
+  }
+
+  var wrap = document.createElement("div");
+  wrap.className = "json-node";
+
+  var header = document.createElement("div");
+  header.className = "json-node-header";
+
+  var toggle = document.createElement("span");
+  toggle.className = "json-toggle";
+  toggle.textContent = "▶";
+
+  var bracket = document.createElement("span");
+  bracket.textContent = openB;
+
+  var summary = document.createElement("span");
+  summary.className = "json-summary";
+  summary.textContent = count + (isArr ? " items" : " keys");
+
+  header.appendChild(toggle);
+  header.appendChild(bracket);
+  header.appendChild(summary);
+
+  var children = document.createElement("div");
+  children.className = "json-node-children";
+  children.style.display = "none";
+
+  var limit = Math.min(count, 2000);
+  for (var i = 0; i < limit; i++) {
+    var key = isArr ? i : keys[i];
+    var itemVal = val[key];
+    var row = document.createElement("div");
+    row.className = "json-row";
+
+    var keyEl = document.createElement("span");
+    keyEl.className = "json-key";
+    keyEl.textContent = isArr ? "" : JSON.stringify(key) + ": ";
+    row.appendChild(keyEl);
+    row.appendChild(buildJsonNode(itemVal));
+    children.appendChild(row);
+  }
+
+  var closeEl = document.createElement("div");
+  closeEl.className = "json-close";
+  closeEl.textContent = closeB;
+  closeEl.style.display = "none";
+
+  toggle.addEventListener("click", function(e) {
+    e.stopPropagation();
+    var expanded = children.style.display !== "none";
+    if (expanded) {
+      children.style.display = "none";
+      closeEl.style.display = "none";
+      toggle.textContent = "▶";
+    } else {
+      children.style.display = "block";
+      closeEl.style.display = "block";
+      toggle.textContent = "▼";
+    }
+  });
+
+  wrap.appendChild(header);
+  wrap.appendChild(children);
+  wrap.appendChild(closeEl);
+  return wrap;
+}
+
+function isJsonPrimitive(val) {
+  return val === null || typeof val === "string" || typeof val === "number" || typeof val === "boolean";
+}
+
+function buildJsonPrimitive(val) {
+  var span = document.createElement("span");
+  if (val === null) {
+    span.className = "json-null"; span.textContent = "null";
+  } else if (typeof val === "string") {
+    span.className = "json-string"; span.textContent = JSON.stringify(val);
+  } else if (typeof val === "number") {
+    span.className = "json-number"; span.textContent = String(val);
+  } else if (typeof val === "boolean") {
+    span.className = "json-boolean"; span.textContent = String(val);
+  }
+  return span;
+}
+
+/* ========== Nav Sidebar ========== */
+function renderNav(items) {
+  var list = document.getElementById("nav-list");
+  list.innerHTML = "";
+  if (!items || items.length === 0) {
+    list.innerHTML = '<div style="padding:8px 14px;font-size:12px;color:#9ca3af;">暂无用户消息</div>';
+    return;
+  }
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    var a = document.createElement("a");
+    a.className = "nav-item";
+    a.href = "#" + item.id;
+    a.innerHTML = '<span class="nav-num">' + (i + 1) + '</span> ' + item.text;
+    a.title = item.text;
+    a.setAttribute("data-target", item.id);
+    a.addEventListener("click", function(e) {
+      e.preventDefault();
+      var targetId = this.getAttribute("data-target");
+      var target = document.getElementById(targetId);
+      if (target) {
+        // Remove previous highlight
+        var prev = document.querySelector(".highlight-flash");
+        if (prev) prev.classList.remove("highlight-flash");
+        // Scroll to target
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+        // Highlight after scroll settles
+        setTimeout(function() {
+          target.classList.add("highlight-flash");
+          setTimeout(function() { target.classList.remove("highlight-flash"); }, 2200);
+        }, 400);
+        var active = document.querySelector(".nav-item.active");
+        if (active) active.classList.remove("active");
+        this.classList.add("active");
+        // Close sidebar on mobile
+        document.getElementById("sidebar").classList.remove("open");
+      }
+    });
+    list.appendChild(a);
+  }
+}
+
+/* Sidebar toggle (mobile) */
+(function initSidebar() {
+  var toggle = document.getElementById("sidebar-toggle");
+  var sidebar = document.getElementById("sidebar");
+  if (toggle && sidebar) {
+    toggle.addEventListener("click", function() {
+      sidebar.classList.toggle("open");
+    });
+    // Close sidebar when clicking outside
+    document.addEventListener("click", function(e) {
+      if (!sidebar.classList.contains("open")) return;
+      if (!sidebar.contains(e.target) && e.target !== toggle) {
+        sidebar.classList.remove("open");
+      }
+    });
+  }
+})();
+
+/* ========== Live Polling ========== */
+var _pollTimer = null;
+var _pollSessionId = null;
+var _pollLoadedCount = 0;
+
+function _startPolling(sessionId, recordCount, isActive) {
+  _pollSessionId = sessionId;
+  _pollLoadedCount = recordCount;
+  if (!isActive) return;
+
+  _pollTimer = setInterval(function() {
+    fetch("/api/sessions/" + encodeURIComponent(_pollSessionId) + "/records?offset=" + _pollLoadedCount)
+      .then(function(resp) { return resp.json(); })
+      .then(function(data) {
+        if (data.error) return;
+        var newRecords = data.records || [];
+        var session = data.session;
+        if (newRecords.length > 0) {
+          _appendNewRecords(newRecords, session);
+          _pollLoadedCount += newRecords.length;
+        }
+        var status = (session.status || "").toLowerCase();
+        if (status !== "active" && status !== "live") {
+          _stopPolling();
+          renderOverview(session);
+        }
+      })
+      .catch(function() { /* silent */ });
+  }, 3000);
+}
+
+function _stopPolling() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+function _showNewMsgNotice() {
+  // Remove existing notice if any
+  var existing = document.querySelector(".new-msg-notice");
+  if (existing) existing.remove();
+
+  var btn = document.createElement("button");
+  btn.className = "new-msg-notice";
+  btn.innerHTML = '<span class="notice-dot"></span> 新消息 ↓';
+  btn.addEventListener("click", function() {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+    btn.remove();
+  });
+  document.body.appendChild(btn);
+
+  // Auto-dismiss after 10s
+  setTimeout(function() {
+    if (btn.parentNode) btn.remove();
+  }, 10000);
+}
+
+function _appendNewRecords(newRecords, session) {
+  // Update nav with new unique user messages
+  var newUnique = extractUniqueUserMessages(newRecords);
+  var textToId = renderState.textToId || {};
+  for (var u = 0; u < newUnique.length; u++) {
+    var um = newUnique[u];
+    var key = um.fullText.slice(0, 200);
+    if (!textToId[key]) {
+      textToId[key] = um.id;
+      renderState.navItems.push({ id: um.id, text: um.navTitle });
+    }
+  }
+  renderState.textToId = textToId;
+  renderNav(renderState.navItems);
+  renderOverview(session);
+
+  // Process new records through batch pipeline
+  var area = document.getElementById("chat-area");
+  renderState.i = 0;
+  processBatch(area, newRecords, function() {
+    _showNewMsgNotice();
+  });
+}
+
+/* ========== Main: Fetch & Render ========== */
+(function main() {
+  // Extract session_id from URL path: /dashboard/chat/{session_id}
+  var path = window.location.pathname;
+  var match = path.match(/\/dashboard\/chat\/([^/?&#]+)/);
+  if (!match) {
+    document.getElementById("chat-area").innerHTML =
+      '<div class="state-msg err-text">无法解析 session_id，请检查 URL</div>';
+    return;
+  }
+  var sessionId = match[1];
+
+  var area = document.getElementById("chat-area");
+  area.innerHTML = '<div class="state-msg"><div class="spinner"></div><div>加载中...</div></div>';
+
+  fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/records")
+    .then(function(resp) {
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      return resp.json();
+    })
+    .then(function(data) {
+      if (data.error) throw new Error(data.error);
+      renderChat(data.session, data.records);
+      var isActive = (data.session.status || "").toLowerCase() === "active" || !!data.session.live;
+      _startPolling(sessionId, data.records.length, isActive);
+    })
+    .catch(function(err) {
+      area.innerHTML = '<div class="state-msg err-text">加载失败：' + escHtml(err.message || String(err)) + '</div>';
+    });
+})();
+
+})();
+</script>
+</body>
+</html>
