@@ -422,8 +422,12 @@ function normalizeUsage(usage) {
     }
   } else {
     /* Native cache_read_input_tokens (Claude/Anthropic/Bedrock) is a separate
-       bucket not included in input_tokens. */
-    normalized._cache_read_in_input = false;
+       bucket not included in input_tokens.  But if the caller already set
+       _cache_read_in_input (e.g. lazy-loading stub with model-based inference),
+       respect the pre-set value. */
+    if (normalized._cache_read_in_input === undefined) {
+      normalized._cache_read_in_input = false;
+    }
   }
   if (normalized.cache_creation_input_tokens === undefined && usage.cacheWriteInputTokens !== undefined && usage.cacheWriteInputTokens !== null) {
     normalized.cache_creation_input_tokens = usage.cacheWriteInputTokens;
