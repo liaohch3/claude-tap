@@ -470,8 +470,13 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
         empty_html_path = _generate_case_html(tmp_path, "empty_coverage", ())
         compact_html_path = tmp_path / "compact_coverage.html"
         compact_bundle_path = tmp_path / "compact_coverage.ctap.json"
+        remote_html_path = tmp_path / "remote_coverage.html"
         from claude_tap.compact_trace import build_compact_trace_bundle
-        from claude_tap.viewer import _generate_html_viewer_from_compact_bundle
+        from claude_tap.viewer import (
+            _extract_metadata_from_record,
+            _generate_html_viewer_from_compact_bundle,
+            _generate_html_viewer_from_metadata,
+        )
 
         compact_bundle = build_compact_trace_bundle(list(_compact_contract_records()))
         _generate_html_viewer_from_compact_bundle(
@@ -484,9 +489,31 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
             json.dumps(compact_bundle, ensure_ascii=False, separators=(",", ":")),
             encoding="utf-8",
         )
+        remote_record = next(record for case in _contract_cases() for record in case.records)
+        remote_api_url = "https://coverage.local/api/records"
+        _generate_html_viewer_from_metadata(
+            [_extract_metadata_from_record(remote_record)],
+            remote_html_path,
+            display_trace_path="coverage.ctap.json",
+            display_html_path=remote_html_path,
+            records_api_path=remote_api_url,
+        )
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page()
+            page.route(
+                f"{remote_api_url}**",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    headers={"Access-Control-Allow-Origin": "*"},
+                    body=json.dumps(
+                        {"session": {"record_count": 1}, "records": [remote_record]},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
             page.add_init_script("window.__TRACE_SESSION_EXPORTS__ = {jsonl: 'coverage.jsonl', log: 'coverage.log'};")
             session = page.context.new_cdp_session(page)
             session.send("Profiler.enable")
@@ -507,6 +534,7 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   if (sessionGroups.length) {
                     sessionTextSnippet(sessionGroups[0].userText || 'coverage prompt');
                     finalResponseText(sessionGroups[0].items[0].entry);
+                    firstUserInputInfo(sessionGroups[0].items[0].entry);
                   }
                   const continuationEntry = {
                     request_id: 'coverage_continuation',
@@ -713,6 +741,21 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                 }""",
                 compact_bundle_path.read_text(encoding="utf-8"),
             )
+            page.goto(remote_html_path.resolve().as_uri(), timeout=10000)
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+            page.evaluate(
+                """async () => {
+                  const entry = filtered[0];
+                  hasEmbeddedRawLines();
+                  shouldFetchRemoteEntry(entry);
+                  remoteRecordUrl(0);
+                  await fetchRemoteEntry(entry);
+                  await resolveEntryForDetailAsync(entry);
+                  withDisplayFields(entry, entry);
+                  selectEntry(0);
+                }"""
+            )
+            page.wait_for_selector("#detail .section", timeout=5000)
             page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".empty-trace-state", timeout=5000)
             page.set_input_files("#file-input", str(compact_bundle_path))
@@ -727,9 +770,10 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
     main_functions = _viewer_script_functions(_main_viewer_script(coverage, "v8_coverage.html"))
     empty_functions = _viewer_script_functions(_main_viewer_script(coverage, "empty_coverage.html"))
     compact_functions = _viewer_script_functions(_main_viewer_script(coverage, "compact_coverage.html"))
+    remote_functions = _viewer_script_functions(_main_viewer_script(coverage, "remote_coverage.html"))
     auxiliary_covered_names = {
         function.get("functionName", "")
-        for function in [*empty_functions, *compact_functions]
+        for function in [*empty_functions, *compact_functions, *remote_functions]
         if function.get("functionName") and _is_function_covered(function)
     }
     covered_functions = [
