@@ -360,6 +360,84 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
         const claudeRate = Math.round(60 / claudeTotalInput * 100);
         assert.equal(claudeRate, 55);
         assert.ok(claudeRate <= 100, 'Claude-style rate must not exceed 100%');
+
+        /* ── Direct DOM test: #stat-cache-hit-rate via applyFilter() ── */
+
+        context.assert = assert;
+        context.element = element;
+
+        vm.runInContext(`
+          // Persistent stat elements so applyFilter can set textContent
+          const _statEls = {};
+          document.querySelector = function (sel) {
+            if (typeof sel === 'string' && sel.startsWith('#')) {
+              const id = sel.slice(1);
+              if (!_statEls[id]) _statEls[id] = element();
+              return _statEls[id];
+            }
+            return element();
+          };
+          // Stub heavy rendering helpers irrelevant to stat computation
+          renderSidebar = function () {};
+          updatePositionIndicator = function () {};
+          renderToolFilter = function () {};
+          renderPathFilter = function () {};
+          renderTracePathBar = function () {};
+
+          function makeUsageEntry(usage, path) {
+            return {
+              request: { path: path || '/v1/messages', method: 'POST', body: {} },
+              response: { body: { usage } },
+              turn: '1',
+              duration_ms: 100,
+            };
+          }
+
+          // Claude-style: cache_read separate from input → 60/(40+60+10)=55%
+          entries = [makeUsageEntry({
+            input_tokens: 40, output_tokens: 20,
+            cache_read_input_tokens: 60, cache_creation_input_tokens: 10,
+          })];
+          activePaths = new Set(['/v1/messages']);
+          searchQuery = '';
+          activeTools = null;
+          applyFilter();
+          assert.equal(_statEls['stat-cache-hit-rate'].textContent, '55%',
+            'Claude-style direct DOM: expected 55%');
+          assert.equal(_statEls['stat-cache-hit-rate-group'].style.display, 'flex',
+            'Claude-style direct DOM: group should be visible');
+
+          // OpenAI-style: cache embedded in input → 60/100=60%
+          entries = [makeUsageEntry({
+            prompt_tokens: 100, completion_tokens: 50,
+            prompt_tokens_details: { cached_tokens: 60 },
+          })];
+          applyFilter();
+          assert.equal(_statEls['stat-cache-hit-rate'].textContent, '60%',
+            'OpenAI-style direct DOM: expected 60%');
+
+          // No cache data: group should be hidden
+          entries = [makeUsageEntry({ input_tokens: 100, output_tokens: 50 })];
+          applyFilter();
+          assert.equal(_statEls['stat-cache-hit-rate-group'].style.display, 'none',
+            'No-cache direct DOM: group should be hidden');
+
+          // Mixed providers: OpenAI(100,cache=60) + Claude(40,cache_read=60,create=10)
+          // denom = 100 + 110 = 210, cache_read = 120, rate = 57%
+          entries = [
+            makeUsageEntry({
+              prompt_tokens: 100, completion_tokens: 50,
+              prompt_tokens_details: { cached_tokens: 60 },
+            }),
+            makeUsageEntry({
+              input_tokens: 40, output_tokens: 20,
+              cache_read_input_tokens: 60, cache_creation_input_tokens: 10,
+            }),
+          ];
+          applyFilter();
+          assert.equal(_statEls['stat-cache-hit-rate'].textContent, '57%',
+            'Mixed-provider direct DOM: expected 57%');
+        `, context);
         """
     )
 
