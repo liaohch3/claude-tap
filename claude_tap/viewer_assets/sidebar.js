@@ -78,11 +78,14 @@ function cleanUserPromptText(text) {
   }
   const userRequest = value.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/i);
   if (userRequest) return userRequest[1].trim();
+  const codexRequest = value.match(/^#+\s*My request for Codex:\s*([\s\S]*?)\s*$/im);
+  if (codexRequest) return codexRequest[1].trim();
   const session = value.match(/^<session>\s*([\s\S]*?)\s*<\/session>$/i);
   if (session) return session[1].trim();
-  const firstTag = value.match(/^<([A-Za-z_-]+)>/);
+  const firstTag = value.match(/^<([A-Za-z_-]+)(?:\s|>)/);
   const injectedTags = new Set([
     'artifacts',
+    'codex_internal_context',
     'environment_context',
     'local-command-caveat',
     'session_context',
@@ -93,6 +96,8 @@ function cleanUserPromptText(text) {
     'user_information',
   ]);
   if (firstTag && injectedTags.has(firstTag[1].toLowerCase())) return '';
+  if (value.startsWith('# AGENTS.md instructions') || value.startsWith('<INSTRUCTIONS>')) return '';
+  if (value.startsWith('# Files mentioned by the user:')) return '';
   if (/^<\/?image(_input)?(\s+[^>]*)?>$/i.test(value)) return '';
   if (/^\[SUGGESTION MODE:/i.test(value)) return '';
   if (/^(web page content|page content|网页内容)\s*[:：]/i.test(value)) return '';

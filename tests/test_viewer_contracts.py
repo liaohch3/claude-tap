@@ -1341,6 +1341,42 @@ def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
         followup = f"{prompt} follow-up {turn}"
         hour = 10 + (turn - 1) // 60
         minute = (turn - 1) % 60
+        injected_user_messages = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "# AGENTS.md instructions\nSkip maintainer automation notes."}
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "<environment_context>\nskip cwd\n</environment_context>"}],
+            },
+        ]
+        if turn > 30:
+            user_message = {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "# Files mentioned by the user:\n\n"
+                            "## screenshot.png\n\n"
+                            "## My request for Codex:\n\n"
+                            f"{prompt}"
+                        ),
+                    }
+                ],
+            }
+        else:
+            user_message = {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt}],
+            }
         records.append(
             {
                 "timestamp": f"2026-06-13T{hour:02d}:{minute:02d}:00+00:00",
@@ -1356,11 +1392,8 @@ def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
                         "model": "gpt-5.5",
                         "metadata": {"codex_app_session_id": session_id},
                         "input": [
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": [{"type": "input_text", "text": prompt}],
-                            },
+                            *injected_user_messages,
+                            user_message,
                             {
                                 "type": "message",
                                 "role": "assistant",

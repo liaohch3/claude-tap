@@ -773,19 +773,79 @@ def _tool_display_name(tool: dict) -> str:
     return ""
 
 
+def _clean_session_user_text(text: str) -> str:
+    value = text.strip()
+    if not value:
+        return ""
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, str) and decoded.strip():
+            value = decoded.strip()
+
+    request = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", value, flags=re.DOTALL | re.IGNORECASE)
+    if request:
+        return request.group(1).strip()
+
+    codex_request = re.search(
+        r"^#+\s*My request for Codex:\s*(.*?)\s*$",
+        value,
+        flags=re.DOTALL | re.IGNORECASE | re.MULTILINE,
+    )
+    if codex_request:
+        return codex_request.group(1).strip()
+
+    session = re.fullmatch(r"<session>\s*(.*?)\s*</session>", value, flags=re.DOTALL | re.IGNORECASE)
+    if session:
+        return session.group(1).strip()
+
+    first_tag = re.match(r"^<([A-Za-z_-]+)", value)
+    if first_tag and first_tag.group(1).lower() in {
+        "artifacts",
+        "codex_internal_context",
+        "environment_context",
+        "local-command-caveat",
+        "session_context",
+        "skills",
+        "slash_commands",
+        "subagents",
+        "system-reminder",
+        "user_information",
+    }:
+        return ""
+
+    if value.startswith(("# AGENTS.md instructions", "<INSTRUCTIONS>")):
+        return ""
+    if value.startswith("# Files mentioned by the user:"):
+        return ""
+    if re.match(r"^</?image(_input)?(\s+[^>]*)?>$", value, flags=re.IGNORECASE):
+        return ""
+    if re.match(r"^\[SUGGESTION MODE:", value, flags=re.IGNORECASE):
+        return ""
+    if re.match(r"^(web page content|page content|网页内容)\s*[:：]", value, flags=re.IGNORECASE):
+        return ""
+    if re.match(r"^\[Image:\s*source:", value, flags=re.IGNORECASE):
+        return ""
+    return re.sub(r"^\[Image #\d+\]\s*", "", value, flags=re.IGNORECASE).strip()
+
+
 def _session_text_from_content(content: object) -> str:
     if content is None:
         return ""
     if isinstance(content, str):
-        return content.strip()
+        return _clean_session_user_text(content)
     if isinstance(content, dict):
         item_type = content.get("type")
         if item_type in {"tool_result", "function_call_output"}:
             return ""
         for key in ("text", "output"):
             value = content.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+            if isinstance(value, str):
+                cleaned = _clean_session_user_text(value)
+                if cleaned:
+                    return cleaned
         if "content" in content:
             return _session_text_from_content(content.get("content"))
         return ""
