@@ -1336,8 +1336,9 @@ def _claude_code_session_round_records() -> tuple[dict[str, Any], ...]:
 def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
     records: list[dict[str, Any]] = []
     for turn in range(1, 61):
-        session_id = "codex-session-alpha" if turn <= 30 else "codex-session-beta"
-        prompt = "Write Codex App runtime wiki" if turn <= 30 else "Investigate live dashboard capture"
+        is_alpha_session = turn % 2 == 1
+        session_id = "codex-session-alpha" if is_alpha_session else "codex-session-beta"
+        prompt = "Write Codex App runtime wiki" if is_alpha_session else "Investigate live dashboard capture"
         followup = f"{prompt} follow-up {turn}"
         hour = 10 + (turn - 1) // 60
         minute = (turn - 1) % 60
@@ -1355,7 +1356,7 @@ def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
                 "content": [{"type": "input_text", "text": "<environment_context>\nskip cwd\n</environment_context>"}],
             },
         ]
-        if turn > 30:
+        if not is_alpha_session:
             user_message = {
                 "type": "message",
                 "role": "user",

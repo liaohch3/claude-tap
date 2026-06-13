@@ -339,7 +339,12 @@ function sessionTurnDiscriminator(entry) {
 
 function buildSessionGroups(items) {
   const groups = [];
+  const groupsByKey = new Map();
   const titleGenerationItems = [];
+
+  function canMergeNonContiguousSession(info) {
+    return typeof info.key === 'string' && info.key.startsWith('codexapp:');
+  }
 
   function createGroup(info, item) {
     const group = {
@@ -353,6 +358,7 @@ function buildSessionGroups(items) {
       items: [],
     };
     groups.push(group);
+    if (canMergeNonContiguousSession(info)) groupsByKey.set(info.key, group);
     return group;
   }
 
@@ -395,6 +401,7 @@ function buildSessionGroups(items) {
     const current = groups[groups.length - 1] || null;
     const info = sessionKeyForEntry(item.entry, current);
     let group = current && current.key === info.key ? current : null;
+    if (!group && canMergeNonContiguousSession(info)) group = groupsByKey.get(info.key) || null;
     if (!group) group = createGroup(info, item);
     addItemToGroup(group, item, info);
   });
