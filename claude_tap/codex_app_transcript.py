@@ -180,6 +180,7 @@ class _TranscriptCursor:
     parser: _TranscriptParser
     offset: int = 0
     partial_line: str = ""
+    imported_records: int = 0
 
 
 class CodexAppTranscriptSessionRegistry:
@@ -195,6 +196,7 @@ class CodexAppTranscriptSessionRegistry:
         self._metadata = metadata or {}
         self._writers: dict[Path, TraceWriter] = {}
         self._session_ids: dict[Path, str] = {}
+        self._skip_record_counts: dict[Path, int] = {}
 
     @property
     def session_ids(self) -> tuple[str, ...]:
@@ -203,6 +205,10 @@ class CodexAppTranscriptSessionRegistry:
     async def write_next_turn(self, transcript_path: Path, record: dict[str, Any]) -> None:
         writer = self._writer_for_record(transcript_path, record)
         await writer.write_next_turn(record)
+
+    def skip_record_count(self, transcript_path: Path, record: dict[str, Any]) -> int:
+        self._writer_for_record(transcript_path, record)
+        return self._skip_record_counts.get(transcript_path, 0)
 
     def close(self) -> None:
         for writer in self._writers.values():
@@ -241,14 +247,25 @@ class CodexAppTranscriptSessionRegistry:
         codex_app_session_id = _record_codex_app_session_id(record)
         if codex_app_session_id:
             metadata["codex_app_session_id"] = codex_app_session_id
-        session_id = self._store.create_session(
-            client=metadata.get("client", "codexapp"),
-            proxy_mode=metadata.get("proxy_mode", "transcript"),
-            started_at=_record_datetime(record),
-        )
+        existing_row = None
+        if codex_app_session_id:
+            existing_row = self._store.find_codex_app_session_row(codex_app_session_id)
+        if existing_row is not None:
+            session_id = existing_row["id"]
+            skip_record_count = self._store.count_non_partial_records(session_id)
+        else:
+            session_id = self._store.create_session(
+                client=metadata.get("client", "codexapp"),
+                proxy_mode=metadata.get("proxy_mode", "transcript"),
+                started_at=_record_datetime(record),
+            )
+            skip_record_count = 0
         writer = TraceWriter(session_id, metadata=metadata, store=self._store)
+        if existing_row is not None:
+            writer.count = int(existing_row["record_count"] or 0)
         self._writers[transcript_path] = writer
         self._session_ids[transcript_path] = session_id
+        self._skip_record_counts[transcript_path] = skip_record_count
         return writer
 
 
@@ -526,7 +543,12 @@ async def import_codex_app_transcripts_to_sessions(
             include_incomplete=include_incomplete,
         )
         for record in records:
+            skip_record_count = registry.skip_record_count(transcript_path, record)
+            if cursor.imported_records < skip_record_count:
+                cursor.imported_records += 1
+                continue
             await registry.write_next_turn(transcript_path, record)
+            cursor.imported_records += 1
             imported += 1
     return imported
 

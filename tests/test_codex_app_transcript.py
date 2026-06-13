@@ -462,6 +462,77 @@ async def test_import_codex_app_transcripts_to_sessions_splits_codex_queries(tra
 
 
 @pytest.mark.asyncio
+async def test_import_codex_app_transcripts_to_sessions_reuses_session_after_restart(
+    trace_db,
+    tmp_path: Path,
+) -> None:
+    transcript = tmp_path / ".codex" / "sessions" / "2026" / "06" / "07" / "rollout.jsonl"
+    rows = _session_rows()
+    rows[0]["payload"]["id"] = "codex-query-restart"
+    _write_jsonl(transcript, rows[:8])
+
+    from claude_tap.trace_store import SessionQuery, get_trace_store
+
+    store = get_trace_store()
+    first_registry = CodexAppTranscriptSessionRegistry(
+        store=store,
+        metadata={"client": "codexapp", "proxy_mode": "transcript"},
+    )
+    imported = await import_codex_app_transcripts_to_sessions(
+        first_registry,
+        since=0,
+        home=tmp_path,
+        include_incomplete=False,
+    )
+    first_registry.close()
+
+    assert imported == 1
+    first_rows = store.list_session_rows(query=SessionQuery(agent_clients=("codexapp",)))
+    assert len(first_rows) == 1
+    session_id = first_rows[0]["id"]
+
+    _write_jsonl(transcript, rows)
+    restarted_registry = CodexAppTranscriptSessionRegistry(
+        store=store,
+        metadata={"client": "codexapp", "proxy_mode": "transcript"},
+    )
+    imported = await import_codex_app_transcripts_to_sessions(
+        restarted_registry,
+        since=0,
+        home=tmp_path,
+        include_incomplete=False,
+    )
+    restarted_registry.close()
+
+    assert imported == 1
+    restarted_rows = store.list_session_rows(query=SessionQuery(agent_clients=("codexapp",)))
+    assert len(restarted_rows) == 1
+    assert restarted_rows[0]["id"] == session_id
+    assert restarted_rows[0]["record_count"] == 2
+    records = store.load_records(session_id)
+    assert [record["turn"] for record in records] == [1, 2]
+    assert records[1]["request"]["body"]["metadata"]["codex_app_session_id"] == "codex-query-restart"
+
+    repeated_registry = CodexAppTranscriptSessionRegistry(
+        store=store,
+        metadata={"client": "codexapp", "proxy_mode": "transcript"},
+    )
+    imported = await import_codex_app_transcripts_to_sessions(
+        repeated_registry,
+        since=0,
+        home=tmp_path,
+        include_incomplete=False,
+    )
+    repeated_registry.close()
+
+    assert imported == 0
+    repeated_rows = store.list_session_rows(query=SessionQuery(agent_clients=("codexapp",)))
+    assert len(repeated_rows) == 1
+    assert repeated_rows[0]["id"] == session_id
+    assert repeated_rows[0]["record_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_watch_codex_app_transcripts_flushes_incomplete_record_on_cancel(trace_db, tmp_path: Path) -> None:
     transcript = tmp_path / ".codex" / "sessions" / "2026" / "06" / "07" / "rollout.jsonl"
     rows = _session_rows()[:5]

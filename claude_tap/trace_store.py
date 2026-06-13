@@ -237,6 +237,53 @@ class TraceStore:
         conn = self._connect()
         return conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
 
+    def find_codex_app_session_row(self, codex_app_session_id: str) -> sqlite3.Row | None:
+        codex_app_session_id = codex_app_session_id.strip()
+        if not codex_app_session_id:
+            return None
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT s.*
+            FROM sessions s
+            WHERE LOWER(COALESCE(s.client, '')) = 'codexapp'
+            ORDER BY s.record_count DESC,
+                     COALESCE(julianday(s.updated_at), 0) DESC,
+                     COALESCE(julianday(s.started_at), 0) DESC,
+                     s.id DESC
+            """
+        ).fetchall()
+        for row in rows:
+            first_record = conn.execute(
+                """
+                SELECT payload_json
+                FROM records
+                WHERE session_id = ?
+                ORDER BY record_index
+                LIMIT 1
+                """,
+                (row["id"],),
+            ).fetchone()
+            if first_record is None:
+                continue
+            payload_json = first_record["payload_json"]
+            if isinstance(payload_json, str) and codex_app_session_id in payload_json:
+                return row
+        return None
+
+    def count_non_partial_records(self, session_id: str) -> int:
+        conn = self._connect()
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM records
+            WHERE session_id = ?
+              AND payload_json NOT LIKE '%codex_app_partial%'
+            """,
+            (session_id,),
+        ).fetchone()
+        return int(row["count"] or 0) if row is not None else 0
+
     def list_session_rows(
         self,
         *,
