@@ -1993,6 +1993,113 @@ def test_kimi_multiturn_tool_calls_reverse_proxy():
         _cleanup(trace_dir, fake_bin_dir, "kimi_multiturn")
 
 
+FAKE_KIMI_CODE_SCRIPT = r"""#!/usr/bin/env python3
+# Fake Kimi Code CLI: read base_url from KIMI_CODE_HOME/config.toml
+import json, os, sys, tomllib, urllib.request
+from pathlib import Path
+
+home = Path(os.environ["KIMI_CODE_HOME"])
+config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+provider = config["providers"]["managed:kimi-code"]
+base = provider["base_url"].rstrip("/")
+url = f"{base}/chat/completions"
+
+req_body = json.dumps({
+    "model": "kimi-k2-turbo-preview",
+    "messages": [{"role": "user", "content": "Reply with exactly: HELLO_KIMI_CODE"}],
+    "stream": True,
+}).encode()
+req = urllib.request.Request(url, data=req_body, headers={
+    "Content-Type": "application/json",
+    "Authorization": "Bearer kimi-test-key-12345678",
+})
+try:
+    with urllib.request.urlopen(req) as resp:
+        chunks = resp.read().decode()
+        print(f"[fake-kimi-code] status={resp.status} stream-bytes={len(chunks)}")
+except Exception as e:
+    print(f"[fake-kimi-code] Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("[fake-kimi-code] Done.")
+"""
+
+
+def test_kimi_code_client_reverse_proxy():
+    """Test --tap-client kimi-code in reverse mode using KIMI_CODE_HOME sandbox."""
+
+    async def handler(request):
+        body = await request.json()
+        assert request.path == "/chat/completions"
+        assert body["model"] == "kimi-k2-turbo-preview"
+        from aiohttp import web
+
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        chunks = [
+            {
+                "id": "kimi_code_chat_1",
+                "model": body["model"],
+                "choices": [{"delta": {"role": "assistant", "reasoning_content": "Need exact text."}}],
+            },
+            {
+                "id": "kimi_code_chat_1",
+                "model": body["model"],
+                "choices": [{"delta": {"content": "HELLO_KIMI_CODE"}}],
+            },
+            {
+                "id": "kimi_code_chat_1",
+                "model": body["model"],
+                "choices": [
+                    {
+                        "delta": {},
+                        "finish_reason": "stop",
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 2,
+                            "total_tokens": 15,
+                            "cached_tokens": 5,
+                        },
+                    }
+                ],
+            },
+        ]
+        for chunk in chunks:
+            await resp.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        await resp.write_eof()
+        return resp
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_kimi_code_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_kimi_code_")
+    fake_kimi = Path(fake_bin_dir) / "kimi"
+    fake_kimi.write_text(FAKE_KIMI_CODE_SCRIPT)
+    fake_kimi.chmod(fake_kimi.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19246, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19246,
+            tap_client="kimi-code",
+        )
+
+        assert proc.returncode == 0, f"kimi-code mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        records = read_trace_records(trace_dir)
+        assert len(records) == 1
+        record = records[0]
+        assert record["request"]["path"] == "/chat/completions"
+        assert record["upstream_base_url"] == "http://127.0.0.1:19246"
+        assert record["response"]["body"]["content"][1]["text"] == "HELLO_KIMI_CODE"
+        assert "KIMI_CODE_HOME=" in proc.stdout
+        assert "KIMI_CODE_BASE_URL=http://127.0.0.1:" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "kimi_code")
+
+
 ## ---------------------------------------------------------------------------
 ## Test 6b: test_codex_zstd_request_body — proxy decompresses zstd request bodies
 ## ---------------------------------------------------------------------------
@@ -2131,6 +2238,92 @@ def test_filter_headers():
     print("  OK: short key masked")
 
     print("\n  test_filter_headers PASSED")
+
+
+## ---------------------------------------------------------------------------
+## Test: double-serialized request body decoding
+## ---------------------------------------------------------------------------
+
+
+def test_double_serialized_request_body():
+    """Verify proxy decodes double-serialized JSON request bodies into dicts."""
+    import socket
+
+    received_bodies: list[object] = []
+
+    async def handler(request):
+        body = await request.json()
+        received_bodies.append(body)
+        from aiohttp import web
+
+        return web.json_response(
+            {
+                "id": "msg_test",
+                "type": "message",
+                "content": [{"type": "text", "text": "OK"}],
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+                "model": "claude-test",
+            }
+        )
+
+    # Build a fake claude script that sends a double-serialized body
+    double_serial_script = r'''#!/usr/bin/env python3
+"""Fake claude CLI — sends a double-serialized JSON body."""
+import json, os, sys, urllib.request
+
+base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+url = f"{base}/v1/messages"
+inner = {"model": "claude-test", "messages": [{"role": "user", "content": "hi"}]}
+# Double-serialize: the outer JSON is a string wrapping the real object
+payload = json.dumps(json.dumps(inner)).encode()
+
+req = urllib.request.Request(url, data=payload, headers={
+    "Content-Type": "application/json",
+    "x-api-key": "sk-test",
+})
+try:
+    resp = urllib.request.urlopen(req)
+    print(resp.read().decode())
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_double_serial_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_double_serial_")
+    fake_claude = Path(fake_bin_dir) / "claude"
+    fake_claude.write_text(double_serial_script)
+    fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IEXEC)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        upstream_port = sock.getsockname()[1]
+    stop = _start_fake_upstream(upstream_port, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            upstream_port,
+        )
+
+        assert proc.returncode == 0, f"double-serial test failed: stdout={proc.stdout} stderr={proc.stderr}"
+        assert len(received_bodies) == 1
+        assert isinstance(received_bodies[0], str)
+        upstream_body = json.loads(received_bodies[0])
+        assert upstream_body["model"] == "claude-test"
+
+        # Verify the trace record stored the body as a dict, not a string
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1
+        req_body = records[0]["request"]["body"]
+        assert isinstance(req_body, dict), f"Expected dict body, got {type(req_body)}: {req_body!r}"
+        assert req_body["model"] == "claude-test"
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "claude")
+
+    print("\n  test_double_serialized_request_body PASSED")
 
 
 ## ---------------------------------------------------------------------------

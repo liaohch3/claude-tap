@@ -84,6 +84,8 @@ async def test_run_client_opencode_forward_sets_node_ca_env(monkeypatch) -> None
 @pytest.mark.asyncio
 async def test_run_client_opencode_reverse_sets_anthropic_base_url(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    for key in ("OPENAI_BASE_URL", "GOOGLE_GEMINI_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

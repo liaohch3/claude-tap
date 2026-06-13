@@ -26,6 +26,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+
+
+
+## [0.1.114] - 2026-06-12
+
+### Changed
+- fix: decode double-serialized JSON request bodies
+## [0.1.113] - 2026-06-12
+
+### Changed
+- docs: add Phistory ecosystem showcase (#321)
+## [0.1.112] - 2026-06-12
+
+### Changed
+- fix: prevent Windows pip background update corruption (#319)
+## [0.1.111] - 2026-06-12
+
+### Changed
+- feat: add Kimi Code tap client
 ## [0.1.110] - 2026-06-12
 
 ### Changed
