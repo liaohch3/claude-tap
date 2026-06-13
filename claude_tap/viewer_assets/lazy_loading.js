@@ -27,6 +27,9 @@ function buildStubEntry(meta, rawIdx) {
 
   // Build a minimal system field to support task fingerprinting
   const body = { model: meta.model || '' };
+  if (meta.codex_app_session_id) {
+    body.metadata = { codex_app_session_id: meta.codex_app_session_id };
+  }
   if (typeof meta.request_generate === 'boolean') body.generate = meta.request_generate;
   if (meta.has_system && meta.sys_hint) {
     body.system = meta.sys_hint;
@@ -57,9 +60,11 @@ function buildStubEntry(meta, rawIdx) {
     timestamp: meta.timestamp || '',
     duration_ms: meta.duration_ms || 0,
     transport: meta.transport || '',
+    _session_user_text: meta.session_user_text || '',
     request: {
       method: meta.method || '',
       path: meta.path || '',
+      headers: meta.codex_app_session_id ? { 'x-codex-app-session-id': meta.codex_app_session_id } : {},
       body: body,
     },
     response: {

@@ -773,6 +773,49 @@ def _tool_display_name(tool: dict) -> str:
     return ""
 
 
+def _session_text_from_content(content: object) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, dict):
+        item_type = content.get("type")
+        if item_type in {"tool_result", "function_call_output"}:
+            return ""
+        for key in ("text", "output"):
+            value = content.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        if "content" in content:
+            return _session_text_from_content(content.get("content"))
+        return ""
+    if isinstance(content, list):
+        for item in content:
+            text = _session_text_from_content(item)
+            if text:
+                return text
+    return ""
+
+
+def _is_tool_result_only_message(message: dict) -> bool:
+    content = message.get("content")
+    if not isinstance(content, list) or not content:
+        return False
+    return all(
+        isinstance(block, dict) and block.get("type") in {"tool_result", "function_call_output"} for block in content
+    )
+
+
+def _first_user_text(messages: list[dict]) -> str:
+    for message in messages:
+        if message.get("role") != "user" or _is_tool_result_only_message(message):
+            continue
+        text = _session_text_from_content(message.get("content"))
+        if text:
+            return text
+    return ""
+
+
 def _extract_metadata(record_json: str) -> dict | None:
     """Extract sidebar-relevant metadata from a raw JSON record string.
 
@@ -833,6 +876,12 @@ def _extract_metadata(record_json: str) -> dict | None:
 
     # Messages
     msgs = _extract_request_messages(body)
+
+    metadata = _dict_or_empty(body.get("metadata"))
+    headers = _dict_or_empty(req.get("headers"))
+    codex_app_session_id = metadata.get("codex_app_session_id") or headers.get("x-codex-app-session-id")
+    if not isinstance(codex_app_session_id, str):
+        codex_app_session_id = ""
 
     # Tool names from request
     tools = _extract_gemini_tools(body) or body.get("tools") or []
@@ -897,6 +946,8 @@ def _extract_metadata(record_json: str) -> dict | None:
         "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
         "has_system": bool(sys_text),
         "message_count": len(msgs),
+        "session_user_text": _first_user_text(msgs),
+        "codex_app_session_id": codex_app_session_id,
         "sys_hint": sys_text[:200],
         "tool_names": tool_names,
         "response_tool_names": response_tool_names,
