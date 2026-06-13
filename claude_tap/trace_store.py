@@ -138,7 +138,7 @@ class TraceStore:
             conn.execute(
                 """
                 UPDATE sessions
-                SET updated_at = ?, record_count = record_count + 1
+                SET updated_at = ?, record_count = record_count + 1, status = 'active'
                 WHERE id = ?
                 """,
                 (updated_at, session_id),
@@ -177,7 +177,7 @@ class TraceStore:
             conn.execute(
                 """
                 UPDATE sessions
-                SET updated_at = ?
+                SET updated_at = ?, status = 'active'
                 WHERE id = ?
                 """,
                 (datetime.now(timezone.utc).isoformat(), session_id),
@@ -360,6 +360,46 @@ class TraceStore:
             "deleted_logs": deleted_logs,
             "missing_sessions": missing_ids,
         }
+
+    def finalize_stale_active_sessions(
+        self,
+        *,
+        protected_session_ids: set[str] | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        """Mark stale active sessions complete so abandoned traces can be managed."""
+        protected = protected_session_ids or set()
+        cutoff = (now or datetime.now(timezone.utc)) - STALE_ACTIVE_SESSION_AFTER
+        with self._write_lock:
+            conn = self._connect()
+            rows = conn.execute(
+                """
+                SELECT id, record_count, summary_json
+                FROM sessions
+                WHERE status = 'active'
+                  AND COALESCE(julianday(updated_at), 0) <= julianday(?)
+                """,
+                (cutoff.isoformat(),),
+            ).fetchall()
+            updated = 0
+            for row in rows:
+                session_id = row["id"]
+                if session_id in protected:
+                    continue
+                status = _stale_active_final_status(row)
+                summary_json = _stale_active_summary_json(row["summary_json"], session_id, status)
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET status = ?, summary_json = ?
+                    WHERE id = ?
+                    """,
+                    (status, summary_json, session_id),
+                )
+                updated += 1
+            if updated:
+                conn.commit()
+            return updated
 
     def load_records(
         self,
@@ -1306,6 +1346,31 @@ def _parse_iso_datetime(value: object) -> datetime | None:
 def _is_stale_active_session(updated_at: object, now: datetime) -> bool:
     updated = _parse_iso_datetime(updated_at)
     return updated is not None and updated <= now - STALE_ACTIVE_SESSION_AFTER
+
+
+def _stale_active_final_status(row: sqlite3.Row) -> str:
+    try:
+        summary = json.loads(row["summary_json"] or "{}")
+    except json.JSONDecodeError:
+        summary = {}
+    if isinstance(summary, dict) and summary.get("status") == "error":
+        return "error"
+    return "empty" if int(row["record_count"] or 0) == 0 else "complete"
+
+
+def _stale_active_summary_json(summary_json: object, session_id: str, status: str) -> str | None:
+    if not summary_json:
+        return None
+    try:
+        summary = json.loads(str(summary_json))
+    except json.JSONDecodeError:
+        return str(summary_json)
+    if not isinstance(summary, dict):
+        return str(summary_json)
+    summary["id"] = session_id
+    summary["status"] = status
+    summary["active"] = False
+    return json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
 
 
 def _int_or_none(value: object) -> int | None:

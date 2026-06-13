@@ -23,6 +23,7 @@ from claude_tap.dashboard import (
     list_trace_sessions,
     load_trace_session,
     read_dashboard_template,
+    redact_dashboard_records,
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
 from claude_tap.shared_dashboard import dashboard_url
@@ -307,6 +308,11 @@ class LiveViewerServer:
         """Return the viewer URL."""
         return dashboard_url(self.host, self._actual_port)
 
+    def _finalize_stale_active_sessions(self) -> None:
+        """Release abandoned active sessions while protecting the current writer."""
+        protected = {self.session_id} if self.session_id else set()
+        ensure_trace_store().finalize_stale_active_sessions(protected_session_ids=protected)
+
     async def _handle_dashboard_index(self, request: web.Request) -> web.Response:
         """Serve the session-first dashboard."""
         if session_id := request.query.get("session_id"):
@@ -475,11 +481,13 @@ class LiveViewerServer:
 
     async def _handle_agents(self, request: web.Request) -> web.Response:
         """Return trace history agent buckets."""
+        self._finalize_stale_active_sessions()
         live_count = await self._current_live_record_count()
         return web.json_response({"agents": list_trace_agents(self.session_id, live_record_count=live_count)})
 
     async def _handle_sessions(self, request: web.Request) -> web.Response:
         """Return trace history sessions."""
+        self._finalize_stale_active_sessions()
         live_count = await self._current_live_record_count()
         offset = _session_offset_from_request(request)
         limit = _session_limit_from_request(request)
@@ -543,7 +551,7 @@ class LiveViewerServer:
                 "html": f"/api/sessions/{quote(session_id)}/export/html",
             }
             _generate_html_viewer_from_compact_bundle(
-                build_compact_trace_bundle(store.load_records(session_id)),
+                build_compact_trace_bundle(redact_dashboard_records(store.load_records(session_id))),
                 html_path,
                 display_trace_path=export_urls["compact"],
                 display_html_path=f"/dashboard/session/{quote(session_id)}",
@@ -607,6 +615,7 @@ class LiveViewerServer:
     async def _handle_delete_session(self, request: web.Request) -> web.Response:
         """Delete one stored trace session."""
         session_id = request.match_info["session_id"]
+        self._finalize_stale_active_sessions()
         store = ensure_trace_store()
         row = store.load_session_row(session_id)
         if row is None:
@@ -632,6 +641,7 @@ class LiveViewerServer:
         if not session_ids:
             return web.json_response({"error": "No sessions selected"}, status=400)
 
+        self._finalize_stale_active_sessions()
         store = ensure_trace_store()
         deletable_ids = []
         skipped_active = []
@@ -732,6 +742,7 @@ class LiveViewerServer:
         date_key = request.match_info["date"]
         if date_key != "legacy" and not _DATE_RE.match(date_key):
             return web.json_response({"error": "Invalid date format"}, status=400)
+        self._finalize_stale_active_sessions()
         protected: set[str] = set()
         force = request.query.get("force", "").lower() in {"1", "true", "yes"}
         if self.session_id:
