@@ -1335,11 +1335,16 @@ def _claude_code_session_round_records() -> tuple[dict[str, Any], ...]:
 
 def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
     records: list[dict[str, Any]] = []
+    session_id = "codex-session-alpha"
+    prompts = [
+        "Write Codex App runtime wiki",
+        "Review live dashboard capture",
+        "Fix duplicate Codex App trace rows",
+    ]
     for turn in range(1, 61):
-        is_alpha_session = turn % 2 == 1
-        session_id = "codex-session-alpha" if is_alpha_session else "codex-session-beta"
-        prompt = "Write Codex App runtime wiki" if is_alpha_session else "Investigate live dashboard capture"
-        followup = f"{prompt} follow-up {turn}"
+        prompt_index = (turn - 1) // 20
+        prompt = prompts[prompt_index]
+        step = (turn - 1) % 20
         hour = 10 + (turn - 1) // 60
         minute = (turn - 1) % 60
         injected_user_messages = [
@@ -1356,28 +1361,41 @@ def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
                 "content": [{"type": "input_text", "text": "<environment_context>\nskip cwd\n</environment_context>"}],
             },
         ]
-        if not is_alpha_session:
-            user_message = {
-                "type": "message",
-                "role": "user",
-                "content": [
+        prior_messages: list[dict[str, Any]] = []
+        for prior_prompt in prompts[:prompt_index]:
+            prior_messages.extend(
+                [
                     {
-                        "type": "input_text",
-                        "text": (
-                            "# Files mentioned by the user:\n\n"
-                            "## screenshot.png\n\n"
-                            "## My request for Codex:\n\n"
-                            f"{prompt}"
-                        ),
-                    }
-                ],
-            }
-        else:
-            user_message = {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": prompt}],
-            }
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": prior_prompt}],
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": f"Finished {prior_prompt}."}],
+                    },
+                ]
+            )
+        user_message = {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": prompt}],
+        }
+        continuation_messages: list[dict[str, Any]] = []
+        if step:
+            continuation_messages = [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": f"Working on {prompt} step {step}."}],
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": f"call-{turn}",
+                    "output": f"step {step} output",
+                },
+            ]
         records.append(
             {
                 "timestamp": f"2026-06-13T{hour:02d}:{minute:02d}:00+00:00",
@@ -1394,17 +1412,9 @@ def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
                         "metadata": {"codex_app_session_id": session_id},
                         "input": [
                             *injected_user_messages,
+                            *prior_messages,
                             user_message,
-                            {
-                                "type": "message",
-                                "role": "assistant",
-                                "content": [{"type": "output_text", "text": "Working."}],
-                            },
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": [{"type": "input_text", "text": followup}],
-                            },
+                            *continuation_messages,
                         ],
                     },
                 },
@@ -2274,10 +2284,14 @@ def test_viewer_session_order_groups_large_codex_app_sessions_in_virtual_mode(tm
     assert errors == []
     assert state["virtualMode"] is True
     assert state["groups"] == ["Query 1 - Write Codex App runtime wiki"]
-    assert state["counts"] == ["30"]
-    assert state["virtualGroups"] == ["Write Codex App runtime wiki", "Investigate live dashboard capture"]
-    assert state["virtualCounts"] == ["30", "30"]
-    assert state["rowCount"] == 62
+    assert state["counts"] == ["20"]
+    assert state["virtualGroups"] == [
+        "Write Codex App runtime wiki",
+        "Review live dashboard capture",
+        "Fix duplicate Codex App trace rows",
+    ]
+    assert state["virtualCounts"] == ["20", "20", "20"]
+    assert state["rowCount"] == 63
     assert state["visualCount"] == 60
 
 

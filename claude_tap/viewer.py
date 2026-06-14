@@ -876,6 +876,16 @@ def _first_user_text(messages: list[dict]) -> str:
     return ""
 
 
+def _latest_user_text(messages: list[dict]) -> str:
+    for message in reversed(messages):
+        if message.get("role") != "user" or _is_tool_result_only_message(message):
+            continue
+        text = _session_text_from_content(message.get("content"))
+        if text:
+            return text
+    return ""
+
+
 def _extract_metadata(record_json: str) -> dict | None:
     """Extract sidebar-relevant metadata from a raw JSON record string."""
     try:
@@ -1013,7 +1023,7 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
         "has_system": bool(sys_text),
         "message_count": len(msgs),
-        "session_user_text": _first_user_text(msgs),
+        "session_user_text": _latest_user_text(msgs) or _first_user_text(msgs),
         "codex_app_session_id": codex_app_session_id,
         "sys_hint": sys_text[:200],
         "tool_names": tool_names,

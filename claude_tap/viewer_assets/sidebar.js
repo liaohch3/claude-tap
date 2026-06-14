@@ -305,9 +305,23 @@ function sessionKeyForEntry(entry, currentGroup) {
   const metadataOnly = isTitleGenerationEntry(entry);
   const rootTurn = sessionRootTurn(entry);
   if (codexApp) {
+    const userText = info.userText || codexApp.userText;
+    const userIndex = info.userText ? info.userIndex : codexApp.userIndex;
+    if (userText) {
+      if (shouldContinueSessionGroup(entry, { ...info, userText, userIndex }, currentGroup)) {
+        return { key: currentGroup.key, userText, userIndex, metadataOnly, rootTurn };
+      }
+      return {
+        key: 'codexapp-user:' + codexApp.sessionId + ':' + userIndex + ':' + userText,
+        userText,
+        userIndex,
+        metadataOnly,
+        rootTurn,
+      };
+    }
     return {
       key: 'codexapp:' + codexApp.sessionId,
-      userText: codexApp.userText || info.userText,
+      userText: codexApp.userText,
       userIndex: codexApp.userIndex,
       metadataOnly,
       rootTurn,
