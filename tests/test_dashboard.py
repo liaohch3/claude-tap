@@ -294,6 +294,52 @@ def test_dashboard_lists_uncached_session_without_record_scan(trace_db, monkeypa
     assert summary["status"] == "complete"
 
 
+def test_dashboard_list_bad_session_summary_does_not_empty_page(trace_db) -> None:
+    store = get_trace_store()
+    good_id = store.create_session(client="codex", proxy_mode="reverse")
+    bad_id = store.create_session(client="", proxy_mode="")
+    conn = store._connect()
+    conn.execute(
+        """
+        UPDATE sessions
+        SET status = 'complete', record_count = 1, summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            json.dumps({"agent": "Codex", "status": "complete", "total_tokens": 10}, separators=(",", ":")),
+            good_id,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE sessions
+        SET status = 'error', record_count = 1, summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            json.dumps({"agent": "Unknown", "status": "error", "total_tokens": 0}, separators=(",", ":")),
+            bad_id,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
+        VALUES (?, 1, 1, ?, ?)
+        """,
+        (bad_id, "2026-05-20T11:00:00+00:00", "{not-json"),
+    )
+    conn.commit()
+
+    sessions = list_trace_sessions()
+    by_id = {session["id"]: session for session in sessions}
+
+    assert good_id in by_id
+    assert bad_id in by_id
+    assert by_id[bad_id]["agent"] == "Unknown"
+    assert by_id[bad_id]["record_count"] == 1
+    assert by_id[bad_id]["status"] == "error"
+
+
 def test_dashboard_agent_buckets_use_aggregate_query(trace_db, monkeypatch) -> None:
     store = get_trace_store()
     codex_id = store.create_session(client="codex", proxy_mode="reverse")

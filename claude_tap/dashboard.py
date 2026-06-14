@@ -97,13 +97,23 @@ def list_trace_sessions(
     """Return trace sessions sorted by most recent activity."""
     store = ensure_trace_store()
     try:
-        sessions = [
+        rows = store.list_session_rows(limit=limit, offset=offset, query=query)
+    except (OSError, sqlite3.Error, ValueError):
+        return []
+
+    sessions: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            summary = _session_summary_from_row(
+                store,
+                row,
+                repair_stale_summary=repair_stale_summaries,
+            )
+        except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
+            summary = _minimal_session_summary_from_row(row)
+        sessions.append(
             _apply_current_session_state(
-                _session_summary_from_row(
-                    store,
-                    row,
-                    repair_stale_summary=repair_stale_summaries,
-                ),
+                summary,
                 current_session_id,
                 live_record_count=(
                     live_record_count
@@ -111,10 +121,7 @@ def list_trace_sessions(
                     else None
                 ),
             )
-            for row in store.list_session_rows(limit=limit, offset=offset, query=query)
-        ]
-    except (OSError, sqlite3.Error, json.JSONDecodeError, ValueError):
-        return []
+        )
     sessions.sort(key=lambda item: (_timestamp_sort_value(item.get("updated_at")), item.get("id") or ""), reverse=True)
     return sessions
 
