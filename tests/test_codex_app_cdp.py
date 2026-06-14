@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import aiohttp
 import pytest
@@ -568,6 +569,86 @@ async def test_async_main_codexapp_starts_cdp_enrichment_by_default(monkeypatch:
     assert await async_main(args) == 0
     assert cancelled.is_set()
     assert calls == [{"endpoint": "http://127.0.0.1:9238", "store_stream_events": False}]
+
+
+@pytest.mark.asyncio
+async def test_async_main_codexapp_cleanup_protects_cdp_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from claude_tap import async_main
+    from claude_tap.trace_store import SessionQuery, get_trace_store
+
+    cdp_written = asyncio.Event()
+
+    async def fake_watch_codex_app_cdp(writer: object, **_: object) -> None:
+        await writer.write_next_turn(
+            {
+                "timestamp": "2026-06-14T00:00:03+00:00",
+                "request_id": "req_cdp_cleanup",
+                "duration_ms": 0,
+                "transport": "websocket",
+                "request": {"method": "WEBSOCKET", "path": "/backend-api/codex", "body": {"model": "gpt-cdp"}},
+                "response": {"status": 200, "body": {"usage": {"input_tokens": 1, "output_tokens": 1}}},
+                "capture": {"source": "codexapp-cdp"},
+            }
+        )
+        cdp_written.set()
+        await asyncio.Future()
+
+    async def fake_watch_codex_app_transcripts_to_sessions(registry: object, **_: object) -> None:
+        await asyncio.wait_for(cdp_written.wait(), timeout=1)
+        for index in range(2):
+            app_session_id = f"codex-query-cleanup-{index}"
+            await registry.write_next_turn(
+                tmp_path / f"{app_session_id}.jsonl",
+                {
+                    "timestamp": f"2026-06-14T00:00:0{index}+00:00",
+                    "request_id": f"req_transcript_cleanup_{index}",
+                    "duration_ms": 0,
+                    "transport": "codex-app-transcript",
+                    "request": {
+                        "method": "CODEX_APP_TRANSCRIPT",
+                        "path": "/v1/responses",
+                        "headers": {"x-codex-app-session-id": app_session_id},
+                        "body": {
+                            "model": "gpt-transcript",
+                            "metadata": {"codex_app_session_id": app_session_id},
+                            "input": [
+                                {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [{"type": "input_text", "text": f"query {index}"}],
+                                }
+                            ],
+                        },
+                    },
+                    "response": {"status": 200, "body": {"usage": {"input_tokens": 1, "output_tokens": 1}}},
+                },
+            )
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "codexapp-cleanup.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.watch_codex_app_cdp", fake_watch_codex_app_cdp)
+    monkeypatch.setattr(
+        "claude_tap.cli.watch_codex_app_transcripts_to_sessions",
+        fake_watch_codex_app_transcripts_to_sessions,
+    )
+
+    args = parse_args(["--tap-client", "codexapp", "--tap-no-live", "--tap-max-traces", "1"])
+
+    assert await async_main(args) == 0
+
+    store = get_trace_store()
+    rows = store.list_session_rows(query=SessionQuery(agent_clients=("codexapp",)))
+    records = [record for row in rows for record in store.load_records(row["id"])]
+
+    assert len(rows) == 3
+    assert any(record.get("capture", {}).get("source") == "codexapp-cdp" for record in records)
+    assert sorted(
+        record["request"]["body"]["metadata"]["codex_app_session_id"]
+        for record in records
+        if record["transport"] == "codex-app-transcript"
+    ) == ["codex-query-cleanup-0", "codex-query-cleanup-1"]
 
 
 def test_parse_args_codexapp_uses_default_cdp_endpoint_for_automatic_capture() -> None:

@@ -500,11 +500,13 @@ async def async_main(args: argparse.Namespace):
             prompt_export_rc = _export_prompt_from_session(store, session_id, args.export_prompt)
 
         if args.max_traces > 0:
-            protected_session_ids = set(transcript_registry.session_ids) if transcript_registry is not None else None
+            protected_session_ids = set(transcript_registry.session_ids) if transcript_registry is not None else set()
+            if cdp_writer is not None and cdp_writer.session_id:
+                protected_session_ids.add(cdp_writer.session_id)
             cleaned = cleanup_trace_sessions(
                 args.max_traces,
                 protected_session_id=session_id,
-                protected_session_ids=protected_session_ids,
+                protected_session_ids=protected_session_ids or None,
             )
             if cleaned:
                 print(f"\n🧹 Cleaned up {cleaned} old trace session(s)")
