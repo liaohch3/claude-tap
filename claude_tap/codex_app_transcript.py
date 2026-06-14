@@ -7,7 +7,7 @@ import json
 import os
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -486,6 +486,43 @@ def build_codex_app_transcript_records(
     return parser.feed(rows, start_turn=start_turn, include_incomplete=include_incomplete)
 
 
+def _selected_transcript_paths(
+    *,
+    since: float,
+    home: Path | None,
+    transcript_paths: Iterable[Path] | None,
+) -> list[Path]:
+    if transcript_paths is not None:
+        return list(transcript_paths)
+    return find_codex_app_transcripts(since=since, home=home)
+
+
+def _cursor_for_transcript(
+    state: dict[Path, _TranscriptCursor],
+    transcript_path: Path,
+) -> _TranscriptCursor:
+    cursor = state.get(transcript_path)
+    if not isinstance(cursor, _TranscriptCursor):
+        cursor = _TranscriptCursor(parser=_TranscriptParser(transcript_path.stem))
+        state[transcript_path] = cursor
+    return cursor
+
+
+def _read_next_transcript_records(
+    transcript_path: Path,
+    *,
+    state: dict[Path, _TranscriptCursor],
+    include_incomplete: bool,
+) -> tuple[_TranscriptCursor, list[dict[str, Any]]]:
+    cursor = _cursor_for_transcript(state, transcript_path)
+    records = cursor.parser.feed(
+        _read_new_jsonl_rows(transcript_path, cursor),
+        start_turn=1,
+        include_incomplete=include_incomplete,
+    )
+    return cursor, records
+
+
 async def import_codex_app_transcripts(
     writer: TraceWriter,
     *,
@@ -498,17 +535,10 @@ async def import_codex_app_transcripts(
     """Append new Codex App transcript records to the active trace."""
     imported = 0
     state = state if state is not None else {}
-    paths = (
-        list(transcript_paths) if transcript_paths is not None else find_codex_app_transcripts(since=since, home=home)
-    )
-    for transcript_path in paths:
-        cursor = state.get(transcript_path)
-        if not isinstance(cursor, _TranscriptCursor):
-            cursor = _TranscriptCursor(parser=_TranscriptParser(transcript_path.stem))
-            state[transcript_path] = cursor
-        records = cursor.parser.feed(
-            _read_new_jsonl_rows(transcript_path, cursor),
-            start_turn=1,
+    for transcript_path in _selected_transcript_paths(since=since, home=home, transcript_paths=transcript_paths):
+        _cursor, records = _read_next_transcript_records(
+            transcript_path,
+            state=state,
             include_incomplete=include_incomplete,
         )
         for record in records:
@@ -529,17 +559,10 @@ async def import_codex_app_transcripts_to_sessions(
     """Append new Codex App transcript records into one trace session per query."""
     imported = 0
     state = state if state is not None else {}
-    paths = (
-        list(transcript_paths) if transcript_paths is not None else find_codex_app_transcripts(since=since, home=home)
-    )
-    for transcript_path in paths:
-        cursor = state.get(transcript_path)
-        if not isinstance(cursor, _TranscriptCursor):
-            cursor = _TranscriptCursor(parser=_TranscriptParser(transcript_path.stem))
-            state[transcript_path] = cursor
-        records = cursor.parser.feed(
-            _read_new_jsonl_rows(transcript_path, cursor),
-            start_turn=1,
+    for transcript_path in _selected_transcript_paths(since=since, home=home, transcript_paths=transcript_paths):
+        cursor, records = _read_next_transcript_records(
+            transcript_path,
+            state=state,
             include_incomplete=include_incomplete,
         )
         for record in records:
@@ -553,6 +576,44 @@ async def import_codex_app_transcripts_to_sessions(
     return imported
 
 
+def _discover_new_transcript_paths(
+    transcript_paths: list[Path],
+    *,
+    since: float,
+    home: Path | None,
+) -> None:
+    known = set(transcript_paths)
+    for path in find_codex_app_transcripts(since=since, home=home):
+        if path not in known:
+            transcript_paths.append(path)
+            known.add(path)
+
+
+async def _watch_transcript_imports(
+    import_paths: Callable[[list[Path], dict[Path, _TranscriptCursor]], Awaitable[int]],
+    *,
+    since: float,
+    home: Path | None,
+    poll_interval: float,
+    discovery_interval: float,
+) -> None:
+    state: dict[Path, _TranscriptCursor] = {}
+    transcript_paths: list[Path] = []
+    last_discovery = 0.0
+    try:
+        while True:
+            now = time.monotonic()
+            if not transcript_paths or now - last_discovery >= discovery_interval:
+                _discover_new_transcript_paths(transcript_paths, since=since, home=home)
+                last_discovery = now
+            await import_paths(transcript_paths, state)
+            await asyncio.sleep(poll_interval)
+    except asyncio.CancelledError:
+        _discover_new_transcript_paths(transcript_paths, since=since, home=home)
+        await import_paths(transcript_paths, state)
+        raise
+
+
 async def watch_codex_app_transcripts(
     writer: TraceWriter,
     *,
@@ -562,41 +623,24 @@ async def watch_codex_app_transcripts(
     discovery_interval: float = CODEX_APP_TRANSCRIPT_DISCOVERY_INTERVAL,
 ) -> None:
     """Poll Codex App session files and append live transcript records."""
-    state: dict[Path, _TranscriptCursor] = {}
-    transcript_paths: list[Path] = []
-    last_discovery = 0.0
-    try:
-        while True:
-            now = time.monotonic()
-            if not transcript_paths or now - last_discovery >= discovery_interval:
-                known = set(transcript_paths)
-                for path in find_codex_app_transcripts(since=since, home=home):
-                    if path not in known:
-                        transcript_paths.append(path)
-                        known.add(path)
-                last_discovery = now
-            await import_codex_app_transcripts(
-                writer,
-                since=since,
-                home=home,
-                state=state,
-                include_incomplete=True,
-                transcript_paths=transcript_paths,
-            )
-            await asyncio.sleep(poll_interval)
-    except asyncio.CancelledError:
-        for path in find_codex_app_transcripts(since=since, home=home):
-            if path not in transcript_paths:
-                transcript_paths.append(path)
-        await import_codex_app_transcripts(
+
+    async def import_paths(paths: list[Path], state: dict[Path, _TranscriptCursor]) -> int:
+        return await import_codex_app_transcripts(
             writer,
             since=since,
             home=home,
             state=state,
             include_incomplete=True,
-            transcript_paths=transcript_paths,
+            transcript_paths=paths,
         )
-        raise
+
+    await _watch_transcript_imports(
+        import_paths,
+        since=since,
+        home=home,
+        poll_interval=poll_interval,
+        discovery_interval=discovery_interval,
+    )
 
 
 async def watch_codex_app_transcripts_to_sessions(
@@ -608,38 +652,21 @@ async def watch_codex_app_transcripts_to_sessions(
     discovery_interval: float = CODEX_APP_TRANSCRIPT_DISCOVERY_INTERVAL,
 ) -> None:
     """Poll Codex App transcripts and keep each app query in its own trace session."""
-    state: dict[Path, _TranscriptCursor] = {}
-    transcript_paths: list[Path] = []
-    last_discovery = 0.0
-    try:
-        while True:
-            now = time.monotonic()
-            if not transcript_paths or now - last_discovery >= discovery_interval:
-                known = set(transcript_paths)
-                for path in find_codex_app_transcripts(since=since, home=home):
-                    if path not in known:
-                        transcript_paths.append(path)
-                        known.add(path)
-                last_discovery = now
-            await import_codex_app_transcripts_to_sessions(
-                registry,
-                since=since,
-                home=home,
-                state=state,
-                include_incomplete=True,
-                transcript_paths=transcript_paths,
-            )
-            await asyncio.sleep(poll_interval)
-    except asyncio.CancelledError:
-        for path in find_codex_app_transcripts(since=since, home=home):
-            if path not in transcript_paths:
-                transcript_paths.append(path)
-        await import_codex_app_transcripts_to_sessions(
+
+    async def import_paths(paths: list[Path], state: dict[Path, _TranscriptCursor]) -> int:
+        return await import_codex_app_transcripts_to_sessions(
             registry,
             since=since,
             home=home,
             state=state,
             include_incomplete=True,
-            transcript_paths=transcript_paths,
+            transcript_paths=paths,
         )
-        raise
+
+    await _watch_transcript_imports(
+        import_paths,
+        since=since,
+        home=home,
+        poll_interval=poll_interval,
+        discovery_interval=discovery_interval,
+    )
