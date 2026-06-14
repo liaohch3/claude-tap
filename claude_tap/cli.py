@@ -265,7 +265,8 @@ async def async_main(args: argparse.Namespace):
     # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY) for
     # outbound upstream requests. This is important when users route traffic
     # through tools like Clash/VPN.
-    session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
+    connector = aiohttp.TCPConnector(ssl=False) if args.no_verify_ssl else None
+    session = aiohttp.ClientSession(auto_decompress=False, trust_env=True, connector=connector)
 
     # Forward proxy mode: raw TCP server with CONNECT/TLS termination
     # Reverse proxy mode: aiohttp web app (current behavior)
@@ -615,6 +616,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     proxy_group.add_argument(
         "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
+    )
+    proxy_group.add_argument(
+        "--tap-no-verify-ssl",
+        action="store_true",
+        dest="no_verify_ssl",
+        default=False,
+        help="Skip SSL certificate verification for upstream connections (useful behind corporate proxies)",
     )
     proxy_group.add_argument(
         "--tap-allow-path",

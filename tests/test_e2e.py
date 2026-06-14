@@ -2923,6 +2923,24 @@ def test_parse_args_new_flags():
     print("  test_parse_args_new_flags PASSED")
 
 
+def test_parse_args_no_verify_ssl():
+    """Test --tap-no-verify-ssl flag parsing."""
+    from claude_tap import parse_args
+
+    # Default: SSL verification enabled
+    a = parse_args([])
+    assert a.no_verify_ssl is False
+
+    # Explicit disable
+    a = parse_args(["--tap-no-verify-ssl"])
+    assert a.no_verify_ssl is True
+
+    # Combined with other flags
+    a = parse_args(["--tap-no-verify-ssl", "--tap-target", "https://example.com/api"])
+    assert a.no_verify_ssl is True
+    assert a.target == "https://example.com/api"
+
+
 def test_parse_dashboard_args():
     """Test standalone dashboard argument parsing."""
     from claude_tap import parse_dashboard_args
