@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.115] - 2026-06-15
+
+### Changed
+- feat: add Codex App transcript listener (#297)
 ## [0.1.114] - 2026-06-12
 
 ### Changed
