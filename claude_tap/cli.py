@@ -15,6 +15,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import web
@@ -191,6 +192,21 @@ def _dashboard_stop_command(host: str, port: int) -> str:
 _CLAUDE_EXECUTABLE_NAMES = {"claude", "claude.exe", "claude.cmd", "claude.bat"}
 
 
+def _is_loopback_target(target: str | None) -> bool:
+    """Return True when the upstream target points at the local loopback host.
+
+    A loopback upstream (e.g. a local Agent Maestro/relay) must never be routed
+    through a system proxy picked up via trust_env, or aiohttp tunnels the call
+    through the proxy and the connection is reset.
+    """
+    if not target:
+        return False
+    host = urlparse(target).hostname
+    if host is None:
+        return False
+    return host == "::1" or host.lower() in ("127.0.0.1", "localhost")
+
+
 def _looks_like_claude_binary_path(value: str) -> bool:
     if not value or value.startswith("-"):
         return False
@@ -356,8 +372,11 @@ async def async_main(args: argparse.Namespace):
         else:
             # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY) for
             # outbound upstream requests. This is important when users route traffic
-            # through tools like Clash/VPN.
-            session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
+            # through tools like Clash/VPN. But never route a loopback upstream
+            # (e.g. a local Agent Maestro/relay on 127.0.0.1) through a system
+            # proxy: aiohttp would tunnel the localhost call through the proxy and
+            # the connection gets reset (ServerDisconnectedError).
+            session = aiohttp.ClientSession(auto_decompress=False, trust_env=not _is_loopback_target(args.target))
 
         if transcript_only:
             print("📁 Trace sessions: one per Codex App query")
