@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import logging
+import os
 import shlex
 
 # Keep the stdlib module object available as claude_tap.cli.shutil for
@@ -192,19 +194,29 @@ def _dashboard_stop_command(host: str, port: int) -> str:
 _CLAUDE_EXECUTABLE_NAMES = {"claude", "claude.exe", "claude.cmd", "claude.bat"}
 
 
-def _is_loopback_target(target: str | None) -> bool:
-    """Return True when the upstream target points at the local loopback host.
+def _loopback_target_host(target: str | None) -> str | None:
+    """Return the host of an upstream target that resolves to the local loopback.
 
-    A loopback upstream (e.g. a local Agent Maestro/relay) must never be routed
+    Covers the whole IPv4 loopback block (127.0.0.0/8), IPv6 ::1, and the
+    "localhost" hostname. Returns None for remote or unparseable targets.
+
+    A loopback upstream (e.g. a local Agent Maestro/relay) must not be routed
     through a system proxy picked up via trust_env, or aiohttp tunnels the call
-    through the proxy and the connection is reset.
+    through the proxy and the connection is reset (ServerDisconnectedError).
     """
     if not target:
-        return False
+        return None
     host = urlparse(target).hostname
     if host is None:
-        return False
-    return host == "::1" or host.lower() in ("127.0.0.1", "localhost")
+        return None
+    if host.lower() == "localhost":
+        return host
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return host
+    except ValueError:
+        return None
+    return None
 
 
 def _looks_like_claude_binary_path(value: str) -> bool:
@@ -370,13 +382,18 @@ async def async_main(args: argparse.Namespace):
                 )
             )
         else:
-            # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY) for
-            # outbound upstream requests. This is important when users route traffic
-            # through tools like Clash/VPN. But never route a loopback upstream
-            # (e.g. a local Agent Maestro/relay on 127.0.0.1) through a system
-            # proxy: aiohttp would tunnel the localhost call through the proxy and
-            # the connection gets reset (ServerDisconnectedError).
-            session = aiohttp.ClientSession(auto_decompress=False, trust_env=not _is_loopback_target(args.target))
+            # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY)
+            # for outbound upstream requests so users routing through Clash/VPN
+            # keep working. A loopback upstream (e.g. a local Agent Maestro/relay)
+            # must NOT be tunneled through that proxy, or aiohttp resets the
+            # connection (ServerDisconnectedError -> HTTP 502). Add only the
+            # loopback host to NO_PROXY so the bypass is per-host: remote traffic
+            # (including forward-mode CONNECT requests sharing this session) still
+            # honors the user's proxy.
+            loopback_host = _loopback_target_host(args.target)
+            if loopback_host is not None:
+                _extend_no_proxy(os.environ, (loopback_host,))
+            session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
 
         if transcript_only:
             print("📁 Trace sessions: one per Codex App query")
