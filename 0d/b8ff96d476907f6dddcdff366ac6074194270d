@@ -1,0 +1,21 @@
+claude_tap/cli_clients.py
+  s_af8b16ccaed558::t_5fdfc2b3343519 605-608
+tests/test_loopback_target.py
+  s_af8b16ccaed558::t_5fdfc2b3343519 46-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "0db8ff96d476907f6dddcdff366ac6074194270d",
+  "prompts": {},
+  "sessions": {
+    "s_af8b16ccaed558": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ecf33-ca50-7162-946c-ac42b3108b70",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
