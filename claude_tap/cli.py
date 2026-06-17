@@ -710,6 +710,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "trust local CA:\n"
             "  claude-tap trust-ca                        Trust forward-proxy CA in macOS user keychain\n"
             "\n"
+            "monitor recovery:\n"
+            "  claude-tap monitor-restore                 Restore Claude/Codex configs after a killed monitor\n"
+            "\n"
             "homepage: https://github.com/liaohch3/claude-tap"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1037,6 +1040,12 @@ def main_entry() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "trust-ca":
         sys.exit(trust_ca_main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "monitor-restore":
+        from claude_tap import global_inject
+
+        global_inject.disable()
+        sys.exit(0)
 
     if len(sys.argv) > 1 and sys.argv[1] == "macos-app":
         from claude_tap import macos_app

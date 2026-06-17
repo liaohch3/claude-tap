@@ -67,6 +67,35 @@ def test_build_macos_app_bundle_uses_native_launcher(tmp_path: Path) -> None:
     assert launcher_path.read_bytes() == b"native-launcher"
 
 
+def test_build_macos_app_bundle_can_embed_pyinstaller_executable(tmp_path: Path) -> None:
+    compiled: dict[str, str] = {}
+
+    def fake_compile(source: str, output_path: Path) -> None:
+        compiled["source"] = source
+        output_path.write_bytes(b"native-launcher")
+
+    def fake_build_frozen(resources_dir: Path) -> Path:
+        executable = resources_dir / "claude-tap" / "claude-tap"
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"frozen")
+        return executable
+
+    app_path = build_macos_app_bundle(
+        tmp_path / "Claude Tap.app",
+        self_contained=True,
+        compile_launcher=fake_compile,
+        build_frozen_executable=fake_build_frozen,
+    )
+
+    source = compiled["source"]
+    assert (app_path / "Contents" / "Resources" / "claude-tap" / "claude-tap").read_bytes() == b"frozen"
+    assert "_NSGetExecutablePath" in source
+    assert "../Resources/claude-tap/claude-tap" in source
+    assert 'child_argv[1] = "macos-app";' in source
+    assert '"-m"' not in source
+    assert '"claude_tap"' not in source
+
+
 def test_main_entry_routes_build_macos_app_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, object] = {}
 

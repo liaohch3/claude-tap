@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from claude_tap import global_inject
 from claude_tap.dashboard import list_trace_sessions
 from claude_tap.shared_dashboard import _sync_dashboard_healthy_for_current_db as _dashboard_is_healthy
 from claude_tap.shared_dashboard import dashboard_url, resolve_dashboard_port
@@ -32,20 +33,48 @@ def build_dashboard_command(
     output_dir: Path,
 ) -> list[str]:
     """Build the subprocess command used by the menu bar monitor."""
-    cmd = [
+    cmd = _claude_tap_command(
         python_executable,
-        "-m",
-        "claude_tap",
         "dashboard",
         "--tap-live-port",
         str(port),
         "--tap-no-open",
         "--tap-output-dir",
         str(output_dir),
-    ]
+    )
     if host != "127.0.0.1":
         cmd.extend(["--tap-host", host])
     return cmd
+
+
+def build_proxy_command(
+    *,
+    python_executable: str,
+    client: str,
+    host: str,
+    port: int,
+    output_dir: Path,
+) -> list[str]:
+    """Build a standalone reverse-proxy command for a globally routed client."""
+    return _claude_tap_command(
+        python_executable,
+        "--tap-no-launch",
+        "--tap-client",
+        client,
+        "--tap-port",
+        str(port),
+        "--tap-host",
+        host,
+        "--tap-no-live",
+        "--tap-output-dir",
+        str(output_dir),
+    )
+
+
+def _claude_tap_command(python_executable: str, *args: str) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [python_executable, *args]
+    return [python_executable, "-m", "claude_tap", *args]
 
 
 class DashboardMonitorController:
@@ -57,65 +86,115 @@ class DashboardMonitorController:
         host: str,
         port: int,
         output_dir: Path,
+        claude_proxy_port: int | None = None,
+        codex_proxy_port: int | None = None,
         python_executable: str = sys.executable,
         popen: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
         is_healthy: Callable[[str, int], bool] = _dashboard_is_healthy,
         open_browser: Callable[[str], object] = webbrowser.open,
+        enable_injection: Callable[..., None] = global_inject.enable,
+        disable_injection: Callable[[], None] = global_inject.disable,
+        injection_is_active: Callable[[], bool] = global_inject.is_active,
     ) -> None:
         self.host = host
         self.port = port
         self.output_dir = output_dir
+        self.claude_proxy_port = claude_proxy_port or port + 1
+        self.codex_proxy_port = codex_proxy_port or port + 2
         self.python_executable = python_executable
         self._popen = popen
         self._is_healthy = is_healthy
         self._open_browser = open_browser
+        self._enable_injection = enable_injection
+        self._disable_injection = disable_injection
+        self._injection_is_active = injection_is_active
         self._process: subprocess.Popen[bytes] | None = None
+        self._proxy_processes: list[subprocess.Popen[bytes]] = []
 
     @property
     def url(self) -> str:
         return dashboard_url(self.host, self.port)
 
     def start(self) -> str:
-        if self._process_is_running() or self._is_healthy(self.host, self.port):
+        if self._monitor_is_running():
             return self.url
 
-        cmd = build_dashboard_command(
-            python_executable=self.python_executable,
-            host=self.host,
-            port=self.port,
-            output_dir=self.output_dir,
-        )
-        self._process = self._popen(cmd, **self._subprocess_kwargs())
+        try:
+            if not self._is_healthy(self.host, self.port):
+                cmd = build_dashboard_command(
+                    python_executable=self.python_executable,
+                    host=self.host,
+                    port=self.port,
+                    output_dir=self.output_dir,
+                )
+                self._process = self._popen(cmd, **self._subprocess_kwargs())
+            self._start_proxy("claude", self.claude_proxy_port)
+            self._start_proxy("codex", self.codex_proxy_port)
+            self._enable_injection(claude_port=self.claude_proxy_port, codex_port=self.codex_proxy_port)
+        except Exception:
+            self._terminate_owned_processes()
+            self._disable_injection()
+            raise
         return self.url
 
     def stop(self) -> bool:
-        if not self._process_is_running() or self._process is None:
+        was_running = self._process_is_running() or self._proxy_processes_are_running() or self._injection_is_active()
+        if not was_running:
             self._process = None
+            self._proxy_processes = []
             return False
 
-        process = self._process
+        self._disable_injection()
+        self._terminate_owned_processes()
+        return True
+
+    def _terminate_process(self, process: subprocess.Popen[bytes]) -> None:
         process.terminate()
         try:
             process.wait(timeout=5.0)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5.0)
-        finally:
-            self._process = None
-        return True
 
     def open_dashboard(self) -> None:
         self.start()
         self._open_browser(self.url)
 
     def is_running(self) -> bool:
-        return self._process_is_running() or self._is_healthy(self.host, self.port)
+        return self._monitor_is_running()
 
     def can_stop(self) -> bool:
-        return self._process_is_running()
+        return self._process_is_running() or self._proxy_processes_are_running() or self._injection_is_active()
 
     def _process_is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
+
+    def _monitor_is_running(self) -> bool:
+        return self._dashboard_is_running() and self._proxy_processes_are_running() and self._injection_is_active()
+
+    def _dashboard_is_running(self) -> bool:
+        return self._process_is_running() or self._is_healthy(self.host, self.port)
+
+    def _proxy_processes_are_running(self) -> bool:
+        return bool(self._proxy_processes) and all(process.poll() is None for process in self._proxy_processes)
+
+    def _start_proxy(self, client: str, port: int) -> None:
+        cmd = build_proxy_command(
+            python_executable=self.python_executable,
+            client=client,
+            host=self.host,
+            port=port,
+            output_dir=self.output_dir,
+        )
+        self._proxy_processes.append(self._popen(cmd, **self._subprocess_kwargs()))
+
+    def _terminate_owned_processes(self) -> None:
+        processes = [process for process in [self._process, *self._proxy_processes] if process is not None]
+        for process in processes:
+            if process.poll() is None:
+                self._terminate_process(process)
+        self._process = None
+        self._proxy_processes = []
 
     @staticmethod
     def _subprocess_kwargs() -> dict[str, object]:

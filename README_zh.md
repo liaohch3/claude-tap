@@ -453,6 +453,12 @@ claude-tap dashboard stop
 claude-tap build-macos-app
 open "dist/Claude Tap.app"
 
+# 构建内置 Python 和依赖的 Apple Silicon App
+claude-tap build-macos-app --self-contained
+
+# 如果菜单栏 App 在监控中被强制退出，用它恢复 Claude/Codex 配置
+claude-tap monitor-restore
+
 # 从已有 JSONL trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
@@ -478,7 +484,9 @@ claude-tap --tap-no-open
 
 作为 VSCode Claude Code 的 `claudeProcessWrapper` 使用时，claude-tap 会识别扩展传入的 Claude binary 路径并用它启动 Claude。
 
-macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 App 以菜单栏图标运行，点击后显示紧凑状态看板，并提供 Start Monitor / Stop Monitor 控制和完整 dashboard 快捷入口。默认 launcher 指向当前 checkout；如果构建时所用 Python 环境已经安装了 `claude-tap`，可加 `--installed`。
+macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 App 以菜单栏图标运行，点击后显示紧凑状态看板，并提供 Start Monitor / Stop Monitor 控制和完整 dashboard 快捷入口。Start Monitor 会启动 Claude Code 和 Codex CLI 的本地反向代理，并把临时 base URL 写入 `~/.claude/settings.json` 和 `~/.codex/config.toml`，之后新开的会话会被捕获。Stop Monitor 会按字节还原这些文件。如果 App 被强制退出，可运行 `claude-tap monitor-restore`。
+
+默认 launcher 指向当前 checkout；如果构建时所用 Python 环境已经安装了 `claude-tap`，可加 `--installed`。加 `--self-contained` 会用 PyInstaller 构建 Apple Silicon 自包含 bundle，并放在 `Contents/Resources` 下，这样 App 不依赖同事机器上的 Python 安装。Ad-hoc 签名的构建仍可能需要接收方移除 quarantine 或在 macOS 安全设置中手动允许。
 
 ### CLI 选项
 

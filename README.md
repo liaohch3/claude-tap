@@ -456,6 +456,12 @@ claude-tap dashboard stop
 claude-tap build-macos-app
 open "dist/Claude Tap.app"
 
+# Build an Apple Silicon app that bundles Python and dependencies
+claude-tap build-macos-app --self-contained
+
+# Restore Claude/Codex configs if the menu app is force-killed while monitoring
+claude-tap monitor-restore
+
 # Regenerate a self-contained HTML viewer from JSONL
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
@@ -481,7 +487,9 @@ In proxy-only mode, start your client in another terminal and point its base URL
 
 When used as VSCode Claude Code's `claudeProcessWrapper`, claude-tap honors the Claude binary path passed by the extension.
 
-On macOS, `claude-tap build-macos-app` creates a local `Claude Tap.app` bundle. The app runs as a menu bar item with a compact status board, Start Monitor / Stop Monitor controls, and a shortcut to the full dashboard. By default the launcher points at the current checkout; pass `--installed` if `claude-tap` is installed in the Python environment used to build the app.
+On macOS, `claude-tap build-macos-app` creates a local `Claude Tap.app` bundle. The app runs as a menu bar item with a compact status board, Start Monitor / Stop Monitor controls, and a shortcut to the full dashboard. Start Monitor launches local reverse proxies for Claude Code and Codex CLI, then writes temporary base-URL settings into `~/.claude/settings.json` and `~/.codex/config.toml` so newly opened sessions are captured. Stop Monitor restores those files byte-for-byte. If the app is force-killed, run `claude-tap monitor-restore`.
+
+By default the launcher points at the current checkout; pass `--installed` if `claude-tap` is installed in the Python environment used to build the app. Pass `--self-contained` to build an Apple Silicon PyInstaller bundle under `Contents/Resources` so the app does not depend on a colleague's Python installation. Ad-hoc signed builds may still require the recipient to remove quarantine or approve the app in macOS security settings.
 
 ### CLI Options
 
