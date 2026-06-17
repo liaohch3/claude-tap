@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.116] - 2026-06-17
+
+### Changed
+- feat(viewer): add cache hit rate display in header stats bar
 ## [0.1.115] - 2026-06-15
 
 ### Changed
