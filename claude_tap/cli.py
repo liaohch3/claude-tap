@@ -1038,6 +1038,16 @@ def main_entry() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "trust-ca":
         sys.exit(trust_ca_main(sys.argv[2:]))
 
+    if len(sys.argv) > 1 and sys.argv[1] == "macos-app":
+        from claude_tap import macos_app
+
+        sys.exit(macos_app.main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "build-macos-app":
+        from claude_tap import macos_bundle
+
+        sys.exit(macos_bundle.main(sys.argv[2:]))
+
     if len(sys.argv) > 1 and sys.argv[1] == "dashboard":
         args = parse_dashboard_args(sys.argv[2:])
         try:

@@ -452,6 +452,10 @@ claude-tap dashboard
 # Stop the shared dashboard service
 claude-tap dashboard stop
 
+# Build a local macOS menu bar app, then double-click it in Finder
+claude-tap build-macos-app
+open "dist/Claude Tap.app"
+
 # Regenerate a self-contained HTML viewer from JSONL
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
@@ -476,6 +480,8 @@ claude-tap --tap-no-open
 In proxy-only mode, start your client in another terminal and point its base URL or proxy settings at the local proxy. Use the [client support matrix](docs/support-matrix.md) for exact wiring.
 
 When used as VSCode Claude Code's `claudeProcessWrapper`, claude-tap honors the Claude binary path passed by the extension.
+
+On macOS, `claude-tap build-macos-app` creates a local `Claude Tap.app` bundle. The app runs as a menu bar item with a compact status board, Start Monitor / Stop Monitor controls, and a shortcut to the full dashboard. By default the launcher points at the current checkout; pass `--installed` if `claude-tap` is installed in the Python environment used to build the app.
 
 ### CLI Options
 

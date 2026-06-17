@@ -449,6 +449,10 @@ claude-tap dashboard
 # 停止共享 dashboard 服务
 claude-tap dashboard stop
 
+# 构建本地 macOS 菜单栏 App，然后在 Finder 中双击
+claude-tap build-macos-app
+open "dist/Claude Tap.app"
+
 # 从已有 JSONL trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
@@ -473,6 +477,8 @@ claude-tap --tap-no-open
 纯代理模式下，可以在另一个终端启动客户端，并把它的 base URL 或代理配置指向本地代理。具体接法见 [客户端支持矩阵](docs/support-matrix.md)。
 
 作为 VSCode Claude Code 的 `claudeProcessWrapper` 使用时，claude-tap 会识别扩展传入的 Claude binary 路径并用它启动 Claude。
+
+macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 App 以菜单栏图标运行，点击后显示紧凑状态看板，并提供 Start Monitor / Stop Monitor 控制和完整 dashboard 快捷入口。默认 launcher 指向当前 checkout；如果构建时所用 Python 环境已经安装了 `claude-tap`，可加 `--installed`。
 
 ### CLI 选项
 
