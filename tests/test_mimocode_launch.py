@@ -64,6 +64,7 @@ async def test_run_client_mimocode_forward_sets_node_ca_env(monkeypatch) -> None
     assert code == 0
     env = captured["env"]
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:43123"
+    assert env["MIMOCODE_MIMO_ONLY"] == "false"
     assert env["NODE_EXTRA_CA_CERTS"] == str(ca_path)
     assert env["SSL_CERT_FILE"] == str(ca_path)
 

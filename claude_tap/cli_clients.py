@@ -354,6 +354,9 @@ async def run_client(
         env["https_proxy"] = proxy_url
         env["all_proxy"] = proxy_url
         _extend_no_proxy(env, ("localhost", "127.0.0.1", "::1"))
+        if client == "mimo":
+            # MiMo defaults to mimo-only mode and ignores provider env vars unless disabled.
+            env["MIMOCODE_MIMO_ONLY"] = "false"
         forward_base_url = cfg.reverse_base_url(port)
         for env_key in cfg.forward_base_url_envs:
             env[env_key] = forward_base_url
