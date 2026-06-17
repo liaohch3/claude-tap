@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.119] - 2026-06-17
+
+### Changed
+- fix: do not proxy loopback upstream targets
 ## [0.1.118] - 2026-06-17
 
 ### Changed
