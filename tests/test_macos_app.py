@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from claude_tap.cli import main_entry
-from claude_tap.macos_app import DashboardMonitorController, build_dashboard_command
+from claude_tap.macos_app import DashboardMonitorController, build_dashboard_command, parse_macos_app_args
 
 
 def test_build_dashboard_command_starts_dashboard_without_opening_browser(tmp_path: Path) -> None:
@@ -126,6 +126,12 @@ def test_monitor_controller_stop_terminates_owned_process(tmp_path: Path) -> Non
     assert controller.stop() is True
     assert events == ["terminate", "wait:5.0"]
     assert controller.is_running() is False
+
+
+def test_parse_macos_app_args_ignores_launch_services_process_serial_number() -> None:
+    args = parse_macos_app_args(["-psn_0_12345", "--tap-no-auto-start"])
+
+    assert args.auto_start is False
 
 
 def test_main_entry_routes_macos_app_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:

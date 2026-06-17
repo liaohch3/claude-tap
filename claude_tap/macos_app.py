@@ -18,6 +18,8 @@ from claude_tap.shared_dashboard import dashboard_url, resolve_dashboard_port
 _NS_VARIABLE_STATUS_ITEM_LENGTH = -1.0
 _NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
 _NS_IMAGE_LEFT = 2
+# Absolute default so the app works when launched from Finder (cwd is "/").
+_DEFAULT_OUTPUT_DIR = Path.home() / ".claude-tap" / "traces"
 _CALLBACKS: list[Any] = []
 _ACTIVE_APP: MacOSMenuApp | None = None
 
@@ -410,11 +412,13 @@ def _latest_session_text(session: dict[str, Any] | None) -> str:
 
 
 def parse_macos_app_args(argv: list[str] | None = None) -> argparse.Namespace:
+    if argv is not None:
+        argv = [arg for arg in argv if not arg.startswith("-psn_")]
     parser = argparse.ArgumentParser(
         prog="claude-tap macos-app",
         description="Run the claude-tap macOS menu bar app.",
     )
-    parser.add_argument("--tap-output-dir", default="./.traces", dest="output_dir")
+    parser.add_argument("--tap-output-dir", default=str(_DEFAULT_OUTPUT_DIR), dest="output_dir")
     parser.add_argument("--tap-live-port", type=int, default=0, dest="live_port")
     parser.add_argument("--tap-host", default="127.0.0.1", dest="host")
     parser.add_argument("--tap-no-auto-start", action="store_false", default=True, dest="auto_start")
@@ -426,12 +430,28 @@ def main(argv: list[str] | None = None) -> int:
         print("claude-tap macos-app is only supported on macOS.", file=sys.stderr)
         return 1
 
-    args = parse_macos_app_args(argv)
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    controller = DashboardMonitorController(
-        host=args.host,
-        port=resolve_dashboard_port(args.live_port),
-        output_dir=output_dir,
-    )
-    return MacOSMenuApp(controller, auto_start=args.auto_start).run()
+    try:
+        args = parse_macos_app_args(argv)
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        controller = DashboardMonitorController(
+            host=args.host,
+            port=resolve_dashboard_port(args.live_port),
+            output_dir=output_dir,
+        )
+        return MacOSMenuApp(controller, auto_start=args.auto_start).run()
+    except Exception:
+        _write_crash_log()
+        raise
+
+
+def _write_crash_log() -> None:
+    import traceback
+
+    log_path = Path.home() / "Library" / "Logs" / "claude-tap-macos.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(traceback.format_exc())
+    except OSError:
+        pass
