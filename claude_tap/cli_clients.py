@@ -602,6 +602,10 @@ def _extend_no_proxy(env: dict[str, str], values: tuple[str, ...]) -> None:
     for key in ("NO_PROXY", "no_proxy"):
         raw = env.get(key, "")
         existing.extend(part.strip() for part in raw.split(",") if part.strip())
+    if "*" in existing:
+        env["NO_PROXY"] = "*"
+        env["no_proxy"] = "*"
+        return
 
     merged: list[str] = []
     seen: set[str] = set()

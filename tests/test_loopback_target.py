@@ -43,3 +43,11 @@ def test_extend_no_proxy_preserves_existing_entries() -> None:
     assert "127.0.0.2" in entries
     # Mirrored into the lowercase variant for tools that read it.
     assert env["no_proxy"] == env["NO_PROXY"]
+
+
+@pytest.mark.parametrize("key", ["NO_PROXY", "no_proxy"])
+def test_extend_no_proxy_preserves_wildcard_sentinel(key: str) -> None:
+    env = {key: "*"}
+    _extend_no_proxy(env, ("127.0.0.2",))
+    assert env["NO_PROXY"] == "*"
+    assert env["no_proxy"] == "*"
