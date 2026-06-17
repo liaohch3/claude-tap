@@ -640,7 +640,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
         description=(
-            "Trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, OpenCode, OpenClaw, Pi, Hermes Agent, "
+            "Trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, "
             "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy or transcript import. "
             "All flags not listed below are forwarded to the selected client."
         ),
@@ -686,6 +686,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client opencode\n"
             "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
             "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
+            "\n"
+            "mimo (MiMo Code — OpenCode fork; defaults to forward proxy mode):\n"
+            "  # Forward proxy captures every provider MiMo Code talks to\n"
+            "  claude-tap --tap-client mimo\n"
+            "  # Reverse mode — single Anthropic provider with mimo-only disabled\n"
+            "  claude-tap --tap-client mimo --tap-proxy-mode reverse\n"
             "\n"
             "openclaw:\n"
             "  # Reads OpenClaw config and points the selected provider at the local proxy\n"
@@ -782,7 +788,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
             "Default depends on the client: 'reverse' for claude/codex/kimi/kimi-code/openclaw/codebuddy, "
-            "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder. "
+            "'forward' for agy/gemini/mimo/opencode/pi/hermes/cursor/qoder. "
             "codexapp is transcript-only and does not use this option."
         ),
     )

@@ -30,6 +30,8 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Kimi Code CLI | Custom `type = "kimi"` provider in config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported via `--tap-target` |
 | OpenCode | Provider creds via `opencode providers` (OpenAI OAuth and OpenCode free provider verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Real E2E verified |
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
+| MiMo Code | Provider creds via `mimo` TUI config or MiMo Platform OAuth | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
+| MiMo Code | Anthropic provider only (`--tap-proxy-mode reverse`; sets `MIMOCODE_MIMO_ONLY=false`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
 | OpenClaw | Provider creds via `~/.openclaw/openclaw.json` or `OPENCLAW_CONFIG_PATH` | Selected provider `baseUrl` patched through a temporary config file | provider-dependent | HTTP/SSE | Unit-tested |
 | OpenClaw | No patchable config (`--tap-proxy-mode reverse`) | Provider env fallback (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, or `OPENROUTER_BASE_URL`) | provider-dependent | HTTP/SSE | Unit-tested |
 | Pi | Provider creds via Pi `/login` or `PI_CODING_AGENT_DIR` auth file (`openai-codex` OAuth verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE + WebSocket | Real E2E verified |
@@ -54,6 +56,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |
 | `kimi` | `reverse` | Legacy kimi-cli; native `KIMI_BASE_URL` env var |
 | `kimi-code` | `reverse` | Patches `~/.kimi-code/config.toml` via temporary `KIMI_CODE_HOME` sandbox |
+| `mimo` | `forward` | OpenCode fork; multi-provider — forward proxy captures every upstream regardless of which env var the client honors |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
 | `openclaw` | `reverse` | Patches the selected OpenClaw provider config when possible, otherwise falls back to provider-specific base URL env vars |
 | `pi` | `forward` | Multi-provider; Pi can use OpenAI Codex OAuth and custom model registry providers, so forward proxy captures traffic without relying on a single base URL override |
