@@ -22,13 +22,14 @@ function buildStubEntry(meta, rawIdx) {
   const usage = {};
   if (meta.input_tokens) usage.input_tokens = meta.input_tokens;
   if (meta.output_tokens) usage.output_tokens = meta.output_tokens;
+  const hasCacheCreate = meta.cache_creation_input_tokens !== undefined && meta.cache_creation_input_tokens !== null;
   if (meta.cache_read_input_tokens) {
     usage.cache_read_input_tokens = meta.cache_read_input_tokens;
     /* Infer cache embedding style from model name so the cache hit rate
-       denominator is correct in lazy/dashboard mode.  Claude/Anthropic
-       keeps cache_read as a separate bucket; OpenAI/Gemini embed it. */
+       denominator is correct in lazy/dashboard mode.  Claude/Anthropic and
+       Bedrock keep cache_read as a separate bucket; OpenAI/Gemini embed it. */
     const m = (meta.model || '').toLowerCase();
-    usage._cache_read_in_input = !(m.includes('claude') || m.includes('anthropic'));
+    usage._cache_read_in_input = !(hasCacheCreate || m.includes('claude') || m.includes('anthropic') || m.includes('bedrock'));
   }
   if (meta.cache_creation_input_tokens) usage.cache_creation_input_tokens = meta.cache_creation_input_tokens;
 

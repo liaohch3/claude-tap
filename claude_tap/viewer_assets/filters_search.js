@@ -206,16 +206,19 @@ function applyFilter(preserveDetail) {
     totalDuration += e.duration_ms || 0;
     const u = getUsage(e);
     if (u) {
-      totalTokens += (u.input_tokens || 0) + (u.output_tokens || 0);
-      sumInput += u.input_tokens || 0;
+      const inputTokens = u.input_tokens || 0;
+      const cacheRead = u.cache_read_input_tokens || 0;
+      const cacheCreate = u.cache_creation_input_tokens || 0;
+      totalTokens += inputTokens + (u.output_tokens || 0);
+      sumInput += inputTokens;
       sumOutput += u.output_tokens || 0;
-      sumCacheRead += u.cache_read_input_tokens || 0;
-      sumCacheCreate += u.cache_creation_input_tokens || 0;
-      if (u.cache_read_input_tokens) {
+      sumCacheRead += cacheRead;
+      sumCacheCreate += cacheCreate;
+      if (inputTokens || cacheRead || cacheCreate) {
         if (u._cache_read_in_input) {
-          sumCacheDenominator += u.input_tokens || 0;
+          sumCacheDenominator += inputTokens;
         } else {
-          sumCacheDenominator += (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+          sumCacheDenominator += inputTokens + cacheRead + cacheCreate;
         }
       }
     }

@@ -342,6 +342,18 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
         assert.equal(claudeUsage.cache_read_input_tokens, 60);
         assert.equal(claudeUsage._cache_read_in_input, false);
 
+        // Bedrock Converse-style camelCase: cacheReadInputTokens is a separate bucket
+        const bedrockUsage = context.normalizeUsage({
+          inputTokens: 9,
+          outputTokens: 1,
+          cacheReadInputTokens: 12,
+          cacheWriteInputTokens: 2,
+        });
+        assert.equal(bedrockUsage.input_tokens, 9);
+        assert.equal(bedrockUsage.cache_read_input_tokens, 12);
+        assert.equal(bedrockUsage.cache_creation_input_tokens, 2);
+        assert.equal(bedrockUsage._cache_read_in_input, false);
+
         // No cache data at all: flag should be absent
         const noCacheUsage = context.normalizeUsage({ input_tokens: 100, output_tokens: 50 });
         assert.equal(noCacheUsage.cache_read_input_tokens, undefined);
@@ -416,6 +428,15 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           assert.equal(_statEls['stat-cache-hit-rate'].textContent, '60%',
             'OpenAI-style direct DOM: expected 60%');
 
+          // Bedrock camelCase: cache_read separate from input → 12/(9+12+2)=52%
+          entries = [makeUsageEntry({
+            inputTokens: 9, outputTokens: 1,
+            cacheReadInputTokens: 12, cacheWriteInputTokens: 2,
+          })];
+          applyFilter();
+          assert.equal(_statEls['stat-cache-hit-rate'].textContent, '52%',
+            'Bedrock camelCase direct DOM: expected 52%');
+
           // No cache data: group should be hidden
           entries = [makeUsageEntry({ input_tokens: 100, output_tokens: 50 })];
           applyFilter();
@@ -437,6 +458,19 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           applyFilter();
           assert.equal(_statEls['stat-cache-hit-rate'].textContent, '57%',
             'Mixed-provider direct DOM: expected 57%');
+
+          // Mixed cached and uncached entries: uncached input still belongs in denominator
+          // denom = OpenAI input 100 + uncached input 100, cache_read = 60, rate = 30%
+          entries = [
+            makeUsageEntry({
+              prompt_tokens: 100, completion_tokens: 50,
+              prompt_tokens_details: { cached_tokens: 60 },
+            }),
+            makeUsageEntry({ input_tokens: 100, output_tokens: 10 }),
+          ];
+          applyFilter();
+          assert.equal(_statEls['stat-cache-hit-rate'].textContent, '30%',
+            'Mixed cached/uncached direct DOM: expected 30%');
         `, context);
         """
     )
