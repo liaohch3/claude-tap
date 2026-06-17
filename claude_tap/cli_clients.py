@@ -212,6 +212,18 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         default_target="https://api.anthropic.com",
         default_proxy_mode="forward",
     ),
+    "mimocode": ClientConfig(
+        cmd="mimo",
+        label="MiMo Code",
+        install_url="https://mimo.xiaomi.com/en/mimocode",
+        # MiMo Code is an OpenCode fork (https://github.com/XiaomiMiMo/MiMo-Code).
+        # It inherits the same multi-provider env vars; forward proxy is the
+        # natural default to capture all provider traffic transparently.
+        base_url_env="ANTHROPIC_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.anthropic.com",
+        default_proxy_mode="forward",
+    ),
     "pi": ClientConfig(
         cmd="pi",
         label="Pi",
@@ -392,7 +404,7 @@ async def run_client(
             reverse_env = _openclaw_reverse_env(port, cmd_args)
         elif capture_only and client in {"hermes", "kimi"}:
             reverse_env = _multi_provider_reverse_env(port)
-        elif capture_only and client == "opencode":
+        elif capture_only and client in {"opencode", "mimocode"}:
             reverse_env = _opencode_reverse_env(port)
         else:
             reverse_env = cfg.reverse_base_url_env_map(port)

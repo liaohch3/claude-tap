@@ -13,7 +13,7 @@
 
 Website: [Local AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · Guide: [How to view agent traces locally](docs/guides/agent-trace-viewer.md)
 
-It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Codex App](https://openai.com/codex/), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [OpenCode](https://opencode.ai), [OpenClaw](https://github.com/openclaw/openclaw), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
+It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Codex App](https://openai.com/codex/), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [MiMo Code](https://mimo.xiaomi.com/en/mimocode), [OpenCode](https://opencode.ai), [OpenClaw](https://github.com/openclaw/openclaw), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
 
 <p align="center">
   <img src="docs/demo.gif" alt="claude-tap demo showing a real Codex trace" width="100%">
@@ -64,7 +64,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 - 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
 - 📦 **Share one portable artifact**: each run writes a local trace session that can be exported to a self-contained HTML viewer for review or archiving.
 - 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
-- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
+- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
 
 ## Supported Clients
 
@@ -75,6 +75,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 | [Codex App](https://openai.com/codex/) | Local Codex App sessions imported from `CODEX_HOME` or `~/.codex`; automatic best-effort CDP WebSocket enrichment |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Legacy kimi-cli and the newer Kimi Code CLI |
+| [MiMo Code](https://mimo.xiaomi.com/en/mimocode) | MiMo Code sessions (OpenCode fork with multi-provider support) |
 | [OpenCode](https://opencode.ai) | Multi-provider OpenCode sessions |
 | [OpenClaw](https://github.com/openclaw/openclaw) | Multi-provider OpenClaw sessions |
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi sessions, including OpenAI Codex OAuth providers |
@@ -123,6 +124,9 @@ claude-tap --tap-client kimi
 
 # New Kimi Code CLI
 claude-tap --tap-client kimi-code
+
+# MiMo Code (OpenCode fork)
+claude-tap --tap-client mimocode
 
 # Pi
 claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
@@ -326,6 +330,24 @@ claude-tap --tap-client opencode --tap-proxy-mode reverse
 </details>
 
 <details>
+<summary>MiMo Code examples</summary>
+
+[MiMo Code](https://mimo.xiaomi.com/en/mimocode) is an [OpenCode](https://opencode.ai) fork with persistent memory, subagent orchestration, and Xiaomi MiMo platform integration. claude-tap defaults to **forward proxy** mode for mimocode: it injects `HTTPS_PROXY` plus the local CA into the child process so traffic to any provider is captured.
+
+```bash
+# Forward proxy mode — captures every provider MiMo Code talks to (default)
+claude-tap --tap-client mimocode
+
+# Live viewer is enabled by default
+claude-tap --tap-client mimocode
+
+# Reverse mode — only works when using Anthropic provider (single ANTHROPIC_BASE_URL)
+claude-tap --tap-client mimocode --tap-proxy-mode reverse
+```
+
+</details>
+
+<details>
 <summary>Pi examples</summary>
 
 [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) is a multi-provider coding agent. claude-tap defaults to **forward proxy** mode for Pi because Pi can use subscription OAuth providers such as `openai-codex` and custom API-key providers from its model registry.
@@ -482,7 +504,7 @@ When used as VSCode Claude Code's `claudeProcessWrapper`, claude-tap honors the 
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch/listen to: claude (default), agy, codex, codexapp, gemini, kimi, kimi-code, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
+--tap-client CLIENT      Client to launch/listen to: claude (default), agy, codex, codexapp, gemini, kimi, kimi-code, mimocode, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer while the client runs (default: on)
 --tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)

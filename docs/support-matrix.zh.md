@@ -30,6 +30,8 @@ English version: [Support Matrix](support-matrix.md).
 | Kimi Code CLI | 配置中自定义 `type = "kimi"` provider | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 支持 `--tap-target` |
 | OpenCode | 通过 `opencode providers` 配置 provider 凭据（OpenAI OAuth 与 OpenCode free provider 均已验证） | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | OpenCode | 仅 Anthropic provider（`--tap-proxy-mode reverse`） | `https://api.anthropic.com` | 无 | HTTP/SSE | 单测覆盖 |
+| MiMo Code | 通过 `mimo` TUI 配置或 MiMo Platform OAuth 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
+| MiMo Code | 仅 Anthropic provider（`--tap-proxy-mode reverse`） | `https://api.anthropic.com` | 无 | HTTP/SSE | 单测覆盖 |
 | OpenClaw | 通过 `~/.openclaw/openclaw.json` 或 `OPENCLAW_CONFIG_PATH` 配置 provider 凭据 | 通过临时配置文件补丁被选中的 provider `baseUrl` | 取决于 provider | HTTP/SSE | 单测覆盖 |
 | OpenClaw | 无可补丁配置（`--tap-proxy-mode reverse`） | provider 环境变量 fallback（`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL`、`GOOGLE_GEMINI_BASE_URL` 或 `OPENROUTER_BASE_URL`） | 取决于 provider | HTTP/SSE | 单测覆盖 |
 | Pi | 通过 Pi `/login` 或 `PI_CODING_AGENT_DIR` auth 文件配置 provider 凭据（`openai-codex` OAuth 已验证） | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE + WebSocket | 真实 E2E 已验证 |
@@ -53,6 +55,7 @@ English version: [Support Matrix](support-matrix.md).
 | `gemini` | `forward` | Google OAuth / Code Assist 会访问多个 Google 端点；forward proxy 不依赖单一 base URL，更适合作为默认 |
 | `kimi` | `reverse` | 旧版 kimi-cli；原生 `KIMI_BASE_URL` 环境变量 |
 | `kimi-code` | `reverse` | 通过临时 `KIMI_CODE_HOME` sandbox 补丁 `~/.kimi-code/config.toml` |
+| `mimocode` | `forward` | OpenCode fork；多 provider — forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
 | `opencode` | `forward` | 多 provider；forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
 | `openclaw` | `reverse` | 尽量补丁被选中的 OpenClaw provider 配置；否则 fallback 到对应 provider 的 base URL 环境变量 |
 | `pi` | `forward` | 多 provider；Pi 可以使用 OpenAI Codex OAuth 和自定义 model registry provider，forward proxy 不依赖单一 base URL 覆盖即可捕获流量 |
