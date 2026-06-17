@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.117] - 2026-06-17
+
+### Changed
+- fix: mock codex provider detection in reverse-inject test
 ## [0.1.116] - 2026-06-17
 
 ### Changed
