@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.118] - 2026-06-17
+
+### Changed
+- feat: add back button on session detail page
 ## [0.1.117] - 2026-06-17
 
 ### Changed
