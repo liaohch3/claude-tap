@@ -1,0 +1,25 @@
+claude_tap/viewer_assets/renderers.js
+  s_af8b16ccaed558::t_43f11b1eeb7e81 410-413,415-416,418-419,421-423
+claude_tap/viewer_assets/filters_search.js
+  s_af8b16ccaed558::t_43f11b1eeb7e81 209-213,215-217,219,221
+claude_tap/viewer_assets/lazy_loading.js
+  s_af8b16ccaed558::t_43f11b1eeb7e81 25,29-30,32
+tests/test_viewer_js_units.py
+  s_af8b16ccaed558::t_43f11b1eeb7e81 345-356,431-439,461-473
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "4162061f4df7d6234dc6f279fe56031901785bc7",
+  "prompts": {},
+  "sessions": {
+    "s_af8b16ccaed558": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ecf33-ca50-7162-946c-ac42b3108b70",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
