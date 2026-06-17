@@ -6,6 +6,7 @@ import argparse
 import ctypes
 import subprocess
 import sys
+import time
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
@@ -95,6 +96,8 @@ class DashboardMonitorController:
         enable_injection: Callable[..., None] = global_inject.enable,
         disable_injection: Callable[[], None] = global_inject.disable,
         injection_is_active: Callable[[], bool] = global_inject.is_active,
+        startup_check_delay: float = 0.15,
+        sleep: Callable[[float], object] = time.sleep,
     ) -> None:
         self.host = host
         self.port = port
@@ -108,8 +111,11 @@ class DashboardMonitorController:
         self._enable_injection = enable_injection
         self._disable_injection = disable_injection
         self._injection_is_active = injection_is_active
+        self._startup_check_delay = startup_check_delay
+        self._sleep = sleep
         self._process: subprocess.Popen[bytes] | None = None
         self._proxy_processes: list[subprocess.Popen[bytes]] = []
+        self._proxy_process_names: list[str] = []
 
     @property
     def url(self) -> str:
@@ -130,6 +136,7 @@ class DashboardMonitorController:
                 self._process = self._popen(cmd, **self._subprocess_kwargs())
             self._start_proxy("claude", self.claude_proxy_port)
             self._start_proxy("codex", self.codex_proxy_port)
+            self._verify_started_processes()
             self._enable_injection(claude_port=self.claude_proxy_port, codex_port=self.codex_proxy_port)
         except Exception:
             self._terminate_owned_processes()
@@ -142,6 +149,7 @@ class DashboardMonitorController:
         if not was_running:
             self._process = None
             self._proxy_processes = []
+            self._proxy_process_names = []
             return False
 
         self._disable_injection()
@@ -187,6 +195,20 @@ class DashboardMonitorController:
             output_dir=self.output_dir,
         )
         self._proxy_processes.append(self._popen(cmd, **self._subprocess_kwargs()))
+        self._proxy_process_names.append(client)
+
+    def _verify_started_processes(self) -> None:
+        if self._startup_check_delay > 0:
+            self._sleep(self._startup_check_delay)
+
+        exited: list[str] = []
+        if self._process is not None and self._process.poll() is not None:
+            exited.append(f"dashboard exited with code {self._process.returncode}")
+        for name, process in zip(self._proxy_process_names, self._proxy_processes, strict=True):
+            if process.poll() is not None:
+                exited.append(f"{name} proxy exited with code {process.returncode}")
+        if exited:
+            raise RuntimeError("Monitor failed to start: " + "; ".join(exited))
 
     def _terminate_owned_processes(self) -> None:
         processes = [process for process in [self._process, *self._proxy_processes] if process is not None]
@@ -195,6 +217,7 @@ class DashboardMonitorController:
                 self._terminate_process(process)
         self._process = None
         self._proxy_processes = []
+        self._proxy_process_names = []
 
     @staticmethod
     def _subprocess_kwargs() -> dict[str, object]:
@@ -253,7 +276,12 @@ class MacOSMenuApp:
         return 0
 
     def start_monitor(self) -> None:
-        self.controller.start()
+        try:
+            self.controller.start()
+        except Exception as exc:
+            self.refresh_menu()
+            self._show_error("Unable to start Claude Tap monitor", _exception_text(exc))
+            return
         self.refresh_menu()
 
     def stop_monitor(self) -> None:
@@ -353,6 +381,16 @@ class MacOSMenuApp:
 
     def _set_enabled(self, item: int, enabled: bool) -> None:
         self._objc.msg(item, "setEnabled:", None, [ctypes.c_bool], enabled)
+
+    def _show_error(self, message: str, details: str) -> None:
+        objc = self._objc
+        app = objc.msg(objc.cls("NSApplication"), "sharedApplication")
+        objc.msg(app, "activateIgnoringOtherApps:", None, [ctypes.c_bool], True)
+        alert = objc.alloc_init("NSAlert")
+        objc.msg(alert, "setMessageText:", None, [ctypes.c_void_p], objc.nsstring(message))
+        objc.msg(alert, "setInformativeText:", None, [ctypes.c_void_p], objc.nsstring(details))
+        objc.msg(alert, "addButtonWithTitle:", None, [ctypes.c_void_p], objc.nsstring("OK"))
+        objc.msg(alert, "runModal", ctypes.c_long)
 
 
 class _ObjC:
@@ -488,6 +526,11 @@ def _latest_session_text(session: dict[str, Any] | None) -> str:
         first_user = first_user[:41].rstrip() + "..."
     suffix = f" - {first_user}" if first_user else ""
     return f"Latest: {agent} ({record_count}){suffix}"
+
+
+def _exception_text(exc: Exception) -> str:
+    text = str(exc).strip()
+    return text or exc.__class__.__name__
 
 
 def parse_macos_app_args(argv: list[str] | None = None) -> argparse.Namespace:

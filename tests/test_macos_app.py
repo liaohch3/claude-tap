@@ -9,6 +9,7 @@ import pytest
 from claude_tap.cli import main_entry
 from claude_tap.macos_app import (
     DashboardMonitorController,
+    MacOSMenuApp,
     build_dashboard_command,
     build_proxy_command,
     parse_macos_app_args,
@@ -183,6 +184,50 @@ def test_monitor_controller_start_spawns_proxies_and_enables_global_injection(tm
     assert injected == [(19528, 19529)]
 
 
+def test_monitor_controller_start_fails_when_proxy_exits_immediately(tmp_path: Path) -> None:
+    injected: list[str] = []
+    restored: list[str] = []
+    events: list[str] = []
+
+    class FakeProcess:
+        def __init__(self, name: str, returncode: int | None) -> None:
+            self.name = name
+            self.returncode = returncode
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            events.append(f"terminate:{self.name}")
+            self.returncode = 0
+
+        def wait(self, timeout: float) -> int:
+            events.append(f"wait:{self.name}:{timeout}")
+            return 0
+
+    processes = iter([FakeProcess("claude", 2), FakeProcess("codex", None)])
+
+    controller = DashboardMonitorController(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        python_executable=sys.executable,
+        popen=lambda _cmd, **_kwargs: next(processes),
+        is_healthy=lambda _host, _port: True,
+        enable_injection=lambda **_kwargs: injected.append("inject"),
+        disable_injection=lambda: restored.append("restore"),
+        startup_check_delay=0,
+    )
+
+    with pytest.raises(RuntimeError, match="claude proxy exited with code 2"):
+        controller.start()
+
+    assert injected == []
+    assert restored == ["restore"]
+    assert events == ["terminate:codex", "wait:codex:5.0"]
+    assert controller.is_running() is False
+
+
 def test_monitor_controller_stop_terminates_owned_process(tmp_path: Path) -> None:
     events: list[str] = []
 
@@ -267,6 +312,24 @@ def test_parse_macos_app_args_ignores_launch_services_process_serial_number() ->
     args = parse_macos_app_args(["-psn_0_12345", "--tap-no-auto-start"])
 
     assert args.auto_start is False
+
+
+def test_menu_app_start_monitor_shows_error_on_failure() -> None:
+    class FakeController:
+        def start(self) -> str:
+            raise RuntimeError("port 19528 is already in use")
+
+    app = object.__new__(MacOSMenuApp)
+    app.controller = FakeController()
+    calls: list[str] = []
+    errors: list[tuple[str, str]] = []
+    app.refresh_menu = lambda: calls.append("refresh")  # type: ignore[method-assign]
+    app._show_error = lambda title, details: errors.append((title, details))  # type: ignore[method-assign]
+
+    app.start_monitor()
+
+    assert calls == ["refresh"]
+    assert errors == [("Unable to start Claude Tap monitor", "port 19528 is already in use")]
 
 
 def test_main_entry_routes_macos_app_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
