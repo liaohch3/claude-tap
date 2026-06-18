@@ -471,6 +471,106 @@ def _create_fake_claude(script_text):
     return fake_bin_dir
 
 
+def test_e2e_tap_target_endpoint_path_is_not_duplicated():
+    """Real subprocess E2E for users passing a full /v1/messages endpoint target."""
+    import socket
+
+    from aiohttp import web
+
+    received_paths: list[str] = []
+
+    async def handler(request):
+        received_paths.append(request.path)
+        if request.path != "/gateway/v1/messages":
+            return web.json_response({"error": f"unexpected path {request.path}"}, status=404)
+        body = await request.json()
+        return web.json_response(
+            {
+                "id": "msg_endpoint_target",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"ok:{body.get('model', 'missing')}"}],
+                "model": body.get("model", "test"),
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "stop_reason": "end_turn",
+            }
+        )
+
+    fake_claude_script = r"""#!/usr/bin/env python3
+import json, os, sys, urllib.request
+
+base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+req = urllib.request.Request(
+    f"{base}/v1/messages",
+    data=json.dumps({
+        "model": "claude-test-model",
+        "max_tokens": 100,
+        "messages": [{"role": "user", "content": "hello"}],
+    }).encode(),
+    headers={
+        "Content-Type": "application/json",
+        "x-api-key": "sk-ant-test-key-12345678",
+        "anthropic-version": "2023-06-01",
+    },
+)
+
+try:
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read())
+        print(body["content"][0]["text"])
+except Exception as exc:
+    print(f"[fake-claude] error: {exc}", file=sys.stderr)
+    sys.exit(1)
+"""
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_endpoint_target_")
+    fake_bin_dir = _create_fake_claude(fake_claude_script)
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        upstream_port = sock.getsockname()[1]
+    stop_upstream = _start_fake_upstream(upstream_port, handler)
+
+    env = os.environ.copy()
+    env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+    env = e2e_env(env, trace_dir)
+
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_tap",
+                "--tap-output-dir",
+                trace_dir,
+                "--tap-no-open",
+                "--tap-target",
+                f"http://127.0.0.1:{upstream_port}/gateway/v1/messages",
+            ],
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        print(f"[test_e2e_tap_target_endpoint_path_is_not_duplicated] exit: {proc.returncode}")
+        if proc.stdout.strip():
+            print(proc.stdout.rstrip())
+        if proc.stderr.strip():
+            print(proc.stderr.rstrip())
+
+        assert proc.returncode == 0
+        assert received_paths == ["/gateway/v1/messages"]
+        records = read_trace_records(trace_dir)
+        assert len(records) == 1
+        assert records[0]["response"]["status"] == 200
+        assert records[0]["response"]["body"]["content"][0]["text"] == "ok:claude-test-model"
+    finally:
+        stop_upstream()
+        _cleanup(trace_dir, fake_bin_dir, "endpoint_target")
+
+
 ## ---------------------------------------------------------------------------
 ## Test 2: test_upstream_error
 ## ---------------------------------------------------------------------------
@@ -2497,6 +2597,60 @@ def test_upstream_unreachable():
         sys.exit(1)
     finally:
         _cleanup(trace_dir, fake_bin_dir, "unreachable")
+
+
+@pytest.mark.asyncio
+async def test_reverse_proxy_ssl_error_returns_ca_diagnostics():
+    """Real localhost reverse proxy test for upstream TLS verification failures."""
+    import aiohttp
+    from aiohttp import web
+
+    from claude_tap.proxy import proxy_handler
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        upstream_port = await _start_fake_https_upstream(tmpdir_path)
+        store, session_id, writer = _writer_for_dir(tmpdir_path)
+        session = aiohttp.ClientSession(auto_decompress=False, trust_env=False)
+
+        app = web.Application(client_max_size=0)
+        app["trace_ctx"] = {
+            "target_url": f"https://127.0.0.1:{upstream_port}",
+            "writer": writer,
+            "session": session,
+            "turn_counter": 0,
+            "store_stream_events": False,
+        }
+        app.router.add_route("*", "/{path_info:.*}", proxy_handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        proxy_port = site._server.sockets[0].getsockname()[1]
+
+        try:
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                async with client.post(
+                    f"http://127.0.0.1:{proxy_port}/v1/messages",
+                    json={
+                        "model": "claude-test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "hello"}],
+                    },
+                ) as resp:
+                    assert resp.status == 502
+                    text = await resp.text()
+
+            assert "SSL_CERT_FILE" in text
+            assert "provider base URL" in text
+            assert "Configured target: https://127.0.0.1:" in text
+            assert "Upstream URL: https://127.0.0.1:" in text
+            writer.close()
+            assert store.export_jsonl(session_id) == ""
+        finally:
+            await runner.cleanup()
+            await session.close()
+            writer.close()
 
 
 ## ---------------------------------------------------------------------------
