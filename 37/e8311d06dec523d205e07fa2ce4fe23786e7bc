@@ -1,0 +1,30 @@
+tests/test_upstream.py
+  s_af8b16ccaed558::t_9f0a22da2c3606 1-61
+claude_tap/proxy.py
+  s_af8b16ccaed558::t_f2b9549f5fecee 24,514,593,595,598
+claude_tap/forward_proxy.py
+  s_af8b16ccaed558::t_c0b113e9dd2453 51,550,1190
+  s_af8b16ccaed558::t_c5868147c24397 549
+tests/test_e2e.py
+  s_af8b16ccaed558::t_83faf34f026074 474-498,500-573
+claude_tap/ws_proxy.py
+  s_af8b16ccaed558::t_7ebba67bc7e994 20,75,139
+claude_tap/upstream.py
+  s_af8b16ccaed558::t_3b0869d6a66c16 1-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "37e8311d06dec523d205e07fa2ce4fe23786e7bc",
+  "prompts": {},
+  "sessions": {
+    "s_af8b16ccaed558": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ecf33-ca50-7162-946c-ac42b3108b70",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}
