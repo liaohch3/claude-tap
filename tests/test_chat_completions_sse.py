@@ -56,6 +56,29 @@ def test_reassembler_can_reconstruct_without_storing_events() -> None:
     assert snap["content"] == [{"type": "text", "text": "OK"}]
 
 
+def test_gemini_stream_generate_content_reconstructs_bare_data_frames() -> None:
+    r = SSEReassembler(store_events=False)
+    r.feed_bytes(
+        b'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Hello "}]}}],'
+        b'"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":1,"totalTokenCount":8}}\n\n'
+        b'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini."}]},'
+        b'"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,'
+        b'"candidatesTokenCount":2,"totalTokenCount":9,"cachedContentTokenCount":3}}\n\n'
+    )
+
+    snap = r.reconstruct()
+
+    assert snap is not None
+    assert snap["candidates"][0]["content"]["parts"] == [{"text": "Hello Gemini."}]
+    assert snap["candidates"][0]["finishReason"] == "STOP"
+    assert snap["content"] == [{"type": "text", "text": "Hello Gemini."}]
+    assert snap["usageMetadata"]["promptTokenCount"] == 7
+    assert snap["usage"]["input_tokens"] == 7
+    assert snap["usage"]["output_tokens"] == 2
+    assert snap["usage"]["total_tokens"] == 9
+    assert snap["usage"]["cache_read_input_tokens"] == 3
+
+
 def test_chat_completions_usage_dual_naming() -> None:
     """Final chunk's `usage` must be exposed under both Anthropic and OpenAI
     keys so token displays that only know one schema still work."""

@@ -81,6 +81,13 @@ class SSEReassembler:
                     self._snapshot = copy.deepcopy(response)
                 elif event_type in ("response.completed", "response.done"):
                     self._snapshot = copy.deepcopy(data)
+            elif event_type == "message" and ("candidates" in data or "usageMetadata" in data):
+                # Gemini streamGenerateContent uses bare `data: {...}` frames
+                # with no `event:` header. Accumulate them before the generic
+                # `_snapshot is None` guard so forward-proxy captures retain
+                # assistant text and usage even when raw stream events are not
+                # stored.
+                self._accumulate_gemini_chunk(data)
             elif event_type == "message" and "choices" in data:
                 # OpenAI Chat Completions chunk — must run before the
                 # `_snapshot is None` guard below, since the accumulator
@@ -241,6 +248,121 @@ class SSEReassembler:
             self._merge_chat_completion_usage(usage)
         if isinstance(choice_usage, dict):
             self._merge_chat_completion_usage(choice_usage)
+
+    def _accumulate_gemini_chunk(self, data: dict) -> None:
+        if self._snapshot is None or not isinstance(self._snapshot.get("candidates"), list):
+            self._snapshot = {"candidates": []}
+
+        for key, value in data.items():
+            if key in {"candidates", "usageMetadata"}:
+                continue
+            self._snapshot[key] = copy.deepcopy(value)
+
+        candidates = data.get("candidates")
+        if isinstance(candidates, list):
+            for position, candidate in enumerate(candidates):
+                if isinstance(candidate, dict):
+                    self._merge_gemini_candidate(position, candidate)
+
+        usage = data.get("usageMetadata")
+        if isinstance(usage, dict):
+            self._snapshot["usageMetadata"] = copy.deepcopy(usage)
+            self._snapshot["usage"] = normalize_usage(usage)
+
+        self._snapshot["content"] = self._gemini_content_blocks()
+
+    def _merge_gemini_candidate(self, position: int, candidate: dict) -> None:
+        idx = candidate.get("index")
+        if not isinstance(idx, int) or idx < 0:
+            idx = position
+
+        candidates = self._snapshot["candidates"]
+        while len(candidates) <= idx:
+            candidates.append({})
+
+        target = candidates[idx]
+        if not isinstance(target, dict):
+            target = {}
+            candidates[idx] = target
+
+        for key, value in candidate.items():
+            if key == "content" and isinstance(value, dict):
+                self._merge_gemini_candidate_content(target, value)
+            else:
+                target[key] = copy.deepcopy(value)
+
+    def _merge_gemini_candidate_content(self, candidate: dict, incoming: dict) -> None:
+        content = candidate.get("content")
+        if not isinstance(content, dict):
+            content = {}
+            candidate["content"] = content
+
+        for key, value in incoming.items():
+            if key == "parts":
+                continue
+            content[key] = copy.deepcopy(value)
+
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            parts = []
+            content["parts"] = parts
+
+        for part in incoming.get("parts") or []:
+            if isinstance(part, dict):
+                self._append_gemini_part(parts, part)
+
+    def _append_gemini_part(self, parts: list, part: dict) -> None:
+        if isinstance(part.get("text"), str):
+            previous = parts[-1] if parts else None
+            if (
+                isinstance(previous, dict)
+                and isinstance(previous.get("text"), str)
+                and previous.get("thought") == part.get("thought")
+                and not any(key in previous for key in ("functionCall", "functionResponse", "inlineData"))
+                and not any(key in part for key in ("functionCall", "functionResponse", "inlineData"))
+            ):
+                previous["text"] += part["text"]
+                return
+        parts.append(copy.deepcopy(part))
+
+    def _gemini_content_blocks(self) -> list[dict]:
+        content: list[dict] = []
+        for candidate in self._snapshot.get("candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_content = candidate.get("content")
+            if not isinstance(candidate_content, dict):
+                continue
+            for part in candidate_content.get("parts") or []:
+                if not isinstance(part, dict):
+                    continue
+                if isinstance(part.get("text"), str) and part["text"].strip():
+                    if part.get("thought") is True:
+                        self._append_mergeable_content_block(content, {"type": "thinking", "thinking": part["text"]})
+                    else:
+                        self._append_mergeable_content_block(content, {"type": "text", "text": part["text"]})
+                call = part.get("functionCall")
+                if isinstance(call, dict):
+                    content.append(
+                        {
+                            "type": "tool_use",
+                            "id": call.get("id", ""),
+                            "name": call.get("name", "tool_use"),
+                            "input": call.get("args") if isinstance(call.get("args"), dict) else {},
+                        }
+                    )
+        return content
+
+    def _append_mergeable_content_block(self, content: list[dict], block: dict) -> None:
+        previous = content[-1] if content else None
+        if isinstance(previous, dict) and previous.get("type") == block.get("type"):
+            if block.get("type") == "thinking":
+                previous["thinking"] = f"{previous.get('thinking', '')}{block.get('thinking', '')}"
+                return
+            if block.get("type") == "text":
+                previous["text"] = f"{previous.get('text', '')}{block.get('text', '')}"
+                return
+        content.append(block)
 
     def _mirror_tool_call_to_content(self, idx: int, tc: dict) -> None:
         """Sync one accumulated tool_call into the `content` array as a
