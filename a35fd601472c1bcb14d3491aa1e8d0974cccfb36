@@ -1,0 +1,26 @@
+claude_tap/compact_trace.py
+  s_dc3cf7190e850a::t_bdc226afc24a1f 99-102,208-231
+tests/test_viewer_js_units.py
+  s_dc3cf7190e850a::t_d3016e962fdab7 257-320
+tests/test_trace_store_compaction.py
+  s_dc3cf7190e850a::t_6d099af2c54538 219-292
+  s_dc3cf7190e850a::t_6ecf54872fc034 9-15
+claude_tap/viewer_assets/live_bootstrap.js
+  s_dc3cf7190e850a::t_f3c7fae6dca9e4 229-266,273-280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "a35fd601472c1bcb14d3491aa1e8d0974cccfb36",
+  "prompts": {},
+  "sessions": {
+    "s_dc3cf7190e850a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e3fb3-d9d0-7cb1-a30b-9c2b352ed439",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}

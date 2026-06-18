@@ -1,0 +1,20 @@
+.agents/evidence/pr/message-content-compaction/tmux-compaction-stats.json
+  s_dc3cf7190e850a::t_a49293dc94bc15 1-24,30-54
+  s_dc3cf7190e850a::t_6588ae059bde1b 25-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "50230b650b022355c18e813d30f789b49738a0f8",
+  "prompts": {},
+  "sessions": {
+    "s_dc3cf7190e850a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e3fb3-d9d0-7cb1-a30b-9c2b352ed439",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+tests/test_gemini_viewer.py
+  s_3b299e0ec9d987::t_c2e39c42927961 274-338
+claude_tap/viewer_assets/filters_search.js
+  s_3b299e0ec9d987::t_690efe6f33b224 119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "f14a23f48a9b2293beb9a77c4fea5d55926b414c",
+  "prompts": {},
+  "sessions": {
+    "s_3b299e0ec9d987": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e6cbf-9476-7ac0-bb8d-7eec4edf3ba9",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}

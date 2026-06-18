@@ -1,0 +1,31 @@
+tests/test_trace_store_compaction.py
+  s_dc3cf7190e850a::t_8d9b48143f31c5 9,398-425
+  s_dc3cf7190e850a::t_9f89141e13963f 324,330-331,353-354
+  s_dc3cf7190e850a::t_5f8407bec4260b 62-117,315-323,325-329,332-352,355-397
+claude_tap/trace_store.py
+  s_dc3cf7190e850a::t_7e00c201e563de 908-910
+  s_dc3cf7190e850a::t_f14511e12bbfed 21
+tests/test_export.py
+  s_dc3cf7190e850a::t_abacf3992f39fb 158
+  s_dc3cf7190e850a::t_1e725add8052e7 124-127,139,157,166
+claude_tap/compact_trace.py
+  s_dc3cf7190e850a::t_bc6fd9003f5b4e 6,23-26,117-134,141,152-173
+.agents/evidence/pr/message-content-compaction/compaction-stats.json
+  s_dc3cf7190e850a::t_11991c04dec271 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "3145e8f8e47c6823e52ce40f68faed33743be5ec",
+  "prompts": {},
+  "sessions": {
+    "s_dc3cf7190e850a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e3fb3-d9d0-7cb1-a30b-9c2b352ed439",
+        "model": "gpt-5.5"
+      },
+      "human_author": "liaohch3 <1015118636@qq.com>"
+    }
+  }
+}

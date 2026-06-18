@@ -1,0 +1,23 @@
+README_zh.md
+  s_dc3cf7190e850a::t_0a442abc2b060b 44-60,518
+  s_dc3cf7190e850a::t_d40287ffd75f81 519-521
+README.md
+  s_dc3cf7190e850a::t_0a442abc2b060b 44-60,521
+  s_dc3cf7190e850a::t_d40287ffd75f81 522-524
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "a4292996b7031732db56d93b9252b4af2cd91793",
+  "prompts": {},
+  "sessions": {
+    "s_dc3cf7190e850a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e3fb3-d9d0-7cb1-a30b-9c2b352ed439",
+        "model": "gpt-5.5"
+      },
+      "human_author": null
+    }
+  }
+}
