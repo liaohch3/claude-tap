@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.120] - 2026-06-18
+
+### Changed
+- fix upstream target diagnostics
 ## [0.1.119] - 2026-06-17
 
 ### Changed
