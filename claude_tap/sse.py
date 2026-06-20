@@ -73,6 +73,8 @@ class SSEReassembler:
         if not isinstance(data, dict):
             return
         try:
+            gemini_chunk = self._gemini_chunk_payload(data) if event_type == "message" else None
+
             if event_type == "message_start":
                 self._snapshot = copy.deepcopy(data.get("message", {}))
             elif event_type in ("response.created", "response.completed", "response.done"):
@@ -81,13 +83,13 @@ class SSEReassembler:
                     self._snapshot = copy.deepcopy(response)
                 elif event_type in ("response.completed", "response.done"):
                     self._snapshot = copy.deepcopy(data)
-            elif event_type == "message" and ("candidates" in data or "usageMetadata" in data):
+            elif gemini_chunk is not None:
                 # Gemini streamGenerateContent uses bare `data: {...}` frames
                 # with no `event:` header. Accumulate them before the generic
                 # `_snapshot is None` guard so forward-proxy captures retain
                 # assistant text and usage even when raw stream events are not
                 # stored.
-                self._accumulate_gemini_chunk(data)
+                self._accumulate_gemini_chunk(gemini_chunk)
             elif event_type == "message" and "choices" in data:
                 # OpenAI Chat Completions chunk — must run before the
                 # `_snapshot is None` guard below, since the accumulator
@@ -249,6 +251,17 @@ class SSEReassembler:
         if isinstance(choice_usage, dict):
             self._merge_chat_completion_usage(choice_usage)
 
+    def _gemini_chunk_payload(self, data: dict) -> dict | None:
+        if self._is_gemini_chunk(data):
+            return data
+        response = data.get("response")
+        if isinstance(response, dict) and self._is_gemini_chunk(response):
+            return response
+        return None
+
+    def _is_gemini_chunk(self, data: dict) -> bool:
+        return "candidates" in data or "usageMetadata" in data
+
     def _accumulate_gemini_chunk(self, data: dict) -> None:
         if self._snapshot is None or not isinstance(self._snapshot.get("candidates"), list):
             self._snapshot = {"candidates": []}
@@ -312,18 +325,22 @@ class SSEReassembler:
                 self._append_gemini_part(parts, part)
 
     def _append_gemini_part(self, parts: list, part: dict) -> None:
-        if isinstance(part.get("text"), str):
+        if self._is_mergeable_gemini_text_part(part):
             previous = parts[-1] if parts else None
             if (
                 isinstance(previous, dict)
                 and isinstance(previous.get("text"), str)
+                and self._is_mergeable_gemini_text_part(previous)
                 and previous.get("thought") == part.get("thought")
-                and not any(key in previous for key in ("functionCall", "functionResponse", "inlineData"))
-                and not any(key in part for key in ("functionCall", "functionResponse", "inlineData"))
             ):
                 previous["text"] += part["text"]
                 return
         parts.append(copy.deepcopy(part))
+
+    def _is_mergeable_gemini_text_part(self, part: dict) -> bool:
+        if not isinstance(part.get("text"), str):
+            return False
+        return set(part).issubset({"text", "thought"})
 
     def _gemini_content_blocks(self) -> list[dict]:
         content: list[dict] = []
