@@ -77,12 +77,31 @@ class SSEReassembler:
 
             if event_type == "message_start":
                 self._snapshot = copy.deepcopy(data.get("message", {}))
-            elif event_type in ("response.created", "response.completed", "response.done"):
+            elif event_type == "response.created":
                 response = data.get("response")
                 if isinstance(response, dict):
                     self._snapshot = copy.deepcopy(response)
-                elif event_type in ("response.completed", "response.done"):
-                    self._snapshot = copy.deepcopy(data)
+            elif event_type in ("response.output_item.added", "response.output_item.done"):
+                # The Codex/ChatGPT backend streams each output item here and
+                # sends response.completed with an EMPTY output array, so the
+                # items have to be accumulated rather than read off the
+                # terminal event. Must run before the `_snapshot is None`
+                # guard since output_item.added can be the first event.
+                self._accumulate_responses_output_item(data)
+            elif event_type == "response.output_text.delta":
+                self._accumulate_responses_output_text(data)
+            elif event_type in (
+                "response.completed",
+                "response.done",
+                "response.incomplete",
+                "response.failed",
+            ):
+                # incomplete (e.g. max_output_tokens) and failed carry the same
+                # {"response": {...}} shape as completed, with the final status,
+                # usage and error / incomplete_details — merge them the same way.
+                self._merge_responses_terminal(data)
+            elif event_type == "response.error":
+                self._record_responses_error(data)
             elif gemini_chunk is not None:
                 # Gemini streamGenerateContent uses bare `data: {...}` frames
                 # with no `event:` header. Accumulate them before the generic
@@ -140,6 +159,90 @@ class SSEReassembler:
                     self._snapshot["usage"].update(normalize_usage(usage))
         except Exception:
             pass
+
+    def _ensure_responses_output(self) -> list:
+        """Return the snapshot's OpenAI Responses `output` list, creating the
+        snapshot and/or the list if a streaming output item arrives before
+        response.created."""
+        if self._snapshot is None:
+            self._snapshot = {"output": []}
+        output = self._snapshot.get("output")
+        if not isinstance(output, list):
+            output = []
+            self._snapshot["output"] = output
+        return output
+
+    def _accumulate_responses_output_item(self, data: dict) -> None:
+        """Place an OpenAI Responses output item into the snapshot at its
+        output_index. response.output_item.done carries the complete item and
+        is authoritative; response.output_item.added seeds a placeholder that
+        text deltas can append to."""
+        item = data.get("item")
+        if not isinstance(item, dict):
+            return
+        output = self._ensure_responses_output()
+        idx = data.get("output_index")
+        if not isinstance(idx, int) or idx < 0:
+            idx = len(output)
+        while len(output) <= idx:
+            output.append({})
+        output[idx] = copy.deepcopy(item)
+
+    def _accumulate_responses_output_text(self, data: dict) -> None:
+        """Append a response.output_text.delta to the in-progress message item
+        so partial/truncated streams still retain their text even if the
+        terminal response.output_item.done never arrives."""
+        delta = data.get("delta")
+        if not isinstance(delta, str) or not delta:
+            return
+        output = self._ensure_responses_output()
+        idx = data.get("output_index")
+        if not isinstance(idx, int) or idx < 0:
+            idx = len(output) - 1
+        if idx < 0 or idx >= len(output):
+            return
+        item = output[idx]
+        if not isinstance(item, dict):
+            return
+        content = item.get("content")
+        if not isinstance(content, list):
+            content = []
+            item["content"] = content
+        part = next((c for c in content if isinstance(c, dict) and c.get("type") == "output_text"), None)
+        if part is None:
+            part = {"type": "output_text", "text": ""}
+            content.append(part)
+        part["text"] = (part.get("text") or "") + delta
+
+    def _merge_responses_terminal(self, data: dict) -> None:
+        """Apply a terminal response.completed / response.done event.
+
+        The terminal `response` object carries the final status and usage but
+        the Codex/ChatGPT backend leaves its `output` empty (the items were
+        streamed via response.output_item.* events), so preserve the output
+        already accumulated in the snapshot when the terminal one is empty."""
+        response = data.get("response")
+        if not isinstance(response, dict):
+            self._snapshot = copy.deepcopy(data)
+            return
+        response = copy.deepcopy(response)
+        accumulated = self._snapshot.get("output") if isinstance(self._snapshot, dict) else None
+        if not response.get("output") and isinstance(accumulated, list) and accumulated:
+            response["output"] = accumulated
+        self._snapshot = response
+
+    def _record_responses_error(self, data: dict) -> None:
+        """Capture a stream-level response.error event. It carries no response
+        object, so attach the error to the snapshot without discarding output
+        already accumulated from response.output_item.* events."""
+        if self._snapshot is None:
+            self._snapshot = {"output": []}
+        error = {k: data[k] for k in ("code", "message", "param") if k in data}
+        self._snapshot["error"] = error or copy.deepcopy(data)
+        # The stream errored out, so promote a still-running status to failed
+        # but never override a status a terminal event already set.
+        if self._snapshot.get("status") in (None, "", "queued", "in_progress"):
+            self._snapshot["status"] = "failed"
 
     def _content_block_for_delta(self, idx: int, delta: dict) -> dict | None:
         if not isinstance(idx, int) or idx < 0:
