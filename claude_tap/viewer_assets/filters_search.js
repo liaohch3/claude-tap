@@ -593,7 +593,7 @@ function ensureEntryVisibleForSearch(target) {
   if (collapsedGroups.has(model)) {
     collapsedGroups.delete(model);
     renderSidebar(true);
-    idx = findFilteredIdxByRequestId(requestId);
+    idx = findFilteredIdxByEntryKey(target.entryKey, target.requestId);
   }
   return idx;
 }

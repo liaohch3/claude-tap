@@ -621,7 +621,7 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   setHistoryDeleteStatus('', '');
                   deleteSelectedTraceDate();
                   getTargetForGlobalMatch(0);
-                  findFilteredIdxByRequestId(entries[0]?.request_id || '');
+                  findFilteredIdxByEntryKey(entryStableKey(entries[0]), entries[0]?.request_id || '');
                   openGlobalSearch();
                   globalSearchState.query = 'subagent_type: "';
                   uniqueSearchQueries(['subagent_type', 'subagent_type']);
