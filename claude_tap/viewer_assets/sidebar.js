@@ -717,7 +717,10 @@ function renderSidebar(preserveDetail) {
 
 function _restoreSelection(preserveDetail) {
   let restoredIdx = -1;
-  if (preserveDetail && currentDetailRequestId) {
+  if (preserveDetail && currentDetailEntryKey) {
+    restoredIdx = filtered.findIndex(e => entryStableKey(e) === currentDetailEntryKey);
+  }
+  if (restoredIdx < 0 && preserveDetail && currentDetailRequestId) {
     restoredIdx = filtered.findIndex(e => e.request_id === currentDetailRequestId);
   }
   if (restoredIdx >= 0) {
@@ -847,6 +850,8 @@ function vsScrollToIdx(idx) {
 function selectEntry(idx, opts) {
   if (idx < 0 || idx >= filtered.length) return;
   const force = !opts || opts.force !== false;
+  const entry = filtered[idx];
+  const entryKey = entryStableKey(entry);
   activeIdx = idx;
   if (virtualMode) {
     vsRenderVisible();
@@ -856,10 +861,9 @@ function selectEntry(idx, opts) {
     });
   }
   // Skip re-render if same entry and force=false (preserves scroll position in live mode)
-  if (!force && currentDetailRequestId === filtered[idx].request_id) {
+  if (!force && currentDetailEntryKey === entryKey) {
     // Just update sidebar highlight, keep detail as-is
   } else {
-    const entry = filtered[idx];
     renderDetailForEntry(entry);
   }
   if (virtualMode) {

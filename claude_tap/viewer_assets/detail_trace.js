@@ -87,6 +87,7 @@ async function renderDetailForEntry(entry) {
   }
   const token = ++detailLoadToken;
   currentDetailRequestId = entry.request_id;
+  currentDetailEntryKey = entryStableKey(entry);
   $('#detail').innerHTML = '<div class="empty-state" role="status" aria-live="polite"></div>';
   try {
     const resolved = await resolveEntryForDetailAsync(entry);
@@ -102,6 +103,7 @@ async function renderDetailForEntry(entry) {
 function renderDetail(e) {
   saveSectionStates();
   currentDetailRequestId = e.request_id;
+  currentDetailEntryKey = entryStableKey(e);
   const d = $('#detail');
   const reqBody = e.request?.body, respBody = e.response?.body, usage = getUsage(e);
   const statusCode = getResponseStatus(e);

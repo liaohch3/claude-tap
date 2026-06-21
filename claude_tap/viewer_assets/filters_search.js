@@ -474,13 +474,14 @@ function buildGlobalHighlightQueries(query) {
 }
 
 function getEntrySearchText(entry) {
-  if (!entry?.request_id) return '';
-  if (globalSearchState.textCache.has(entry.request_id)) return globalSearchState.textCache.get(entry.request_id);
+  const cacheKey = entryStableKey(entry);
+  if (!cacheKey) return '';
+  if (globalSearchState.textCache.has(cacheKey)) return globalSearchState.textCache.get(cacheKey);
   if (entry._isStub) {
     const lines = getRawLines();
     const raw = lines[entry._rawIdx] || '';
     const text = raw.toLowerCase();
-    globalSearchState.textCache.set(entry.request_id, text);
+    globalSearchState.textCache.set(cacheKey, text);
     return text;
   }
   const resolved = entry;
@@ -495,7 +496,7 @@ function getEntrySearchText(entry) {
   getResponseEvents(resolved).forEach(ev => parts.push(JSON.stringify(ev)));
   parts.push(JSON.stringify(resolved, null, 2));
   const text = parts.join('\n').toLowerCase();
-  globalSearchState.textCache.set(entry.request_id, text);
+  globalSearchState.textCache.set(cacheKey, text);
   return text;
 }
 
@@ -547,7 +548,7 @@ function recalcGlobalSearchMatches() {
   entries.forEach(entry => {
     if (!isNavigableTraceEntry(entry)) return;
     const c = countMatchesInText(getEntrySearchText(entry), queries);
-    if (c > 0) counts.push({ requestId: entry.request_id, count: c });
+    if (c > 0) counts.push({ entryKey: entryStableKey(entry), requestId: entry.request_id, count: c });
     total += c;
   });
   globalSearchState.matchCounts = counts;
@@ -568,22 +569,24 @@ function getTargetForGlobalMatch(globalIndex) {
   let seen = 0;
   for (const row of globalSearchState.matchCounts) {
     if (globalIndex < seen + row.count) {
-      return { requestId: row.requestId, localIndex: globalIndex - seen };
+      return { entryKey: row.entryKey, requestId: row.requestId, localIndex: globalIndex - seen };
     }
     seen += row.count;
   }
   return null;
 }
 
-function findFilteredIdxByRequestId(requestId) {
+function findFilteredIdxByEntryKey(entryKey, requestId) {
+  let idx = filtered.findIndex(entry => entryStableKey(entry) === entryKey);
+  if (idx >= 0) return idx;
   return filtered.findIndex(entry => entry.request_id === requestId);
 }
 
-function ensureEntryVisibleForSearch(requestId) {
-  let idx = findFilteredIdxByRequestId(requestId);
+function ensureEntryVisibleForSearch(target) {
+  let idx = findFilteredIdxByEntryKey(target.entryKey, target.requestId);
   if (idx < 0) {
     normalizeFiltersForGlobalSearch();
-    idx = findFilteredIdxByRequestId(requestId);
+    idx = findFilteredIdxByEntryKey(target.entryKey, target.requestId);
   }
   if (idx < 0) return -1;
   const model = filtered[idx]?.request?.body?.model || 'unknown';
@@ -607,9 +610,9 @@ function navigateGlobalSearch(delta) {
 function revealCurrentSearchMatch() {
   const target = getTargetForGlobalMatch(globalSearchState.currentMatch);
   if (!target) return;
-  const filteredIdx = ensureEntryVisibleForSearch(target.requestId);
+  const filteredIdx = ensureEntryVisibleForSearch(target);
   if (filteredIdx < 0) return;
-  const sameEntry = currentDetailRequestId === target.requestId;
+  const sameEntry = currentDetailEntryKey === target.entryKey;
   selectEntry(filteredIdx, { force: !sameEntry });
   applyGlobalSearchHighlights(target.localIndex);
 }
