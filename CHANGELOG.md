@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.121] - 2026-06-22
+
+### Changed
+- feat: add MiMo Code client support (#338)
 ## [0.1.120] - 2026-06-18
 
 ### Changed
