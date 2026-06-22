@@ -160,7 +160,7 @@ function renderDetail(e) {
   restoreSectionStates();
   if (globalSearchState.open && globalSearchState.query) {
     const target = getTargetForGlobalMatch(globalSearchState.currentMatch);
-    const localIndex = target && target.requestId === e.request_id ? target.localIndex : 0;
+    const localIndex = target && target.entryKey === entryStableKey(e) ? target.localIndex : 0;
     applyGlobalSearchHighlights(localIndex);
   }
 }

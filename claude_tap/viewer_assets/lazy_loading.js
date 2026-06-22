@@ -68,6 +68,7 @@ function buildStubEntry(meta, rawIdx) {
   return {
     _isStub: true,
     _rawIdx: rawIdx,
+    _entry_index: rawIdx,
     turn: meta.turn,
     request_id: meta.request_id || '',
     timestamp: meta.timestamp || '',
@@ -162,6 +163,7 @@ async function fetchRemoteEntry(entry) {
 function withDisplayFields(full, entry) {
   return {
     ...full,
+    _entry_index: entry._entry_index,
     display_turn: entry.display_turn,
     capture_turn: entry.capture_turn,
     record_index: entry.record_index,

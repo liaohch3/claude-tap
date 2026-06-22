@@ -378,7 +378,7 @@ def _write_duplicate_request_id_tool_trace(path: Path) -> str:
         {
             "timestamp": "2026-05-29T08:00:01+00:00",
             "request_id": "req_shared_search",
-            "turn": 2,
+            "turn": 1,
             "duration_ms": 900,
             "request": {
                 "method": "POST",

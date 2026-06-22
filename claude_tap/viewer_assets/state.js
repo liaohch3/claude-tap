@@ -42,10 +42,13 @@ function entryStableKey(entry) {
   if (!entry) return '';
   const requestId = entry.request_id || entry.req_id || '';
   const parts = [requestId || 'entry'];
+  const entryIndex = entry._entry_index ?? entry._rawIdx;
   const websocketIndex = entry.websocket_response_index;
   const recordIndex = entry.record_index;
   const captureTurn = entry.capture_turn ?? entry.turn;
-  if (websocketIndex !== undefined && websocketIndex !== null && websocketIndex !== '') {
+  if (entryIndex !== undefined && entryIndex !== null && entryIndex !== '') {
+    parts.push(`idx:${entryIndex}`);
+  } else if (websocketIndex !== undefined && websocketIndex !== null && websocketIndex !== '') {
     parts.push(`ws:${websocketIndex}`);
   } else if (recordIndex !== undefined && recordIndex !== null && recordIndex !== '') {
     parts.push(`record:${recordIndex}`);
