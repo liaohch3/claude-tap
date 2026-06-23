@@ -21,6 +21,9 @@ def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_enable_creates_configs_when_absent(_home: Path) -> None:
+    assert global_inject.claude_home_exists() is False
+    assert global_inject.codex_home_exists() is False
+
     global_inject.enable(claude_port=8788, codex_port=8789)
 
     settings = json.loads((_home / ".claude" / "settings.json").read_text())
@@ -29,6 +32,8 @@ def test_enable_creates_configs_when_absent(_home: Path) -> None:
     codex = (_home / ".codex" / "config.toml").read_text()
     assert 'openai_base_url = "http://127.0.0.1:8789/v1"' in codex
     assert global_inject.is_active() is True
+    assert global_inject.claude_home_exists() is True
+    assert global_inject.codex_home_exists() is True
 
 
 def test_disable_removes_files_that_did_not_exist(_home: Path) -> None:
@@ -107,6 +112,17 @@ def test_enable_tolerates_invalid_claude_json(_home: Path) -> None:
     global_inject.enable(claude_port=8788)
     data = json.loads(settings_path.read_text())
     assert data["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8788"
+
+
+def test_enable_replaces_non_object_claude_settings(_home: Path) -> None:
+    settings_path = _home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text('["not", "an", "object"]')
+
+    global_inject.enable(claude_port=8788)
+
+    data = json.loads(settings_path.read_text())
+    assert data == {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8788"}}
 
 
 def test_enable_twice_then_disable_restores_original(_home: Path) -> None:
@@ -192,6 +208,39 @@ def test_codex_injects_selected_custom_provider_base_url(_home: Path) -> None:
     assert "https://new-api.example.test/v1" not in text
 
 
+def test_toml_dotted_string_inserts_before_next_table() -> None:
+    text = global_inject._set_toml_dotted_string(
+        "\n".join(
+            [
+                "[model_providers.newapi]",
+                'name = "Custom"',
+                "",
+                "[tui]",
+                'theme = "dark"',
+                "",
+            ]
+        ),
+        "model_providers.newapi.base_url",
+        "http://127.0.0.1:8789/v1",
+    )
+
+    lines = text.splitlines()
+    provider_idx = lines.index("[model_providers.newapi]")
+    base_url_idx = lines.index('base_url = "http://127.0.0.1:8789/v1"')
+    tui_idx = lines.index("[tui]")
+    assert provider_idx < base_url_idx < tui_idx
+
+
+def test_toml_dotted_string_uses_top_level_key_when_table_is_missing() -> None:
+    text = global_inject._set_toml_dotted_string(
+        'model = "gpt-5"\n\n[tui]\ntheme = "dark"\n',
+        "model_providers.newapi.base_url",
+        "http://127.0.0.1:8789/v1",
+    )
+
+    assert 'model_providers.newapi.base_url = "http://127.0.0.1:8789/v1"' in text
+
+
 def test_claude_injects_custom_bedrock_gateway_when_bedrock_mode_is_enabled(_home: Path) -> None:
     settings_path = _home / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
@@ -248,6 +297,97 @@ def test_disable_can_terminate_recorded_monitor_processes(_home: Path, monkeypat
 
     assert signals == [(4321, signal.SIGTERM)]
     assert not state_file.exists()
+
+
+def test_disable_ignores_invalid_state_and_restores_no_files(_home: Path) -> None:
+    state_file = _home / ".claude-tap" / "monitor-state.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text("not-json{{")
+
+    global_inject.disable()
+
+    assert not state_file.exists()
+
+
+def test_restore_files_skips_invalid_entries_and_missing_backups(_home: Path) -> None:
+    created_path = _home / ".claude" / "settings.json"
+    created_path.parent.mkdir(parents=True)
+    created_path.write_text("{}")
+
+    existing_path = _home / ".codex" / "config.toml"
+    existing_path.parent.mkdir(parents=True)
+    existing_path.write_text('model = "gpt-5"\n')
+
+    global_inject._restore_files(
+        [
+            "invalid",
+            {"path": str(existing_path), "existed": True, "backup": str(existing_path.with_suffix(".missing"))},
+            {"path": str(created_path), "existed": False},
+        ]
+    )
+
+    assert existing_path.read_text() == 'model = "gpt-5"\n'
+    assert not created_path.exists()
+
+
+def test_terminate_recorded_processes_filters_and_kills_stubborn_process(
+    _home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_file = _home / ".claude-tap" / "monitor-state.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "files": [],
+                "processes": [
+                    "invalid",
+                    {"pid": -1},
+                    {"pid": os.getpid()},
+                    {"pid": 1111},
+                    {"pid": 2222},
+                    {"pid": 3333},
+                ],
+            }
+        )
+    )
+    commands = {
+        1111: "python unrelated.py",
+        2222: "python -m claude_tap dashboard",
+        3333: "python -m claude_tap --tap-no-launch",
+    }
+    alive_checks = {2222: [True, True, True], 3333: [True, False]}
+    signals: list[tuple[int, signal.Signals]] = []
+
+    def fake_pid_exists(pid: int) -> bool:
+        checks = alive_checks.get(pid)
+        if not checks:
+            return False
+        return checks.pop(0)
+
+    def fake_kill(pid: int, sig: int) -> None:
+        signals.append((pid, signal.Signals(sig)))
+        if pid == 3333:
+            raise OSError("gone")
+
+    monkeypatch.setattr(global_inject, "_monitor_process_command", lambda pid: commands[pid])
+    monkeypatch.setattr(global_inject, "_pid_exists", fake_pid_exists)
+    monkeypatch.setattr(global_inject.time, "monotonic", iter([0.0, 1.0, 6.0, 10.0, 11.0]).__next__)
+    monkeypatch.setattr(global_inject.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(os, "kill", fake_kill)
+
+    global_inject.disable(terminate_processes=True)
+
+    assert signals == [(2222, signal.SIGTERM), (2222, signal.SIGKILL), (3333, signal.SIGTERM)]
+
+
+def test_monitor_process_helpers_handle_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_run(*_args: object, **_kwargs: object) -> None:
+        raise OSError("ps failed")
+
+    monkeypatch.setattr(global_inject.subprocess, "run", fail_run)
+
+    assert global_inject._monitor_process_command(1234) == ""
+    assert global_inject._looks_like_monitor_process("") is False
 
 
 def test_disable_is_noop_without_state(_home: Path) -> None:
