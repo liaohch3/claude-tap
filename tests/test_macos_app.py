@@ -95,6 +95,7 @@ def test_build_proxy_command_starts_reverse_proxy_without_dashboard(tmp_path: Pa
 def test_monitor_controller_reuses_healthy_dashboard_and_starts_proxies(tmp_path: Path) -> None:
     spawned: list[list[str]] = []
     injected: list[tuple[int, int]] = []
+    active = False
 
     class FakeProcess:
         def poll(self) -> int | None:
@@ -104,6 +105,11 @@ def test_monitor_controller_reuses_healthy_dashboard_and_starts_proxies(tmp_path
         spawned.append(cmd)
         return FakeProcess()
 
+    def fake_enable_injection(*, claude_port: int, codex_port: int, **_kwargs: object) -> None:
+        nonlocal active
+        injected.append((claude_port, codex_port))
+        active = True
+
     controller = DashboardMonitorController(
         host="127.0.0.1",
         port=19527,
@@ -111,7 +117,8 @@ def test_monitor_controller_reuses_healthy_dashboard_and_starts_proxies(tmp_path
         python_executable="/usr/bin/python3",
         popen=fake_popen,
         is_healthy=lambda _host, _port: True,
-        enable_injection=lambda *, claude_port, codex_port: injected.append((claude_port, codex_port)),
+        enable_injection=fake_enable_injection,
+        injection_is_active=lambda: active,
     )
 
     assert controller.start() == "http://127.0.0.1:19527"
@@ -170,7 +177,7 @@ def test_monitor_controller_start_spawns_proxies_and_enables_global_injection(tm
         python_executable=sys.executable,
         popen=fake_popen,
         is_healthy=lambda _host, _port: False,
-        enable_injection=lambda *, claude_port, codex_port: injected.append((claude_port, codex_port)),
+        enable_injection=lambda *, claude_port, codex_port, **_kwargs: injected.append((claude_port, codex_port)),
     )
 
     assert controller.start() == "http://127.0.0.1:19527"
@@ -182,6 +189,34 @@ def test_monitor_controller_start_spawns_proxies_and_enables_global_injection(tm
     assert spawned[2][3:7] == ["--tap-no-launch", "--tap-client", "codex", "--tap-port"]
     assert spawned[2][7] == "19529"
     assert injected == [(19528, 19529)]
+
+
+def test_monitor_controller_restores_stale_injection_before_spawning_proxies(tmp_path: Path) -> None:
+    events: list[str] = []
+
+    class FakeProcess:
+        def poll(self) -> int | None:
+            return None
+
+    def fake_popen(_cmd: list[str], **_kwargs: object) -> FakeProcess:
+        events.append("spawn")
+        return FakeProcess()
+
+    controller = DashboardMonitorController(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        python_executable=sys.executable,
+        popen=fake_popen,
+        is_healthy=lambda _host, _port: True,
+        injection_is_active=lambda: True,
+        disable_injection=lambda: events.append("restore"),
+        enable_injection=lambda **_kwargs: events.append("inject"),
+    )
+
+    controller.start()
+
+    assert events == ["restore", "spawn", "spawn", "inject"]
 
 
 def test_monitor_controller_start_fails_when_proxy_exits_immediately(tmp_path: Path) -> None:
@@ -325,11 +360,28 @@ def test_menu_app_start_monitor_shows_error_on_failure() -> None:
     errors: list[tuple[str, str]] = []
     app.refresh_menu = lambda: calls.append("refresh")  # type: ignore[method-assign]
     app._show_error = lambda title, details: errors.append((title, details))  # type: ignore[method-assign]
+    app._confirm_start_monitor = lambda: True  # type: ignore[method-assign]
 
     app.start_monitor()
 
     assert calls == ["refresh"]
     assert errors == [("Unable to start Claude Tap monitor", "port 19528 is already in use")]
+
+
+def test_menu_app_start_monitor_cancel_does_not_start() -> None:
+    class FakeController:
+        def start(self) -> str:
+            pytest.fail("start should not be called")
+
+    app = object.__new__(MacOSMenuApp)
+    app.controller = FakeController()
+    calls: list[str] = []
+    app.refresh_menu = lambda: calls.append("refresh")  # type: ignore[method-assign]
+    app._confirm_start_monitor = lambda: False  # type: ignore[method-assign]
+
+    app.start_monitor()
+
+    assert calls == ["refresh"]
 
 
 def test_main_entry_routes_macos_app_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:

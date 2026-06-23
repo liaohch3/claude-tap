@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 from pathlib import Path
 
 import pytest
@@ -133,6 +135,121 @@ def test_enable_overwrites_stale_backup_before_restore(_home: Path) -> None:
     assert codex_path.read_text() == 'model = "current"\n'
 
 
+def test_enable_rolls_back_partial_injection_on_failure(_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings_path = _home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    original_settings = '{"env":{"FOO":"bar"}}\n'
+    settings_path.write_text(original_settings)
+
+    def fail_codex(*_args: object, **_kwargs: object) -> None:
+        raise OSError("codex write failed")
+
+    monkeypatch.setattr(global_inject, "_inject_codex", fail_codex)
+
+    with pytest.raises(OSError, match="codex write failed"):
+        global_inject.enable(claude_port=8788, codex_port=8789)
+
+    assert settings_path.read_text() == original_settings
+    assert not settings_path.with_name("settings.json.tap-backup").exists()
+    assert global_inject.is_active() is False
+
+
+def test_backup_preserves_existing_config_permissions(_home: Path) -> None:
+    settings_path = _home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text('{"env":{"ANTHROPIC_AUTH_TOKEN":"secret"}}\n')
+    settings_path.chmod(0o600)
+
+    global_inject.enable(claude_port=8788)
+
+    backup_path = settings_path.with_name("settings.json.tap-backup")
+    assert backup_path.exists()
+    assert (backup_path.stat().st_mode & 0o777) == 0o600
+
+
+def test_codex_injects_selected_custom_provider_base_url(_home: Path) -> None:
+    codex_path = _home / ".codex" / "config.toml"
+    codex_path.parent.mkdir(parents=True)
+    codex_path.write_text(
+        "\n".join(
+            [
+                'model_provider = "newapi"',
+                "",
+                "[model_providers.newapi]",
+                'base_url = "https://new-api.example.test/v1"',
+                'name = "Custom"',
+                "",
+            ]
+        )
+    )
+
+    global_inject.enable(codex_port=8789)
+
+    text = codex_path.read_text()
+    assert 'openai_base_url = "http://127.0.0.1:8789/v1"' in text
+    assert 'base_url = "http://127.0.0.1:8789/v1"' in text
+    assert 'name = "Custom"' in text
+    assert "https://new-api.example.test/v1" not in text
+
+
+def test_claude_injects_custom_bedrock_gateway_when_bedrock_mode_is_enabled(_home: Path) -> None:
+    settings_path = _home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps(
+            {
+                "env": {
+                    "CLAUDE_CODE_USE_BEDROCK": "1",
+                    "ANTHROPIC_BEDROCK_BASE_URL": "https://ai-gateway.internal.example.com/bedrock",
+                }
+            }
+        )
+    )
+
+    global_inject.enable(claude_port=8788)
+
+    env = json.loads(settings_path.read_text())["env"]
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8788"
+    assert env["ANTHROPIC_BEDROCK_BASE_URL"] == "http://127.0.0.1:8788"
+
+
+def test_claude_does_not_rewrite_native_aws_bedrock_url(_home: Path) -> None:
+    settings_path = _home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps(
+            {
+                "env": {
+                    "CLAUDE_CODE_USE_BEDROCK": "1",
+                    "ANTHROPIC_BEDROCK_BASE_URL": "https://bedrock-runtime.us-east-1.amazonaws.com",
+                }
+            }
+        )
+    )
+
+    global_inject.enable(claude_port=8788)
+
+    env = json.loads(settings_path.read_text())["env"]
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8788"
+    assert env["ANTHROPIC_BEDROCK_BASE_URL"] == "https://bedrock-runtime.us-east-1.amazonaws.com"
+
+
+def test_disable_can_terminate_recorded_monitor_processes(_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state_file = _home / ".claude-tap" / "monitor-state.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(json.dumps({"files": [], "processes": [{"pid": 4321, "role": "claude proxy"}]}))
+    signals: list[tuple[int, signal.Signals]] = []
+
+    monkeypatch.setattr(global_inject, "_monitor_process_command", lambda _pid: "python -m claude_tap --tap-no-launch")
+    monkeypatch.setattr(global_inject, "_pid_exists", lambda _pid: False)
+    monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append((pid, signal.Signals(sig))))
+
+    global_inject.disable(terminate_processes=True)
+
+    assert signals == [(4321, signal.SIGTERM)]
+    assert not state_file.exists()
+
+
 def test_disable_is_noop_without_state(_home: Path) -> None:
     global_inject.disable()  # should not raise
     assert global_inject.is_active() is False
@@ -142,10 +259,13 @@ def test_main_entry_routes_monitor_restore(monkeypatch: pytest.MonkeyPatch) -> N
     restored: list[str] = []
 
     monkeypatch.setattr("sys.argv", ["claude-tap", "monitor-restore"])
-    monkeypatch.setattr("claude_tap.global_inject.disable", lambda: restored.append("restore"))
+    monkeypatch.setattr(
+        "claude_tap.global_inject.disable",
+        lambda *, terminate_processes=False: restored.append(str(terminate_processes)),
+    )
 
     with pytest.raises(SystemExit) as excinfo:
         main_entry()
 
     assert excinfo.value.code == 0
-    assert restored == ["restore"]
+    assert restored == ["True"]

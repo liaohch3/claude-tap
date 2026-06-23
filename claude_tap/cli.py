@@ -1044,7 +1044,7 @@ def main_entry() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "monitor-restore":
         from claude_tap import global_inject
 
-        global_inject.disable()
+        global_inject.disable(terminate_processes=True)
         sys.exit(0)
 
     if len(sys.argv) > 1 and sys.argv[1] == "macos-app":

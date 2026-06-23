@@ -484,7 +484,7 @@ claude-tap --tap-no-open
 
 作为 VSCode Claude Code 的 `claudeProcessWrapper` 使用时，claude-tap 会识别扩展传入的 Claude binary 路径并用它启动 Claude。
 
-macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 App 以菜单栏图标运行，点击后显示紧凑状态看板，并提供 Start Monitor / Stop Monitor 控制和完整 dashboard 快捷入口。Start Monitor 会启动 Claude Code 和 Codex CLI 的本地反向代理，并把临时 base URL 写入 `~/.claude/settings.json` 和 `~/.codex/config.toml`，之后新开的会话会被捕获。Stop Monitor 会按字节还原这些文件。如果 App 被强制退出，可运行 `claude-tap monitor-restore`。
+macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 App 以菜单栏图标运行，点击后显示紧凑状态看板，并提供 Start Monitor / Stop Monitor 控制和完整 dashboard 快捷入口。Start Monitor 会先请求确认，再启动 Claude Code 和 Codex CLI 的本地反向代理，并把临时 base URL 写入 `~/.claude/settings.json` 和 `~/.codex/config.toml`，之后新开的会话会被捕获。Codex 自定义 provider 会改写所选 provider 的 `base_url`；Claude Bedrock 自定义网关会在目标不是 AWS 原生 Bedrock endpoint 时被路由。AWS 原生 Bedrock endpoint 会保持不变，因为 reverse 模式改写 URL 会破坏 SigV4 签名。Stop Monitor 会按字节还原配置文件。如果 App 被强制退出，可运行 `claude-tap monitor-restore` 还原配置，并清理 App 记录的 monitor 进程。
 
 默认 launcher 指向当前 checkout；如果构建时所用 Python 环境已经安装了 `claude-tap`，可加 `--installed`。加 `--self-contained` 会用 PyInstaller 构建 Apple Silicon 自包含 bundle，并放在 `Contents/Resources` 下，这样 App 不依赖同事机器上的 Python 安装。Ad-hoc 签名的构建仍可能需要接收方移除 quarantine 或在 macOS 安全设置中手动允许。
 

@@ -20,6 +20,7 @@ from claude_tap.shared_dashboard import dashboard_url, resolve_dashboard_port
 _NS_VARIABLE_STATUS_ITEM_LENGTH = -1.0
 _NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
 _NS_IMAGE_LEFT = 2
+_NS_ALERT_FIRST_BUTTON_RETURN = 1000
 # Absolute default so the app works when launched from Finder (cwd is "/").
 _DEFAULT_OUTPUT_DIR = Path.home() / ".claude-tap" / "traces"
 _CALLBACKS: list[Any] = []
@@ -126,6 +127,8 @@ class DashboardMonitorController:
             return self.url
 
         try:
+            if self._injection_is_active():
+                self._disable_injection()
             if not self._is_healthy(self.host, self.port):
                 cmd = build_dashboard_command(
                     python_executable=self.python_executable,
@@ -137,7 +140,11 @@ class DashboardMonitorController:
             self._start_proxy("claude", self.claude_proxy_port)
             self._start_proxy("codex", self.codex_proxy_port)
             self._verify_started_processes()
-            self._enable_injection(claude_port=self.claude_proxy_port, codex_port=self.codex_proxy_port)
+            self._enable_injection(
+                claude_port=self.claude_proxy_port,
+                codex_port=self.codex_proxy_port,
+                processes=self._monitor_process_records(),
+            )
         except Exception:
             self._terminate_owned_processes()
             self._disable_injection()
@@ -196,6 +203,20 @@ class DashboardMonitorController:
         )
         self._proxy_processes.append(self._popen(cmd, **self._subprocess_kwargs()))
         self._proxy_process_names.append(client)
+
+    def _monitor_process_records(self) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
+        if self._process is not None and self._process.poll() is None:
+            pid = getattr(self._process, "pid", None)
+            if isinstance(pid, int):
+                records.append({"pid": pid, "role": "dashboard"})
+        for name, process in zip(self._proxy_process_names, self._proxy_processes, strict=True):
+            if process.poll() is not None:
+                continue
+            pid = getattr(process, "pid", None)
+            if isinstance(pid, int):
+                records.append({"pid": pid, "role": f"{name} proxy"})
+        return records
 
     def _verify_started_processes(self) -> None:
         if self._startup_check_delay > 0:
@@ -276,6 +297,9 @@ class MacOSMenuApp:
         return 0
 
     def start_monitor(self) -> None:
+        if not self._confirm_start_monitor():
+            self.refresh_menu()
+            return
         try:
             self.controller.start()
         except Exception as exc:
@@ -391,6 +415,27 @@ class MacOSMenuApp:
         objc.msg(alert, "setInformativeText:", None, [ctypes.c_void_p], objc.nsstring(details))
         objc.msg(alert, "addButtonWithTitle:", None, [ctypes.c_void_p], objc.nsstring("OK"))
         objc.msg(alert, "runModal", ctypes.c_long)
+
+    def _confirm_start_monitor(self) -> bool:
+        objc = self._objc
+        app = objc.msg(objc.cls("NSApplication"), "sharedApplication")
+        objc.msg(app, "activateIgnoringOtherApps:", None, [ctypes.c_bool], True)
+        alert = objc.alloc_init("NSAlert")
+        objc.msg(alert, "setMessageText:", None, [ctypes.c_void_p], objc.nsstring("Start Claude Tap Monitor?"))
+        objc.msg(
+            alert,
+            "setInformativeText:",
+            None,
+            [ctypes.c_void_p],
+            objc.nsstring(
+                "This starts local dashboard/proxy processes and temporarily writes base URL settings to "
+                "~/.claude/settings.json and ~/.codex/config.toml. Stop Monitor restores the files; "
+                "claude-tap monitor-restore recovers them after a force quit."
+            ),
+        )
+        objc.msg(alert, "addButtonWithTitle:", None, [ctypes.c_void_p], objc.nsstring("Start Monitor"))
+        objc.msg(alert, "addButtonWithTitle:", None, [ctypes.c_void_p], objc.nsstring("Cancel"))
+        return objc.msg(alert, "runModal", ctypes.c_long) == _NS_ALERT_FIRST_BUTTON_RETURN
 
 
 class _ObjC:
