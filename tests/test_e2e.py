@@ -4478,6 +4478,51 @@ async def test_dashboard_main_opens_reused_dashboard(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_main_stops_stale_dashboard_before_start(monkeypatch, tmp_path):
+    """The standalone dashboard command should replace stale dashboard processes."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli._is_dashboard_reusable", AsyncMock(return_value=False))
+
+    async def fake_stop_stale(host: str, port: int, url: str) -> None:
+        calls.append(("stop_stale", (host, port, url)))
+
+    class FakeServer:
+        url = "http://127.0.0.1:23456"
+
+        def __init__(self, *, port: int, host: str, migrate_from: Path, dashboard_mode: bool) -> None:
+            calls.append(("server_init", (host, port, migrate_from, dashboard_mode)))
+
+        async def start(self) -> int:
+            calls.append(("start", None))
+            return 23456
+
+        async def wait_stopped(self) -> None:
+            calls.append(("wait_stopped", None))
+
+        async def stop(self) -> None:
+            calls.append(("stop", None))
+
+    monkeypatch.setattr("claude_tap.cli.stop_incompatible_dashboard_if_running", fake_stop_stale)
+    monkeypatch.setattr("claude_tap.cli.LiveViewerServer", FakeServer)
+
+    args = parse_dashboard_args(["--tap-output-dir", str(tmp_path), "--tap-live-port", "23456", "--tap-no-open"])
+
+    assert await dashboard_main(args) == 0
+    assert calls == [
+        ("stop_stale", ("127.0.0.1", 23456, "http://127.0.0.1:23456")),
+        ("server_init", ("127.0.0.1", 23456, tmp_path, True)),
+        ("start", None),
+        ("wait_stopped", None),
+        ("stop", None),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_dashboard_main_stops_running_dashboard(monkeypatch, tmp_path):
     """The dashboard stop command should stop an existing dashboard."""
     from unittest.mock import AsyncMock

@@ -75,8 +75,8 @@ from claude_tap.shared_dashboard import (
     dashboard_url,
     ensure_shared_dashboard,
     is_dashboard_healthy,
-    is_legacy_dashboard_healthy,
     resolve_dashboard_port,
+    stop_incompatible_dashboard_if_running,
     stop_shared_dashboard,
 )
 from claude_tap.trace import TraceWriter
@@ -179,7 +179,7 @@ def _open_browser(url: str) -> None:
 
 
 async def _is_dashboard_reusable(host: str, port: int) -> bool:
-    return await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port)
+    return await is_dashboard_healthy(host, port)
 
 
 def _dashboard_stop_command(host: str, port: int) -> str:
@@ -1011,6 +1011,9 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         if args.open_viewer:
             _open_browser(url)
         return 0
+
+    url = dashboard_url(host, port)
+    await stop_incompatible_dashboard_if_running(host, port, url)
 
     server = LiveViewerServer(
         port=port,

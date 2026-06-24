@@ -7,6 +7,7 @@ import pytest
 from aiohttp import web
 
 from claude_tap.shared_dashboard import (
+    CLAUDE_TAP_VERSION,
     DEFAULT_DASHBOARD_PORT,
     _dashboard_lock_path,
     _dashboard_spawn_lock,
@@ -84,13 +85,39 @@ def test_sync_dashboard_health_uses_proxyless_opener(monkeypatch: pytest.MonkeyP
             return FakeResponse()
 
     db_path = tmp_path / "health.sqlite3"
-    json_bytes = f'{{"ok":true,"db_path":"{db_path}"}}'.encode()
+    json_bytes = f'{{"ok":true,"db_path":"{db_path}","version":"{CLAUDE_TAP_VERSION}"}}'.encode()
     calls: list[tuple[str, float]] = []
     monkeypatch.setenv("CLOUDTAP_DB", str(db_path))
     monkeypatch.setattr("claude_tap.shared_dashboard._LOCAL_DASHBOARD_OPENER", FakeOpener())
 
     assert _sync_dashboard_healthy_for_current_db("127.0.0.1", 19527) is True
     assert calls and calls[0][0] == "http://127.0.0.1:19527/dashboard/health"
+
+
+def test_sync_dashboard_health_rejects_stale_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json_bytes
+
+    class FakeOpener:
+        def open(self, _url: str, *, timeout: float) -> FakeResponse:
+            assert timeout > 0
+            return FakeResponse()
+
+    db_path = tmp_path / "health.sqlite3"
+    json_bytes = f'{{"ok":true,"db_path":"{db_path}","version":"0.1.106"}}'.encode()
+    monkeypatch.setenv("CLOUDTAP_DB", str(db_path))
+    monkeypatch.setattr("claude_tap.shared_dashboard._LOCAL_DASHBOARD_OPENER", FakeOpener())
+
+    assert _sync_dashboard_healthy_for_current_db("127.0.0.1", 19527) is False
 
 
 def test_dashboard_lock_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -206,6 +233,7 @@ async def test_is_dashboard_healthy_real_server(monkeypatch: pytest.MonkeyPatch,
                 assert payload["ok"] is True
                 assert payload["db_path"] == str(resolve_db_path())
                 assert payload["dashboard_mode"] is True
+                assert payload["version"] == CLAUDE_TAP_VERSION
                 assert isinstance(payload["quit_token"], str)
                 assert payload["quit_token"]
         assert await is_dashboard_healthy("127.0.0.1", port) is True
@@ -338,7 +366,7 @@ async def test_is_dashboard_healthy_prefers_lightweight_health_route(
     app = web.Application()
 
     async def health(request: web.Request) -> web.Response:
-        return web.json_response({"ok": True, "db_path": str(resolve_db_path())})
+        return web.json_response({"ok": True, "db_path": str(resolve_db_path()), "version": CLAUDE_TAP_VERSION})
 
     async def sessions(request: web.Request) -> web.Response:
         nonlocal sessions_seen
@@ -356,12 +384,32 @@ async def test_is_dashboard_healthy_prefers_lightweight_health_route(
 
 
 @pytest.mark.asyncio
+async def test_is_dashboard_healthy_rejects_stale_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "current.sqlite3"))
+    app = web.Application()
+
+    async def health(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True, "db_path": str(resolve_db_path()), "version": "0.1.106"})
+
+    app.router.add_get("/dashboard/health", health)
+    runner, port = await _start_test_app(app)
+    try:
+        assert await is_dashboard_healthy("127.0.0.1", port) is False
+        assert await is_dashboard_healthy("127.0.0.1", port, require_current_db=False) is True
+        assert await is_legacy_dashboard_healthy("127.0.0.1", port) is False
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_is_dashboard_healthy_rejects_different_database(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "current.sqlite3"))
     app = web.Application()
 
     async def health(request: web.Request) -> web.Response:
-        return web.json_response({"ok": True, "db_path": str(tmp_path / "other.sqlite3")})
+        return web.json_response(
+            {"ok": True, "db_path": str(tmp_path / "other.sqlite3"), "version": CLAUDE_TAP_VERSION}
+        )
 
     app.router.add_get("/dashboard/health", health)
     runner, port = await _start_test_app(app)
@@ -421,10 +469,73 @@ async def test_ensure_shared_dashboard_already_healthy_does_not_reopen_browser(
 
 
 @pytest.mark.asyncio
+async def test_ensure_shared_dashboard_stops_stale_dashboard_before_spawn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def fake_is_dashboard_healthy(_host: str, _port: int, *, require_current_db: bool = True) -> bool:
+        calls.append(("health", require_current_db))
+        return not require_current_db
+
+    async def fake_stop_shared_dashboard(_host: str, _port: int) -> bool:
+        calls.append(("stop", None))
+        return True
+
+    def fake_spawn_if_needed(_host: str, _port: int, _output_dir: Path) -> bool:
+        calls.append(("spawn", None))
+        return True
+
+    async def fake_wait_for_dashboard_healthy(_host: str, _port: int) -> bool:
+        calls.append(("wait", None))
+        return True
+
+    monkeypatch.setattr("claude_tap.shared_dashboard.is_dashboard_healthy", fake_is_dashboard_healthy)
+    monkeypatch.setattr("claude_tap.shared_dashboard.stop_shared_dashboard", fake_stop_shared_dashboard)
+    monkeypatch.setattr("claude_tap.shared_dashboard._spawn_dashboard_subprocess_if_needed", fake_spawn_if_needed)
+    monkeypatch.setattr("claude_tap.shared_dashboard.wait_for_dashboard_healthy", fake_wait_for_dashboard_healthy)
+
+    url, spawned = await ensure_shared_dashboard(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        open_browser=False,
+        open_browser_fn=lambda _url: None,
+    )
+
+    assert url == "http://127.0.0.1:19527"
+    assert spawned is True
+    assert calls == [("health", True), ("health", False), ("stop", None), ("spawn", None), ("wait", None)]
+
+
+@pytest.mark.asyncio
+async def test_ensure_shared_dashboard_reports_unstoppable_stale_dashboard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    async def fake_is_dashboard_healthy(_host: str, _port: int, *, require_current_db: bool = True) -> bool:
+        return not require_current_db
+
+    async def fake_stop_shared_dashboard(_host: str, _port: int) -> bool:
+        return False
+
+    monkeypatch.setattr("claude_tap.shared_dashboard.is_dashboard_healthy", fake_is_dashboard_healthy)
+    monkeypatch.setattr("claude_tap.shared_dashboard.stop_shared_dashboard", fake_stop_shared_dashboard)
+
+    with pytest.raises(RuntimeError, match="outdated claude-tap dashboard"):
+        await ensure_shared_dashboard(
+            host="127.0.0.1",
+            port=19527,
+            output_dir=tmp_path,
+            open_browser=False,
+            open_browser_fn=lambda _url: None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_ensure_shared_dashboard_migrates_after_lock_time_reuse(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    async def mock_false(h: str, p: int) -> bool:
+    async def mock_false(h: str, p: int, *, require_current_db: bool = True) -> bool:
         return False
 
     migrated: list[Path] = []
@@ -455,7 +566,7 @@ async def test_ensure_shared_dashboard_spawns(monkeypatch: pytest.MonkeyPatch, t
 
     health_calls: list[int] = []
 
-    async def mock_health(h: str, p: int) -> bool:
+    async def mock_health(h: str, p: int, *, require_current_db: bool = True) -> bool:
         if len(health_calls) < 2:
             health_calls.append(1)
             return False
@@ -490,7 +601,7 @@ async def test_ensure_shared_dashboard_spawns(monkeypatch: pytest.MonkeyPatch, t
 async def test_ensure_shared_dashboard_timeout_raises_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "test.sqlite3"))
 
-    async def mock_false(h: str, p: int) -> bool:
+    async def mock_false(h: str, p: int, *, require_current_db: bool = True) -> bool:
         return False
 
     async def mock_wait_false(h: str, p: int, **kw: object) -> bool:

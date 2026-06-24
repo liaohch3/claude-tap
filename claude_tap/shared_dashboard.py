@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
 import aiohttp
@@ -25,6 +26,11 @@ _DASHBOARD_SESSIONS_HEALTH_TIMEOUT = 3.0
 _DASHBOARD_QUIT_TIMEOUT = 2.0
 _DASHBOARD_LOCK_NAME = "dashboard.lock"
 _DASHBOARD_QUIT_TOKEN_HEADER = "X-Claude-Tap-Dashboard-Token"
+
+try:
+    CLAUDE_TAP_VERSION = _pkg_version("claude-tap")
+except Exception:
+    CLAUDE_TAP_VERSION = "0.0.0"
 
 
 def resolve_dashboard_port(explicit: int | None = None) -> int:
@@ -119,8 +125,13 @@ async def _dashboard_get_status_and_payload(
         return None, None
 
 
-def _dashboard_health_matches_current_db(payload: dict | None) -> bool:
-    return bool(payload and payload.get("ok") is True and payload.get("db_path") == str(resolve_db_path()))
+def _dashboard_health_matches_current_instance(payload: dict | None) -> bool:
+    return bool(
+        payload
+        and payload.get("ok") is True
+        and payload.get("db_path") == str(resolve_db_path())
+        and payload.get("version") == CLAUDE_TAP_VERSION
+    )
 
 
 def _sync_dashboard_healthy_for_current_db(host: str, port: int) -> bool:
@@ -132,7 +143,7 @@ def _sync_dashboard_healthy_for_current_db(host: str, port: int) -> bool:
             payload = json.loads(resp.read().decode("utf-8"))
     except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError):
         return False
-    return _dashboard_health_matches_current_db(payload if isinstance(payload, dict) else None)
+    return _dashboard_health_matches_current_instance(payload if isinstance(payload, dict) else None)
 
 
 def _spawn_dashboard_subprocess_if_needed(host: str, port: int, output_dir: Path) -> bool:
@@ -157,7 +168,7 @@ async def is_dashboard_healthy(host: str, port: int, *, require_current_db: bool
         timeout_seconds=_DASHBOARD_HEALTH_TIMEOUT,
     )
     if status == 200:
-        return not require_current_db or _dashboard_health_matches_current_db(payload)
+        return not require_current_db or _dashboard_health_matches_current_instance(payload)
     if status not in {404, 405}:
         return False
 
@@ -227,6 +238,23 @@ async def stop_shared_dashboard(host: str, port: int) -> bool:
     return await wait_for_dashboard_stopped(host, port)
 
 
+async def stop_incompatible_dashboard_if_running(host: str, port: int, url: str) -> None:
+    """Stop a dashboard that is listening on the shared port but cannot be reused.
+
+    The common case is an older claude-tap dashboard left running after the CLI
+    was upgraded. Reusing it would keep serving the old packaged HTML/JS.
+    """
+    if not await is_dashboard_healthy(host, port, require_current_db=False):
+        return
+    if await stop_shared_dashboard(host, port):
+        return
+    raise RuntimeError(
+        "A different or outdated claude-tap dashboard is already running on "
+        f"{url}. Stop it first with `claude-tap dashboard stop --tap-live-port {port}` "
+        "or terminate the old dashboard process."
+    )
+
+
 async def wait_for_dashboard_stopped(
     host: str,
     port: int,
@@ -294,9 +322,11 @@ async def ensure_shared_dashboard(
 ) -> tuple[str, bool]:
     """Ensure the shared dashboard is running; return (url, spawned_by_caller)."""
     url = dashboard_url(host, port)
-    if await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port):
+    if await is_dashboard_healthy(host, port):
         _migrate_legacy_traces(output_dir)
         return url, False
+
+    await stop_incompatible_dashboard_if_running(host, port, url)
 
     spawned = await asyncio.to_thread(_spawn_dashboard_subprocess_if_needed, host, port, output_dir)
     if spawned:

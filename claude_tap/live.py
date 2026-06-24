@@ -25,7 +25,7 @@ from claude_tap.dashboard import (
     redact_dashboard_summary,
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
-from claude_tap.shared_dashboard import dashboard_url
+from claude_tap.shared_dashboard import CLAUDE_TAP_VERSION, dashboard_url
 from claude_tap.trace_store import get_trace_store, resolve_db_path
 from claude_tap.viewer import (
     VIEWER_SCRIPT_ANCHOR,
@@ -321,6 +321,11 @@ class LiveViewerServer:
             html = read_dashboard_template()
         except OSError:
             return web.Response(status=404, text="dashboard.html not found")
+        html = html.replace(
+            'const CLAUDE_TAP_VERSION = "";',
+            f"const CLAUDE_TAP_VERSION = {json.dumps(CLAUDE_TAP_VERSION)};",
+            1,
+        )
         if self.dashboard_mode and _is_trusted_dashboard_token_request(request):
             html = html.replace(
                 'const DASHBOARD_QUIT_TOKEN = "";',
@@ -340,7 +345,12 @@ class LiveViewerServer:
         return await self._handle_dashboard_index(request)
 
     async def _handle_dashboard_health(self, request: web.Request) -> web.Response:
-        payload = {"ok": True, "db_path": str(resolve_db_path()), "dashboard_mode": self.dashboard_mode}
+        payload = {
+            "ok": True,
+            "db_path": str(resolve_db_path()),
+            "dashboard_mode": self.dashboard_mode,
+            "version": CLAUDE_TAP_VERSION,
+        }
         if self.dashboard_mode and _is_trusted_dashboard_token_request(request):
             payload["quit_token"] = self._dashboard_quit_token
         return web.json_response(payload)
