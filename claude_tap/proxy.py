@@ -140,10 +140,21 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     "/feedback",
 )
 
+_VERTEX_ANTHROPIC_RAW_PREDICT_RE = re.compile(
+    r"^/v1/projects/[^/]+/locations/[^/]+/publishers/anthropic/models/[^/]+"
+    r"(?::(?:rawPredict|streamRawPredict)|/count-tokens:rawPredict)$"
+)
+
+
+def _is_vertex_anthropic_raw_predict_path(clean_path: str) -> bool:
+    return bool(_VERTEX_ANTHROPIC_RAW_PREDICT_RE.fullmatch(clean_path.rstrip("/")))
+
 
 def _is_allowed_path(path: str, extra_prefixes: tuple[str, ...] = ()) -> bool:
     """Check whether the request path matches a known API endpoint."""
     clean = path.split("?", 1)[0].rstrip("/")
+    if _is_vertex_anthropic_raw_predict_path(clean):
+        return True
     prefixes = ALLOWED_PATH_PREFIXES + extra_prefixes
     return any(
         clean == prefix or clean.startswith(prefix + "/") or clean.startswith(prefix + ":") for prefix in prefixes
@@ -194,6 +205,8 @@ def is_capture_only_request(path: str, req_body: object) -> bool:
     clean_path = path.split("?", 1)[0]
     if clean_path.startswith(("/v1/embeddings", "/embeddings", "/v1/files", "/files")):
         return False
+    if _is_vertex_anthropic_raw_predict_path(clean_path):
+        return True
     if clean_path.startswith(
         (
             "/v1/messages",
@@ -226,6 +239,8 @@ def is_capture_only_streaming_request(path: str, req_body: object) -> bool:
 
     if is_bedrock_eventstream_path(path):
         return True
+    if _is_vertex_anthropic_raw_predict_path(path.split("?", 1)[0]) and ":streamRawPredict" in path:
+        return True
     if "streamGenerateContent" in path:
         return True
     return isinstance(req_body, dict) and bool(req_body.get("stream", False))
@@ -249,9 +264,11 @@ def capture_only_response(path: str, req_body: object) -> dict:
             "stopReason": "end_turn",
             "usage": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0},
         }
+    if _is_vertex_anthropic_raw_predict_path(clean_path) and clean_path.endswith("/count-tokens:rawPredict"):
+        return {"input_tokens": 0}
     if clean_path.startswith("/v1/complete"):
         return _capture_only_anthropic_completion_response(model)
-    if clean_path.startswith(("/v1/messages", "/model/")):
+    if clean_path.startswith(("/v1/messages", "/model/")) or _is_vertex_anthropic_raw_predict_path(clean_path):
         return {
             "id": "msg_claude_tap_capture",
             "type": "message",
@@ -358,20 +375,9 @@ def capture_only_stream_bytes(path: str, req_body: object) -> bytes:
             f"data: {json.dumps(chunk, separators=(',', ':'))}\n\ndata: {json.dumps(done, separators=(',', ':'))}\n\n"
         ).encode("utf-8")
     if clean_path.startswith("/v1/messages"):
-        events = [
-            ("message_start", {"type": "message_start", "message": resp_body}),
-            (
-                "content_block_start",
-                {"type": "content_block_start", "index": 0, "content_block": resp_body["content"][0]},
-            ),
-            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
-            ("message_stop", {"type": "message_stop"}),
-        ]
-        return b"".join(
-            f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n".encode("utf-8")
-            for event, payload in events
-        )
+        return _capture_only_anthropic_message_stream_bytes(resp_body)
+    if _is_vertex_anthropic_raw_predict_path(clean_path) and clean_path.endswith(":streamRawPredict"):
+        return _capture_only_anthropic_message_stream_bytes(resp_body)
     if clean_path.startswith(("/v1/completions", "/completions")):
         chunk = {
             "id": resp_body["id"],
@@ -422,6 +428,23 @@ def capture_only_stream_bytes(path: str, req_body: object) -> bytes:
         f"data: {json.dumps(completed, separators=(',', ':'))}\n\n"
         "data: [DONE]\n\n"
     ).encode("utf-8")
+
+
+def _capture_only_anthropic_message_stream_bytes(resp_body: dict) -> bytes:
+    events = [
+        ("message_start", {"type": "message_start", "message": resp_body}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": resp_body["content"][0]},
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return b"".join(
+        f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n".encode("utf-8")
+        for event, payload in events
+    )
 
 
 def _capture_only_bedrock_eventstream_bytes(path: str) -> bytes:

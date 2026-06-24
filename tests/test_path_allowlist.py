@@ -37,6 +37,10 @@ from claude_tap.proxy import _is_allowed_path
         "/model/anthropic.claude-sonnet-4-20250514-v1:0/invoke",
         "/model/anthropic.claude-sonnet-4-20250514-v1:0/invoke-with-response-stream",
         "/model/us.anthropic.claude-sonnet-4-20250514-v1:0/messages",
+        # Claude Code through Google Vertex AI pass-through gateways
+        "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7:rawPredict",
+        "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7:streamRawPredict",
+        "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7/count-tokens:rawPredict",
     ],
 )
 def test_allowed_paths(path: str):
@@ -61,6 +65,9 @@ def test_allowed_paths(path: str):
         "/.env",
         "/actuator/health",
         "/api/v1/hack",
+        "/v1/projects/test-project/locations/us-east5/publishers/google/models/gemini-2.5-pro:rawPredict",
+        "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7:predict",
+        "/v1/projects/test-project/locations/us-east5/endpoints/endpoint-id:predict",
     ],
 )
 def test_blocked_paths(path: str):

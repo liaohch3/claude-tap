@@ -159,9 +159,10 @@ claude-tap -- --dangerously-skip-permissions
 claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
-`claude-tap` auto-detects custom Claude Code upstreams from `ANTHROPIC_BASE_URL`
-or `ANTHROPIC_BEDROCK_BASE_URL` in your environment or Claude settings. Use
-`--tap-target` only when you want to override that detected target.
+`claude-tap` auto-detects custom Claude Code upstreams from `ANTHROPIC_BASE_URL`,
+`ANTHROPIC_BEDROCK_BASE_URL`, or `ANTHROPIC_VERTEX_BASE_URL` in your environment
+or Claude settings. Use `--tap-target` only when you want to override that
+detected target.
 
 Local proxy upstreams are supported too: if a tool such as [CC Switch](https://github.com/farion1231/cc-switch) points Claude Code at a local `ANTHROPIC_BASE_URL`, `claude-tap` detects that value from Claude settings and records the traffic before forwarding it upstream. Use `claude-tap` in place of `claude`, such as `claude-tap -- <claude-args>`; no separate `--tap-client` value is needed.
 
@@ -222,6 +223,30 @@ claude-tap --tap-proxy-mode forward
 When the endpoint is a real AWS domain (`*.amazonaws.com`), `claude-tap` does **not** rewrite `ANTHROPIC_BEDROCK_BASE_URL` to localhost — doing so would break AWS SigV4 signature validation. Use forward proxy mode (`--tap-proxy-mode forward`) to capture this traffic without modifying the signed request.
 
 Use `--tap-target` only as a manual override when auto-detection does not apply.
+
+</details>
+
+<details>
+<summary>Claude Code with Google Vertex AI</summary>
+
+`claude-tap` supports Claude Code Vertex pass-through gateways that expose the
+Vertex `rawPredict`, `streamRawPredict`, and `count-tokens:rawPredict` paths.
+
+```bash
+export CLAUDE_CODE_USE_VERTEX=1
+export CLOUD_ML_REGION="us-east5"
+export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
+export ANTHROPIC_VERTEX_BASE_URL="https://your-gateway.company.com/vertex"
+export CLAUDE_CODE_SKIP_VERTEX_AUTH=1  # when your gateway handles auth
+claude-tap
+```
+
+When `CLAUDE_CODE_USE_VERTEX=1` and `ANTHROPIC_VERTEX_BASE_URL` is set,
+`claude-tap` detects that upstream, redirects both `ANTHROPIC_BASE_URL` and
+`ANTHROPIC_VERTEX_BASE_URL` to the local proxy, and records Vertex rawPredict
+HTTP/SSE traffic. If Claude Code uses native Google Vertex without
+`ANTHROPIC_VERTEX_BASE_URL`, use forward proxy mode or set the base URL
+explicitly so reverse mode has a single target to forward to.
 
 </details>
 

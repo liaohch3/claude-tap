@@ -159,8 +159,8 @@ claude-tap -- --dangerously-skip-permissions
 claude-tap -- --dangerously-skip-permissions --model claude-sonnet-4-6
 ```
 
-`claude-tap` 会从环境变量或 Claude settings 中的 `ANTHROPIC_BASE_URL` 或
-`ANTHROPIC_BEDROCK_BASE_URL` 自动识别自定义 Claude Code 上游；只有想手动覆盖时才需要传 `--tap-target`。
+`claude-tap` 会从环境变量或 Claude settings 中的 `ANTHROPIC_BASE_URL`、
+`ANTHROPIC_BEDROCK_BASE_URL` 或 `ANTHROPIC_VERTEX_BASE_URL` 自动识别自定义 Claude Code 上游；只有想手动覆盖时才需要传 `--tap-target`。
 
 也支持本地代理上游：如果 [CC Switch](https://github.com/farion1231/cc-switch) 等工具把 Claude Code 指向本地 `ANTHROPIC_BASE_URL`，`claude-tap` 会从 Claude settings 中检测到该值，并在转发到上游前记录流量。用 `claude-tap` 替代 `claude` 运行，例如 `claude-tap -- <Claude Code 参数>`；不需要单独的 `--tap-client` 值。
 
@@ -221,6 +221,29 @@ claude-tap --tap-proxy-mode forward
 当端点是真实 AWS 域名（`*.amazonaws.com`）时，`claude-tap` **不会**将 `ANTHROPIC_BEDROCK_BASE_URL` 重写为 localhost — 这样做会破坏 AWS SigV4 签名验证。请使用正向代理模式（`--tap-proxy-mode forward`）来捕获此流量，而不修改已签名的请求。
 
 只有手动覆盖时才需要 `--tap-target`。
+
+</details>
+
+<details>
+<summary>Claude Code + Google Vertex AI</summary>
+
+`claude-tap` 支持暴露 Vertex `rawPredict`、`streamRawPredict` 和
+`count-tokens:rawPredict` 路径的 Claude Code Vertex 透传网关。
+
+```bash
+export CLAUDE_CODE_USE_VERTEX=1
+export CLOUD_ML_REGION="us-east5"
+export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
+export ANTHROPIC_VERTEX_BASE_URL="https://your-gateway.company.com/vertex"
+export CLAUDE_CODE_SKIP_VERTEX_AUTH=1  # 网关负责鉴权时使用
+claude-tap
+```
+
+当 `CLAUDE_CODE_USE_VERTEX=1` 且配置了 `ANTHROPIC_VERTEX_BASE_URL` 时，
+`claude-tap` 会检测到该上游，将 `ANTHROPIC_BASE_URL` 和
+`ANTHROPIC_VERTEX_BASE_URL` 都重定向到本地代理，并记录 Vertex rawPredict
+HTTP/SSE 流量。如果 Claude Code 直接使用 Google Vertex 原生端点且没有设置
+`ANTHROPIC_VERTEX_BASE_URL`，请使用正向代理模式，或显式设置该 base URL，让 reverse 模式有单一上游可转发。
 
 </details>
 

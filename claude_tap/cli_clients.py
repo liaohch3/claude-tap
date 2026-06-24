@@ -55,15 +55,19 @@ def _is_claude_bedrock_enabled() -> bool:
     return _is_truthy_env_value(_resolve_env_value("CLAUDE_CODE_USE_BEDROCK"))
 
 
+def _is_claude_vertex_enabled() -> bool:
+    return _is_truthy_env_value(_resolve_env_value("CLAUDE_CODE_USE_VERTEX"))
+
+
 def _should_rewrite_extra_base_url_env(env_key: str) -> bool:
-    if env_key != "ANTHROPIC_BEDROCK_BASE_URL":
-        return True
-    if not _is_claude_bedrock_enabled():
-        return False
     current_value = _resolve_env_value(env_key)
-    if not current_value:
-        return False
-    return not (current_value and _is_aws_native_bedrock_url(current_value))
+    if env_key == "ANTHROPIC_BEDROCK_BASE_URL":
+        if not _is_claude_bedrock_enabled() or not current_value:
+            return False
+        return not _is_aws_native_bedrock_url(current_value)
+    if env_key == "ANTHROPIC_VERTEX_BASE_URL":
+        return _is_claude_vertex_enabled() and bool(current_value)
+    return True
 
 
 @dataclass(frozen=True)
@@ -145,7 +149,7 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         label="Claude Code",
         install_url="https://docs.anthropic.com/en/docs/claude-code",
         base_url_env="ANTHROPIC_BASE_URL",
-        extra_base_url_envs=("ANTHROPIC_BEDROCK_BASE_URL",),
+        extra_base_url_envs=("ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL"),
         base_url_suffix="",
         default_target="https://api.anthropic.com",
         nesting_env_keys=("CLAUDECODE", "CLAUDE_CODE_SSE_PORT"),
@@ -831,11 +835,18 @@ def _read_settings_env_base_url(path: Path, env_key: str) -> str | None:
 def _detect_claude_target() -> str:
     """Auto-detect the upstream target Claude Code would normally use.
 
-    Claude Code can source ``ANTHROPIC_BASE_URL`` from settings files rather
-    than the process environment. When Bedrock mode is enabled, it can also
-    source ``ANTHROPIC_BEDROCK_BASE_URL``. Mirror that behavior for custom
-    gateways without forcing users to repeat ``--tap-target``.
+    Claude Code can source provider base URLs from settings files rather than
+    only the process environment. Mirror that behavior for custom Anthropic,
+    Bedrock, and Vertex gateways without forcing users to repeat
+    ``--tap-target``.
     """
+    if _is_claude_vertex_enabled():
+        vertex_target = _resolve_env_value("ANTHROPIC_VERTEX_BASE_URL")
+    else:
+        vertex_target = ""
+    if vertex_target:
+        return vertex_target
+
     if _is_claude_bedrock_enabled():
         bedrock_target = _resolve_env_value("ANTHROPIC_BEDROCK_BASE_URL")
     else:

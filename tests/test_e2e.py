@@ -471,6 +471,153 @@ def _create_fake_claude(script_text):
     return fake_bin_dir
 
 
+def test_e2e_claude_vertex_base_url_autodetects_and_records_raw_predict():
+    """Real subprocess E2E for Claude Code Vertex base URL reverse proxy support."""
+    import socket
+
+    from aiohttp import web
+
+    received_paths: list[str] = []
+
+    async def handler(request):
+        received_paths.append(request.path)
+        body = await request.json()
+        if request.path.endswith(":streamRawPredict"):
+            resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+            await resp.prepare(request)
+            events = [
+                (
+                    "message_start",
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_vertex_stream",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [],
+                            "model": body.get("model", "claude-opus-4-7"),
+                            "usage": {"input_tokens": 7, "output_tokens": 0},
+                        },
+                    },
+                ),
+                (
+                    "content_block_start",
+                    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                ),
+                (
+                    "content_block_delta",
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "stream ok"}},
+                ),
+                ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                (
+                    "message_delta",
+                    {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}},
+                ),
+                ("message_stop", {"type": "message_stop"}),
+            ]
+            for event, payload in events:
+                await resp.write(f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode())
+            await resp.write_eof()
+            return resp
+        return web.json_response(
+            {
+                "id": "msg_vertex_raw",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "vertex raw ok"}],
+                "model": body.get("model", "claude-opus-4-7"),
+                "usage": {"input_tokens": 5, "output_tokens": 3},
+                "stop_reason": "end_turn",
+            }
+        )
+
+    fake_claude_script = r"""#!/usr/bin/env python3
+import json, os, sys, urllib.request
+
+base = os.environ.get("ANTHROPIC_VERTEX_BASE_URL")
+if not base:
+    print("ANTHROPIC_VERTEX_BASE_URL missing", file=sys.stderr)
+    sys.exit(1)
+
+model_path = "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7"
+
+for suffix, stream in [(":rawPredict", False), (":streamRawPredict", True)]:
+    req = urllib.request.Request(
+        f"{base}{model_path}{suffix}",
+        data=json.dumps({
+            "model": "claude-opus-4-7",
+            "max_tokens": 32,
+            "stream": stream,
+            "messages": [{"role": "user", "content": "vertex test"}],
+        }).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer vertex-test-token-12345678",
+            "anthropic-version": "2023-06-01",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            print(resp.read().decode()[:80])
+    except Exception as e:
+        print(f"Vertex request failed: {e}", file=sys.stderr)
+        sys.exit(1)
+"""
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_vertex_")
+    fake_bin_dir = _create_fake_claude(fake_claude_script)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        upstream_port = sock.getsockname()[1]
+    stop = _start_fake_upstream(upstream_port, handler)
+
+    try:
+        env = os.environ.copy()
+        env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+        env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+        env["CLAUDE_CODE_USE_VERTEX"] = "1"
+        env["CLAUDE_CODE_USE_BEDROCK"] = "0"
+        env["ANTHROPIC_VERTEX_BASE_URL"] = f"http://127.0.0.1:{upstream_port}"
+        env["ANTHROPIC_BASE_URL"] = "https://anthropic.example.invalid"
+        env = e2e_env(env, trace_dir)
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_tap",
+                "--tap-output-dir",
+                trace_dir,
+                "--tap-no-live",
+                "--tap-no-open",
+            ],
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert proc.returncode == 0, f"vertex e2e failed: stdout={proc.stdout} stderr={proc.stderr}"
+        assert "ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert "ANTHROPIC_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert received_paths == [
+            "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7:rawPredict",
+            "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7:streamRawPredict",
+        ]
+
+        records = read_trace_records(trace_dir)
+        assert len(records) == 2
+        assert records[0]["upstream_base_url"] == f"http://127.0.0.1:{upstream_port}"
+        assert records[0]["request"]["path"].endswith(":rawPredict")
+        assert records[0]["response"]["body"]["content"][0]["text"] == "vertex raw ok"
+        assert records[1]["request"]["path"].endswith(":streamRawPredict")
+        assert records[1]["response"]["body"]["content"][0]["text"] == "stream ok"
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "claude_vertex")
+
+
 def test_e2e_tap_target_endpoint_path_is_not_duplicated():
     """Real subprocess E2E for users passing a full /v1/messages endpoint target."""
     import socket

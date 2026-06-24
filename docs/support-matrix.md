@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-06-07
+last_reviewed: 2026-06-24
 source_of_truth: AGENTS.md
 ---
 
@@ -17,6 +17,7 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 |--------|-----------|--------|-------------------|-----------|--------|
 | Claude Code | API Key | `https://api.anthropic.com` | none | HTTP/SSE | Verified |
 | Claude Code | Claude-compatible gateway (`ANTHROPIC_BASE_URL` env or Claude settings) | Custom Anthropic-compatible upstream | none | HTTP/SSE | Unit-tested; DeepSeek real E2E verified |
+| Claude Code | Google Vertex AI pass-through gateway (`CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_BASE_URL`) | Vertex rawPredict-compatible upstream | none | HTTP/SSE | Unit-tested; local E2E verified |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | HTTP/SSE | Verified |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
@@ -50,7 +51,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 
 | Client | Default mode | Reason |
 |--------|--------------|--------|
-| `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
+| `claude` | `reverse` | Single provider, native Claude provider base URL env vars (`ANTHROPIC_BASE_URL`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL`) |
 | `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
 | `codexapp` | `transcript` | Transcript listener for `CODEX_HOME/sessions` or `~/.codex/sessions`; no proxy is created. CDP WebSocket evidence is added automatically when Codex App exposes a debug endpoint |
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |

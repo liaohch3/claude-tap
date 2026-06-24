@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Add Claude Code Vertex `ANTHROPIC_VERTEX_BASE_URL` target detection and proxy routing support.
 
 
 

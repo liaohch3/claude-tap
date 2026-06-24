@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-06-07
+last_reviewed: 2026-06-24
 source_of_truth: AGENTS.md
 ---
 
@@ -17,6 +17,7 @@ English version: [Support Matrix](support-matrix.md).
 |--------|----------|----------|-------------------|------|------|
 | Claude Code | API Key | `https://api.anthropic.com` | 无 | HTTP/SSE | 已验证 |
 | Claude Code | Claude 兼容网关（`ANTHROPIC_BASE_URL` 环境变量或 Claude settings） | 自定义 Anthropic 兼容上游 | 无 | HTTP/SSE | 单测覆盖；DeepSeek 真实 E2E 已验证 |
+| Claude Code | Google Vertex AI 透传网关（`CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_BASE_URL`） | Vertex rawPredict 兼容上游 | 无 | HTTP/SSE | 单测覆盖；本地 E2E 已验证 |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | HTTP/SSE | 已验证 |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | WebSocket | 已验证 |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | 已验证 |
@@ -49,7 +50,7 @@ English version: [Support Matrix](support-matrix.md).
 
 | 客户端 | 默认模式 | 原因 |
 |--------|----------|------|
-| `claude` | `reverse` | 单 provider，原生支持 `ANTHROPIC_BASE_URL` 环境变量 |
+| `claude` | `reverse` | 单 provider，原生支持 Claude provider base URL 环境变量（`ANTHROPIC_BASE_URL`、`ANTHROPIC_BEDROCK_BASE_URL`、`ANTHROPIC_VERTEX_BASE_URL`） |
 | `codex` | `reverse` | 单 provider，原生支持 `OPENAI_BASE_URL` 环境变量 |
 | `codexapp` | `transcript` | 监听 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 的 transcript 客户端；不会创建代理。Codex App 暴露 debug endpoint 时会自动追加 CDP WebSocket 证据 |
 | `gemini` | `forward` | Google OAuth / Code Assist 会访问多个 Google 端点；forward proxy 不依赖单一 base URL，更适合作为默认 |
