@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.122] - 2026-06-24
+
+### Changed
+- [codex] Fix viewer search for duplicate request ids (#342)
+- Fix Gemini SSE response reconstruction (#339)
+- fix(sse): reconstruct Responses output from streaming item events (#343)
 ## [0.1.121] - 2026-06-22
 
 ### Changed
