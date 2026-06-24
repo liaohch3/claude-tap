@@ -197,7 +197,23 @@ claude-tap -- --permission-mode bypassPermissions
 <details>
 <summary>Claude Code + AWS Bedrock</summary>
 
-`claude-tap` 支持两种 Bedrock 场景，并自动检测适用哪种：
+`claude-tap` 支持三种 Bedrock 场景，并自动检测适用哪种：
+
+**Anthropic 兼容 Bedrock 网关（New API 或类似网关，Claude Code 不做 SigV4）**
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="<your gateway token>"
+unset ANTHROPIC_API_KEY
+export ANTHROPIC_BASE_URL="https://new-api.example.com"
+export ANTHROPIC_MODEL="bedrock/claude-opus-4-6"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="bedrock/claude-opus-4-6"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="bedrock/claude-opus-4-6"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="bedrock/claude-opus-4-6"
+claude-tap -- --model bedrock/claude-opus-4-6
+```
+
+`claude-tap` 会记录正常的 Claude Code `/v1/messages` HTTP/SSE 流量，再转发给网关。对于以
+`bedrock/` 开头的模型名，它会在转发上游前移除 AWS Bedrock 不接受的 Claude Code beta-only 请求选项，同时保留已捕获的 trace。
 
 **自定义 Bedrock 网关（公司代理，无 SigV4）**
 

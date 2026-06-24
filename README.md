@@ -199,7 +199,25 @@ claude-tap -- --permission-mode bypassPermissions
 <details>
 <summary>Claude Code with AWS Bedrock</summary>
 
-`claude-tap` supports two Bedrock scenarios and auto-detects which applies:
+`claude-tap` supports three Bedrock scenarios and auto-detects which applies:
+
+**Anthropic-compatible Bedrock gateway (New API or similar, no SigV4 in Claude Code)**
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="<your gateway token>"
+unset ANTHROPIC_API_KEY
+export ANTHROPIC_BASE_URL="https://new-api.example.com"
+export ANTHROPIC_MODEL="bedrock/claude-opus-4-6"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="bedrock/claude-opus-4-6"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="bedrock/claude-opus-4-6"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="bedrock/claude-opus-4-6"
+claude-tap -- --model bedrock/claude-opus-4-6
+```
+
+`claude-tap` records the normal Claude Code `/v1/messages` HTTP/SSE traffic, then
+forwards it to the gateway. For model names prefixed with `bedrock/`, it removes
+Claude Code beta-only request options that AWS Bedrock rejects while preserving
+the captured trace.
 
 **Custom Bedrock gateway (company proxy, no SigV4)**
 

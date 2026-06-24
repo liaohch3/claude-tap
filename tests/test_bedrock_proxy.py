@@ -223,6 +223,89 @@ async def test_reverse_proxy_capture_only_records_without_upstream(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_reverse_proxy_strips_anthropic_beta_for_bedrock_gateway_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    upstream_requests: list[dict[str, Any]] = []
+
+    async def upstream_handler(request: web.Request) -> web.Response:
+        body = await request.json()
+        upstream_requests.append(
+            {
+                "path_qs": request.rel_url.raw_path_qs,
+                "anthropic_beta": request.headers.get("anthropic-beta"),
+                "body": body,
+            }
+        )
+        return web.json_response(
+            {
+                "id": "msg_bedrock_gateway",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-6",
+                "content": [{"type": "text", "text": "ok"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "stop_reason": "end_turn",
+            }
+        )
+
+    upstream_app = web.Application()
+    upstream_app.router.add_route("*", "/{path_info:.*}", upstream_handler)
+    upstream_runner = web.AppRunner(upstream_app)
+    await upstream_runner.setup()
+    upstream_site = web.TCPSite(upstream_runner, "127.0.0.1", 0)
+    await upstream_site.start()
+    upstream_port = upstream_site._server.sockets[0].getsockname()[1]
+
+    store, session_id, writer = _make_writer(tmp_path, monkeypatch)
+    runner, port, session = await _start_reverse_proxy(
+        f"http://127.0.0.1:{upstream_port}",
+        writer,
+    )
+
+    try:
+        async with aiohttp.ClientSession() as client:
+            response = await client.post(
+                f"http://127.0.0.1:{port}/v1/messages?beta=true",
+                headers={
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "claude-code-20250219,structured-outputs-2025-12-15",
+                },
+                json={
+                    "model": "bedrock/claude-opus-4-6",
+                    "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
+                    "output_config": {"effort": "high"},
+                    "thinking": {"type": "adaptive"},
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+            assert response.status == 200
+    finally:
+        writer.close()
+        await runner.cleanup()
+        await session.close()
+        await upstream_runner.cleanup()
+
+    assert upstream_requests == [
+        {
+            "path_qs": "/v1/messages",
+            "anthropic_beta": None,
+            "body": {
+                "model": "bedrock/claude-opus-4-6",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        }
+    ]
+
+    records = store.load_records(session_id)
+    assert len(records) == 1
+    assert records[0]["request"]["path"] == "/v1/messages?beta=true"
+    assert records[0]["request"]["headers"]["anthropic-beta"] == ("claude-code-20250219,structured-outputs-2025-12-15")
+
+
+@pytest.mark.asyncio
 async def test_reverse_proxy_capture_only_streams_when_requested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     async def upstream_handler(_request: web.Request) -> web.Response:
         raise AssertionError("capture-only must not call upstream")

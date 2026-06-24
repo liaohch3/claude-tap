@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Add Claude Code Vertex `ANTHROPIC_VERTEX_BASE_URL` target detection and proxy routing support.
+- Add Claude Code compatibility for Anthropic-compatible Bedrock gateway models such as `bedrock/claude-opus-4-6`.
 
 
 

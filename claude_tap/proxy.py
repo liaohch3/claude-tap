@@ -162,6 +162,7 @@ def _is_allowed_path(path: str, extra_prefixes: tuple[str, ...] = ()) -> bool:
 
 
 _ANTHROPIC_METADATA_USER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+_BEDROCK_GATEWAY_UNSUPPORTED_BODY_FIELDS = frozenset({"context_management", "output_config"})
 
 
 def _is_deepseek_anthropic_target(target: str) -> bool:
@@ -175,6 +176,10 @@ def _is_deepseek_anthropic_target(target: str) -> bool:
 
 def _normalize_request_body_for_upstream(req_body: dict, target: str) -> dict:
     """Apply narrow upstream compatibility fixes without changing default Anthropic behavior."""
+    normalized_body = _normalize_bedrock_gateway_body(req_body)
+    if normalized_body is not req_body:
+        req_body = normalized_body
+
     if not _is_deepseek_anthropic_target(target):
         return req_body
 
@@ -192,6 +197,50 @@ def _normalize_request_body_for_upstream(req_body: dict, target: str) -> dict:
     normalized_metadata["user_id"] = f"claude_tap_{digest}"
     normalized_body["metadata"] = normalized_metadata
     return normalized_body
+
+
+def _normalize_bedrock_gateway_body(req_body: dict) -> dict:
+    if not _is_bedrock_gateway_request(req_body):
+        return req_body
+
+    normalized_body: dict | None = None
+    for key in _BEDROCK_GATEWAY_UNSUPPORTED_BODY_FIELDS:
+        if key in req_body:
+            normalized_body = dict(req_body) if normalized_body is None else normalized_body
+            normalized_body.pop(key, None)
+
+    body = normalized_body if normalized_body is not None else req_body
+    thinking = body.get("thinking")
+    if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+        normalized_body = dict(body) if normalized_body is None else normalized_body
+        normalized_body.pop("thinking", None)
+
+    return normalized_body if normalized_body is not None else req_body
+
+
+def _is_bedrock_gateway_request(req_body: object) -> bool:
+    """Return True when an Anthropic-compatible gateway routes by a Bedrock model prefix."""
+    if not isinstance(req_body, dict):
+        return False
+    model = req_body.get("model")
+    return isinstance(model, str) and model.startswith("bedrock/")
+
+
+def _drop_header(headers: dict[str, str], header_name: str) -> None:
+    target = header_name.lower()
+    for key in list(headers):
+        if key.lower() == target:
+            del headers[key]
+
+
+def _drop_query_param(raw_path: str, param_name: str) -> str:
+    path, separator, query = raw_path.partition("?")
+    if not separator:
+        return raw_path
+    kept = [part for part in query.split("&") if part.split("=", 1)[0] != param_name]
+    if not kept:
+        return path
+    return f"{path}?{'&'.join(kept)}"
 
 
 def is_capture_only_request(path: str, req_body: object) -> bool:
@@ -534,7 +583,6 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     fwd_path = request.raw_path
     if strip_prefix and fwd_path.startswith(strip_prefix):
         fwd_path = fwd_path[len(strip_prefix) :] or "/"
-    upstream_url = build_upstream_url(target, fwd_path)
 
     # aiohttp auto-decompresses request bodies (gzip/deflate/zstd), so
     # request.read() returns plain bytes even when Content-Encoding is set.
@@ -564,6 +612,12 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             for key in list(fwd_headers.keys()):
                 if key.lower() == "content-length":
                     del fwd_headers[key]
+
+    if _is_bedrock_gateway_request(req_body):
+        _drop_header(fwd_headers, "anthropic-beta")
+        fwd_path = _drop_query_param(fwd_path, "beta")
+
+    upstream_url = build_upstream_url(target, fwd_path)
 
     is_streaming = is_capture_only_streaming_request(request.raw_path, req_body)
 

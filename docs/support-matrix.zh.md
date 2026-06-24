@@ -17,6 +17,7 @@ English version: [Support Matrix](support-matrix.md).
 |--------|----------|----------|-------------------|------|------|
 | Claude Code | API Key | `https://api.anthropic.com` | 无 | HTTP/SSE | 已验证 |
 | Claude Code | Claude 兼容网关（`ANTHROPIC_BASE_URL` 环境变量或 Claude settings） | 自定义 Anthropic 兼容上游 | 无 | HTTP/SSE | 单测覆盖；DeepSeek 真实 E2E 已验证 |
+| Claude Code | Anthropic 兼容 Bedrock 网关（`ANTHROPIC_BASE_URL` + `bedrock/...` 模型） | New API 或同类网关代理到 AWS Bedrock | 无 | HTTP/SSE | 单测覆盖；New API AWS Bedrock 真实 E2E 已验证 |
 | Claude Code | Google Vertex AI 透传网关（`CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_BASE_URL`） | Vertex rawPredict 兼容上游 | 无 | HTTP/SSE | 单测覆盖；本地 E2E 已验证 |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | HTTP/SSE | 已验证 |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | WebSocket | 已验证 |

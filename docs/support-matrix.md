@@ -17,6 +17,7 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 |--------|-----------|--------|-------------------|-----------|--------|
 | Claude Code | API Key | `https://api.anthropic.com` | none | HTTP/SSE | Verified |
 | Claude Code | Claude-compatible gateway (`ANTHROPIC_BASE_URL` env or Claude settings) | Custom Anthropic-compatible upstream | none | HTTP/SSE | Unit-tested; DeepSeek real E2E verified |
+| Claude Code | Anthropic-compatible Bedrock gateway (`ANTHROPIC_BASE_URL` + `bedrock/...` model) | New API or equivalent gateway routed to AWS Bedrock | none | HTTP/SSE | Unit-tested; New API AWS Bedrock real E2E verified |
 | Claude Code | Google Vertex AI pass-through gateway (`CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_BASE_URL`) | Vertex rawPredict-compatible upstream | none | HTTP/SSE | Unit-tested; local E2E verified |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | HTTP/SSE | Verified |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
