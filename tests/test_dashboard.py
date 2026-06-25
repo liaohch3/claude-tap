@@ -740,6 +740,7 @@ def test_dashboard_parses_provider_fallbacks(trace_db, tmp_path: Path) -> None:
         ({}, [{"request": {"headers": {"Host": "api.moonshot.cn"}}}], "Kimi"),
         ({}, [{"request": {"headers": {"Host": "qoder.example"}}}], "Qoder"),
         ({}, [{"request": {"headers": {"Host": "opencode.example"}}}], "OpenCode"),
+        ({}, [{"request": {"headers": {"Host": "mimo.xiaomi.example"}}}], "MiMo Code"),
         ({}, [{"request": {"headers": {"Host": "hermes.example"}}}], "Hermes"),
         ({}, [{"upstream_base_url": "https://api.anthropic.com/v1"}], "Claude Code"),
         ({}, [], "Unknown"),

@@ -201,15 +201,26 @@ function applyFilter(preserveDetail) {
   filtered.sort((a, b) => compareTurns(captureTurnValue(a), captureTurnValue(b)));
   let totalTokens = 0, totalDuration = 0;
   let sumInput = 0, sumOutput = 0, sumCacheRead = 0, sumCacheCreate = 0;
+  let sumCacheDenominator = 0;
   filtered.forEach(e => {
     totalDuration += e.duration_ms || 0;
     const u = getUsage(e);
     if (u) {
-      totalTokens += (u.input_tokens || 0) + (u.output_tokens || 0);
-      sumInput += u.input_tokens || 0;
+      const inputTokens = u.input_tokens || 0;
+      const cacheRead = u.cache_read_input_tokens || 0;
+      const cacheCreate = u.cache_creation_input_tokens || 0;
+      totalTokens += inputTokens + (u.output_tokens || 0);
+      sumInput += inputTokens;
       sumOutput += u.output_tokens || 0;
-      sumCacheRead += u.cache_read_input_tokens || 0;
-      sumCacheCreate += u.cache_creation_input_tokens || 0;
+      sumCacheRead += cacheRead;
+      sumCacheCreate += cacheCreate;
+      if (inputTokens || cacheRead || cacheCreate) {
+        if (u._cache_read_in_input) {
+          sumCacheDenominator += inputTokens;
+        } else {
+          sumCacheDenominator += inputTokens + cacheRead + cacheCreate;
+        }
+      }
     }
   });
   $('#stat-turns').textContent = filtered.length;
@@ -225,8 +236,15 @@ function applyFilter(preserveDetail) {
     else { $('#stat-cache-read-group').style.display = 'none'; }
     if (sumCacheCreate) { $('#stat-cache-write').textContent = sumCacheCreate.toLocaleString(); $('#stat-cache-write-group').style.display = 'flex'; }
     else { $('#stat-cache-write-group').style.display = 'none'; }
+    if (sumCacheRead && sumCacheDenominator > 0) {
+      const hitRate = Math.round(sumCacheRead / sumCacheDenominator * 100);
+      $('#stat-cache-hit-rate').textContent = hitRate + '%';
+      $('#stat-cache-hit-rate-group').style.display = 'flex';
+    } else {
+      $('#stat-cache-hit-rate-group').style.display = 'none';
+    }
   } else {
-    ['stat-input-group','stat-output-group','stat-cache-read-group','stat-cache-write-group'].forEach(id => $('#'+id).style.display = 'none');
+    ['stat-input-group','stat-output-group','stat-cache-read-group','stat-cache-write-group','stat-cache-hit-rate-group'].forEach(id => $('#'+id).style.display = 'none');
   }
   renderToolFilter();
   renderSidebar(preserveDetail);
@@ -456,13 +474,14 @@ function buildGlobalHighlightQueries(query) {
 }
 
 function getEntrySearchText(entry) {
-  if (!entry?.request_id) return '';
-  if (globalSearchState.textCache.has(entry.request_id)) return globalSearchState.textCache.get(entry.request_id);
+  const cacheKey = entryStableKey(entry);
+  if (!cacheKey) return '';
+  if (globalSearchState.textCache.has(cacheKey)) return globalSearchState.textCache.get(cacheKey);
   if (entry._isStub) {
     const lines = getRawLines();
     const raw = lines[entry._rawIdx] || '';
     const text = raw.toLowerCase();
-    globalSearchState.textCache.set(entry.request_id, text);
+    globalSearchState.textCache.set(cacheKey, text);
     return text;
   }
   const resolved = entry;
@@ -477,7 +496,7 @@ function getEntrySearchText(entry) {
   getResponseEvents(resolved).forEach(ev => parts.push(JSON.stringify(ev)));
   parts.push(JSON.stringify(resolved, null, 2));
   const text = parts.join('\n').toLowerCase();
-  globalSearchState.textCache.set(entry.request_id, text);
+  globalSearchState.textCache.set(cacheKey, text);
   return text;
 }
 
@@ -529,7 +548,7 @@ function recalcGlobalSearchMatches() {
   entries.forEach(entry => {
     if (!isNavigableTraceEntry(entry)) return;
     const c = countMatchesInText(getEntrySearchText(entry), queries);
-    if (c > 0) counts.push({ requestId: entry.request_id, count: c });
+    if (c > 0) counts.push({ entryKey: entryStableKey(entry), requestId: entry.request_id, count: c });
     total += c;
   });
   globalSearchState.matchCounts = counts;
@@ -550,29 +569,31 @@ function getTargetForGlobalMatch(globalIndex) {
   let seen = 0;
   for (const row of globalSearchState.matchCounts) {
     if (globalIndex < seen + row.count) {
-      return { requestId: row.requestId, localIndex: globalIndex - seen };
+      return { entryKey: row.entryKey, requestId: row.requestId, localIndex: globalIndex - seen };
     }
     seen += row.count;
   }
   return null;
 }
 
-function findFilteredIdxByRequestId(requestId) {
+function findFilteredIdxByEntryKey(entryKey, requestId) {
+  let idx = filtered.findIndex(entry => entryStableKey(entry) === entryKey);
+  if (idx >= 0) return idx;
   return filtered.findIndex(entry => entry.request_id === requestId);
 }
 
-function ensureEntryVisibleForSearch(requestId) {
-  let idx = findFilteredIdxByRequestId(requestId);
+function ensureEntryVisibleForSearch(target) {
+  let idx = findFilteredIdxByEntryKey(target.entryKey, target.requestId);
   if (idx < 0) {
     normalizeFiltersForGlobalSearch();
-    idx = findFilteredIdxByRequestId(requestId);
+    idx = findFilteredIdxByEntryKey(target.entryKey, target.requestId);
   }
   if (idx < 0) return -1;
   const model = filtered[idx]?.request?.body?.model || 'unknown';
   if (collapsedGroups.has(model)) {
     collapsedGroups.delete(model);
     renderSidebar(true);
-    idx = findFilteredIdxByRequestId(requestId);
+    idx = findFilteredIdxByEntryKey(target.entryKey, target.requestId);
   }
   return idx;
 }
@@ -589,9 +610,9 @@ function navigateGlobalSearch(delta) {
 function revealCurrentSearchMatch() {
   const target = getTargetForGlobalMatch(globalSearchState.currentMatch);
   if (!target) return;
-  const filteredIdx = ensureEntryVisibleForSearch(target.requestId);
+  const filteredIdx = ensureEntryVisibleForSearch(target);
   if (filteredIdx < 0) return;
-  const sameEntry = currentDetailRequestId === target.requestId;
+  const sameEntry = currentDetailEntryKey === target.entryKey;
   selectEntry(filteredIdx, { force: !sameEntry });
   applyGlobalSearchHighlights(target.localIndex);
 }

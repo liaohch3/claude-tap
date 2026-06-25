@@ -17,6 +17,7 @@ from yarl import URL
 
 from claude_tap.proxy import capture_only_response, filter_headers, is_capture_only_request
 from claude_tap.trace import TraceWriter
+from claude_tap.upstream import build_upstream_url, format_upstream_error
 
 log = logging.getLogger("claude-tap")
 
@@ -71,7 +72,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     fwd_path = request.path_qs
     if strip_prefix and fwd_path.startswith(strip_prefix):
         fwd_path = fwd_path[len(strip_prefix) :] or "/"
-    upstream_url = target.rstrip("/") + "/" + fwd_path.lstrip("/")
+    upstream_url = build_upstream_url(target, fwd_path)
 
     # Convert HTTP scheme to WebSocket scheme for upstream
     if upstream_url.startswith("https://"):
@@ -135,7 +136,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         )
     except Exception as exc:
         duration_ms = int((time.monotonic() - t0) * 1000)
-        error_message = str(exc) or exc.__class__.__name__
+        error_message = format_upstream_error(exc, target_url=target, upstream_url=upstream_ws_url)
         log.error(f"{log_prefix} upstream WS connect to {upstream_ws_url} failed: {error_message}")
         record = _build_ws_record(
             req_id=req_id,

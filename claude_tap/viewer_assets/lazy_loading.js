@@ -27,7 +27,15 @@ function buildStubEntry(meta, rawIdx) {
   const usage = {};
   if (meta.input_tokens) usage.input_tokens = meta.input_tokens;
   if (meta.output_tokens) usage.output_tokens = meta.output_tokens;
-  if (meta.cache_read_input_tokens) usage.cache_read_input_tokens = meta.cache_read_input_tokens;
+  const hasCacheCreate = meta.cache_creation_input_tokens !== undefined && meta.cache_creation_input_tokens !== null;
+  if (meta.cache_read_input_tokens) {
+    usage.cache_read_input_tokens = meta.cache_read_input_tokens;
+    /* Infer cache embedding style from model name so the cache hit rate
+       denominator is correct in lazy/dashboard mode.  Claude/Anthropic and
+       Bedrock keep cache_read as a separate bucket; OpenAI/Gemini embed it. */
+    const m = (meta.model || '').toLowerCase();
+    usage._cache_read_in_input = !(hasCacheCreate || m.includes('claude') || m.includes('anthropic') || m.includes('bedrock'));
+  }
   if (meta.cache_creation_input_tokens) usage.cache_creation_input_tokens = meta.cache_creation_input_tokens;
 
   // Build a minimal system field to support task fingerprinting
@@ -60,6 +68,7 @@ function buildStubEntry(meta, rawIdx) {
   return {
     _isStub: true,
     _rawIdx: rawIdx,
+    _entry_index: rawIdx,
     turn: meta.turn,
     request_id: meta.request_id || '',
     timestamp: meta.timestamp || '',
@@ -154,6 +163,7 @@ async function fetchRemoteEntry(entry) {
 function withDisplayFields(full, entry) {
   return {
     ...full,
+    _entry_index: entry._entry_index,
     display_turn: entry.display_turn,
     capture_turn: entry.capture_turn,
     record_index: entry.record_index,

@@ -582,6 +582,15 @@ body.detail-route .main {
   gap: 12px;
   margin-bottom: 12px;
 }
+.detail-page-head .back-btn {
+  width: 28px; height: 28px; display: grid; place-items: center; flex-shrink: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-card); color: var(--text-tertiary);
+  font-size: 16px; line-height: 1; transition: all .15s;
+}
+.detail-page-head .back-btn:hover {
+  border-color: var(--blue); color: var(--blue); background: var(--blue-bg);
+}
 body.detail-route .detail-page-head {
   margin-bottom: 8px;
 }
@@ -1065,6 +1074,7 @@ pre {
 
   <section id="detail-view" class="detail-view hidden">
     <div class="detail-page-head">
+      <button class="back-btn" onclick="showListView()" title="Back to session list" aria-label="Back to session list">←</button>
       <div class="detail-heading">
         <div class="detail-title" id="detail-title" data-i18n="session_detail">Session detail</div>
         <div class="detail-subtitle" id="detail-subtitle" data-i18n="no_session_selected">No session selected.</div>
@@ -2040,6 +2050,7 @@ function openSession(sessionId) {
 
 function showListView() {
   state.view = "list";
+  state.selectedSessionId = null;
   state.detailSessionId = null;
   state.detailRecordsLoaded = 0;
   state.detailRecordTotal = 0;
@@ -2049,6 +2060,9 @@ function showListView() {
   $("#list-view").classList.remove("hidden");
   $("#detail-view").classList.add("hidden");
   updateTracePathBar();
+  if (window.location.pathname.match(SESSION_DETAIL_ROUTE)) {
+    history.replaceState(null, "", "/dashboard");
+  }
 }
 
 function showDetailView() {

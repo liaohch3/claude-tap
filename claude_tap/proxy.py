@@ -21,6 +21,7 @@ from yarl import URL
 from claude_tap.bedrock import attach_bedrock_errors, bedrock_model_from_path, is_bedrock_eventstream_path
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
+from claude_tap.upstream import build_upstream_url, format_upstream_error
 from claude_tap.usage import normalize_usage
 from claude_tap.viewer import _decode_bedrock_eventstream_events
 
@@ -510,7 +511,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     fwd_path = request.raw_path
     if strip_prefix and fwd_path.startswith(strip_prefix):
         fwd_path = fwd_path[len(strip_prefix) :] or "/"
-    upstream_url = target.rstrip("/") + "/" + fwd_path.lstrip("/")
+    upstream_url = build_upstream_url(target, fwd_path)
 
     # aiohttp auto-decompresses request bodies (gzip/deflate/zstd), so
     # request.read() returns plain bytes even when Content-Encoding is set.
@@ -589,11 +590,12 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             timeout=aiohttp.ClientTimeout(total=600, sock_read=300),
         )
     except Exception as exc:
+        error_text = format_upstream_error(exc, target_url=target, upstream_url=upstream_url)
         log.error(
-            f"{log_prefix} upstream error while requesting {upstream_url}: {exc}  "
+            f"{log_prefix} upstream error while requesting {upstream_url}: {error_text}  "
             f"-- Check that the target ({target}) is reachable."
         )
-        return web.Response(status=502, text=str(exc))
+        return web.Response(status=502, text=error_text)
 
     if is_streaming and upstream_resp.status == 200:
         resp_body = await _handle_streaming(

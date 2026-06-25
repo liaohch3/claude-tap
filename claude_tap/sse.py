@@ -73,14 +73,42 @@ class SSEReassembler:
         if not isinstance(data, dict):
             return
         try:
+            gemini_chunk = self._gemini_chunk_payload(data) if event_type == "message" else None
+
             if event_type == "message_start":
                 self._snapshot = copy.deepcopy(data.get("message", {}))
-            elif event_type in ("response.created", "response.completed", "response.done"):
+            elif event_type == "response.created":
                 response = data.get("response")
                 if isinstance(response, dict):
                     self._snapshot = copy.deepcopy(response)
-                elif event_type in ("response.completed", "response.done"):
-                    self._snapshot = copy.deepcopy(data)
+            elif event_type in ("response.output_item.added", "response.output_item.done"):
+                # The Codex/ChatGPT backend streams each output item here and
+                # sends response.completed with an EMPTY output array, so the
+                # items have to be accumulated rather than read off the
+                # terminal event. Must run before the `_snapshot is None`
+                # guard since output_item.added can be the first event.
+                self._accumulate_responses_output_item(data)
+            elif event_type == "response.output_text.delta":
+                self._accumulate_responses_output_text(data)
+            elif event_type in (
+                "response.completed",
+                "response.done",
+                "response.incomplete",
+                "response.failed",
+            ):
+                # incomplete (e.g. max_output_tokens) and failed carry the same
+                # {"response": {...}} shape as completed, with the final status,
+                # usage and error / incomplete_details — merge them the same way.
+                self._merge_responses_terminal(data)
+            elif event_type == "response.error":
+                self._record_responses_error(data)
+            elif gemini_chunk is not None:
+                # Gemini streamGenerateContent uses bare `data: {...}` frames
+                # with no `event:` header. Accumulate them before the generic
+                # `_snapshot is None` guard so forward-proxy captures retain
+                # assistant text and usage even when raw stream events are not
+                # stored.
+                self._accumulate_gemini_chunk(gemini_chunk)
             elif event_type == "message" and "choices" in data:
                 # OpenAI Chat Completions chunk — must run before the
                 # `_snapshot is None` guard below, since the accumulator
@@ -131,6 +159,90 @@ class SSEReassembler:
                     self._snapshot["usage"].update(normalize_usage(usage))
         except Exception:
             pass
+
+    def _ensure_responses_output(self) -> list:
+        """Return the snapshot's OpenAI Responses `output` list, creating the
+        snapshot and/or the list if a streaming output item arrives before
+        response.created."""
+        if self._snapshot is None:
+            self._snapshot = {"output": []}
+        output = self._snapshot.get("output")
+        if not isinstance(output, list):
+            output = []
+            self._snapshot["output"] = output
+        return output
+
+    def _accumulate_responses_output_item(self, data: dict) -> None:
+        """Place an OpenAI Responses output item into the snapshot at its
+        output_index. response.output_item.done carries the complete item and
+        is authoritative; response.output_item.added seeds a placeholder that
+        text deltas can append to."""
+        item = data.get("item")
+        if not isinstance(item, dict):
+            return
+        output = self._ensure_responses_output()
+        idx = data.get("output_index")
+        if not isinstance(idx, int) or idx < 0:
+            idx = len(output)
+        while len(output) <= idx:
+            output.append({})
+        output[idx] = copy.deepcopy(item)
+
+    def _accumulate_responses_output_text(self, data: dict) -> None:
+        """Append a response.output_text.delta to the in-progress message item
+        so partial/truncated streams still retain their text even if the
+        terminal response.output_item.done never arrives."""
+        delta = data.get("delta")
+        if not isinstance(delta, str) or not delta:
+            return
+        output = self._ensure_responses_output()
+        idx = data.get("output_index")
+        if not isinstance(idx, int) or idx < 0:
+            idx = len(output) - 1
+        if idx < 0 or idx >= len(output):
+            return
+        item = output[idx]
+        if not isinstance(item, dict):
+            return
+        content = item.get("content")
+        if not isinstance(content, list):
+            content = []
+            item["content"] = content
+        part = next((c for c in content if isinstance(c, dict) and c.get("type") == "output_text"), None)
+        if part is None:
+            part = {"type": "output_text", "text": ""}
+            content.append(part)
+        part["text"] = (part.get("text") or "") + delta
+
+    def _merge_responses_terminal(self, data: dict) -> None:
+        """Apply a terminal response.completed / response.done event.
+
+        The terminal `response` object carries the final status and usage but
+        the Codex/ChatGPT backend leaves its `output` empty (the items were
+        streamed via response.output_item.* events), so preserve the output
+        already accumulated in the snapshot when the terminal one is empty."""
+        response = data.get("response")
+        if not isinstance(response, dict):
+            self._snapshot = copy.deepcopy(data)
+            return
+        response = copy.deepcopy(response)
+        accumulated = self._snapshot.get("output") if isinstance(self._snapshot, dict) else None
+        if not response.get("output") and isinstance(accumulated, list) and accumulated:
+            response["output"] = accumulated
+        self._snapshot = response
+
+    def _record_responses_error(self, data: dict) -> None:
+        """Capture a stream-level response.error event. It carries no response
+        object, so attach the error to the snapshot without discarding output
+        already accumulated from response.output_item.* events."""
+        if self._snapshot is None:
+            self._snapshot = {"output": []}
+        error = {k: data[k] for k in ("code", "message", "param") if k in data}
+        self._snapshot["error"] = error or copy.deepcopy(data)
+        # The stream errored out, so promote a still-running status to failed
+        # but never override a status a terminal event already set.
+        if self._snapshot.get("status") in (None, "", "queued", "in_progress"):
+            self._snapshot["status"] = "failed"
 
     def _content_block_for_delta(self, idx: int, delta: dict) -> dict | None:
         if not isinstance(idx, int) or idx < 0:
@@ -241,6 +353,136 @@ class SSEReassembler:
             self._merge_chat_completion_usage(usage)
         if isinstance(choice_usage, dict):
             self._merge_chat_completion_usage(choice_usage)
+
+    def _gemini_chunk_payload(self, data: dict) -> dict | None:
+        if self._is_gemini_chunk(data):
+            return data
+        response = data.get("response")
+        if isinstance(response, dict) and self._is_gemini_chunk(response):
+            return response
+        return None
+
+    def _is_gemini_chunk(self, data: dict) -> bool:
+        return "candidates" in data or "usageMetadata" in data
+
+    def _accumulate_gemini_chunk(self, data: dict) -> None:
+        if self._snapshot is None or not isinstance(self._snapshot.get("candidates"), list):
+            self._snapshot = {"candidates": []}
+
+        for key, value in data.items():
+            if key in {"candidates", "usageMetadata"}:
+                continue
+            self._snapshot[key] = copy.deepcopy(value)
+
+        candidates = data.get("candidates")
+        if isinstance(candidates, list):
+            for position, candidate in enumerate(candidates):
+                if isinstance(candidate, dict):
+                    self._merge_gemini_candidate(position, candidate)
+
+        usage = data.get("usageMetadata")
+        if isinstance(usage, dict):
+            self._snapshot["usageMetadata"] = copy.deepcopy(usage)
+            self._snapshot["usage"] = normalize_usage(usage)
+
+        self._snapshot["content"] = self._gemini_content_blocks()
+
+    def _merge_gemini_candidate(self, position: int, candidate: dict) -> None:
+        idx = candidate.get("index")
+        if not isinstance(idx, int) or idx < 0:
+            idx = position
+
+        candidates = self._snapshot["candidates"]
+        while len(candidates) <= idx:
+            candidates.append({})
+
+        target = candidates[idx]
+        if not isinstance(target, dict):
+            target = {}
+            candidates[idx] = target
+
+        for key, value in candidate.items():
+            if key == "content" and isinstance(value, dict):
+                self._merge_gemini_candidate_content(target, value)
+            else:
+                target[key] = copy.deepcopy(value)
+
+    def _merge_gemini_candidate_content(self, candidate: dict, incoming: dict) -> None:
+        content = candidate.get("content")
+        if not isinstance(content, dict):
+            content = {}
+            candidate["content"] = content
+
+        for key, value in incoming.items():
+            if key == "parts":
+                continue
+            content[key] = copy.deepcopy(value)
+
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            parts = []
+            content["parts"] = parts
+
+        for part in incoming.get("parts") or []:
+            if isinstance(part, dict):
+                self._append_gemini_part(parts, part)
+
+    def _append_gemini_part(self, parts: list, part: dict) -> None:
+        if self._is_mergeable_gemini_text_part(part):
+            previous = parts[-1] if parts else None
+            if (
+                isinstance(previous, dict)
+                and isinstance(previous.get("text"), str)
+                and self._is_mergeable_gemini_text_part(previous)
+                and previous.get("thought") == part.get("thought")
+            ):
+                previous["text"] += part["text"]
+                return
+        parts.append(copy.deepcopy(part))
+
+    def _is_mergeable_gemini_text_part(self, part: dict) -> bool:
+        if not isinstance(part.get("text"), str):
+            return False
+        return set(part).issubset({"text", "thought"})
+
+    def _gemini_content_blocks(self) -> list[dict]:
+        content: list[dict] = []
+        for candidate in self._snapshot.get("candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_content = candidate.get("content")
+            if not isinstance(candidate_content, dict):
+                continue
+            for part in candidate_content.get("parts") or []:
+                if not isinstance(part, dict):
+                    continue
+                if isinstance(part.get("text"), str) and part["text"].strip():
+                    if part.get("thought") is True:
+                        self._append_mergeable_content_block(content, {"type": "thinking", "thinking": part["text"]})
+                    else:
+                        self._append_mergeable_content_block(content, {"type": "text", "text": part["text"]})
+                call = part.get("functionCall")
+                if isinstance(call, dict):
+                    content.append(
+                        {
+                            "type": "tool_use",
+                            "id": call.get("id", ""),
+                            "name": call.get("name", "tool_use"),
+                            "input": call.get("args") if isinstance(call.get("args"), dict) else {},
+                        }
+                    )
+        return content
+
+    def _append_mergeable_content_block(self, content: list[dict], block: dict) -> None:
+        previous = content[-1] if content else None
+        if isinstance(previous, dict) and previous.get("type") == block.get("type"):
+            if block.get("type") == "thinking":
+                previous["thinking"] = f"{previous.get('thinking', '')}{block.get('thinking', '')}"
+                return
+            if block.get("type") == "text":
+                previous["text"] = f"{previous.get('text', '')}{block.get('text', '')}"
+                return
+        content.append(block)
 
     def _mirror_tool_call_to_content(self, idx: int, tc: dict) -> None:
         """Sync one accumulated tool_call into the `content` array as a

@@ -30,6 +30,8 @@ def normalize_usage(usage: object) -> dict:
         normalized["output_tokens"] = usage["outputTokens"]
     if _missing_or_zero(normalized.get("total_tokens")) and usage.get("totalTokens"):
         normalized["total_tokens"] = usage["totalTokens"]
+    if _missing_or_zero(normalized.get("total_tokens")) and usage.get("totalTokenCount"):
+        normalized["total_tokens"] = usage["totalTokenCount"]
 
     if "cache_read_input_tokens" not in normalized:
         cached = usage.get("cached_tokens")

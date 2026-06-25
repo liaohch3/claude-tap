@@ -26,6 +26,181 @@ def test_sse_reassembler_reconstructs_openai_responses_completed_event() -> None
     assert body["usage"] == {"input_tokens": 12, "output_tokens": 3, "reasoning_tokens": 0}
 
 
+def test_sse_reassembler_recovers_output_from_item_events_when_completed_is_empty() -> None:
+    # The Codex/ChatGPT backend over HTTP/SSE (model_provider = "openai_http")
+    # streams output via response.output_item.* events and sends a terminal
+    # response.completed with output: []. The reassembler must keep the items.
+    reassembler = SSEReassembler()
+    for frame in (
+        b'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"gpt-5.5","output":[]}}\n\n',
+        b'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}\n\n',
+        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","output_index":0,"delta":"Hello"}\n\n',
+        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","output_index":0,"delta":" world"}\n\n',
+        b'event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello world"}]}}\n\n',
+        b'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_1","status":"completed","model":"gpt-5.5","output":[],"usage":{"input_tokens":13159,"output_tokens":18,"total_tokens":13177}}}\n\n',
+    ):
+        reassembler.feed_bytes(frame)
+
+    body = reassembler.reconstruct()
+
+    assert body is not None
+    assert body["status"] == "completed"
+    assert body["output"][0]["content"][0]["text"] == "Hello world"
+    assert body["usage"] == {"input_tokens": 13159, "output_tokens": 18, "total_tokens": 13177}
+
+
+def test_sse_reassembler_keeps_streamed_text_when_completed_done_is_missing() -> None:
+    # A truncated capture: output_item.done / response.completed never arrive,
+    # so the accumulated output_text.delta content must survive on its own.
+    reassembler = SSEReassembler()
+    for frame in (
+        b'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_2","status":"in_progress","output":[]}}\n\n',
+        b'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}\n\n',
+        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","output_index":0,"delta":"partial"}\n\n',
+    ):
+        reassembler.feed_bytes(frame)
+
+    body = reassembler.reconstruct()
+
+    assert body is not None
+    assert body["output"][0]["content"][0]["text"] == "partial"
+
+
+def test_sse_reassembler_merges_response_incomplete_terminal_event() -> None:
+    # A response truncated by max_output_tokens ends with response.incomplete,
+    # not response.completed. The final status/usage/details must be captured
+    # while the streamed output items are preserved.
+    reassembler = SSEReassembler()
+    for frame in (
+        b'event: response.created\ndata: {"type":"response.created","response":{"id":"r","status":"in_progress","output":[]}}\n\n',
+        b'event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"cut off"}]}}\n\n',
+        b'event: response.incomplete\ndata: {"type":"response.incomplete","response":{"id":"r","status":"incomplete","output":[],"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":5,"output_tokens":7}}}\n\n',
+    ):
+        reassembler.feed_bytes(frame)
+
+    body = reassembler.reconstruct()
+
+    assert body is not None
+    assert body["status"] == "incomplete"
+    assert body["incomplete_details"] == {"reason": "max_output_tokens"}
+    assert body["usage"] == {"input_tokens": 5, "output_tokens": 7}
+    assert body["output"][0]["content"][0]["text"] == "cut off"
+
+
+def test_sse_reassembler_merges_response_failed_terminal_event() -> None:
+    reassembler = SSEReassembler()
+    for frame in (
+        b'event: response.created\ndata: {"type":"response.created","response":{"id":"r","status":"in_progress","output":[]}}\n\n',
+        b'event: response.failed\ndata: {"type":"response.failed","response":{"id":"r","status":"failed","output":[],"error":{"code":"server_error","message":"boom"},"usage":{"input_tokens":3,"output_tokens":0}}}\n\n',
+    ):
+        reassembler.feed_bytes(frame)
+
+    body = reassembler.reconstruct()
+
+    assert body is not None
+    assert body["status"] == "failed"
+    assert body["error"] == {"code": "server_error", "message": "boom"}
+
+
+def test_sse_reassembler_records_stream_level_response_error_event() -> None:
+    # response.error has no "response" object and can arrive mid-stream; the
+    # error must be attached without discarding accumulated output.
+    reassembler = SSEReassembler()
+    for frame in (
+        b'event: response.created\ndata: {"type":"response.created","response":{"id":"r","status":"in_progress","output":[]}}\n\n',
+        b'event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}\n\n',
+        b'event: response.error\ndata: {"type":"error","code":"rate_limit_exceeded","message":"slow down","param":null}\n\n',
+    ):
+        reassembler.feed_bytes(frame)
+
+    body = reassembler.reconstruct()
+
+    assert body is not None
+    assert body["status"] == "failed"
+    assert body["error"]["code"] == "rate_limit_exceeded"
+    assert body["error"]["message"] == "slow down"
+    assert body["output"][0]["content"][0]["text"] == "hi"
+
+
+def test_sse_reassembler_accepts_output_item_before_response_created() -> None:
+    reassembler = SSEReassembler()
+    reassembler.feed_bytes(
+        b'event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":"bad","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"early"}]}}\n\n'
+    )
+
+    body = reassembler.reconstruct()
+
+    assert body is not None
+    assert body["output"][0]["content"][0]["text"] == "early"
+
+
+def test_sse_reassembler_repairs_non_list_responses_output_and_content() -> None:
+    reassembler = SSEReassembler()
+    for frame in (
+        b'event: response.created\ndata: {"type":"response.created","response":{"id":"r","status":"in_progress","output":{"unexpected":true}}}\n\n',
+        b'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":{"unexpected":true}}}\n\n',
+        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"repaired"}\n\n',
+    ):
+        reassembler.feed_bytes(frame)
+
+    body = reassembler.reconstruct()
+
+    assert body is not None
+    assert body["output"][0]["content"] == [{"type": "output_text", "text": "repaired"}]
+
+
+def test_sse_reassembler_ignores_malformed_responses_item_and_text_events() -> None:
+    item_reassembler = SSEReassembler()
+    item_reassembler.feed_bytes(
+        b'event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":0,"item":null}\n\n'
+    )
+    assert item_reassembler.reconstruct() is None
+
+    empty_delta_reassembler = SSEReassembler()
+    empty_delta_reassembler.feed_bytes(
+        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","output_index":0,"delta":""}\n\n'
+    )
+    assert empty_delta_reassembler.reconstruct() is None
+
+    out_of_range_reassembler = SSEReassembler()
+    out_of_range_reassembler.feed_bytes(
+        b'event: response.created\ndata: {"type":"response.created","response":{"id":"r","output":[]}}\n\n'
+    )
+    out_of_range_reassembler.feed_bytes(
+        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","output_index":0,"delta":"ignored"}\n\n'
+    )
+    assert out_of_range_reassembler.reconstruct() == {"id": "r", "output": []}
+
+    non_dict_item_reassembler = SSEReassembler()
+    non_dict_item_reassembler.feed_bytes(
+        b'event: response.created\ndata: {"type":"response.created","response":{"id":"r","output":["raw"]}}\n\n'
+    )
+    non_dict_item_reassembler.feed_bytes(
+        b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","output_index":0,"delta":"ignored"}\n\n'
+    )
+    assert non_dict_item_reassembler.reconstruct() == {"id": "r", "output": ["raw"]}
+
+
+def test_sse_reassembler_handles_responses_terminal_without_response_object() -> None:
+    reassembler = SSEReassembler()
+    reassembler.feed_bytes(b'event: response.completed\ndata: {"type":"response.completed","id":"r"}\n\n')
+
+    body = reassembler.reconstruct()
+
+    assert body == {"type": "response.completed", "id": "r"}
+
+
+def test_sse_reassembler_records_response_error_before_any_snapshot() -> None:
+    reassembler = SSEReassembler()
+    reassembler.feed_bytes(b'event: response.error\ndata: {"type":"error","code":"server_error","message":"boom"}\n\n')
+
+    body = reassembler.reconstruct()
+
+    assert body is not None
+    assert body["status"] == "failed"
+    assert body["error"] == {"code": "server_error", "message": "boom"}
+
+
 def test_extract_metadata_supports_responses_input_roles_and_ws_usage() -> None:
     fixture_path = Path(__file__).parent / "fixtures" / "openai_responses_trace.jsonl"
     record_json = fixture_path.read_text(encoding="utf-8").splitlines()[0]

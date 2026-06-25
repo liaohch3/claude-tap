@@ -29,6 +29,7 @@ CLIENT_LABELS = {
     "hermes": "Hermes",
     "kimi": "Kimi",
     "kimi-code": "Kimi Code",
+    "mimo": "MiMo Code",
     "opencode": "OpenCode",
     "pi": "Pi",
     "qoder": "Qoder",
@@ -785,6 +786,8 @@ def _infer_agent(records: list[dict[str, Any]], manifest_entry: dict[str, Any]) 
         return "Qoder"
     if "opencode" in signal:
         return "OpenCode"
+    if "mimo" in signal or "mimo.xiaomi" in signal:
+        return "MiMo Code"
     if "hermes" in signal:
         return "Hermes"
     return "Unknown"

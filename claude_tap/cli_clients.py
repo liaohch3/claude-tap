@@ -212,6 +212,18 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         default_target="https://api.anthropic.com",
         default_proxy_mode="forward",
     ),
+    "mimo": ClientConfig(
+        cmd="mimo",
+        label="MiMo Code",
+        install_url="https://mimo.xiaomi.com/en/mimocode",
+        # MiMo Code is an OpenCode fork (https://github.com/XiaomiMiMo/MiMo-Code).
+        # It inherits the same multi-provider env vars; forward proxy is the
+        # natural default to capture all provider traffic transparently.
+        base_url_env="ANTHROPIC_BASE_URL",
+        base_url_suffix="",
+        default_target="https://api.anthropic.com",
+        default_proxy_mode="forward",
+    ),
     "pi": ClientConfig(
         cmd="pi",
         label="Pi",
@@ -342,6 +354,9 @@ async def run_client(
         env["https_proxy"] = proxy_url
         env["all_proxy"] = proxy_url
         _extend_no_proxy(env, ("localhost", "127.0.0.1", "::1"))
+        if client == "mimo":
+            # MiMo defaults to mimo-only mode and ignores provider env vars unless disabled.
+            env["MIMOCODE_MIMO_ONLY"] = "false"
         forward_base_url = cfg.reverse_base_url(port)
         for env_key in cfg.forward_base_url_envs:
             env[env_key] = forward_base_url
@@ -392,15 +407,26 @@ async def run_client(
             reverse_env = _openclaw_reverse_env(port, cmd_args)
         elif capture_only and client in {"hermes", "kimi"}:
             reverse_env = _multi_provider_reverse_env(port)
+        elif capture_only and client == "mimo":
+            reverse_env = _opencode_reverse_env(port)
+            reverse_env["MIMOCODE_MIMO_ONLY"] = "false"
         elif capture_only and client == "opencode":
             reverse_env = _opencode_reverse_env(port)
+        elif client == "mimo":
+            reverse_env = cfg.reverse_base_url_env_map(port)
+            reverse_env["MIMOCODE_MIMO_ONLY"] = "false"
         else:
             reverse_env = cfg.reverse_base_url_env_map(port)
         cleanup_path = reverse_env.pop(_OPENCLAW_CLEANUP_ENV, None)
         if cleanup_path:
             cleanup_paths.append(Path(cleanup_path))
         env.update(reverse_env)
-        env["NO_PROXY"] = "127.0.0.1"
+        if client == "mimo":
+            # MiMo talks to a local HTTP server in TUI mode; preserve any existing
+            # NO_PROXY entries and bypass localhost the same way forward mode does.
+            _extend_no_proxy(env, ("localhost", "127.0.0.1", "::1"))
+        else:
+            env["NO_PROXY"] = "127.0.0.1"
         if cfg.inject_settings_env and not _has_settings_arg(cmd_args):
             cmd_args = _settings_arg(reverse_env) + cmd_args
         base_url_config_overrides: list[str] = []
@@ -602,6 +628,10 @@ def _extend_no_proxy(env: dict[str, str], values: tuple[str, ...]) -> None:
     for key in ("NO_PROXY", "no_proxy"):
         raw = env.get(key, "")
         existing.extend(part.strip() for part in raw.split(",") if part.strip())
+    if "*" in existing:
+        env["NO_PROXY"] = "*"
+        env["no_proxy"] = "*"
+        return
 
     merged: list[str] = []
     seen: set[str] = set()

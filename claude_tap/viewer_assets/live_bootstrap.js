@@ -2,6 +2,7 @@
 let liveEventSource = null;
 let liveConnected = false;
 let currentDetailRequestId = null;
+let currentDetailEntryKey = null;
 let liveRecords = [];
 let viewingDate = null; // null = live, string = historical date
 let liveRenderTimer = null;

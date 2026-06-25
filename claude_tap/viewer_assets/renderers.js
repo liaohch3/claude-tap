@@ -404,17 +404,31 @@ function normalizeUsage(usage) {
     normalized.total_tokens = usage.totalTokens;
   }
   if (normalized.cache_read_input_tokens === undefined) {
-    let cached = usage.cached_tokens;
-    if (cached === undefined) cached = usage.cachedContentTokenCount;
-    if (cached === undefined) cached = usage.cacheReadInputTokens;
-    if (cached === undefined && usage.input_tokens_details && typeof usage.input_tokens_details === 'object') {
-      cached = usage.input_tokens_details.cached_tokens;
+    /* Cache tokens derived from OpenAI/Gemini-style details fields are already
+       counted inside input_tokens/prompt_tokens.  Mark them so the cache hit
+       rate denominator can avoid double-counting. */
+    let embeddedCached = usage.cached_tokens;
+    if (embeddedCached === undefined) embeddedCached = usage.cachedContentTokenCount;
+    if (embeddedCached === undefined && usage.input_tokens_details && typeof usage.input_tokens_details === 'object') {
+      embeddedCached = usage.input_tokens_details.cached_tokens;
     }
-    if (cached === undefined && usage.prompt_tokens_details && typeof usage.prompt_tokens_details === 'object') {
-      cached = usage.prompt_tokens_details.cached_tokens;
+    if (embeddedCached === undefined && usage.prompt_tokens_details && typeof usage.prompt_tokens_details === 'object') {
+      embeddedCached = usage.prompt_tokens_details.cached_tokens;
     }
-    if (cached !== undefined && cached !== null) {
-      normalized.cache_read_input_tokens = cached;
+    if (embeddedCached !== undefined && embeddedCached !== null) {
+      normalized.cache_read_input_tokens = embeddedCached;
+      normalized._cache_read_in_input = true;
+    } else if (usage.cacheReadInputTokens !== undefined && usage.cacheReadInputTokens !== null) {
+      normalized.cache_read_input_tokens = usage.cacheReadInputTokens;
+      normalized._cache_read_in_input = false;
+    }
+  } else {
+    /* Native cache_read_input_tokens (Claude/Anthropic/Bedrock) is a separate
+       bucket not included in input_tokens.  But if the caller already set
+       _cache_read_in_input (e.g. lazy-loading stub with model-based inference),
+       respect the pre-set value. */
+    if (normalized._cache_read_in_input === undefined) {
+      normalized._cache_read_in_input = false;
     }
   }
   if (normalized.cache_creation_input_tokens === undefined && usage.cacheWriteInputTokens !== undefined && usage.cacheWriteInputTokens !== null) {

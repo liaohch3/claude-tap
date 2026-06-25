@@ -48,6 +48,7 @@ from claude_tap.proxy import (
 )
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
+from claude_tap.upstream import build_upstream_url, format_upstream_error
 from claude_tap.usage import normalize_usage
 from claude_tap.viewer import _decode_bedrock_eventstream_events
 from claude_tap.ws_proxy import (
@@ -545,8 +546,8 @@ class ForwardProxyServer:
             )
         except Exception as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
-            log.error(f"{log_prefix} upstream error: {exc}")
-            error_text = str(exc)
+            error_text = format_upstream_error(exc, target_url=upstream_url, upstream_url=upstream_url)
+            log.error(f"{log_prefix} upstream error: {error_text}")
             error_body = error_text.encode("utf-8", errors="replace")
             record = _build_record(
                 req_id,
@@ -1186,7 +1187,7 @@ class ForwardProxyServer:
             and self._local_reverse_target
             and _matches_path_prefix(path, self._local_reverse_allowed_path_prefixes)
         ):
-            upstream_url = self._local_reverse_target.rstrip("/") + "/" + path.lstrip("/")
+            upstream_url = build_upstream_url(self._local_reverse_target, path)
             await self._forward_and_record(method, path, headers, body, upstream_url, writer)
             return
 

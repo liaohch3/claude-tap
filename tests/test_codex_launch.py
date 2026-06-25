@@ -42,6 +42,7 @@ async def test_run_client_codex_reverse_injects_openai_base_url(monkeypatch) -> 
     monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/codex")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("claude_tap.cli_clients._codex_selected_provider_base_url_key", lambda _: None)
 
     code = await run_client(43123, ["exec", "hello"], client="codex", proxy_mode="reverse")
 
@@ -67,6 +68,7 @@ async def test_run_client_codex_reverse_respects_existing_openai_base_override(m
     monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/codex")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("claude_tap.cli_clients._codex_selected_provider_base_url_key", lambda _: None)
 
     code = await run_client(
         43123,

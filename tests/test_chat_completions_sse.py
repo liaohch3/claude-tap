@@ -56,6 +56,73 @@ def test_reassembler_can_reconstruct_without_storing_events() -> None:
     assert snap["content"] == [{"type": "text", "text": "OK"}]
 
 
+def test_gemini_stream_generate_content_reconstructs_bare_data_frames() -> None:
+    r = SSEReassembler(store_events=False)
+    r.feed_bytes(
+        b'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Hello "}]}}],'
+        b'"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":1,"totalTokenCount":8}}\n\n'
+        b'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini."}]},'
+        b'"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,'
+        b'"candidatesTokenCount":2,"totalTokenCount":9,"cachedContentTokenCount":3}}\n\n'
+    )
+
+    snap = r.reconstruct()
+
+    assert snap is not None
+    assert snap["candidates"][0]["content"]["parts"] == [{"text": "Hello Gemini."}]
+    assert snap["candidates"][0]["finishReason"] == "STOP"
+    assert snap["content"] == [{"type": "text", "text": "Hello Gemini."}]
+    assert snap["usageMetadata"]["promptTokenCount"] == 7
+    assert snap["usage"]["input_tokens"] == 7
+    assert snap["usage"]["output_tokens"] == 2
+    assert snap["usage"]["total_tokens"] == 9
+    assert snap["usage"]["cache_read_input_tokens"] == 3
+
+
+def test_gemini_stream_generate_content_reconstructs_wrapped_response_frames() -> None:
+    r = SSEReassembler(store_events=False)
+    r.feed_bytes(
+        b'data: {"response":{"candidates":[{"content":{"role":"model",'
+        b'"parts":[{"text":"Wrapped "}]}}],"usageMetadata":{"promptTokenCount":11,'
+        b'"candidatesTokenCount":1,"totalTokenCount":12}}}\n\n'
+        b'data: {"response":{"candidates":[{"content":{"role":"model",'
+        b'"parts":[{"text":"Gemini."}]},"finishReason":"STOP"}],'
+        b'"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":2,'
+        b'"totalTokenCount":13,"cachedContentTokenCount":4}}}\n\n'
+    )
+
+    snap = r.reconstruct()
+
+    assert snap is not None
+    assert snap["candidates"][0]["content"]["parts"] == [{"text": "Wrapped Gemini."}]
+    assert snap["candidates"][0]["finishReason"] == "STOP"
+    assert snap["content"] == [{"type": "text", "text": "Wrapped Gemini."}]
+    assert snap["usageMetadata"]["promptTokenCount"] == 11
+    assert snap["usage"]["input_tokens"] == 11
+    assert snap["usage"]["output_tokens"] == 2
+    assert snap["usage"]["total_tokens"] == 13
+    assert snap["usage"]["cache_read_input_tokens"] == 4
+
+
+def test_gemini_stream_generate_content_preserves_signed_text_parts() -> None:
+    r = SSEReassembler(store_events=False)
+    r.feed_bytes(
+        b'data: {"candidates":[{"content":{"role":"model","parts":['
+        b'{"thought":true,"text":"A","thoughtSignature":"sig1"}]}}]}\n\n'
+        b'data: {"candidates":[{"content":{"role":"model","parts":['
+        b'{"thought":true,"text":"B","thoughtSignature":"sig2"}]}}]}\n\n'
+    )
+
+    snap = r.reconstruct()
+
+    assert snap is not None
+    assert snap["candidates"][0]["content"]["parts"] == [
+        {"thought": True, "text": "A", "thoughtSignature": "sig1"},
+        {"thought": True, "text": "B", "thoughtSignature": "sig2"},
+    ]
+    assert snap["content"] == [{"type": "thinking", "thinking": "AB"}]
+
+
 def test_chat_completions_usage_dual_naming() -> None:
     """Final chunk's `usage` must be exposed under both Anthropic and OpenAI
     keys so token displays that only know one schema still work."""

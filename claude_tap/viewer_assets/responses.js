@@ -554,8 +554,9 @@ function isDisplayTurnCandidate(entry) {
 
 function normalizeDisplayTurns(rawEntries, reset = true) {
   if (reset) nextDisplayTurn = 1;
-  return (rawEntries || []).map(entry => {
+  return (rawEntries || []).map((entry, idx) => {
     if (!entry || typeof entry !== 'object') return entry;
+    if (entry._entry_index === undefined) entry._entry_index = idx;
     if (entry.capture_turn === undefined && entry.turn !== undefined) entry.capture_turn = entry.turn;
     if (!isDisplayTurnCandidate(entry)) {
       if (reset) delete entry.display_turn;
@@ -587,4 +588,3 @@ function isNavigableTraceEntry(entry) {
 function captureTurnValue(entry) {
   return entry?.capture_turn ?? entry?.turn;
 }
-
