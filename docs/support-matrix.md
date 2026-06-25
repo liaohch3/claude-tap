@@ -21,7 +21,7 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
-| Codex App | ChatGPT account in Codex App | `codex-app://sessions` | n/a | Local session JSONL transcript import plus automatic best-effort CDP WebSocket enrichment when a Codex App debug endpoint is available | Unit-tested |
+| Codex App | ChatGPT account in Codex App | `codex-app://sessions` | n/a | Forward proxy capture of raw upstream HTTP/WebSocket traffic | Unit-tested |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy (Google endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Gemini CLI | API key / Vertex-compatible config (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE | Unit-tested |
 | Kimi CLI (legacy kimi-cli) | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested (`KIMI_BASE_URL`) |
@@ -52,7 +52,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 |--------|--------------|--------|
 | `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
 | `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
-| `codexapp` | `transcript` | Transcript listener for `CODEX_HOME/sessions` or `~/.codex/sessions`; no proxy is created. CDP WebSocket evidence is added automatically when Codex App exposes a debug endpoint |
+| `codexapp` | `forward` | Launches Codex App through the forward proxy by default to capture raw upstream HTTP/WebSocket traffic |
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |
 | `kimi` | `reverse` | Legacy kimi-cli; native `KIMI_BASE_URL` env var |
 | `kimi-code` | `reverse` | Patches `~/.kimi-code/config.toml` via temporary `KIMI_CODE_HOME` sandbox |
@@ -66,7 +66,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `agy` | `forward` | Antigravity uses multiple Google / Antigravity endpoints; claude-tap sets `HTTPS_PROXY` for auxiliary traffic and `CLOUD_CODE_URL` for Code Assist model traffic |
 | `codebuddy` | `reverse` | Single provider, native `CODEBUDDY_BASE_URL` env var; supports `--settings` env injection. Endpoint auto-detected from CodeBuddy's login cache |
 
-Users can override proxy-backed clients with `--tap-proxy-mode {reverse,forward}`. `codexapp` is transcript-only, so `--tap-proxy-mode` does not apply.
+Users can override proxy-backed clients with `--tap-proxy-mode {reverse,forward}`. `codexapp` only supports forward mode and launches Codex App with `HTTP_PROXY` / `HTTPS_PROXY`, `SSL_CERT_FILE`, `CODEX_CA_CERTIFICATE`, and a Chromium `--proxy-server` switch. This mode requires launching a fresh Codex App process; quit any already-running Codex App first so the proxy environment is inherited. claude-tap fails fast when it detects an already-running Codex App unless `CLAUDE_TAP_ALLOW_RUNNING_CODEX_APP=1` is set.
 
 ## Subcommand Argv Rewrites
 
@@ -117,10 +117,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 
 - `test_codex_upstream_url_construction` — verifies URL construction for all 5 matrix combinations
 - `test_codex_client_reverse_proxy` — e2e with fake upstream (OAuth-like, with strip)
-- `test_build_codex_app_transcript_records_preserves_turn_context` — verifies Codex App session JSONL imports as viewer-friendly Responses records with usage, tools, and tool results
-- `test_import_codex_app_transcripts_appends_only_new_completed_records` — verifies Codex App transcript polling appends only new completed records
-- `test_cdp_recorder_writes_viewer_friendly_websocket_record` — verifies Codex App CDP WebSocket frames are reconstructed into viewer-friendly WebSocket records
-- `test_async_main_codexapp_starts_cdp_enrichment_by_default` — verifies `--tap-client codexapp` starts automatic CDP enrichment while honoring the global raw stream event storage setting
+- `test_run_client_codexapp_forward_launches_desktop_app_with_proxy_env` — verifies Codex App forward launch injects proxy, CA, and Chromium proxy-switch settings
 - `test_gemini_registered_in_client_configs` — verifies Gemini CLI registration and default forward mode
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs` — verifies Gemini forward proxy launch env
 - `test_run_client_gemini_reverse_sets_both_base_url_envs` — verifies Gemini reverse proxy base URL env injection
@@ -161,8 +158,7 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Repl
 
 # Codex App
 uv run python -m claude_tap --tap-client codexapp
-# Start or continue a Codex App task and verify the dashboard receives transcript records.
-# If Codex App exposes a debug endpoint, websocket evidence is added automatically.
+# Start a Codex App task and verify the dashboard receives raw proxy records.
 
 # Qoder CLI
 uv run python -m claude_tap --tap-client qoder -- -p "Reply OK" --permission-mode dont_ask

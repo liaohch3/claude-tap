@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -98,9 +99,6 @@ class ClientConfig:
     # local proxy and let the forward proxy bridge selected paths to target.
     forward_base_url_envs: tuple[str, ...] = ()
     forward_base_url_allowed_path_prefixes: tuple[str, ...] = ()
-    # Transcript-only clients are observed from local session logs instead of a
-    # spawned process and do not need a reverse or forward proxy.
-    transcript_only: bool = False
 
     @property
     def missing_help(self) -> str:
@@ -163,14 +161,14 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         strip_path_prefix_unless_target_contains=("api.openai.com",),
     ),
     "codexapp": ClientConfig(
-        cmd="codex",
+        cmd="Codex.app",
         label="Codex App",
         install_url="https://openai.com/codex",
         base_url_env="CODEX_HOME",
         base_url_suffix="",
         default_target="codex-app://sessions",
-        default_proxy_mode="transcript",
-        transcript_only=True,
+        default_proxy_mode="forward",
+        auto_trust_ca_macos=True,
     ),
     "kimi": ClientConfig(
         cmd="kimi",
@@ -310,6 +308,70 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
 }
 
 
+def _codex_app_executable_candidates() -> tuple[Path, ...]:
+    configured = os.environ.get("CODEX_APP_EXECUTABLE")
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    if sys.platform == "darwin":
+        candidates.extend(
+            [
+                Path("/Applications/Codex.app/Contents/MacOS/Codex"),
+                Path.home() / "Applications/Codex.app/Contents/MacOS/Codex",
+            ]
+        )
+    return tuple(candidates)
+
+
+def _resolve_client_executable(client: str, cfg: ClientConfig, client_cmd: str | None) -> str | None:
+    if client_cmd:
+        return str(Path(client_cmd)) if Path(client_cmd).is_file() else None
+    if client == "codexapp":
+        for candidate in _codex_app_executable_candidates():
+            if candidate.is_file():
+                return str(candidate)
+        return None
+    return shutil.which(cfg.cmd)
+
+
+def _codex_app_process_already_running(executable: str) -> bool:
+    if sys.platform != "darwin":
+        return False
+    marker = _codex_app_bundle_marker(executable) or executable
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    current_pid = os.getpid()
+    for line in result.stdout.splitlines():
+        pid_text, _, command = line.strip().partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if pid == current_pid:
+            continue
+        if marker in command:
+            return True
+    return False
+
+
+def _codex_app_bundle_marker(executable: str) -> str | None:
+    path = Path(executable)
+    for parent in (path, *path.parents):
+        if parent.name.endswith(".app"):
+            return str(parent) + os.sep
+    return None
+
+
 async def run_client(
     port: int,
     extra_args: list[str],
@@ -324,12 +386,31 @@ async def run_client(
     # asyncio.create_subprocess_exec uses CreateProcess on Windows, which only
     # auto-appends `.exe`; resolve here so npm `.cmd`/`.bat` shims also work.
     display_cmd = client_cmd or cfg.cmd
-    resolved_cmd = str(Path(client_cmd)) if client_cmd and Path(client_cmd).is_file() else shutil.which(display_cmd)
+    resolved_cmd = _resolve_client_executable(client, cfg, client_cmd)
     if resolved_cmd is None:
         if client_cmd:
             print(f"\nError: '{client_cmd}' command not found.\nPlease check the wrapper-provided {cfg.label} path.\n")
+        elif client == "codexapp":
+            print(
+                "\nError: Codex.app executable not found.\n"
+                "Install Codex.app in /Applications, or set CODEX_APP_EXECUTABLE to "
+                "/path/to/Codex.app/Contents/MacOS/Codex.\n"
+            )
         else:
             print(cfg.missing_help)
+        return 1
+    if (
+        client == "codexapp"
+        and proxy_mode == "forward"
+        and not os.environ.get("CLAUDE_TAP_ALLOW_RUNNING_CODEX_APP")
+        and _codex_app_process_already_running(resolved_cmd)
+    ):
+        print(
+            "\nError: Codex App is already running.\n"
+            "Quit Codex App before starting codexapp forward capture so the app-server inherits "
+            "claude-tap proxy and CA environment variables.\n"
+            "Set CLAUDE_TAP_ALLOW_RUNNING_CODEX_APP=1 only if you intentionally want to launch anyway.\n"
+        )
         return 1
 
     env = os.environ.copy()
@@ -384,6 +465,10 @@ async def run_client(
                 if ca_cert_path:
                     settings_payload["env"]["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
                 cmd_args = _settings_arg(settings_payload["env"]) + cmd_args
+        if client == "codexapp":
+            proxy_switch = f"--proxy-server={proxy_url}"
+            if not any(arg == proxy_switch or arg.startswith("--proxy-server=") for arg in cmd_args):
+                cmd_args = [proxy_switch, *cmd_args]
         # Don't set reverse-mode provider-specific base URL in forward mode.
     else:
         if client == "kimi-code":
@@ -460,6 +545,11 @@ async def run_client(
             print(f"   {env_key}={cfg.reverse_base_url(port)}")
         if ca_cert_path:
             print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
+            if client == "codexapp":
+                print(f"   SSL_CERT_FILE={ca_cert_path}")
+                print(f"   CODEX_CA_CERTIFICATE={ca_cert_path}")
+        if client == "codexapp":
+            print("   Quit any already-running Codex App before launch so the new proxy environment is used.")
     elif client == "kimi-code":
         print(f"   KIMI_CODE_HOME={env.get('KIMI_CODE_HOME', '')}")
         print(f"   KIMI_CODE_BASE_URL={env.get('KIMI_CODE_BASE_URL', '')}")

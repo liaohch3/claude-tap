@@ -303,3 +303,77 @@ async def test_async_main_returns_before_starting_proxy_when_trust_ca_fails(
     assert code == 7
     assert proxy_started is False
     assert get_trace_store().list_session_rows() == []
+
+
+@pytest.mark.asyncio
+async def test_async_main_codexapp_default_starts_forward_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ca_path = tmp_path / "ca.pem"
+    key_path = tmp_path / "ca-key.pem"
+    captured: dict[str, object] = {}
+
+    class FakeCertificateAuthority:
+        def __init__(self, cert_path: Path, key_path_value: Path) -> None:
+            captured["ca_cert_path"] = cert_path
+            captured["ca_key_path"] = key_path_value
+
+    class FakeForwardProxyServer:
+        def __init__(self, **kwargs) -> None:
+            captured["forward_kwargs"] = kwargs
+
+        async def start(self) -> int:
+            captured["forward_started"] = True
+            return 43123
+
+        async def stop(self) -> None:
+            captured["forward_stopped"] = True
+
+    async def fake_run_client(port: int, extra_args: list[str], **kwargs) -> int:
+        captured["run_client_port"] = port
+        captured["run_client_extra_args"] = extra_args
+        captured["run_client_kwargs"] = kwargs
+        return 0
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "codexapp-forward.sqlite3"))
+    reset_trace_store()
+    monkeypatch.setattr("claude_tap.cli.ensure_ca", lambda: (ca_path, key_path))
+    monkeypatch.setattr("claude_tap.cli._ensure_ca_trust_for_forward_proxy", lambda _args, _path: 0)
+    monkeypatch.setattr("claude_tap.cli.CertificateAuthority", FakeCertificateAuthority)
+    monkeypatch.setattr("claude_tap.cli.ForwardProxyServer", FakeForwardProxyServer)
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+
+    args = parse_args(
+        [
+            "--tap-client",
+            "codexapp",
+            "--tap-output-dir",
+            str(tmp_path / "traces"),
+            "--tap-no-live",
+            "--tap-no-open",
+            "--tap-no-update-check",
+        ]
+    )
+
+    code = await async_main(args)
+
+    assert code == 0
+    assert captured["ca_cert_path"] == ca_path
+    assert captured["ca_key_path"] == key_path
+    assert captured["forward_started"] is True
+    assert captured["forward_stopped"] is True
+    forward_kwargs = captured["forward_kwargs"]
+    assert forward_kwargs["host"] == "127.0.0.1"
+    assert forward_kwargs["port"] == 0
+    assert forward_kwargs["local_reverse_target"] == "codex-app://sessions"
+    assert forward_kwargs["local_reverse_allowed_path_prefixes"] == ()
+    assert captured["run_client_port"] == 43123
+    assert captured["run_client_extra_args"] == []
+    assert captured["run_client_kwargs"] == {
+        "client": "codexapp",
+        "proxy_mode": "forward",
+        "ca_cert_path": ca_path,
+        "client_cmd": None,
+        "capture_only": False,
+    }
