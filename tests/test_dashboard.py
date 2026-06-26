@@ -1226,7 +1226,7 @@ async def test_dashboard_session_detail_redacts_sensitive_display_records(trace_
 @pytest.mark.asyncio
 async def test_dashboard_session_html_uses_remote_records_for_long_codex_prompt(trace_db) -> None:
     store = get_trace_store()
-    session_id = store.create_session(client="codexapp", proxy_mode="transcript")
+    session_id = store.create_session(client="codexapp", proxy_mode="forward")
     long_prompt = ("sandbox_permissions=" * 1200) + "done"
     store.append_record(
         session_id,
@@ -1234,10 +1234,12 @@ async def test_dashboard_session_html_uses_remote_records_for_long_codex_prompt(
             "timestamp": "2026-06-13T09:00:00+00:00",
             "request_id": "req_codex_app",
             "turn": 1,
+            "transport": "websocket",
+            "upstream_base_url": "https://chatgpt.com/backend-api/codex",
             "request": {
-                "method": "CODEX_APP_TRANSCRIPT",
-                "path": "/v1/responses",
-                "headers": {"x-codex-app-session-id": "019ec061-b6cd-74b0-abdf-1d51267d1355"},
+                "method": "WEBSOCKET",
+                "path": "/backend-api/codex/responses",
+                "headers": {"host": "chatgpt.com", "authorization": "Bearer [REDACTED]"},
                 "body": {
                     "type": "response.create",
                     "model": "gpt-5.5",
@@ -1250,12 +1252,12 @@ async def test_dashboard_session_html_uses_remote_records_for_long_codex_prompt(
                         {
                             "type": "message",
                             "role": "user",
-                            "content": [{"type": "input_text", "text": "Add Codex App listening"}],
+                            "content": [{"type": "input_text", "text": "Capture Codex App traffic"}],
                         },
                     ],
                 },
             },
-            "response": {"status": 200, "body": {"usage": {"input_tokens": 100, "output_tokens": 20}}},
+            "response": {"status": 101, "body": {"usage": {"input_tokens": 100, "output_tokens": 20}}},
         },
     )
 
@@ -1271,7 +1273,7 @@ async def test_dashboard_session_html_uses_remote_records_for_long_codex_prompt(
                 assert "__TRACE_RECORDS_API__" in html
                 assert "const EMBEDDED_TRACE_COMPACT_DATA =" not in html
                 assert long_prompt not in html
-                assert "Add Codex App listening" in html
+                assert "Capture Codex App traffic" in html
 
             async with session.get(
                 f"http://127.0.0.1:{port}/api/sessions/{session_id}/records?offset=0&limit=1"

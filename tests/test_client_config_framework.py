@@ -27,13 +27,13 @@ SUPPORTED_CLIENTS = {
     "codebuddy",
 }
 
-SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"claude", "gemini", "kimi-code", "openclaw", "codexapp"}
+SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"claude", "codexapp", "gemini", "kimi-code", "openclaw"}
 
 SUPPORTED_DEFAULT_PROXY_MODES = {
     "agy": "forward",
     "claude": "reverse",
     "codex": "reverse",
-    "codexapp": "transcript",
+    "codexapp": "forward",
     "gemini": "forward",
     "kimi": "reverse",
     "kimi-code": "reverse",
@@ -68,10 +68,10 @@ def test_client_matrix_contains_only_supported_clients() -> None:
     assert set(CLIENT_CONFIGS) == SUPPORTED_CLIENTS
 
 
-def test_only_agy_auto_trusts_ca_on_macos() -> None:
+def test_forward_proxy_desktop_clients_auto_trust_ca_on_macos() -> None:
     auto_trust_clients = {client for client, cfg in CLIENT_CONFIGS.items() if cfg.auto_trust_ca_macos}
 
-    assert auto_trust_clients == {"agy"}
+    assert auto_trust_clients == {"agy", "codexapp"}
 
 
 @pytest.mark.parametrize("client", sorted(SUPPORTED_CLIENTS))
@@ -120,23 +120,31 @@ def test_agy_declares_cloud_code_bridge_env() -> None:
     assert cfg.forward_base_url_allowed_path_prefixes == ("/v1internal",)
 
 
-def test_codexapp_declares_transcript_only_mode() -> None:
+def test_codexapp_declares_raw_backend_capture_mode() -> None:
     cfg = CLIENT_CONFIGS["codexapp"]
 
     assert cfg.label == "Codex App"
-    assert cfg.default_target == "codex-app://sessions"
-    assert cfg.default_proxy_mode == "transcript"
-    assert cfg.transcript_only is True
+    assert cfg.cmd == "/Applications/Codex.app/Contents/MacOS/Codex"
+    assert cfg.default_target == "https://chatgpt.com/backend-api/codex"
+    assert cfg.default_proxy_mode == "forward"
+    assert cfg.transcript_only is False
 
 
-def test_parse_args_codexapp_rejects_proxy_mode() -> None:
+def test_parse_args_codexapp_accepts_forward_proxy_mode() -> None:
+    args = parse_args(["--tap-client", "codexapp", "--tap-proxy-mode", "forward"])
+
+    assert args.client == "codexapp"
+    assert args.proxy_mode == "forward"
+
+
+def test_parse_args_codexapp_rejects_reverse_trust_ca() -> None:
     with pytest.raises(SystemExit):
-        parse_args(["--tap-client", "codexapp", "--tap-proxy-mode", "forward"])
+        parse_args(["--tap-client", "codexapp", "--tap-proxy-mode", "reverse", "--tap-trust-ca"])
 
 
-def test_parse_args_codexapp_rejects_trust_ca() -> None:
+def test_parse_args_codexapp_rejects_removed_cdp_endpoint() -> None:
     with pytest.raises(SystemExit):
-        parse_args(["--tap-client", "codexapp", "--tap-trust-ca"])
+        parse_args(["--tap-client", "codexapp", "--tap-codexapp-cdp-endpoint", "http://127.0.0.1:9999"])
 
 
 def test_openclaw_declares_multi_provider_reverse_envs() -> None:

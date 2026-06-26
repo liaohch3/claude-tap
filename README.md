@@ -72,7 +72,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 |--------|-------------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, Claude-compatible gateways such as DeepSeek / GLM, or local proxy upstreams such as CC Switch |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API key mode or ChatGPT subscription OAuth |
-| [Codex App](https://openai.com/codex/) | Local Codex App sessions imported from `CODEX_HOME` or `~/.codex`; automatic best-effort CDP WebSocket enrichment |
+| [Codex App](https://openai.com/codex/) | Desktop app launched through forward proxy mode so backend HTTP/WebSocket request bodies are captured |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Legacy kimi-cli and the newer Kimi Code CLI |
 | [MiMo Code](https://mimo.xiaomi.com/en/mimocode) | MiMo Code sessions (OpenCode fork with multi-provider support) |
@@ -113,7 +113,7 @@ claude-tap --tap-no-live
 # Codex CLI
 claude-tap --tap-client codex
 
-# Codex App local session listener
+# Codex App backend request capture
 claude-tap --tap-client codexapp
 
 # Gemini CLI
@@ -260,19 +260,19 @@ claude-tap --tap-client codex -- --full-auto
 </details>
 
 <details>
-<summary>Codex App listener examples</summary>
+<summary>Codex App backend capture examples</summary>
 
-Codex App sessions are imported from local JSONL files under `CODEX_HOME/sessions` or `~/.codex/sessions`. This mode does not launch Codex or create a network proxy; it keeps a claude-tap dashboard session open and appends in-progress and completed Codex App records as they appear.
+Codex App is launched through claude-tap's forward proxy so the final backend HTTP and WebSocket request bodies can be captured in the same trace viewer as other clients. On macOS, claude-tap trusts its local CA in the current user's login keychain when needed so the bundled app-server can connect through the proxy.
 
 ```bash
-# Listen to local Codex App sessions and inspect them in the dashboard
+# Launch Codex App and inspect captured backend requests in the dashboard
 claude-tap --tap-client codexapp
 
-# Use a custom Codex home directory
-CODEX_HOME=/path/to/codex-home claude-tap --tap-client codexapp
+# Keep raw WebSocket/SSE event arrays in the trace
+claude-tap --tap-client codexapp --tap-store-stream-events
 ```
 
-`--tap-client codexapp` automatically imports the local transcript and silently tries to add CDP WebSocket evidence when a Codex App debug endpoint is available. CDP capture is a side-channel observer, not a proxy; the local session transcript remains the canonical source when the frontend does not expose model traffic through Chrome DevTools Protocol.
+If Codex App is already running, quit it first so the new process inherits the proxy and CA environment from claude-tap. This mode records live backend traffic instead of importing local session JSONL transcripts.
 
 </details>
 
@@ -518,7 +518,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
 --tap-no-update-check    Disable PyPI update check on startup
 --tap-no-auto-update     Check for updates but don't auto-download
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/kimi-code/openclaw/codebuddy, forward for agy/gemini/mimo/opencode/pi/hermes/cursor/qoder; codexapp is transcript-only)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/kimi-code/openclaw/codebuddy, forward for agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 
