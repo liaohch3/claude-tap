@@ -223,6 +223,8 @@ class ForwardProxyServer:
         session: aiohttp.ClientSession,
         local_reverse_target: str | None = None,
         local_reverse_allowed_path_prefixes: tuple[str, ...] = (),
+        trace_methods: tuple[str, ...] = (),
+        trace_path_prefixes: tuple[str, ...] = (),
         store_stream_events: bool = False,
         capture_only: bool = False,
     ) -> None:
@@ -233,6 +235,8 @@ class ForwardProxyServer:
         self._session = session
         self._local_reverse_target = local_reverse_target
         self._local_reverse_allowed_path_prefixes = local_reverse_allowed_path_prefixes
+        self._trace_methods = frozenset(method.upper() for method in trace_methods)
+        self._trace_path_prefixes = trace_path_prefixes
         self._store_stream_events = store_stream_events
         self._capture_only = capture_only
         self._server: asyncio.Server | None = None
@@ -240,6 +244,17 @@ class ForwardProxyServer:
         self._client_writers: set[asyncio.StreamWriter] = set()
         self._turn_counter = 0
         self.actual_port: int = port
+
+    def _should_trace_request(self, method: str, path: str) -> bool:
+        if self._trace_methods and method.upper() not in self._trace_methods:
+            return False
+        if self._trace_path_prefixes and not _matches_path_prefix(path, self._trace_path_prefixes):
+            return False
+        return True
+
+    def _next_trace_turn(self) -> int:
+        self._turn_counter += 1
+        return self._turn_counter
 
     async def start(self) -> int:
         """Start the forward proxy server. Returns the actual port."""
@@ -485,20 +500,23 @@ class ForwardProxyServer:
         client_writer: asyncio.StreamWriter,
     ) -> None:
         """Forward request to upstream, record trace, send response back."""
-        self._turn_counter += 1
-        turn = self._turn_counter
+        should_trace = self._should_trace_request(method, path)
+        turn = self._next_trace_turn() if should_trace else None
         req_id = f"req_{uuid.uuid4().hex[:12]}"
         t0 = time.monotonic()
-        log_prefix = f"[Turn {turn}]"
+        log_prefix = f"[Turn {turn}]" if turn is not None else "[relay]"
 
         req_body = _parse_request_body_for_trace(body)
 
         is_streaming = is_capture_only_streaming_request(path, req_body)
 
         model = req_body.get("model", "") if isinstance(req_body, dict) else ""
-        log.info(f"{log_prefix} -> {method} {path} (model={model}, stream={is_streaming})")
+        if should_trace:
+            log.info(f"{log_prefix} -> {method} {path} (model={model}, stream={is_streaming})")
+        else:
+            log.debug(f"{log_prefix} -> {method} {path} (trace skipped by client filter)")
 
-        if self._capture_only and is_capture_only_request(path, req_body):
+        if should_trace and self._capture_only and is_capture_only_request(path, req_body):
             resp_body = capture_only_response(path, req_body)
             response_headers = {"Content-Type": capture_only_content_type(path, is_streaming)}
             duration_ms = int((time.monotonic() - t0) * 1000)
@@ -549,25 +567,34 @@ class ForwardProxyServer:
             error_text = format_upstream_error(exc, target_url=upstream_url, upstream_url=upstream_url)
             log.error(f"{log_prefix} upstream error: {error_text}")
             error_body = error_text.encode("utf-8", errors="replace")
-            record = _build_record(
-                req_id,
-                turn,
-                duration_ms,
-                method,
-                path,
-                headers,
-                req_body,
-                502,
-                {"Content-Type": "text/plain"},
-                {"error": error_text},
-            )
-            await self._writer.write(record)
+            if should_trace:
+                assert turn is not None
+                record = _build_record(
+                    req_id,
+                    turn,
+                    duration_ms,
+                    method,
+                    path,
+                    headers,
+                    req_body,
+                    502,
+                    {"Content-Type": "text/plain"},
+                    {"error": error_text},
+                )
+                await self._writer.write(record)
             response_line = b"HTTP/1.1 502 Bad Gateway\r\n"
             resp_headers = f"Content-Length: {len(error_body)}\r\nContent-Type: text/plain\r\n\r\n"
             client_writer.write(response_line + resp_headers.encode() + error_body)
             await client_writer.drain()
             return
 
+        if not should_trace:
+            total_bytes = await self._relay_unrecorded_response(upstream_resp, client_writer)
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            log.debug(f"{log_prefix} <- {upstream_resp.status} ({duration_ms}ms, {total_bytes} bytes, trace skipped)")
+            return
+
+        assert turn is not None
         if is_streaming and upstream_resp.status == 200:
             await self._handle_streaming(
                 upstream_resp,
@@ -808,11 +835,11 @@ class ForwardProxyServer:
         writer: asyncio.StreamWriter,
     ) -> None:
         """Relay a WebSocket upgrade received inside the CONNECT tunnel."""
-        self._turn_counter += 1
-        turn = self._turn_counter
+        should_trace = self._should_trace_request("WEBSOCKET", path)
+        turn = self._next_trace_turn() if should_trace else None
         req_id = f"req_{uuid.uuid4().hex[:12]}"
         t0 = time.monotonic()
-        log_prefix = f"[Turn {turn}]"
+        log_prefix = f"[Turn {turn}]" if turn is not None else "[relay]"
         upstream_base_url = f"https://{hostname}:{port}"
         upstream_ws_url = f"wss://{hostname}:{port}{path}"
 
@@ -828,9 +855,13 @@ class ForwardProxyServer:
         if ws_protocol:
             protocols = tuple(p.strip() for p in ws_protocol.split(",") if p.strip())
 
-        log.info(f"{log_prefix} -> WS UPGRADE {path} (upstream={upstream_ws_url})")
+        if should_trace:
+            log.info(f"{log_prefix} -> WS UPGRADE {path} (upstream={upstream_ws_url})")
+        else:
+            log.debug(f"{log_prefix} -> WS UPGRADE {path} (trace skipped by client filter)")
 
-        if self._capture_only:
+        if should_trace and self._capture_only:
+            assert turn is not None
             await self._capture_only_websocket(
                 req_id,
                 turn,
@@ -872,22 +903,24 @@ class ForwardProxyServer:
                 + error_body
             )
             await writer.drain()
-            record = {
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "request_id": req_id,
-                "turn": turn,
-                "duration_ms": duration_ms,
-                "transport": "websocket",
-                "request": {
-                    "method": "WEBSOCKET",
-                    "path": path,
-                    "headers": filter_headers(headers, redact_keys=True),
-                    "body": None,
-                },
-                "response": {"status": 502, "headers": {}, "body": None, "error": str(exc)},
-                "upstream_base_url": upstream_base_url,
-            }
-            await self._writer.write(record)
+            if should_trace:
+                assert turn is not None
+                record = {
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "request_id": req_id,
+                    "turn": turn,
+                    "duration_ms": duration_ms,
+                    "transport": "websocket",
+                    "request": {
+                        "method": "WEBSOCKET",
+                        "path": path,
+                        "headers": filter_headers(headers, redact_keys=True),
+                        "body": None,
+                    },
+                    "response": {"status": 502, "headers": {}, "body": None, "error": str(exc)},
+                    "upstream_base_url": upstream_base_url,
+                }
+                await self._writer.write(record)
             return
 
         sec_key = headers.get("Sec-WebSocket-Key") or headers.get("sec-websocket-key")
@@ -936,7 +969,8 @@ class ForwardProxyServer:
                     break
 
                 if msg.type == WSMsgType.TEXT:
-                    client_messages.append(msg.data)
+                    if should_trace:
+                        client_messages.append(msg.data)
                     await upstream_ws.send_str(msg.data)
                 elif msg.type == WSMsgType.BINARY:
                     await upstream_ws.send_bytes(msg.data)
@@ -953,7 +987,8 @@ class ForwardProxyServer:
         async def _relay_upstream_to_client() -> None:
             async for msg in upstream_ws:
                 if msg.type == WSMsgType.TEXT:
-                    server_messages.append(msg.data)
+                    if should_trace:
+                        server_messages.append(msg.data)
                     await ws_writer.send_frame(msg.data.encode("utf-8"), WSMsgType.TEXT)
                     await writer.drain()
                 elif msg.type == WSMsgType.BINARY:
@@ -1001,39 +1036,43 @@ class ForwardProxyServer:
             pass
 
         duration_ms = int((time.monotonic() - t0) * 1000)
-        request_record = {
-            "method": "WEBSOCKET",
-            "path": path,
-            "headers": filter_headers(headers, redact_keys=True),
-            "body": reconstruct_ws_request_body(client_messages),
-        }
-        response_events = [json.loads(msg) if msg.startswith("{") else {"raw": msg} for msg in server_messages]
-        response_record = {
-            "status": 101,
-            "headers": {},
-            "body": reconstruct_ws_response_body(response_events),
-        }
-        if self._store_stream_events:
-            request_record["ws_events"] = [
-                json.loads(msg) if msg.startswith("{") else {"raw": msg} for msg in client_messages
-            ]
-            response_record["ws_events"] = response_events
+        if should_trace:
+            assert turn is not None
+            request_record = {
+                "method": "WEBSOCKET",
+                "path": path,
+                "headers": filter_headers(headers, redact_keys=True),
+                "body": reconstruct_ws_request_body(client_messages),
+            }
+            response_events = [json.loads(msg) if msg.startswith("{") else {"raw": msg} for msg in server_messages]
+            response_record = {
+                "status": 101,
+                "headers": {},
+                "body": reconstruct_ws_response_body(response_events),
+            }
+            if self._store_stream_events:
+                request_record["ws_events"] = [
+                    json.loads(msg) if msg.startswith("{") else {"raw": msg} for msg in client_messages
+                ]
+                response_record["ws_events"] = response_events
 
-        record = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "request_id": req_id,
-            "turn": turn,
-            "duration_ms": duration_ms,
-            "transport": "websocket",
-            "request": request_record,
-            "response": response_record,
-            "upstream_base_url": upstream_base_url,
-        }
-        await self._writer.write(record)
-        log.info(
-            f"{log_prefix} <- WS closed ({duration_ms}ms, "
-            f"{len(client_messages)} client→upstream, {len(server_messages)} upstream→client)"
-        )
+            record = {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "request_id": req_id,
+                "turn": turn,
+                "duration_ms": duration_ms,
+                "transport": "websocket",
+                "request": request_record,
+                "response": response_record,
+                "upstream_base_url": upstream_base_url,
+            }
+            await self._writer.write(record)
+            log.info(
+                f"{log_prefix} <- WS closed ({duration_ms}ms, "
+                f"{len(client_messages)} client->upstream, {len(server_messages)} upstream->client)"
+            )
+        else:
+            log.debug(f"{log_prefix} <- WS closed ({duration_ms}ms, trace skipped)")
 
     async def _capture_only_websocket(
         self,

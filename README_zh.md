@@ -72,7 +72,7 @@
 |--------|----------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API、AWS Bedrock、DeepSeek / GLM 等 Claude 兼容网关，或 CC Switch 等本地代理上游 |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
-| [Codex App](https://openai.com/codex/) | 从 `CODEX_HOME` 或 `~/.codex` 导入本地 Codex App 会话；自动尽力补充 CDP WebSocket 证据 |
+| [Codex App](https://openai.com/codex/) | 通过 forward proxy 启动桌面 App，捕获后端 HTTP/WebSocket 请求体 |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist 的多 Google 端点流量 |
 | [Grok Build CLI](https://docs.x.ai/build/overview) | 通过官方 CLI chat proxy 捕获 Grok 订阅 OAuth 会话 |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | 旧版 kimi-cli 和新版 Kimi Code CLI |
@@ -114,7 +114,7 @@ claude-tap --tap-no-live
 # Codex CLI
 claude-tap --tap-client codex
 
-# Codex App 本地会话监听
+# Codex App 后端请求捕获
 claude-tap --tap-client codexapp
 
 # Gemini CLI
@@ -305,19 +305,19 @@ claude-tap --tap-client codex -- --full-auto
 </details>
 
 <details>
-<summary>Codex App 监听示例</summary>
+<summary>Codex App 后端捕获示例</summary>
 
-Codex App 会话会从 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 下的本地 JSONL 文件导入。这个模式不会启动 Codex，也不会创建网络代理；它会保持一个 claude-tap dashboard session，并在 Codex App 运行中或完成后追加可查看的记录。
+Codex App 会通过 claude-tap 的 forward proxy 启动，因此最终发往 `/backend-api/codex/responses` 的 HTTP 和 WebSocket 请求体会像其他客户端一样进入 trace viewer。非模型的 Codex App 产品流量会照常转发，但不会持久化成 trace 行。在 macOS 上，必要时 claude-tap 会把本地 CA 信任到当前用户的登录钥匙串中，让内置 app-server 能通过代理连接。
 
 ```bash
-# 监听本地 Codex App 会话，并在 dashboard 中查看
+# 启动 Codex App，并在 dashboard 中查看捕获到的后端请求
 claude-tap --tap-client codexapp
 
-# 使用自定义 Codex home 目录
-CODEX_HOME=/path/to/codex-home claude-tap --tap-client codexapp
+# 在 trace 中保留原始 WebSocket/SSE 事件数组
+claude-tap --tap-client codexapp --tap-store-stream-events
 ```
 
-`--tap-client codexapp` 会自动导入本地 transcript，并在 Codex App debug endpoint 可用时静默补充 CDP WebSocket 证据。CDP capture 是旁路观测，不是代理；如果前端没有通过 Chrome DevTools Protocol 暴露模型流量，Codex App 复盘仍以本地 session transcript 为准。
+如果 Codex App 已经在运行，请先退出它，再让 claude-tap 启动新的进程，这样新进程才能继承代理和 CA 环境。这个模式捕获实时后端流量，不再导入本地 session JSONL transcript。
 
 </details>
 
@@ -595,7 +595,7 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 --tap-no-launch          仅启动代理，不启动客户端
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-store-stream-events 捕获时把原始 SSE/WebSocket event 数组写入 trace 存储，以便查看器/导出结果展示（默认关闭）
---tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/grok/kimi/kimi-code/openclaw/codebuddy 用 reverse，agy/gemini/mimo/opencode/pi/hermes/cursor/qoder 用 forward；codexapp 是 transcript-only）
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/grok/kimi/kimi-code/openclaw/codebuddy 用 reverse，agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder 用 forward）
 --tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy 会自动执行）
 ```
 
