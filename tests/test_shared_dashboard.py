@@ -10,7 +10,9 @@ from aiohttp import web
 from claude_tap.shared_dashboard import (
     CLAUDE_TAP_VERSION,
     DEFAULT_DASHBOARD_PORT,
+    _dashboard_listening_pids_for_port,
     _dashboard_lock_path,
+    _dashboard_process_command,
     _dashboard_spawn_lock,
     _looks_like_legacy_dashboard_command,
     _spawn_dashboard_subprocess,
@@ -23,6 +25,7 @@ from claude_tap.shared_dashboard import (
     is_legacy_dashboard_healthy,
     resolve_dashboard_port,
     stop_dashboard_service,
+    stop_legacy_dashboard_process,
     stop_shared_dashboard,
 )
 from claude_tap.trace_store import resolve_db_path
@@ -403,6 +406,74 @@ def test_looks_like_legacy_dashboard_command_is_strict() -> None:
     )
 
 
+def test_dashboard_listening_pids_uses_lsof(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Result:
+        returncode = 0
+        stdout = "111\nnot-a-pid\n222\n"
+
+    calls: list[list[str]] = []
+
+    def fake_which(name: str) -> str | None:
+        return f"/usr/bin/{name}" if name == "lsof" else None
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> Result:
+        calls.append(cmd)
+        return Result()
+
+    monkeypatch.setattr("claude_tap.shared_dashboard.shutil.which", fake_which)
+    monkeypatch.setattr("claude_tap.shared_dashboard.subprocess.run", fake_run)
+
+    assert _dashboard_listening_pids_for_port(19527) == [111, 222]
+    assert calls == [["/usr/bin/lsof", "-nP", "-iTCP:19527", "-sTCP:LISTEN", "-t"]]
+
+
+def test_dashboard_listening_pids_falls_back_to_ss(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Result:
+        returncode = 0
+        stdout = 'LISTEN 0 128 127.0.0.1:19527 *:* users:(("python",pid=333,fd=6),("python",pid=444,fd=7))'
+
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/ss" if name == "ss" else None
+
+    monkeypatch.setattr("claude_tap.shared_dashboard.shutil.which", fake_which)
+    monkeypatch.setattr("claude_tap.shared_dashboard.subprocess.run", lambda *_args, **_kwargs: Result())
+
+    assert _dashboard_listening_pids_for_port(19527) == [333, 444]
+
+
+def test_dashboard_listening_pids_handles_missing_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("claude_tap.shared_dashboard.shutil.which", lambda _name: None)
+
+    assert _dashboard_listening_pids_for_port(0) == []
+    assert _dashboard_listening_pids_for_port(19527) == []
+
+
+def test_dashboard_process_command_reads_linux_proc(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_read_bytes(path: Path) -> bytes:
+        assert str(path) == "/proc/123/cmdline"
+        return b"python\0-m\0claude_tap\0dashboard\0"
+
+    monkeypatch.setattr("claude_tap.shared_dashboard.sys.platform", "linux")
+    monkeypatch.setattr("pathlib.Path.read_bytes", fake_read_bytes)
+
+    assert _dashboard_process_command(123) == "python -m claude_tap dashboard"
+
+
+def test_dashboard_process_command_falls_back_to_ps(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Result:
+        returncode = 0
+        stdout = "claude-tap dashboard --tap-live-port 19527\n"
+
+    def fake_which(name: str) -> str | None:
+        return "/bin/ps" if name == "ps" else None
+
+    monkeypatch.setattr("claude_tap.shared_dashboard.sys.platform", "darwin")
+    monkeypatch.setattr("claude_tap.shared_dashboard.shutil.which", fake_which)
+    monkeypatch.setattr("claude_tap.shared_dashboard.subprocess.run", lambda *_args, **_kwargs: Result())
+
+    assert _dashboard_process_command(123) == "claude-tap dashboard --tap-live-port 19527"
+
+
 def test_terminate_legacy_dashboard_pids_filters_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     commands = {
         111: "/usr/bin/python -m claude_tap dashboard --tap-live-port 19527",
@@ -415,6 +486,34 @@ def test_terminate_legacy_dashboard_pids_filters_commands(monkeypatch: pytest.Mo
 
     assert _terminate_legacy_dashboard_pids([111, 222], 19527) is True
     assert killed == [(111, signal.SIGTERM)]
+
+
+@pytest.mark.asyncio
+async def test_stop_legacy_dashboard_process_terminates_and_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    def fake_listening_pids(port: int) -> list[int]:
+        calls.append(("pids", port))
+        return [111]
+
+    def fake_terminate(pids: list[int], port: int) -> bool:
+        calls.append(("terminate", (pids, port)))
+        return True
+
+    async def fake_wait_stopped(host: str, port: int) -> bool:
+        calls.append(("wait", (host, port)))
+        return True
+
+    monkeypatch.setattr("claude_tap.shared_dashboard._dashboard_listening_pids_for_port", fake_listening_pids)
+    monkeypatch.setattr("claude_tap.shared_dashboard._terminate_legacy_dashboard_pids", fake_terminate)
+    monkeypatch.setattr("claude_tap.shared_dashboard.wait_for_dashboard_stopped", fake_wait_stopped)
+
+    assert await stop_legacy_dashboard_process("127.0.0.1", 19527) is True
+    assert calls == [
+        ("pids", 19527),
+        ("terminate", ([111], 19527)),
+        ("wait", ("127.0.0.1", 19527)),
+    ]
 
 
 @pytest.mark.asyncio
