@@ -602,36 +602,38 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     t0 = time.monotonic()
 
     req_body = _parse_request_body_for_trace(body)
+    trace_req_body = req_body
+    upstream_req_body = req_body
 
     upstream_body = body
     if isinstance(req_body, dict):
         normalized_req_body = _normalize_request_body_for_upstream(req_body, target)
         if normalized_req_body is not req_body:
-            req_body = normalized_req_body
-            upstream_body = json.dumps(req_body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            upstream_req_body = normalized_req_body
+            upstream_body = json.dumps(upstream_req_body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             for key in list(fwd_headers.keys()):
                 if key.lower() == "content-length":
                     del fwd_headers[key]
 
-    if _is_bedrock_gateway_request(req_body):
+    if _is_bedrock_gateway_request(upstream_req_body):
         _drop_header(fwd_headers, "anthropic-beta")
         fwd_path = _drop_query_param(fwd_path, "beta")
 
     upstream_url = build_upstream_url(target, fwd_path)
 
-    is_streaming = is_capture_only_streaming_request(request.raw_path, req_body)
+    is_streaming = is_capture_only_streaming_request(request.raw_path, trace_req_body)
 
     ctx["turn_counter"] = ctx.get("turn_counter", 0) + 1
     turn = ctx["turn_counter"]
 
-    model = req_body.get("model", "") if isinstance(req_body, dict) else ""
+    model = trace_req_body.get("model", "") if isinstance(trace_req_body, dict) else ""
     log_prefix = f"[Turn {turn}]"
     log.info(
         f"{log_prefix} → {request.method} {request.path} (model={model}, stream={is_streaming}, upstream={upstream_url})"
     )
 
-    if ctx.get("capture_only") and is_capture_only_request(request.raw_path, req_body):
-        resp_body = capture_only_response(request.raw_path, req_body)
+    if ctx.get("capture_only") and is_capture_only_request(request.raw_path, trace_req_body):
+        resp_body = capture_only_response(request.raw_path, trace_req_body)
         content_type = capture_only_content_type(request.raw_path, is_streaming)
         response_headers = {"Content-Type": content_type}
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -642,7 +644,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             request.method,
             request.raw_path,
             request.headers,
-            req_body,
+            trace_req_body,
             200,
             response_headers,
             resp_body,
@@ -651,7 +653,9 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         await writer.write(record)
         log.info(f"{log_prefix} ← 200 capture-only ({duration_ms}ms, upstream skipped)")
         if is_streaming:
-            return web.Response(body=capture_only_stream_bytes(request.raw_path, req_body), content_type=content_type)
+            return web.Response(
+                body=capture_only_stream_bytes(request.raw_path, trace_req_body), content_type=content_type
+            )
         return web.json_response(resp_body)
 
     # Request identity encoding from upstream to avoid client-side zstd decode issues
@@ -681,7 +685,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             req_id,
             turn,
             t0,
-            req_body,
+            trace_req_body,
             writer,
             log_prefix,
             upstream_base_url=target,
@@ -695,7 +699,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         req_id,
         turn,
         t0,
-        req_body,
+        trace_req_body,
         writer,
         log_prefix,
         upstream_base_url=target,

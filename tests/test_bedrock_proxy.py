@@ -303,6 +303,14 @@ async def test_reverse_proxy_strips_anthropic_beta_for_bedrock_gateway_models(
     assert len(records) == 1
     assert records[0]["request"]["path"] == "/v1/messages?beta=true"
     assert records[0]["request"]["headers"]["anthropic-beta"] == ("claude-code-20250219,structured-outputs-2025-12-15")
+    assert records[0]["request"]["body"] == {
+        "model": "bedrock/claude-opus-4-6",
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
+        "output_config": {"effort": "high"},
+        "thinking": {"type": "adaptive"},
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "hello"}],
+    }
 
 
 @pytest.mark.asyncio
