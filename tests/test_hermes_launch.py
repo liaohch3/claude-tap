@@ -277,10 +277,42 @@ async def test_run_client_hermes_reverse_sets_openai_base_url(monkeypatch) -> No
     monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/hermes")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
+    monkeypatch.delenv("CUSTOM_BASE_URL", raising=False)
 
     code = await run_client(43123, ["chat"], client="hermes", proxy_mode="reverse")
 
     assert code == 0
-    assert captured["env"]["OPENAI_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    env = captured["env"]
+    assert env["OPENAI_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    assert "ANTHROPIC_BASE_URL" not in env
+    assert "OPENROUTER_BASE_URL" not in env
+    assert "CUSTOM_BASE_URL" not in env
+    # Reverse mode for hermes must not inject the codex-only -c flag
+    assert captured["cmd"] == ("/tmp/hermes", "chat")
+
+
+@pytest.mark.asyncio
+async def test_run_client_hermes_capture_only_reverse_sets_multi_provider_urls(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/hermes")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["chat"], client="hermes", proxy_mode="reverse", capture_only=True)
+
+    assert code == 0
+    env = captured["env"]
+    assert env["OPENAI_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:43123"
+    assert env["OPENROUTER_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    assert env["CUSTOM_BASE_URL"] == "http://127.0.0.1:43123/v1"
     # Reverse mode for hermes must not inject the codex-only -c flag
     assert captured["cmd"] == ("/tmp/hermes", "chat")

@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import re
+import struct
 import time
 import uuid
 import zlib
@@ -17,9 +18,12 @@ import aiohttp
 from aiohttp import web
 from yarl import URL
 
+from claude_tap.bedrock import attach_bedrock_errors, bedrock_model_from_path, is_bedrock_eventstream_path
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
+from claude_tap.upstream import build_upstream_url, format_upstream_error
 from claude_tap.usage import normalize_usage
+from claude_tap.viewer import _decode_bedrock_eventstream_events
 
 log = logging.getLogger("claude-tap")
 
@@ -47,6 +51,7 @@ SENSITIVE_HEADER_KEYS = frozenset(
         "set-cookie",
         "set-cookie2",
         "x-api-key",
+        "x-amz-security-token",
         # Qoder/Cosy runtime headers can carry account, machine, or token-derived
         # identifiers and must not be persisted in trace evidence.
         "cosy-key",
@@ -76,6 +81,27 @@ def filter_headers(headers: dict[str, str], *, redact_keys: bool = False) -> dic
     return out
 
 
+def _parse_request_body_for_trace(body: bytes) -> object:
+    """Parse a request body for trace storage without mutating upstream bytes."""
+    if not body:
+        return None
+
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return body.decode("utf-8", errors="replace")
+
+    if isinstance(parsed, str):
+        try:
+            inner = json.loads(parsed)
+        except (json.JSONDecodeError, ValueError):
+            return parsed
+        if isinstance(inner, dict):
+            return inner
+
+    return parsed
+
+
 # ---------------------------------------------------------------------------
 # Path allowlist – only forward requests to known API endpoints.
 # Scanners / crawlers hitting the proxy with paths like /etc/passwd, /swagger,
@@ -86,6 +112,8 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     # Anthropic API (Claude Code)
     "/v1/messages",
     "/v1/complete",
+    # AWS Bedrock API (Claude Code via Bedrock)
+    "/model",
     # OpenAI API (Codex CLI)
     "/v1/responses",
     "/v1/chat/completions",
@@ -112,10 +140,21 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     "/feedback",
 )
 
+_VERTEX_ANTHROPIC_RAW_PREDICT_RE = re.compile(
+    r"^/v1/projects/[^/]+/locations/[^/]+/publishers/anthropic/models/[^/]+"
+    r"(?::(?:rawPredict|streamRawPredict)|/count-tokens:rawPredict)$"
+)
+
+
+def _is_vertex_anthropic_raw_predict_path(clean_path: str) -> bool:
+    return bool(_VERTEX_ANTHROPIC_RAW_PREDICT_RE.fullmatch(clean_path.rstrip("/")))
+
 
 def _is_allowed_path(path: str, extra_prefixes: tuple[str, ...] = ()) -> bool:
     """Check whether the request path matches a known API endpoint."""
     clean = path.split("?", 1)[0].rstrip("/")
+    if _is_vertex_anthropic_raw_predict_path(clean):
+        return True
     prefixes = ALLOWED_PATH_PREFIXES + extra_prefixes
     return any(
         clean == prefix or clean.startswith(prefix + "/") or clean.startswith(prefix + ":") for prefix in prefixes
@@ -123,6 +162,7 @@ def _is_allowed_path(path: str, extra_prefixes: tuple[str, ...] = ()) -> bool:
 
 
 _ANTHROPIC_METADATA_USER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+_BEDROCK_GATEWAY_UNSUPPORTED_BODY_FIELDS = frozenset({"context_management", "output_config"})
 
 
 def _is_deepseek_anthropic_target(target: str) -> bool:
@@ -136,6 +176,10 @@ def _is_deepseek_anthropic_target(target: str) -> bool:
 
 def _normalize_request_body_for_upstream(req_body: dict, target: str) -> dict:
     """Apply narrow upstream compatibility fixes without changing default Anthropic behavior."""
+    normalized_body = _normalize_bedrock_gateway_body(req_body)
+    if normalized_body is not req_body:
+        req_body = normalized_body
+
     if not _is_deepseek_anthropic_target(target):
         return req_body
 
@@ -153,6 +197,358 @@ def _normalize_request_body_for_upstream(req_body: dict, target: str) -> dict:
     normalized_metadata["user_id"] = f"claude_tap_{digest}"
     normalized_body["metadata"] = normalized_metadata
     return normalized_body
+
+
+def _normalize_bedrock_gateway_body(req_body: dict) -> dict:
+    if not _is_bedrock_gateway_request(req_body):
+        return req_body
+
+    normalized_body: dict | None = None
+    for key in _BEDROCK_GATEWAY_UNSUPPORTED_BODY_FIELDS:
+        if key in req_body:
+            normalized_body = dict(req_body) if normalized_body is None else normalized_body
+            normalized_body.pop(key, None)
+
+    body = normalized_body if normalized_body is not None else req_body
+    thinking = body.get("thinking")
+    if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+        normalized_body = dict(body) if normalized_body is None else normalized_body
+        normalized_body.pop("thinking", None)
+
+    return normalized_body if normalized_body is not None else req_body
+
+
+def _is_bedrock_gateway_request(req_body: object) -> bool:
+    """Return True when an Anthropic-compatible gateway routes by a Bedrock model prefix."""
+    if not isinstance(req_body, dict):
+        return False
+    model = req_body.get("model")
+    return isinstance(model, str) and model.startswith("bedrock/")
+
+
+def _drop_header(headers: dict[str, str], header_name: str) -> None:
+    target = header_name.lower()
+    for key in list(headers):
+        if key.lower() == target:
+            del headers[key]
+
+
+def _drop_query_param(raw_path: str, param_name: str) -> str:
+    path, separator, query = raw_path.partition("?")
+    if not separator:
+        return raw_path
+    kept = [part for part in query.split("&") if part.split("=", 1)[0] != param_name]
+    if not kept:
+        return path
+    return f"{path}?{'&'.join(kept)}"
+
+
+def is_capture_only_request(path: str, req_body: object) -> bool:
+    """Return whether capture-only mode should short-circuit this request.
+
+    Forward proxy clients may make unrelated HTTPS calls during startup. Prompt
+    export mode should only synthesize model API responses; everything else can
+    continue upstream and be filtered by the normal trace-skip rules.
+    """
+
+    clean_path = path.split("?", 1)[0]
+    if clean_path.startswith(("/v1/embeddings", "/embeddings", "/v1/files", "/files")):
+        return False
+    if _is_vertex_anthropic_raw_predict_path(clean_path):
+        return True
+    if clean_path.startswith(
+        (
+            "/v1/messages",
+            "/v1/complete",
+            "/model/",
+            "/v1/responses",
+            "/responses",
+            "/v1/chat/completions",
+            "/chat/completions",
+            "/v1/completions",
+            "/completions",
+            "/v1/models",
+            "/models",
+            "/v1beta/models",
+            "/v1alpha/models",
+        )
+    ):
+        return True
+    if clean_path.startswith(("/v1internal:", "/v1internal/")):
+        return "generatecontent" in clean_path.lower()
+    if isinstance(req_body, dict) and isinstance(req_body.get("request"), dict):
+        return is_capture_only_request(path, req_body["request"])
+    return isinstance(req_body, dict) and any(
+        key in req_body for key in ("system", "messages", "instructions", "input", "contents", "system_instruction")
+    )
+
+
+def is_capture_only_streaming_request(path: str, req_body: object) -> bool:
+    """Return whether a captured request expects a streaming response by path or body."""
+
+    if is_bedrock_eventstream_path(path):
+        return True
+    if _is_vertex_anthropic_raw_predict_path(path.split("?", 1)[0]) and ":streamRawPredict" in path:
+        return True
+    if "streamGenerateContent" in path:
+        return True
+    return isinstance(req_body, dict) and bool(req_body.get("stream", False))
+
+
+def capture_only_content_type(path: str, is_streaming: bool) -> str:
+    if is_bedrock_eventstream_path(path):
+        return "application/vnd.amazon.eventstream"
+    if is_streaming:
+        return "text/event-stream"
+    return "application/json"
+
+
+def capture_only_response(path: str, req_body: object) -> dict:
+    """Return a protocol-shaped success response without contacting upstream."""
+    model = req_body.get("model", "claude-tap-capture") if isinstance(req_body, dict) else "claude-tap-capture"
+    clean_path = path.split("?", 1)[0]
+    if clean_path.startswith("/model/") and clean_path.rstrip("/").endswith("/converse"):
+        return {
+            "output": {"message": {"role": "assistant", "content": [{"text": "captured"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0},
+        }
+    if _is_vertex_anthropic_raw_predict_path(clean_path) and clean_path.endswith("/count-tokens:rawPredict"):
+        return {"input_tokens": 0}
+    if clean_path.startswith("/v1/complete"):
+        return _capture_only_anthropic_completion_response(model)
+    if clean_path.startswith(("/v1/messages", "/model/")) or _is_vertex_anthropic_raw_predict_path(clean_path):
+        return {
+            "id": "msg_claude_tap_capture",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "captured"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+    if clean_path.startswith(("/v1internal:", "/v1internal/")):
+        return _capture_only_gemini_generation_response()
+    if clean_path in {"/v1/models", "/models"}:
+        return {"object": "list", "data": [{"id": str(model), "object": "model"}]}
+    if clean_path.startswith(("/v1/models/", "/models/")):
+        model_id = clean_path.rsplit("/", 1)[-1] or str(model)
+        return {"id": model_id, "object": "model", "created": 0, "owned_by": "claude-tap"}
+    if clean_path.startswith(("/v1beta/models", "/v1alpha/models")):
+        if ":" not in clean_path.rsplit("/", 1)[-1]:
+            return _capture_only_gemini_model_response(clean_path, model)
+        return _capture_only_gemini_generation_response()
+    if clean_path.startswith(("/v1/completions", "/completions")):
+        return {
+            "id": "cmpl_claude_tap_capture",
+            "object": "text_completion",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "text": "captured", "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+    if "chat/completions" in clean_path:
+        return {
+            "id": "chatcmpl_claude_tap_capture",
+            "object": "chat.completion",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "captured"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+    return {
+        "id": "resp_claude_tap_capture",
+        "object": "response",
+        "created_at": 0,
+        "model": model,
+        "status": "completed",
+        "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "captured"}]}],
+        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+    }
+
+
+def _capture_only_anthropic_completion_response(model: object) -> dict:
+    return {
+        "id": "compl_claude_tap_capture",
+        "type": "completion",
+        "model": model,
+        "completion": "captured",
+        "stop_reason": "stop_sequence",
+    }
+
+
+def _capture_only_gemini_generation_response() -> dict:
+    return {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "captured"}]},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0},
+    }
+
+
+def _capture_only_gemini_model_response(clean_path: str, model: object) -> dict:
+    if clean_path in {"/v1beta/models", "/v1alpha/models"}:
+        model_name = f"models/{model}"
+        return {"models": [_capture_only_gemini_model(model_name)]}
+
+    model_id = clean_path.rsplit("/", 1)[-1] or str(model)
+    model_name = model_id if model_id.startswith("models/") else f"models/{model_id}"
+    return _capture_only_gemini_model(model_name)
+
+
+def _capture_only_gemini_model(model_name: str) -> dict:
+    model_id = model_name.rsplit("/", 1)[-1]
+    return {
+        "name": model_name,
+        "version": model_id,
+        "displayName": model_id,
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+    }
+
+
+def capture_only_stream_bytes(path: str, req_body: object) -> bytes:
+    """Return a small provider-shaped SSE response for streaming capture-only requests."""
+
+    resp_body = capture_only_response(path, req_body)
+    clean_path = path.split("?", 1)[0]
+    if is_bedrock_eventstream_path(path):
+        return _capture_only_bedrock_eventstream_bytes(path)
+    if clean_path.startswith("/v1/complete"):
+        chunk = {**resp_body, "stop_reason": None}
+        done = {**resp_body, "completion": "", "stop_reason": "stop_sequence"}
+        return (
+            f"data: {json.dumps(chunk, separators=(',', ':'))}\n\ndata: {json.dumps(done, separators=(',', ':'))}\n\n"
+        ).encode("utf-8")
+    if clean_path.startswith("/v1/messages"):
+        return _capture_only_anthropic_message_stream_bytes(resp_body)
+    if _is_vertex_anthropic_raw_predict_path(clean_path) and clean_path.endswith(":streamRawPredict"):
+        return _capture_only_anthropic_message_stream_bytes(resp_body)
+    if clean_path.startswith(("/v1/completions", "/completions")):
+        chunk = {
+            "id": resp_body["id"],
+            "object": "text_completion",
+            "created": 0,
+            "model": resp_body["model"],
+            "choices": [{"index": 0, "text": "captured", "finish_reason": None}],
+        }
+        done = {
+            "id": resp_body["id"],
+            "object": "text_completion",
+            "created": 0,
+            "model": resp_body["model"],
+            "choices": [{"index": 0, "text": "", "finish_reason": "stop"}],
+        }
+        return (
+            f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n"
+            f"data: {json.dumps(done, separators=(',', ':'))}\n\n"
+            "data: [DONE]\n\n"
+        ).encode("utf-8")
+    if "chat/completions" in clean_path:
+        chunk = {
+            "id": resp_body["id"],
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": resp_body["model"],
+            "choices": [{"index": 0, "delta": {"content": "captured"}, "finish_reason": None}],
+        }
+        done = {
+            "id": resp_body["id"],
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": resp_body["model"],
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+        return (
+            f"data: {json.dumps(chunk, separators=(',', ':'))}\n\n"
+            f"data: {json.dumps(done, separators=(',', ':'))}\n\n"
+            "data: [DONE]\n\n"
+        ).encode("utf-8")
+    if clean_path.startswith(("/v1beta/models", "/v1alpha/models", "/v1internal:", "/v1internal/")):
+        return f"data: {json.dumps(resp_body, separators=(',', ':'))}\n\n".encode("utf-8")
+
+    created = {"type": "response.created", "response": {**resp_body, "status": "in_progress"}}
+    completed = {"type": "response.completed", "response": {**resp_body, "status": "completed"}}
+    return (
+        f"data: {json.dumps(created, separators=(',', ':'))}\n\n"
+        f"data: {json.dumps(completed, separators=(',', ':'))}\n\n"
+        "data: [DONE]\n\n"
+    ).encode("utf-8")
+
+
+def _capture_only_anthropic_message_stream_bytes(resp_body: dict) -> bytes:
+    events = [
+        ("message_start", {"type": "message_start", "message": resp_body}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": resp_body["content"][0]},
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return b"".join(
+        f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n".encode("utf-8")
+        for event, payload in events
+    )
+
+
+def _capture_only_bedrock_eventstream_bytes(path: str) -> bytes:
+    model = bedrock_model_from_path(path) or "claude-tap-capture"
+    if path.split("?", 1)[0].rstrip("/").endswith("/converse-stream"):
+        events = [
+            {"messageStart": {"role": "assistant"}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "captured"}}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+            {"metadata": {"usage": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}}},
+        ]
+        return b"".join(_capture_only_bedrock_frame(event, next(iter(event))) for event in events)
+    else:
+        events = [
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_claude_tap_capture",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model,
+                    "content": [],
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "captured"}},
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 0}},
+            {"type": "message_stop"},
+        ]
+    return b"".join(_capture_only_bedrock_frame(event) for event in events)
+
+
+def _capture_only_bedrock_frame(payload: dict, event_type: str = "chunk") -> bytes:
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    headers = b"".join(
+        _bedrock_eventstream_header(name, value)
+        for name, value in (
+            (":message-type", "event"),
+            (":event-type", event_type),
+            (":content-type", "application/json"),
+        )
+    )
+    prelude = struct.pack("!II", 16 + len(headers) + len(payload_bytes), len(headers))
+    prelude_crc = struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF)
+    message = prelude + prelude_crc + headers + payload_bytes
+    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
+
+
+def _bedrock_eventstream_header(name: str, value: str) -> bytes:
+    name_bytes = name.encode("utf-8")
+    value_bytes = value.encode("utf-8")
+    return bytes([len(name_bytes)]) + name_bytes + b"\x07" + struct.pack("!H", len(value_bytes)) + value_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -184,10 +580,9 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     # Strip path prefix (e.g. /v1) for codex client so that
     # /v1/responses -> target + /responses
     strip_prefix: str = ctx.get("strip_path_prefix", "")
-    fwd_path = request.path_qs
+    fwd_path = request.raw_path
     if strip_prefix and fwd_path.startswith(strip_prefix):
         fwd_path = fwd_path[len(strip_prefix) :] or "/"
-    upstream_url = target.rstrip("/") + "/" + fwd_path.lstrip("/")
 
     # aiohttp auto-decompresses request bodies (gzip/deflate/zstd), so
     # request.read() returns plain bytes even when Content-Encoding is set.
@@ -206,34 +601,62 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     req_id = f"req_{uuid.uuid4().hex[:12]}"
     t0 = time.monotonic()
 
-    # Parse request body
-    try:
-        req_body = json.loads(body) if body else None
-    except (json.JSONDecodeError, ValueError):
-        req_body = body.decode("utf-8", errors="replace") if body else None
+    req_body = _parse_request_body_for_trace(body)
+    trace_req_body = req_body
+    upstream_req_body = req_body
 
     upstream_body = body
     if isinstance(req_body, dict):
         normalized_req_body = _normalize_request_body_for_upstream(req_body, target)
         if normalized_req_body is not req_body:
-            req_body = normalized_req_body
-            upstream_body = json.dumps(req_body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            upstream_req_body = normalized_req_body
+            upstream_body = json.dumps(upstream_req_body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             for key in list(fwd_headers.keys()):
                 if key.lower() == "content-length":
                     del fwd_headers[key]
 
-    is_streaming = False
-    if isinstance(req_body, dict):
-        is_streaming = req_body.get("stream", False)
+    if _is_bedrock_gateway_request(upstream_req_body):
+        _drop_header(fwd_headers, "anthropic-beta")
+        fwd_path = _drop_query_param(fwd_path, "beta")
+
+    upstream_url = build_upstream_url(target, fwd_path)
+
+    is_streaming = is_capture_only_streaming_request(request.raw_path, trace_req_body)
 
     ctx["turn_counter"] = ctx.get("turn_counter", 0) + 1
     turn = ctx["turn_counter"]
 
-    model = req_body.get("model", "") if isinstance(req_body, dict) else ""
+    model = trace_req_body.get("model", "") if isinstance(trace_req_body, dict) else ""
     log_prefix = f"[Turn {turn}]"
     log.info(
         f"{log_prefix} → {request.method} {request.path} (model={model}, stream={is_streaming}, upstream={upstream_url})"
     )
+
+    if ctx.get("capture_only") and is_capture_only_request(request.raw_path, trace_req_body):
+        resp_body = capture_only_response(request.raw_path, trace_req_body)
+        content_type = capture_only_content_type(request.raw_path, is_streaming)
+        response_headers = {"Content-Type": content_type}
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        record = _build_record(
+            req_id,
+            turn,
+            duration_ms,
+            request.method,
+            request.raw_path,
+            request.headers,
+            trace_req_body,
+            200,
+            response_headers,
+            resp_body,
+            upstream_base_url=target,
+        )
+        await writer.write(record)
+        log.info(f"{log_prefix} ← 200 capture-only ({duration_ms}ms, upstream skipped)")
+        if is_streaming:
+            return web.Response(
+                body=capture_only_stream_bytes(request.raw_path, trace_req_body), content_type=content_type
+            )
+        return web.json_response(resp_body)
 
     # Request identity encoding from upstream to avoid client-side zstd decode issues
     # and to simplify SSE/text reconstruction.
@@ -248,11 +671,12 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             timeout=aiohttp.ClientTimeout(total=600, sock_read=300),
         )
     except Exception as exc:
+        error_text = format_upstream_error(exc, target_url=target, upstream_url=upstream_url)
         log.error(
-            f"{log_prefix} upstream error while requesting {upstream_url}: {exc}  "
+            f"{log_prefix} upstream error while requesting {upstream_url}: {error_text}  "
             f"-- Check that the target ({target}) is reachable."
         )
-        return web.Response(status=502, text=str(exc))
+        return web.Response(status=502, text=error_text)
 
     if is_streaming and upstream_resp.status == 200:
         resp_body = await _handle_streaming(
@@ -261,7 +685,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             req_id,
             turn,
             t0,
-            req_body,
+            trace_req_body,
             writer,
             log_prefix,
             upstream_base_url=target,
@@ -275,7 +699,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         req_id,
         turn,
         t0,
-        req_body,
+        trace_req_body,
         writer,
         log_prefix,
         upstream_base_url=target,
@@ -300,12 +724,17 @@ async def _handle_streaming(
     )
     await resp.prepare(request)
 
+    is_bedrock_stream = is_bedrock_eventstream_path(request.raw_path)
     reassembler = SSEReassembler(store_events=store_stream_events)
+    raw_chunks: list[bytes] = []
 
     try:
         async for chunk in upstream_resp.content.iter_any():
             await resp.write(chunk)
-            reassembler.feed_bytes(chunk)
+            if is_bedrock_stream:
+                raw_chunks.append(chunk)
+            else:
+                reassembler.feed_bytes(chunk)
     except (ConnectionError, asyncio.CancelledError):
         pass
 
@@ -315,9 +744,20 @@ async def _handle_streaming(
         pass
 
     duration_ms = int((time.monotonic() - t0) * 1000)
-    reconstructed = reassembler.reconstruct()
 
-    usage = normalize_usage(reconstructed.get("usage", {}) if reconstructed else {})
+    if is_bedrock_stream:
+        raw_body = b"".join(raw_chunks).decode("utf-8", errors="replace")
+        bedrock_events = _decode_bedrock_eventstream_events(raw_body)
+        for event in bedrock_events:
+            reassembler.add_event(event["event"], event["data"])
+        reconstructed = reassembler.reconstruct()
+        if not reconstructed:
+            reconstructed = raw_body
+        reconstructed = attach_bedrock_errors(reconstructed, bedrock_events)
+    else:
+        reconstructed = reassembler.reconstruct()
+
+    usage = normalize_usage(reconstructed.get("usage", {}) if isinstance(reconstructed, dict) else {})
     in_tok = usage.get("input_tokens", 0)
     out_tok = usage.get("output_tokens", 0)
     cache_read = usage.get("cache_read_input_tokens", 0)
@@ -332,7 +772,7 @@ async def _handle_streaming(
         turn,
         duration_ms,
         request.method,
-        request.path_qs,
+        request.raw_path,
         request.headers,
         req_body,
         upstream_resp.status,
@@ -384,7 +824,7 @@ async def _handle_non_streaming(
         turn,
         duration_ms,
         request.method,
-        request.path_qs,
+        request.raw_path,
         request.headers,
         req_body,
         upstream_resp.status,

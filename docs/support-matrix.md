@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-20
+last_reviewed: 2026-06-24
 source_of_truth: AGENTS.md
 ---
 
@@ -17,16 +17,25 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 |--------|-----------|--------|-------------------|-----------|--------|
 | Claude Code | API Key | `https://api.anthropic.com` | none | HTTP/SSE | Verified |
 | Claude Code | Claude-compatible gateway (`ANTHROPIC_BASE_URL` env or Claude settings) | Custom Anthropic-compatible upstream | none | HTTP/SSE | Unit-tested; DeepSeek real E2E verified |
+| Claude Code | Anthropic-compatible Bedrock gateway (`ANTHROPIC_BASE_URL` + `bedrock/...` model) | New API or equivalent gateway routed to AWS Bedrock | none | HTTP/SSE | Unit-tested; New API AWS Bedrock real E2E verified |
+| Claude Code | Google Vertex AI pass-through gateway (`CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_BASE_URL`) | Vertex rawPredict-compatible upstream | none | HTTP/SSE | Unit-tested; local E2E verified |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | HTTP/SSE | Verified |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
+| Codex App | ChatGPT account in Codex App | `codex-app://sessions` | n/a | Local session JSONL transcript import plus automatic best-effort CDP WebSocket enrichment when a Codex App debug endpoint is available | Unit-tested |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy (Google endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Gemini CLI | API key / Vertex-compatible config (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE | Unit-tested |
-| Kimi CLI | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested |
-| Kimi CLI | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
+| Kimi CLI (legacy kimi-cli) | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested (`KIMI_BASE_URL`) |
+| Kimi CLI (legacy kimi-cli) | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
+| Kimi Code CLI | `~/.kimi-code/config.toml` + OAuth (`managed:kimi-code`) | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested (`KIMI_CODE_HOME` sandbox) |
+| Kimi Code CLI | Custom `type = "kimi"` provider in config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported via `--tap-target` |
 | OpenCode | Provider creds via `opencode providers` (OpenAI OAuth and OpenCode free provider verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Real E2E verified |
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
+| MiMo Code | Provider creds via `mimo` TUI config or MiMo Platform OAuth | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
+| MiMo Code | Anthropic provider only (`--tap-proxy-mode reverse`; sets `MIMOCODE_MIMO_ONLY=false`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
+| OpenClaw | Provider creds via `~/.openclaw/openclaw.json` or `OPENCLAW_CONFIG_PATH` | Selected provider `baseUrl` patched through a temporary config file | provider-dependent | HTTP/SSE | Unit-tested |
+| OpenClaw | No patchable config (`--tap-proxy-mode reverse`) | Provider env fallback (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, or `OPENROUTER_BASE_URL`) | provider-dependent | HTTP/SSE | Unit-tested |
 | Pi | Provider creds via Pi `/login` or `PI_CODING_AGENT_DIR` auth file (`openai-codex` OAuth verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE + WebSocket | Real E2E verified |
 | Pi | Custom OpenAI-compatible setup (`--tap-proxy-mode reverse`) | `https://api.openai.com` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
@@ -43,11 +52,15 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 
 | Client | Default mode | Reason |
 |--------|--------------|--------|
-| `claude` | `reverse` | Single provider, native `ANTHROPIC_BASE_URL` env var |
+| `claude` | `reverse` | Single provider, native Claude provider base URL env vars (`ANTHROPIC_BASE_URL`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL`) |
 | `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
+| `codexapp` | `transcript` | Transcript listener for `CODEX_HOME/sessions` or `~/.codex/sessions`; no proxy is created. CDP WebSocket evidence is added automatically when Codex App exposes a debug endpoint |
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |
-| `kimi` | `reverse` | Single provider, native `KIMI_BASE_URL` env var |
+| `kimi` | `reverse` | Legacy kimi-cli; native `KIMI_BASE_URL` env var |
+| `kimi-code` | `reverse` | Patches `~/.kimi-code/config.toml` via temporary `KIMI_CODE_HOME` sandbox |
+| `mimo` | `forward` | OpenCode fork; multi-provider — forward proxy captures every upstream regardless of which env var the client honors |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
+| `openclaw` | `reverse` | Patches the selected OpenClaw provider config when possible, otherwise falls back to provider-specific base URL env vars |
 | `pi` | `forward` | Multi-provider; Pi can use OpenAI Codex OAuth and custom model registry providers, so forward proxy captures traffic without relying on a single base URL override |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
 | `cursor` | `forward` | Cursor CLI has no base URL override; forward proxy captures network traffic and local transcripts provide readable turns |
@@ -55,7 +68,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `agy` | `forward` | Antigravity uses multiple Google / Antigravity endpoints; claude-tap sets `HTTPS_PROXY` for auxiliary traffic and `CLOUD_CODE_URL` for Code Assist model traffic |
 | `codebuddy` | `reverse` | Single provider, native `CODEBUDDY_BASE_URL` env var; supports `--settings` env injection. Endpoint auto-detected from CodeBuddy's login cache |
 
-Users can always override with `--tap-proxy-mode {reverse,forward}`.
+Users can override proxy-backed clients with `--tap-proxy-mode {reverse,forward}`. `codexapp` is transcript-only, so `--tap-proxy-mode` does not apply.
 
 ## Subcommand Argv Rewrites
 
@@ -106,15 +119,21 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 
 - `test_codex_upstream_url_construction` — verifies URL construction for all 5 matrix combinations
 - `test_codex_client_reverse_proxy` — e2e with fake upstream (OAuth-like, with strip)
+- `test_build_codex_app_transcript_records_preserves_turn_context` — verifies Codex App session JSONL imports as viewer-friendly Responses records with usage, tools, and tool results
+- `test_import_codex_app_transcripts_appends_only_new_completed_records` — verifies Codex App transcript polling appends only new completed records
+- `test_cdp_recorder_writes_viewer_friendly_websocket_record` — verifies Codex App CDP WebSocket frames are reconstructed into viewer-friendly WebSocket records
+- `test_async_main_codexapp_starts_cdp_enrichment_by_default` — verifies `--tap-client codexapp` starts automatic CDP enrichment while honoring the global raw stream event storage setting
 - `test_gemini_registered_in_client_configs` — verifies Gemini CLI registration and default forward mode
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs` — verifies Gemini forward proxy launch env
 - `test_run_client_gemini_reverse_sets_both_base_url_envs` — verifies Gemini reverse proxy base URL env injection
 - `test_viewer_renders_gemini_semantic_sections` — verifies Gemini systemInstruction, contents, functionDeclarations, functionCall, functionResponse, SSE output, and token usage render as semantic viewer sections
-- `test_kimi_registered_in_client_configs` — verifies Kimi CLI registration
-- `test_kimi_client_reverse_proxy` — e2e with fake Kimi Chat Completions stream
+- `test_kimi_registered_in_client_configs` — verifies legacy Kimi CLI registration
+- `test_kimi_client_reverse_proxy` — e2e with fake Kimi Chat Completions stream (`KIMI_BASE_URL`)
+- `test_kimi_code_*` — verifies Kimi Code CLI registration, sandbox config patch, and e2e capture
 - `test_chat_completions_reasoning_content_is_mirrored_as_thinking` — verifies Kimi thinking stream rendering shape
 - `test_websocket_proxy_basic` — WS relay and trace recording
 - `test_hermes_*` — registration, parse_args default-mode resolution, forward/reverse env, argv rewrite
+- `test_openclaw_*` — verifies OpenClaw registration, selected-provider config patching, fallback env routing, and target detection
 - `test_pi_*` — registration, parse_args default-mode resolution, forward/reverse env, and argument preservation
 - `test_cursor_registered_in_client_configs` — verifies Cursor CLI registration and default forward mode
 - `test_run_client_cursor_forward_sets_proxy_ca_and_no_proxy` — verifies Cursor launch env for forward proxy mode
@@ -142,6 +161,11 @@ uv run python -m claude_tap --tap-client codex \
 uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Reply OK"
 # Verify the trace contains raw proxy records plus cursor-transcript records
 
+# Codex App
+uv run python -m claude_tap --tap-client codexapp
+# Start or continue a Codex App task and verify the dashboard receives transcript records.
+# If Codex App exposes a debug endpoint, websocket evidence is added automatically.
+
 # Qoder CLI
 uv run python -m claude_tap --tap-client qoder -- -p "Reply OK" --permission-mode dont_ask
 # Verify stdout contains the assistant response and the trace contains Qoder endpoint records
@@ -151,8 +175,11 @@ uv run python -m claude_tap --tap-client agy --tap-live
 # On first run, verify macOS prompts only for the user login keychain, not sudo/admin System keychain writes.
 # Then verify the trace contains /v1internal:streamGenerateContent model records.
 
-# Kimi CLI
+# Kimi CLI (legacy kimi-cli)
 uv run python -m claude_tap --tap-client kimi -- --thinking
+
+# Kimi Code CLI
+uv run python -m claude_tap --tap-client kimi-code -- --thinking
 # Verify the trace contains /chat/completions records and thinking/text output
 
 # Gemini CLI

@@ -207,6 +207,30 @@ def test_extract_metadata_understands_gemini_system_tools_output_and_usage() -> 
     assert meta["cache_read_input_tokens"] == 40
 
 
+def _direct_gemini_native_record() -> dict:
+    record = json.loads(json.dumps(_gemini_record()))
+    record["request"]["path"] = "/v1beta/models/gemini-3.5-flash:generateContent"
+    record["request"]["body"] = record["request"]["body"]["request"]
+    return record
+
+
+def test_extract_request_messages_normalizes_direct_gemini_native_body() -> None:
+    messages = _extract_request_messages(_direct_gemini_native_record()["request"]["body"])
+
+    assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
+    assert messages[1]["content"][0]["name"] == "run_shell_command"
+    assert messages[2]["content"][0]["tool_use_id"] == "run_shell_command_1"
+
+
+def test_extract_metadata_understands_direct_gemini_native_body() -> None:
+    meta = _extract_metadata(json.dumps(_direct_gemini_native_record(), ensure_ascii=False))
+
+    assert meta is not None
+    assert meta["model"] == "gemini-3.5-flash"
+    assert meta["tool_names"] == ["run_shell_command"]
+    assert meta["response_tool_names"] == ["run_shell_command"]
+
+
 @pytest.fixture(scope="module")
 def gemini_html_file() -> Path:
     trace_path = Path(tempfile.mktemp(suffix=".jsonl"))
@@ -271,3 +295,107 @@ def test_viewer_renders_gemini_semantic_sections(gemini_html_file: Path) -> None
     assert "Output: /repo" in detail
     assert "run_shell_command" in detail
     assert "Final OK from Gemini." in detail
+
+
+@pytest.mark.skipif(pw_missing, reason="playwright not installed")
+def test_viewer_keeps_gemini_native_paths_visible_with_chat_completions(tmp_path: Path) -> None:
+    from playwright.sync_api import sync_playwright
+
+    gemini_record = json.loads(json.dumps(_gemini_record()))
+    gemini_record["request"]["path"] = "/v1beta/models/gemini-3.5-flash:generateContent"
+    gemini_record["request"]["body"]["model"] = "gemini-3.5-flash"
+
+    chat_record = {
+        "timestamp": "2026-05-13T12:01:00+00:00",
+        "request_id": "req_grading",
+        "turn": 2,
+        "duration_ms": 456,
+        "request": {
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": {"Host": "api.openai.test"},
+            "body": {
+                "model": "gemini-3.5-flash",
+                "messages": [{"role": "user", "content": "Grade this answer."}],
+            },
+        },
+        "response": {
+            "status": 200,
+            "body": {
+                "model": "gemini-3.5-flash",
+                "choices": [{"message": {"role": "assistant", "content": "score: 0"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+            },
+        },
+    }
+
+    trace_path = tmp_path / "mixed-gemini-native-and-chat.jsonl"
+    html_path = tmp_path / "mixed-gemini-native-and-chat.html"
+    trace_path.write_text(
+        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in (gemini_record, chat_record)),
+        encoding="utf-8",
+    )
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"file://{html_path}", timeout=10000)
+        page.wait_for_selector(".sidebar-item", timeout=5000)
+
+        result = page.evaluate(
+            """() => ({
+              turns: document.querySelector('#stat-turns').textContent,
+              activePaths: Array.from(activePaths).sort(),
+              filteredPaths: filtered.map(getPath).sort(),
+              pathFilter: document.querySelector('#path-filter').innerText.replace(/\\s+/g, ' ').trim(),
+            })"""
+        )
+        browser.close()
+
+    assert result["turns"] == "2"
+    assert result["activePaths"] == [
+        "/v1/chat/completions",
+        "/v1beta/models/gemini-3.5-flash:generateContent",
+    ]
+    assert result["filteredPaths"] == result["activePaths"]
+    assert "+1 more" not in result["pathFilter"]
+
+
+@pytest.mark.skipif(pw_missing, reason="playwright not installed")
+def test_viewer_renders_direct_gemini_native_body(tmp_path: Path) -> None:
+    from playwright.sync_api import sync_playwright
+
+    trace_path = tmp_path / "direct-gemini-native.jsonl"
+    html_path = tmp_path / "direct-gemini-native.html"
+    trace_path.write_text(json.dumps(_direct_gemini_native_record(), ensure_ascii=False) + "\n", encoding="utf-8")
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"file://{html_path}", timeout=10000)
+        page.wait_for_selector(".sidebar-item", timeout=5000)
+        page.locator(".sidebar-item").first.click()
+        page.wait_for_selector("#detail .section", timeout=5000)
+
+        result = page.evaluate(
+            """() => {
+              const entry = entries[0];
+              const body = entry.request.body;
+              return {
+                roles: getMessages(body).map(message => message.role),
+                tools: getRequestTools(body).map(toolDisplayName),
+                output: getResponseOutput(entry).content,
+                detail: document.querySelector('#detail').innerText,
+              };
+            }"""
+        )
+        browser.close()
+
+    assert result["roles"] == ["user", "assistant", "tool"]
+    assert result["tools"] == ["run_shell_command"]
+    assert result["output"][1]["name"] == "run_shell_command"
+    assert "unknown" not in "\n".join(result["tools"]).lower()
+    assert "run_shell_command" in result["detail"]
+    assert "Final OK from Gemini." in result["detail"]

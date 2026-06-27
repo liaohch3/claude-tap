@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-05-20
+last_reviewed: 2026-06-24
 source_of_truth: AGENTS.md
 ---
 
@@ -17,16 +17,25 @@ English version: [Support Matrix](support-matrix.md).
 |--------|----------|----------|-------------------|------|------|
 | Claude Code | API Key | `https://api.anthropic.com` | 无 | HTTP/SSE | 已验证 |
 | Claude Code | Claude 兼容网关（`ANTHROPIC_BASE_URL` 环境变量或 Claude settings） | 自定义 Anthropic 兼容上游 | 无 | HTTP/SSE | 单测覆盖；DeepSeek 真实 E2E 已验证 |
+| Claude Code | Anthropic 兼容 Bedrock 网关（`ANTHROPIC_BASE_URL` + `bedrock/...` 模型） | New API 或同类网关代理到 AWS Bedrock | 无 | HTTP/SSE | 单测覆盖；New API AWS Bedrock 真实 E2E 已验证 |
+| Claude Code | Google Vertex AI 透传网关（`CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_BASE_URL`） | Vertex rawPredict 兼容上游 | 无 | HTTP/SSE | 单测覆盖；本地 E2E 已验证 |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | HTTP/SSE | 已验证 |
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | WebSocket | 已验证 |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | 已验证 |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | 已验证 |
+| Codex App | Codex App 中的 ChatGPT 账号 | `codex-app://sessions` | n/a | 本地 session JSONL transcript import；当 Codex App debug endpoint 可用时自动尽力补充 CDP WebSocket 证据 | 单测覆盖 |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy（Google 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | Gemini CLI | API key / Vertex 兼容配置（`--tap-proxy-mode reverse`） | `https://generativelanguage.googleapis.com` | 无 | HTTP/SSE | 单测覆盖 |
-| Kimi CLI | Kimi CLI 认证/配置 | `https://api.kimi.com/coding/v1` | 无 | HTTP/SSE Chat Completions | 单测覆盖 |
-| Kimi CLI | Kimi CLI 认证/配置 | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 配置支持 |
+| Kimi CLI（旧版 kimi-cli） | Kimi CLI 认证/配置 | `https://api.kimi.com/coding/v1` | 无 | HTTP/SSE Chat Completions | 单测覆盖（`KIMI_BASE_URL`） |
+| Kimi CLI（旧版 kimi-cli） | Kimi CLI 认证/配置 | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 配置支持 |
+| Kimi Code CLI | `~/.kimi-code/config.toml` + OAuth（`managed:kimi-code`） | `https://api.kimi.com/coding/v1` | 无 | HTTP/SSE Chat Completions | 单测覆盖（`KIMI_CODE_HOME` sandbox） |
+| Kimi Code CLI | 配置中自定义 `type = "kimi"` provider | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 支持 `--tap-target` |
 | OpenCode | 通过 `opencode providers` 配置 provider 凭据（OpenAI OAuth 与 OpenCode free provider 均已验证） | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | OpenCode | 仅 Anthropic provider（`--tap-proxy-mode reverse`） | `https://api.anthropic.com` | 无 | HTTP/SSE | 单测覆盖 |
+| MiMo Code | 通过 `mimo` TUI 配置或 MiMo Platform OAuth 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
+| MiMo Code | 仅 Anthropic provider（`--tap-proxy-mode reverse`；设置 `MIMOCODE_MIMO_ONLY=false`） | `https://api.anthropic.com` | 无 | HTTP/SSE | 单测覆盖 |
+| OpenClaw | 通过 `~/.openclaw/openclaw.json` 或 `OPENCLAW_CONFIG_PATH` 配置 provider 凭据 | 通过临时配置文件补丁被选中的 provider `baseUrl` | 取决于 provider | HTTP/SSE | 单测覆盖 |
+| OpenClaw | 无可补丁配置（`--tap-proxy-mode reverse`） | provider 环境变量 fallback（`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL`、`GOOGLE_GEMINI_BASE_URL` 或 `OPENROUTER_BASE_URL`） | 取决于 provider | HTTP/SSE | 单测覆盖 |
 | Pi | 通过 Pi `/login` 或 `PI_CODING_AGENT_DIR` auth 文件配置 provider 凭据（`openai-codex` OAuth 已验证） | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE + WebSocket | 真实 E2E 已验证 |
 | Pi | 自定义 OpenAI 兼容配置（`--tap-proxy-mode reverse`） | `https://api.openai.com` | 无 | HTTP/SSE | 单测覆盖 |
 | Hermes Agent | 通过 `~/.hermes/` 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
@@ -42,11 +51,15 @@ English version: [Support Matrix](support-matrix.md).
 
 | 客户端 | 默认模式 | 原因 |
 |--------|----------|------|
-| `claude` | `reverse` | 单 provider，原生支持 `ANTHROPIC_BASE_URL` 环境变量 |
+| `claude` | `reverse` | 单 provider，原生支持 Claude provider base URL 环境变量（`ANTHROPIC_BASE_URL`、`ANTHROPIC_BEDROCK_BASE_URL`、`ANTHROPIC_VERTEX_BASE_URL`） |
 | `codex` | `reverse` | 单 provider，原生支持 `OPENAI_BASE_URL` 环境变量 |
+| `codexapp` | `transcript` | 监听 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 的 transcript 客户端；不会创建代理。Codex App 暴露 debug endpoint 时会自动追加 CDP WebSocket 证据 |
 | `gemini` | `forward` | Google OAuth / Code Assist 会访问多个 Google 端点；forward proxy 不依赖单一 base URL，更适合作为默认 |
-| `kimi` | `reverse` | 单 provider，原生支持 `KIMI_BASE_URL` 环境变量 |
+| `kimi` | `reverse` | 旧版 kimi-cli；原生 `KIMI_BASE_URL` 环境变量 |
+| `kimi-code` | `reverse` | 通过临时 `KIMI_CODE_HOME` sandbox 补丁 `~/.kimi-code/config.toml` |
+| `mimo` | `forward` | OpenCode fork；多 provider — forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
 | `opencode` | `forward` | 多 provider；forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
+| `openclaw` | `reverse` | 尽量补丁被选中的 OpenClaw provider 配置；否则 fallback 到对应 provider 的 base URL 环境变量 |
 | `pi` | `forward` | 多 provider；Pi 可以使用 OpenAI Codex OAuth 和自定义 model registry provider，forward proxy 不依赖单一 base URL 覆盖即可捕获流量 |
 | `hermes` | `forward` | 多 provider 的 Python agent；`httpx` 与 `requests` 都原生认 `HTTPS_PROXY`，forward proxy 捕获是最自然的默认 |
 | `cursor` | `forward` | Cursor CLI 没有 base URL 覆盖能力；forward proxy 捕获网络流量，本地 transcript 提供可读对话 |
@@ -54,7 +67,7 @@ English version: [Support Matrix](support-matrix.md).
 | `agy` | `forward` | Antigravity 会访问多个 Google / Antigravity 端点；claude-tap 用 `HTTPS_PROXY` 捕获辅助流量，并用 `CLOUD_CODE_URL` 捕获 Code Assist 模型流量 |
 | `codebuddy` | `reverse` | 单 provider，原生支持 `CODEBUDDY_BASE_URL` 环境变量；支持 `--settings` 环境变量注入；上游 endpoint 自动从 CodeBuddy 登录缓存识别 |
 
-用户始终可以通过 `--tap-proxy-mode {reverse,forward}` 显式覆盖。
+用户可以通过 `--tap-proxy-mode {reverse,forward}` 覆盖有代理的客户端。`codexapp` 是 transcript-only，`--tap-proxy-mode` 不适用。
 
 ## 子命令 argv 改写
 
@@ -100,15 +113,21 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 
 - `test_codex_upstream_url_construction`：验证全部 5 个矩阵组合的 URL 构造
 - `test_codex_client_reverse_proxy`：使用 fake upstream 覆盖 OAuth 类 reverse proxy e2e
+- `test_build_codex_app_transcript_records_preserves_turn_context`：验证 Codex App session JSONL 会导入为 viewer 友好的 Responses 记录，并保留 usage、tools 和 tool results
+- `test_import_codex_app_transcripts_appends_only_new_completed_records`：验证 Codex App transcript 轮询只追加新的已完成记录
+- `test_cdp_recorder_writes_viewer_friendly_websocket_record`：验证 Codex App CDP WebSocket frame 会重建为 viewer 友好的 WebSocket 记录
+- `test_async_main_codexapp_starts_cdp_enrichment_by_default`：验证 `--tap-client codexapp` 默认启动 CDP 补充采集，并遵循全局原始 stream event 存储设置
 - `test_gemini_registered_in_client_configs`：验证 Gemini CLI 注册和默认 forward 模式
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs`：验证 Gemini forward proxy 启动环境变量
 - `test_run_client_gemini_reverse_sets_both_base_url_envs`：验证 Gemini reverse proxy base URL 环境变量注入
 - `test_viewer_renders_gemini_semantic_sections`：验证 Gemini systemInstruction、contents、functionDeclarations、functionCall、functionResponse、SSE output 和 token usage 会渲染为语义化 viewer 区块
-- `test_kimi_registered_in_client_configs`：验证 Kimi CLI 注册
-- `test_kimi_client_reverse_proxy`：使用 fake Kimi Chat Completions stream 覆盖 e2e
+- `test_kimi_registered_in_client_configs`：验证旧版 Kimi CLI 注册
+- `test_kimi_client_reverse_proxy`：使用 fake Kimi Chat Completions stream 覆盖 e2e（`KIMI_BASE_URL`）
+- `test_kimi_code_*`：验证 Kimi Code CLI 注册、sandbox 配置补丁与 e2e 捕获
 - `test_chat_completions_reasoning_content_is_mirrored_as_thinking`：验证 Kimi thinking stream 渲染形状
 - `test_websocket_proxy_basic`：验证 WebSocket relay 和 trace 记录
 - `test_hermes_*`：验证 Hermes 注册、parse_args 默认模式解析、forward/reverse 启动环境、argv 改写
+- `test_openclaw_*`：验证 OpenClaw 注册、选中 provider 配置补丁、fallback 环境变量路由和目标探测
 - `test_pi_*`：验证 Pi 注册、parse_args 默认模式解析、forward/reverse 启动环境和参数透传
 - `test_cursor_registered_in_client_configs`：验证 Cursor CLI 注册和默认 forward 模式
 - `test_run_client_cursor_forward_sets_proxy_ca_and_no_proxy`：验证 Cursor forward proxy 启动环境变量
@@ -136,6 +155,11 @@ uv run python -m claude_tap --tap-client codex \
 uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Reply OK"
 # 验证 trace 同时包含 raw proxy records 和 cursor-transcript records
 
+# Codex App
+uv run python -m claude_tap --tap-client codexapp
+# 启动或继续一个 Codex App 任务，并验证 dashboard 收到 transcript records。
+# 如果 Codex App 暴露 debug endpoint，websocket 证据会自动追加。
+
 # Qoder CLI
 uv run python -m claude_tap --tap-client qoder -- -p "Reply OK" --permission-mode dont_ask
 # 验证 stdout 包含 assistant 响应，trace 包含 Qoder 端点记录
@@ -145,8 +169,11 @@ uv run python -m claude_tap --tap-client agy --tap-live
 # 首次运行时，验证 macOS 只要求解锁用户 login keychain，不要求 sudo/admin 写 System keychain。
 # 然后验证 trace 包含 /v1internal:streamGenerateContent 模型记录。
 
-# Kimi CLI
+# Kimi CLI（旧版 kimi-cli）
 uv run python -m claude_tap --tap-client kimi -- --thinking
+
+# Kimi Code CLI
+uv run python -m claude_tap --tap-client kimi-code -- --thinking
 # 验证 trace 包含 /chat/completions 记录和 thinking/text 输出
 
 # Gemini CLI

@@ -15,8 +15,9 @@ from aiohttp import web
 from aiohttp.helpers import get_env_proxy_for_url
 from yarl import URL
 
-from claude_tap.proxy import filter_headers
+from claude_tap.proxy import capture_only_response, filter_headers, is_capture_only_request
 from claude_tap.trace import TraceWriter
+from claude_tap.upstream import build_upstream_url, format_upstream_error
 
 log = logging.getLogger("claude-tap")
 
@@ -71,7 +72,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     fwd_path = request.path_qs
     if strip_prefix and fwd_path.startswith(strip_prefix):
         fwd_path = fwd_path[len(strip_prefix) :] or "/"
-    upstream_url = target.rstrip("/") + "/" + fwd_path.lstrip("/")
+    upstream_url = build_upstream_url(target, fwd_path)
 
     # Convert HTTP scheme to WebSocket scheme for upstream
     if upstream_url.startswith("https://"):
@@ -100,6 +101,19 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
     turn = ctx["turn_counter"]
     log_prefix = f"[Turn {turn}]"
 
+    if ctx.get("capture_only"):
+        return await _handle_capture_only_websocket(
+            request=request,
+            writer=writer,
+            target=target,
+            protocols=protocols,
+            req_id=req_id,
+            turn=turn,
+            t0=t0,
+            log_prefix=log_prefix,
+            store_stream_events=store_stream_events,
+        )
+
     # Resolve proxy from env — aiohttp ws_connect ignores trust_env
     proxy_settings = _get_ws_proxy_settings(upstream_ws_url) if session.trust_env else None
     ws_connect_kwargs: dict[str, object] = {}
@@ -122,7 +136,7 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         )
     except Exception as exc:
         duration_ms = int((time.monotonic() - t0) * 1000)
-        error_message = str(exc) or exc.__class__.__name__
+        error_message = format_upstream_error(exc, target_url=target, upstream_url=upstream_ws_url)
         log.error(f"{log_prefix} upstream WS connect to {upstream_ws_url} failed: {error_message}")
         record = _build_ws_record(
             req_id=req_id,
@@ -296,6 +310,70 @@ async def _handle_websocket(request: web.Request) -> web.StreamResponse:
         f"{server_message_count} upstream→client)"
     )
 
+    return client_ws
+
+
+async def _handle_capture_only_websocket(
+    *,
+    request: web.Request,
+    writer: TraceWriter,
+    target: str,
+    protocols: tuple[str, ...],
+    req_id: str,
+    turn: int,
+    t0: float,
+    log_prefix: str,
+    store_stream_events: bool,
+) -> web.WebSocketResponse:
+    client_ws = web.WebSocketResponse(protocols=protocols)
+    await client_ws.prepare(request)
+
+    client_messages: list[str] = []
+    deadline = time.monotonic() + 30
+    while True:
+        timeout = max(0.1, deadline - time.monotonic())
+        try:
+            msg = await asyncio.wait_for(client_ws.receive(), timeout=timeout)
+        except asyncio.TimeoutError:
+            break
+
+        if msg.type == aiohttp.WSMsgType.TEXT:
+            client_messages.append(msg.data)
+            req_body = _reconstruct_ws_request_body(client_messages) or {}
+            if is_prompt_bearing_ws_request_body(req_body):
+                break
+            if time.monotonic() >= deadline:
+                break
+            continue
+        if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
+            break
+        if msg.type == aiohttp.WSMsgType.ERROR:
+            break
+
+    req_body = _reconstruct_ws_request_body(client_messages) or {}
+    response_body = capture_only_response(request.path_qs, req_body)
+    response_messages = [
+        json.dumps({"type": "response.created", "response": {**response_body, "status": "in_progress"}}),
+        json.dumps({"type": "response.completed", "response": {**response_body, "status": "completed"}}),
+    ]
+    for message in response_messages:
+        await client_ws.send_str(message)
+    await client_ws.close()
+
+    duration_ms = int((time.monotonic() - t0) * 1000)
+    record = _build_ws_record(
+        req_id=req_id,
+        turn=turn,
+        duration_ms=duration_ms,
+        path_qs=request.path_qs,
+        req_headers=request.headers,
+        client_messages=client_messages,
+        server_messages=response_messages,
+        upstream_base_url=target,
+        store_stream_events=store_stream_events,
+    )
+    await writer.write(record)
+    log.info(f"{log_prefix} ← WS capture-only ({duration_ms}ms, upstream skipped)")
     return client_ws
 
 
@@ -499,3 +577,33 @@ def reconstruct_ws_response_body(ws_events: list[dict]) -> dict | None:
 def reconstruct_ws_request_body(client_messages: list[str]) -> dict | None:
     """Public wrapper for websocket request-body reconstruction."""
     return _reconstruct_ws_request_body(client_messages)
+
+
+def is_prompt_bearing_ws_request_body(body: dict | None) -> bool:
+    """Return whether a reconstructed WebSocket request contains an actual prompt."""
+    if not isinstance(body, dict):
+        return False
+    if not is_capture_only_request("", body):
+        return False
+    for key in ("system", "instructions", "system_instruction", "systemInstruction", "messages", "contents", "prompt"):
+        if body.get(key):
+            return True
+    input_value = body.get("input")
+    if isinstance(input_value, str):
+        return bool(input_value.strip())
+    if isinstance(input_value, list):
+        return any(_ws_input_item_is_prompt(item) for item in input_value)
+    nested = body.get("request")
+    return isinstance(nested, dict) and is_prompt_bearing_ws_request_body(nested)
+
+
+def _ws_input_item_is_prompt(item: object) -> bool:
+    if isinstance(item, str):
+        return bool(item.strip())
+    if not isinstance(item, dict):
+        return False
+    if item.get("type") == "function_call_output":
+        return False
+    if item.get("role") in {"user", "developer", "system"}:
+        return True
+    return any(key in item for key in ("content", "text", "input_text"))

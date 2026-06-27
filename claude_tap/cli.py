@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import logging
+import os
+import shlex
 
 # Keep the stdlib module object available as claude_tap.cli.shutil for
 # existing tests and private integrations that monkeypatch shutil.which there.
@@ -14,6 +17,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import web
@@ -49,10 +53,17 @@ from claude_tap.cli_update import (
     _build_update_command,
     _check_pypi_version,
     _detect_installer,
+    _maybe_start_background_update,
     _start_background_update,
     _version_tuple,
     parse_update_args,
     update_main,
+)
+from claude_tap.codex_app_cdp import CODEX_APP_CDP_DEFAULT_ENDPOINT, watch_codex_app_cdp
+from claude_tap.codex_app_transcript import (
+    CodexAppTranscriptSessionRegistry,
+    codex_app_sessions_dir,
+    watch_codex_app_transcripts_to_sessions,
 )
 from claude_tap.cursor_transcript import import_cursor_transcripts
 from claude_tap.forward_proxy import ForwardProxyServer
@@ -64,8 +75,9 @@ from claude_tap.shared_dashboard import (
     dashboard_url,
     ensure_shared_dashboard,
     is_dashboard_healthy,
-    is_legacy_dashboard_healthy,
     resolve_dashboard_port,
+    stop_dashboard_service,
+    stop_incompatible_dashboard_if_running,
 )
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
@@ -79,6 +91,52 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 log = logging.getLogger("claude-tap")
+
+
+class _LazyTraceWriter:
+    """Create a trace session only when side-channel capture writes a record."""
+
+    def __init__(self, *, client: str, proxy_mode: str, metadata: dict[str, str]):
+        self._client = client
+        self._proxy_mode = proxy_mode
+        self._metadata = metadata
+        self._store = get_trace_store()
+        self._writer: TraceWriter | None = None
+        self.session_id: str | None = None
+
+    @property
+    def count(self) -> int:
+        return self._writer.count if self._writer is not None else 0
+
+    async def write(self, record: dict) -> None:
+        await self._ensure_writer().write(record)
+
+    async def write_next_turn(self, record: dict) -> None:
+        await self._ensure_writer().write_next_turn(record)
+
+    def close(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
+
+    def get_summary(self) -> dict:
+        if self._writer is not None:
+            return self._writer.get_summary()
+        return {
+            "api_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_create_tokens": 0,
+            "models_used": {},
+            "has_error": False,
+        }
+
+    def _ensure_writer(self) -> TraceWriter:
+        if self._writer is None:
+            self.session_id = self._store.create_session(client=self._client, proxy_mode=self._proxy_mode)
+            self._writer = TraceWriter(self.session_id, metadata=self._metadata, store=self._store)
+        return self._writer
+
 
 try:
     from importlib.metadata import version as _pkg_version
@@ -109,6 +167,7 @@ _CLI_COMPAT_EXPORTS = (
     _read_settings_env_base_url,
     _selected_codex_provider_base_url,
     _settings_arg,
+    _start_background_update,
     _toml_dotted_key_segment,
     parse_update_args,
 )
@@ -120,7 +179,64 @@ def _open_browser(url: str) -> None:
 
 
 async def _is_dashboard_reusable(host: str, port: int) -> bool:
-    return await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port)
+    return await is_dashboard_healthy(host, port)
+
+
+def _dashboard_stop_command(host: str, port: int) -> str:
+    parts = ["claude-tap", "dashboard", "stop"]
+    if port != DEFAULT_DASHBOARD_PORT:
+        parts.extend(["--tap-live-port", str(port)])
+    if host != "127.0.0.1":
+        parts.extend(["--tap-host", host])
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+_CLAUDE_EXECUTABLE_NAMES = {"claude", "claude.exe", "claude.cmd", "claude.bat"}
+
+
+def _loopback_target_host(target: str | None) -> str | None:
+    """Return the host of an upstream target that resolves to the local loopback.
+
+    Covers the whole IPv4 loopback block (127.0.0.0/8), IPv6 ::1, and the
+    "localhost" hostname. Returns None for remote or unparseable targets.
+
+    A loopback upstream (e.g. a local Agent Maestro/relay) must not be routed
+    through a system proxy picked up via trust_env, or aiohttp tunnels the call
+    through the proxy and the connection is reset (ServerDisconnectedError).
+    """
+    if not target:
+        return None
+    host = urlparse(target).hostname
+    if host is None:
+        return None
+    if host.lower() == "localhost":
+        return host
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return host
+    except ValueError:
+        return None
+    return None
+
+
+def _looks_like_claude_binary_path(value: str) -> bool:
+    if not value or value.startswith("-"):
+        return False
+    # VSCode's claudeProcessWrapper passes the bundled Claude binary path as
+    # argv[0]. Require a path-looking file so normal prompts/dirs named
+    # "claude" are not silently stripped or executed.
+    if "/" not in value and "\\" not in value and not (len(value) > 1 and value[1] == ":"):
+        return False
+    path = Path(value)
+    return path.name.lower() in _CLAUDE_EXECUTABLE_NAMES and path.is_file()
+
+
+def _extract_wrapped_client_command(client: str, args: list[str]) -> tuple[str | None, list[str]]:
+    if client != "claude" or not args:
+        return None, args
+    if _looks_like_claude_binary_path(args[0]):
+        return args[0], args[1:]
+    return None, args
 
 
 def _trust_ca_for_current_user(ca_cert_path: Path) -> int:
@@ -180,22 +296,33 @@ async def async_main(args: argparse.Namespace):
 
     store = get_trace_store()
     trace_metadata = {"client": args.client, "proxy_mode": args.proxy_mode}
+    cfg = CLIENT_CONFIGS[args.client]
+    transcript_only = cfg.transcript_only
 
     ca_cert_path: Path | None = None
     ca_key_path: Path | None = None
-    if args.proxy_mode == "forward":
+    if args.proxy_mode == "forward" and not transcript_only:
         ca_cert_path, ca_key_path = ensure_ca()
         trust_result = _ensure_ca_trust_for_forward_proxy(args, ca_cert_path)
         if trust_result != 0:
             return trust_result
 
-    session_id = store.create_session(client=args.client, proxy_mode=args.proxy_mode)
+    session_id: str | None = None
+    writer: TraceWriter | None = None
+    transcript_registry: CodexAppTranscriptSessionRegistry | None = None
+    cdp_writer: _LazyTraceWriter | None = None
+    if transcript_only:
+        transcript_registry = CodexAppTranscriptSessionRegistry(store=store, metadata=trace_metadata)
+        cdp_writer = _LazyTraceWriter(client=args.client, proxy_mode=args.proxy_mode, metadata=trace_metadata)
+    else:
+        session_id = store.create_session(client=args.client, proxy_mode=args.proxy_mode)
+        writer = TraceWriter(session_id, live_server=None, metadata=trace_metadata, store=store)
 
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
+    dashboard_host = args.host
+    dashboard_port = resolve_dashboard_port(args.live_port)
     if args.live_viewer:
-        dashboard_host = args.host
-        dashboard_port = resolve_dashboard_port(args.live_port)
         try:
             dashboard_url_value, spawned = await ensure_shared_dashboard(
                 host=dashboard_host,
@@ -211,36 +338,76 @@ async def async_main(args: argparse.Namespace):
         except RuntimeError as exc:
             print(f"⚠️  {exc}", file=sys.stderr)
 
-    writer = TraceWriter(session_id, live_server=None, metadata=trace_metadata, store=store)
-
     # Proxy logs go to SQLite, not terminal (avoids polluting Claude TUI)
-    sqlite_handler = SQLiteLogHandler(session_id, store=store)
-    sqlite_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
-    log.addHandler(sqlite_handler)
-    log.setLevel(logging.DEBUG)
-    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
-    aiohttp_server_log = logging.getLogger("aiohttp.server")
-    aiohttp_server_log.addHandler(sqlite_handler)
-    aiohttp_server_log.propagate = False
-    asyncio_log = logging.getLogger("asyncio")
-    asyncio_log.addHandler(sqlite_handler)
-    asyncio_log.propagate = False
+    sqlite_handler: SQLiteLogHandler | None = None
+    if session_id is not None:
+        sqlite_handler = SQLiteLogHandler(session_id, store=store)
+        sqlite_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+        log.addHandler(sqlite_handler)
+        log.setLevel(logging.DEBUG)
+        logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+        aiohttp_server_log = logging.getLogger("aiohttp.server")
+        aiohttp_server_log.addHandler(sqlite_handler)
+        aiohttp_server_log.propagate = False
+        asyncio_log = logging.getLogger("asyncio")
+        asyncio_log.addHandler(sqlite_handler)
+        asyncio_log.propagate = False
 
-    # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY) for
-    # outbound upstream requests. This is important when users route traffic
-    # through tools like Clash/VPN.
-    session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
+    # Proxy clients create this lazily; transcript-only clients do not need an
+    # outbound upstream session.
+    session: aiohttp.ClientSession | None = None
 
     # Forward proxy mode: raw TCP server with CONNECT/TLS termination
     # Reverse proxy mode: aiohttp web app (current behavior)
     forward_server: ForwardProxyServer | None = None
     runner: web.AppRunner | None = None
+    codex_app_cdp_task: asyncio.Task | None = None
     exit_code = 0
     client_started_at = time.time()
+    capture_only = bool(getattr(args, "export_prompt", None))
+    if capture_only:
+        print("📝 Prompt export mode: upstream calls are skipped after capture.")
     try:
-        if args.proxy_mode == "forward":
+        if transcript_only:
+            sessions_dir = codex_app_sessions_dir()
+            print(f"🔍 claude-tap v{__version__} listening for {cfg.label} sessions in {sessions_dir}")
+            print("   Each Codex App query is recorded as a separate dashboard trace.")
+            print("   Keep Codex App running; debug WebSocket evidence is added automatically when available.")
+            assert cdp_writer is not None
+            codex_app_cdp_task = asyncio.create_task(
+                watch_codex_app_cdp(
+                    cdp_writer,
+                    endpoint=getattr(args, "codexapp_cdp_endpoint", CODEX_APP_CDP_DEFAULT_ENDPOINT),
+                    store_stream_events=args.store_stream_events,
+                )
+            )
+        else:
+            # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY)
+            # for outbound upstream requests so users routing through Clash/VPN
+            # keep working. A loopback upstream (e.g. a local Agent Maestro/relay)
+            # must NOT be tunneled through that proxy, or aiohttp resets the
+            # connection (ServerDisconnectedError -> HTTP 502). Add only the
+            # loopback host to NO_PROXY so the bypass is per-host: remote traffic
+            # (including forward-mode CONNECT requests sharing this session) still
+            # honors the user's proxy.
+            loopback_host = _loopback_target_host(args.target)
+            if loopback_host is not None:
+                _extend_no_proxy(os.environ, (loopback_host,))
+            session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
+
+        if transcript_only:
+            print("📁 Trace sessions: one per Codex App query")
+            print(f"🗄️  Trace database: {resolve_db_path()}")
+            assert transcript_registry is not None
+            try:
+                await watch_codex_app_transcripts_to_sessions(transcript_registry, since=client_started_at)
+            except asyncio.CancelledError:
+                pass
+        elif args.proxy_mode == "forward":
             assert ca_cert_path is not None
             assert ca_key_path is not None
+            assert session is not None
+            assert writer is not None
             ca = CertificateAuthority(ca_cert_path, ca_key_path)
             forward_server = ForwardProxyServer(
                 host=args.host,
@@ -251,11 +418,14 @@ async def async_main(args: argparse.Namespace):
                 local_reverse_target=args.target,
                 local_reverse_allowed_path_prefixes=CLIENT_CONFIGS[args.client].forward_base_url_allowed_path_prefixes,
                 store_stream_events=args.store_stream_events,
+                capture_only=capture_only,
             )
             actual_port = await forward_server.start()
             print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
             print(f"   CA cert: {ca_cert_path}")
         else:
+            assert session is not None
+            assert writer is not None
             app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
             app["trace_ctx"] = {
                 "target_url": args.target,
@@ -264,6 +434,7 @@ async def async_main(args: argparse.Namespace):
                 "turn_counter": 0,
                 "extra_allowed_path_prefixes": tuple(args.extra_allowed_paths),
                 "store_stream_events": args.store_stream_events,
+                "capture_only": capture_only,
                 **_reverse_proxy_trace_options(args.client, args.target),
             }
             app.router.add_route("*", "/{path_info:.*}", proxy_handler)
@@ -280,41 +451,44 @@ async def async_main(args: argparse.Namespace):
                 actual_port = args.port
             print(f"🔍 claude-tap v{__version__} listening on http://{args.host}:{actual_port}")
 
-        print(f"📁 Trace session: {session_id}")
-        print(f"🗄️  Trace database: {resolve_db_path()}")
+        if not transcript_only:
+            print(f"📁 Trace session: {session_id}")
+            print(f"🗄️  Trace database: {resolve_db_path()}")
 
-        # Background update check
-        if not args.no_update_check:
-            try:
-                latest = await _check_pypi_version()
-                if latest and _version_tuple(latest) > _version_tuple(__version__):
-                    print(f"⬆️  Update available: {__version__} → {latest}")
-                    if not args.no_auto_update:
-                        installer = _detect_installer()
-                        _start_background_update(installer)
-                        print(f"   Downloading update in background ({installer})...")
-            except Exception:
-                pass
+            # Background update check
+            if not args.no_update_check:
+                try:
+                    latest = await _check_pypi_version()
+                    if latest and _version_tuple(latest) > _version_tuple(__version__):
+                        print(f"⬆️  Update available: {__version__} → {latest}")
+                        _maybe_start_background_update(
+                            no_auto_update=args.no_auto_update,
+                            dashboard_stop_command=_dashboard_stop_command(dashboard_host, dashboard_port),
+                        )
+                except Exception:
+                    pass
 
-        if not args.no_launch:
-            client_started_at = time.time()
-            try:
-                exit_code = await run_client(
-                    actual_port,
-                    args.claude_args,
-                    client=args.client,
-                    proxy_mode=args.proxy_mode,
-                    ca_cert_path=ca_cert_path,
-                )
-            except asyncio.CancelledError:
-                pass
-        else:
-            print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
-            try:
-                while True:
-                    await asyncio.sleep(3600)
-            except asyncio.CancelledError:
-                pass
+            if not args.no_launch:
+                client_started_at = time.time()
+                try:
+                    exit_code = await run_client(
+                        actual_port,
+                        args.claude_args,
+                        client=args.client,
+                        proxy_mode=args.proxy_mode,
+                        ca_cert_path=ca_cert_path,
+                        client_cmd=getattr(args, "client_cmd", None),
+                        capture_only=capture_only,
+                    )
+                except asyncio.CancelledError:
+                    pass
+            else:
+                print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
+                try:
+                    while True:
+                        await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    pass
     finally:
         if forward_server:
             try:
@@ -328,31 +502,80 @@ async def async_main(args: argparse.Namespace):
                 await runner.cleanup()
             except Exception:
                 pass
+        if codex_app_cdp_task:
+            codex_app_cdp_task.cancel()
+            try:
+                await asyncio.wait_for(codex_app_cdp_task, timeout=5)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
 
         # Shared dashboard runs in a detached process; nothing to stop here.
-        try:
-            await asyncio.wait_for(session.close(), timeout=5)
-        except asyncio.TimeoutError:
-            log.warning("Timed out closing upstream HTTP session")
-        except Exception:
-            pass
+        if session is not None:
+            try:
+                await asyncio.wait_for(session.close(), timeout=5)
+            except asyncio.TimeoutError:
+                log.warning("Timed out closing upstream HTTP session")
+            except Exception:
+                pass
 
         if args.client == "cursor" and not args.no_launch:
+            assert writer is not None
             imported = await import_cursor_transcripts(writer, since=client_started_at)
             if imported:
                 print(f"   Cursor transcript turns: {imported}")
 
-        writer.close()
+        if transcript_registry is not None:
+            transcript_registry.close()
+        if cdp_writer is not None:
+            cdp_writer.close()
+        if writer is not None:
+            writer.close()
+
+        prompt_export_rc: int | None = None
+        if args.export_prompt and session_id is not None:
+            prompt_export_rc = _export_prompt_from_session(store, session_id, args.export_prompt)
 
         if args.max_traces > 0:
-            cleaned = cleanup_trace_sessions(args.max_traces, protected_session_id=session_id)
+            protected_session_ids = set(transcript_registry.session_ids) if transcript_registry is not None else set()
+            if cdp_writer is not None and cdp_writer.session_id:
+                protected_session_ids.add(cdp_writer.session_id)
+            cleaned = cleanup_trace_sessions(
+                args.max_traces,
+                protected_session_id=session_id,
+                protected_session_ids=protected_session_ids or None,
+            )
             if cleaned:
                 print(f"\n🧹 Cleaned up {cleaned} old trace session(s)")
 
         # Print summary with cost estimation
-        stats = writer.get_summary()
+        if transcript_registry is not None:
+            stats = transcript_registry.get_summary()
+            if cdp_writer is not None:
+                cdp_stats = cdp_writer.get_summary()
+                stats["api_calls"] += cdp_stats["api_calls"]
+                stats["input_tokens"] += cdp_stats["input_tokens"]
+                stats["output_tokens"] += cdp_stats["output_tokens"]
+                stats["cache_read_tokens"] += cdp_stats["cache_read_tokens"]
+                stats["cache_create_tokens"] += cdp_stats["cache_create_tokens"]
+                stats["has_error"] = bool(stats["has_error"] or cdp_stats["has_error"])
+                for model, count in cdp_stats["models_used"].items():
+                    stats["models_used"][model] = stats["models_used"].get(model, 0) + count
+        elif writer is not None:
+            stats = writer.get_summary()
+        else:
+            stats = {
+                "api_calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_create_tokens": 0,
+                "models_used": {},
+                "has_error": False,
+            }
         print("\n📊 Trace summary:")
         print(f"   API calls: {stats['api_calls']}")
+        if transcript_registry is not None:
+            print(f"   Query sessions: {len(transcript_registry.session_ids)}")
 
         # Token breakdown
         total_tokens = stats["input_tokens"] + stats["output_tokens"]
@@ -364,12 +587,47 @@ async def async_main(args: argparse.Namespace):
                 print(f" / {stats['cache_create_tokens']:,} cache_write", end="")
             print()
 
-        print(f"   Session: {session_id}")
+        if session_id is not None:
+            print(f"   Session: {session_id}")
         print(f"   Database: {resolve_db_path()}")
         if dashboard_url_value:
             print(f"   Dashboard: {dashboard_url_value}")
+            print(f"   Stop dashboard: {_dashboard_stop_command(dashboard_host, dashboard_port)}")
+
+        if prompt_export_rc is not None:
+            if prompt_export_rc != 0:
+                exit_code = 1
 
     return exit_code
+
+
+def _export_prompt_from_session(store, session_id: str, output: str) -> int:
+    from claude_tap.prompt_snapshot import render_prompt_markdown, snapshot_from_records
+
+    try:
+        text = render_prompt_markdown(snapshot_from_records(store.load_records(session_id)))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if output == "-":
+        print(text, end="")
+        return 0
+
+    path = Path(output).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    print(f"📝 Prompt snapshot: {path}")
+    trace_path = _prompt_trace_path(path)
+    trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
+    print(f"🧾 Raw trace: {trace_path}")
+    return 0
+
+
+def _prompt_trace_path(prompt_path: Path) -> Path:
+    if prompt_path.name in {"prompt.md", "prompt.markdown", "system.md", "system.markdown"}:
+        return prompt_path.with_name("trace.jsonl")
+    return prompt_path.with_name(f"{prompt_path.stem}.trace.jsonl")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -382,9 +640,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
         description=(
-            "Trace Claude Code, Codex CLI, Gemini CLI, Kimi CLI, OpenCode, Pi, Hermes Agent, "
-            "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy. All flags not listed below are "
-            "forwarded to the selected client."
+            "Trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, "
+            "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy or transcript import. "
+            "All flags not listed below are forwarded to the selected client."
         ),
         epilog=(
             "claude code:\n"
@@ -404,12 +662,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # With model and full auto-approval\n"
             "  claude-tap --tap-client codex -- --model codex-mini-latest --full-auto\n"
             "\n"
-            "kimi cli:\n"
-            "  # Uses KIMI_BASE_URL and forwards to Kimi Code by default\n"
+            "codex app:\n"
+            "  # Listen to local Codex App session JSONL files under CODEX_HOME / ~/.codex\n"
+            "  claude-tap --tap-client codexapp\n"
+            "\n"
+            "kimi cli (legacy kimi-cli; uses shell KIMI_BASE_URL):\n"
             "  claude-tap --tap-client kimi\n"
             "  claude-tap --tap-client kimi -- --thinking\n"
-            "  # Use Moonshot Open Platform instead of Kimi Code\n"
             "  claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1\n"
+            "\n"
+            "kimi-code cli (MoonshotAI/kimi-code; patches ~/.kimi-code/config.toml via sandbox):\n"
+            "  claude-tap --tap-client kimi-code\n"
+            "  claude-tap --tap-client kimi-code -- --thinking\n"
+            "  claude-tap --tap-client kimi-code --tap-target https://api.moonshot.ai/v1\n"
             "\n"
             "gemini cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client gemini -- -p "hello"\n'
@@ -421,6 +686,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client opencode\n"
             "  # Force reverse mode (single ANTHROPIC_BASE_URL provider only)\n"
             "  claude-tap --tap-client opencode --tap-proxy-mode reverse\n"
+            "\n"
+            "mimo (MiMo Code — OpenCode fork; defaults to forward proxy mode):\n"
+            "  # Forward proxy captures every provider MiMo Code talks to\n"
+            "  claude-tap --tap-client mimo\n"
+            "  # Reverse mode — single Anthropic provider with mimo-only disabled\n"
+            "  claude-tap --tap-client mimo --tap-proxy-mode reverse\n"
+            "\n"
+            "openclaw:\n"
+            "  # Reads OpenClaw config and points the selected provider at the local proxy\n"
+            "  claude-tap --tap-client openclaw -- agent\n"
             "\n"
             "pi (multi-provider; defaults to forward proxy mode):\n"
             "  # Forward proxy captures OpenAI Codex OAuth and other providers\n"
@@ -461,6 +736,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "export traces:\n"
             "  claude-tap export trace.jsonl              Export to markdown\n"
             "  claude-tap export trace.jsonl -o out.md    Export to file\n"
+            "  claude-tap export trace.jsonl --format prompt-md -o prompt.md Export prompt snapshot\n"
             "  claude-tap export trace.jsonl --format json Export as JSON\n"
             "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
             "\n"
@@ -470,6 +746,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "\n"
             "dashboard:\n"
             "  claude-tap dashboard                       Browse trace history\n"
+            "  claude-tap dashboard stop                  Stop the shared dashboard service\n"
             "  claude-tap dashboard --tap-live-port 3000  Use a fixed dashboard port\n"
             "\n"
             "trust local CA:\n"
@@ -510,8 +787,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex/kimi/codebuddy, "
-            "'forward' for agy/gemini/opencode/pi/hermes/cursor/qoder."
+            "Default depends on the client: 'reverse' for claude/codex/kimi/kimi-code/openclaw/codebuddy, "
+            "'forward' for agy/gemini/mimo/opencode/pi/hermes/cursor/qoder. "
+            "codexapp is transcript-only and does not use this option."
         ),
     )
     proxy_group.add_argument(
@@ -533,6 +811,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="extra_allowed_paths",
         metavar="PREFIX",
         help="Extra path prefix to allow through the proxy (can be repeated, e.g. --tap-allow-path /custom/api)",
+    )
+    proxy_group.add_argument(
+        "--tap-codexapp-cdp-endpoint",
+        default=CODEX_APP_CDP_DEFAULT_ENDPOINT,
+        dest="codexapp_cdp_endpoint",
+        help=argparse.SUPPRESS,
     )
 
     # -- Viewer options --
@@ -587,6 +871,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Persist raw SSE/WebSocket stream events in trace storage and viewer/export output (default: off)",
     )
     storage_group.add_argument(
+        "--tap-export-prompt",
+        metavar="PATH",
+        default=None,
+        dest="export_prompt",
+        help=(
+            "Export the captured prompt surface to Markdown after this run, plus a raw trace JSONL next to it. "
+            "This mode records the request and returns a local success response without contacting upstream."
+        ),
+    )
+    storage_group.add_argument(
         "--tap-no-update-check",
         action="store_true",
         dest="no_update_check",
@@ -602,6 +896,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Strip leading "--" separator if present (argparse leaves it in remainder)
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
+    args.client_cmd, claude_args = _extract_wrapped_client_command(args.client, claude_args)
+    if any(arg == "--tap-codexapp-cdp-capture" for arg in claude_args):
+        tap_parser.error(
+            "--tap-codexapp-cdp-capture was removed; Codex App CDP enrichment runs automatically "
+            "with --tap-client codexapp"
+        )
     args.claude_args = claude_args
     # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
     # 127.0.0.1 otherwise (launching the client locally).
@@ -610,13 +910,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.target is None:
         if args.client == "codex":
             args.target = _detect_codex_target(claude_args)
+        elif args.client == "kimi-code":
+            args.target = TARGET_DETECTORS["kimi-code"](claude_args)
+        elif args.client == "openclaw":
+            args.target = TARGET_DETECTORS["openclaw"](claude_args)
         else:
             detector = TARGET_DETECTORS.get(args.client)
             args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
-    if args.proxy_mode is None:
+    if CLIENT_CONFIGS[args.client].transcript_only:
+        if args.proxy_mode is not None:
+            tap_parser.error("--tap-proxy-mode does not apply to transcript-only clients")
         args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
+    elif args.proxy_mode is None:
+        args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
+    if args.trust_ca and CLIENT_CONFIGS[args.client].transcript_only:
+        tap_parser.error("--tap-trust-ca does not apply to transcript-only clients")
     if args.trust_ca and args.proxy_mode != "forward":
         tap_parser.error("--tap-trust-ca only applies to forward proxy mode")
+    if args.codexapp_cdp_endpoint != CODEX_APP_CDP_DEFAULT_ENDPOINT and args.client != "codexapp":
+        tap_parser.error("--tap-codexapp-cdp-endpoint only applies to --tap-client codexapp")
 
     # Validate --tap-allow-path prefixes
     for prefix in args.extra_allowed_paths:
@@ -637,6 +949,12 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="claude-tap dashboard",
         description="Open a local claude-tap dashboard for browsing trace history.",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["stop", "quit"],
+        help="Use 'stop' or 'quit' to stop a running dashboard service instead of starting one",
     )
     parser.add_argument(
         "--tap-output-dir",
@@ -670,10 +988,21 @@ def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def dashboard_main(args: argparse.Namespace) -> int:
     """Run the standalone dashboard until interrupted."""
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     host = args.host
     port = resolve_dashboard_port(args.live_port)
+    if args.command in {"stop", "quit"}:
+        if not await is_dashboard_healthy(host, port, require_current_db=False):
+            print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
+            return 1
+        if not await stop_dashboard_service(host, port):
+            print(f"Unable to stop claude-tap dashboard on {dashboard_url(host, port)}")
+            return 1
+        print(f"Stopped claude-tap dashboard on {dashboard_url(host, port)}")
+        return 0
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     if await _is_dashboard_reusable(host, port):
         migrate_legacy_traces(output_dir)
         url = dashboard_url(host, port)
@@ -682,6 +1011,9 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         if args.open_viewer:
             _open_browser(url)
         return 0
+
+    url = dashboard_url(host, port)
+    await stop_incompatible_dashboard_if_running(host, port, url)
 
     server = LiveViewerServer(
         port=port,
@@ -709,8 +1041,7 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         _open_browser(server.url)
 
     try:
-        while True:
-            await asyncio.sleep(3600)
+        await server.wait_stopped()
     except asyncio.CancelledError:
         pass
     finally:
@@ -718,6 +1049,7 @@ async def dashboard_main(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
 def parse_trust_ca_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse arguments for the trust-ca subcommand."""
     parser = argparse.ArgumentParser(

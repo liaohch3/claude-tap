@@ -52,6 +52,8 @@ def test_parse_args_accepts_every_registered_client(monkeypatch, tmp_path) -> No
 @pytest.mark.asyncio
 async def test_run_client_kimi_reverse_sets_kimi_base_url(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    for key in ("MOONSHOT_BASE_URL", "OPENAI_BASE_URL", "OPENROUTER_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -66,7 +68,33 @@ async def test_run_client_kimi_reverse_sets_kimi_base_url(monkeypatch) -> None:
 
     assert code == 0
     assert captured["cmd"] == ("/tmp/kimi", "--thinking")
-    assert captured["env"]["KIMI_BASE_URL"] == "http://127.0.0.1:43123"
+    env = captured["env"]
+    assert env["KIMI_BASE_URL"] == "http://127.0.0.1:43123"
+    assert "MOONSHOT_BASE_URL" not in env
+    assert "OPENAI_BASE_URL" not in env
+    assert "OPENROUTER_BASE_URL" not in env
+
+
+@pytest.mark.asyncio
+async def test_run_client_kimi_capture_only_reverse_sets_multi_provider_urls(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/kimi")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["--thinking"], client="kimi", proxy_mode="reverse", capture_only=True)
+
+    assert code == 0
+    env = captured["env"]
+    assert env["KIMI_BASE_URL"] == "http://127.0.0.1:43123"
+    assert env["MOONSHOT_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    assert env["OPENAI_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    assert env["OPENROUTER_BASE_URL"] == "http://127.0.0.1:43123/v1"
 
 
 def test_kimi_reverse_trace_options_do_not_strip_path_prefix() -> None:

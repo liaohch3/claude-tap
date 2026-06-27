@@ -201,7 +201,7 @@ def test_append_log_refreshes_active_session_heartbeat(trace_db) -> None:
     session_id = store.create_session(client="claude", proxy_mode="reverse")
     stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     conn = store._connect()
-    conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (stale, session_id))
+    conn.execute("UPDATE sessions SET updated_at = ?, status = 'complete' WHERE id = ?", (stale, session_id))
     conn.commit()
 
     store.append_log(session_id, "proxy still alive", logged_at="12:00:00")
@@ -209,6 +209,7 @@ def test_append_log_refreshes_active_session_heartbeat(trace_db) -> None:
     row = store.load_session_row(session_id)
     assert row is not None
     assert row["updated_at"] > stale
+    assert row["status"] == "active"
 
 
 def test_finalize_session_refreshes_cached_summary_timestamp(trace_db) -> None:
@@ -307,6 +308,26 @@ def test_cleanup_trace_sessions_skips_protected_and_continues(trace_db) -> None:
     assert remaining == {session_ids[0], session_ids[-1]}
 
 
+def test_cleanup_trace_sessions_skips_protected_session_set(trace_db) -> None:
+    store = get_trace_store()
+    session_ids = [
+        store.create_session(
+            client="codexapp",
+            proxy_mode="transcript",
+            started_at=datetime(2026, 5, 1, 12, index, tzinfo=timezone.utc),
+        )
+        for index in range(5)
+    ]
+    for session_id in session_ids:
+        store.finalize_session(session_id, {"api_calls": 1})
+
+    removed = cleanup_trace_sessions(2, protected_session_ids={session_ids[0], session_ids[1]})
+
+    assert removed == 3
+    remaining = {row["id"] for row in store.list_session_rows()}
+    assert remaining == {session_ids[0], session_ids[1]}
+
+
 def test_cleanup_trace_sessions_skips_active_sessions(trace_db) -> None:
     store = get_trace_store()
     now = datetime.now(timezone.utc)
@@ -392,6 +413,12 @@ async def test_shared_dashboard_delete_history_requires_force_for_active_session
         proxy_mode="reverse",
         started_at=datetime(2026, 5, 1, 12, 30, tzinfo=timezone.utc),
     )
+    conn = get_trace_store()._connect()
+    conn.execute(
+        "UPDATE sessions SET updated_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), active_session),
+    )
+    conn.commit()
 
     server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
     port = await server.start()

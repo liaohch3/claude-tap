@@ -20,9 +20,18 @@ def delete_trace_history(
         raise ValueError("Invalid date format") from exc
 
 
-def cleanup_trace_sessions(max_sessions: int, *, protected_session_id: str | None = None) -> int:
+def cleanup_trace_sessions(
+    max_sessions: int,
+    *,
+    protected_session_id: str | None = None,
+    protected_session_ids: set[str] | None = None,
+) -> int:
     """Remove oldest trace sessions exceeding max_sessions."""
-    return get_trace_store().cleanup_old_sessions(max_sessions, protected_session_id=protected_session_id)
+    return get_trace_store().cleanup_old_sessions(
+        max_sessions,
+        protected_session_id=protected_session_id,
+        protected_session_ids=protected_session_ids,
+    )
 
 
 def migrate_legacy_traces(output_dir: Path) -> int:

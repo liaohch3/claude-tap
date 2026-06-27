@@ -436,6 +436,7 @@ def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout
     Returns the CompletedProcess."""
     env = os.environ.copy()
     env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+    env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
 
     env = e2e_env(env, trace_dir)
     cmd = [
@@ -468,6 +469,253 @@ def _create_fake_claude(script_text):
     fake_claude.write_text(script_text)
     fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IEXEC)
     return fake_bin_dir
+
+
+def test_e2e_claude_vertex_base_url_autodetects_and_records_raw_predict():
+    """Real subprocess E2E for Claude Code Vertex base URL reverse proxy support."""
+    import socket
+
+    from aiohttp import web
+
+    received_paths: list[str] = []
+
+    async def handler(request):
+        received_paths.append(request.path)
+        body = await request.json()
+        if request.path.endswith(":streamRawPredict"):
+            resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+            await resp.prepare(request)
+            events = [
+                (
+                    "message_start",
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_vertex_stream",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [],
+                            "model": body.get("model", "claude-opus-4-7"),
+                            "usage": {"input_tokens": 7, "output_tokens": 0},
+                        },
+                    },
+                ),
+                (
+                    "content_block_start",
+                    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                ),
+                (
+                    "content_block_delta",
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "stream ok"}},
+                ),
+                ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                (
+                    "message_delta",
+                    {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}},
+                ),
+                ("message_stop", {"type": "message_stop"}),
+            ]
+            for event, payload in events:
+                await resp.write(f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode())
+            await resp.write_eof()
+            return resp
+        return web.json_response(
+            {
+                "id": "msg_vertex_raw",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "vertex raw ok"}],
+                "model": body.get("model", "claude-opus-4-7"),
+                "usage": {"input_tokens": 5, "output_tokens": 3},
+                "stop_reason": "end_turn",
+            }
+        )
+
+    fake_claude_script = r"""#!/usr/bin/env python3
+import json, os, sys, urllib.request
+
+base = os.environ.get("ANTHROPIC_VERTEX_BASE_URL")
+if not base:
+    print("ANTHROPIC_VERTEX_BASE_URL missing", file=sys.stderr)
+    sys.exit(1)
+
+model_path = "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7"
+
+for suffix, stream in [(":rawPredict", False), (":streamRawPredict", True)]:
+    req = urllib.request.Request(
+        f"{base}{model_path}{suffix}",
+        data=json.dumps({
+            "model": "claude-opus-4-7",
+            "max_tokens": 32,
+            "stream": stream,
+            "messages": [{"role": "user", "content": "vertex test"}],
+        }).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer vertex-test-token-12345678",
+            "anthropic-version": "2023-06-01",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            print(resp.read().decode()[:80])
+    except Exception as e:
+        print(f"Vertex request failed: {e}", file=sys.stderr)
+        sys.exit(1)
+"""
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_vertex_")
+    fake_bin_dir = _create_fake_claude(fake_claude_script)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        upstream_port = sock.getsockname()[1]
+    stop = _start_fake_upstream(upstream_port, handler)
+
+    try:
+        env = os.environ.copy()
+        env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+        env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+        env["CLAUDE_CODE_USE_VERTEX"] = "1"
+        env["CLAUDE_CODE_USE_BEDROCK"] = "0"
+        env["ANTHROPIC_VERTEX_BASE_URL"] = f"http://127.0.0.1:{upstream_port}"
+        env["ANTHROPIC_BASE_URL"] = "https://anthropic.example.invalid"
+        env = e2e_env(env, trace_dir)
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_tap",
+                "--tap-output-dir",
+                trace_dir,
+                "--tap-no-live",
+                "--tap-no-open",
+            ],
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert proc.returncode == 0, f"vertex e2e failed: stdout={proc.stdout} stderr={proc.stderr}"
+        assert "ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert "ANTHROPIC_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert received_paths == [
+            "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7:rawPredict",
+            "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7:streamRawPredict",
+        ]
+
+        records = read_trace_records(trace_dir)
+        assert len(records) == 2
+        assert records[0]["upstream_base_url"] == f"http://127.0.0.1:{upstream_port}"
+        assert records[0]["request"]["path"].endswith(":rawPredict")
+        assert records[0]["response"]["body"]["content"][0]["text"] == "vertex raw ok"
+        assert records[1]["request"]["path"].endswith(":streamRawPredict")
+        assert records[1]["response"]["body"]["content"][0]["text"] == "stream ok"
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "claude_vertex")
+
+
+def test_e2e_tap_target_endpoint_path_is_not_duplicated():
+    """Real subprocess E2E for users passing a full /v1/messages endpoint target."""
+    import socket
+
+    from aiohttp import web
+
+    received_paths: list[str] = []
+
+    async def handler(request):
+        received_paths.append(request.path)
+        if request.path != "/gateway/v1/messages":
+            return web.json_response({"error": f"unexpected path {request.path}"}, status=404)
+        body = await request.json()
+        return web.json_response(
+            {
+                "id": "msg_endpoint_target",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"ok:{body.get('model', 'missing')}"}],
+                "model": body.get("model", "test"),
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "stop_reason": "end_turn",
+            }
+        )
+
+    fake_claude_script = r"""#!/usr/bin/env python3
+import json, os, sys, urllib.request
+
+base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+req = urllib.request.Request(
+    f"{base}/v1/messages",
+    data=json.dumps({
+        "model": "claude-test-model",
+        "max_tokens": 100,
+        "messages": [{"role": "user", "content": "hello"}],
+    }).encode(),
+    headers={
+        "Content-Type": "application/json",
+        "x-api-key": "sk-ant-test-key-12345678",
+        "anthropic-version": "2023-06-01",
+    },
+)
+
+try:
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read())
+        print(body["content"][0]["text"])
+except Exception as exc:
+    print(f"[fake-claude] error: {exc}", file=sys.stderr)
+    sys.exit(1)
+"""
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_endpoint_target_")
+    fake_bin_dir = _create_fake_claude(fake_claude_script)
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        upstream_port = sock.getsockname()[1]
+    stop_upstream = _start_fake_upstream(upstream_port, handler)
+
+    env = os.environ.copy()
+    env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
+    env = e2e_env(env, trace_dir)
+
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "claude_tap",
+                "--tap-output-dir",
+                trace_dir,
+                "--tap-no-open",
+                "--tap-target",
+                f"http://127.0.0.1:{upstream_port}/gateway/v1/messages",
+            ],
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        print(f"[test_e2e_tap_target_endpoint_path_is_not_duplicated] exit: {proc.returncode}")
+        if proc.stdout.strip():
+            print(proc.stdout.rstrip())
+        if proc.stderr.strip():
+            print(proc.stderr.rstrip())
+
+        assert proc.returncode == 0
+        assert received_paths == ["/gateway/v1/messages"]
+        records = read_trace_records(trace_dir)
+        assert len(records) == 1
+        assert records[0]["response"]["status"] == 200
+        assert records[0]["response"]["body"]["content"][0]["text"] == "ok:claude-test-model"
+    finally:
+        stop_upstream()
+        _cleanup(trace_dir, fake_bin_dir, "endpoint_target")
 
 
 ## ---------------------------------------------------------------------------
@@ -1183,6 +1431,7 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.no_launch is False
     assert a.live_viewer is True
     assert a.open_viewer is True
+    assert a.client_cmd is None
     assert a.store_stream_events is False
     print("  OK: defaults")
 
@@ -1192,6 +1441,27 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.target == "https://api.openai.com"
     assert a.claude_args == []
     print("  OK: codex defaults")
+
+    openclaw_config = tmp_path / "openclaw.json"
+    openclaw_config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": {"primary": "openai/default"}}},
+                "models": {
+                    "providers": {
+                        "openai": {"baseUrl": "https://openai.example.com/v1", "api": "openai-responses"},
+                        "anthropic": {"baseUrl": "https://anthropic.example.com", "api": "anthropic-messages"},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(openclaw_config))
+    a = parse_args(["--tap-client", "openclaw", "--", "agent", "--model", "anthropic/claude"])
+    assert a.target == "https://anthropic.example.com"
+    assert a.claude_args == ["agent", "--model", "anthropic/claude"]
+    print("  OK: openclaw target honors forwarded --model")
 
     # Claude flags pass through
     a = parse_args(["-c"])
@@ -1217,6 +1487,21 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.claude_args == []
     print("  OK: --tap-* flags consumed")
 
+    # VSCode claudeProcessWrapper passes the bundled Claude binary as argv[0].
+    wrapped_claude = tmp_path / "claude"
+    wrapped_claude.write_text("#!/bin/sh\n", encoding="utf-8")
+    a = parse_args([str(wrapped_claude), "--output-format", "stream-json", "--verbose"])
+    assert a.client_cmd == str(wrapped_claude)
+    assert a.claude_args == ["--output-format", "stream-json", "--verbose"]
+    print("  OK: VSCode wrapper Claude binary path consumed")
+
+    prompt_dir_named_claude = tmp_path / "context" / "claude"
+    prompt_dir_named_claude.mkdir(parents=True)
+    a = parse_args([str(prompt_dir_named_claude), "--output-format", "stream-json"])
+    assert a.client_cmd is None
+    assert a.claude_args == [str(prompt_dir_named_claude), "--output-format", "stream-json"]
+    print("  OK: directory named claude is not consumed as wrapper binary")
+
     a = parse_args(["--tap-no-live"])
     assert a.live_viewer is False
     assert a.claude_args == []
@@ -1226,6 +1511,11 @@ def test_parse_args(monkeypatch, tmp_path):
     assert a.store_stream_events is True
     assert a.claude_args == []
     print("  OK: --tap-store-stream-events enables raw event storage")
+
+    a = parse_args(["--tap-export-prompt", "prompt.md"])
+    assert a.export_prompt == "prompt.md"
+    assert a.claude_args == []
+    print("  OK: --tap-export-prompt consumed")
 
     # Mix: tap flags + claude flags
     a = parse_args(["--tap-port", "9999", "-c", "--model", "sonnet"])
@@ -1252,7 +1542,7 @@ def test_parse_args(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tmp_path):
+async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tmp_path, capsys):
     """Default live viewer starts, and --tap-no-open controls browser opening."""
     from claude_tap import async_main, parse_args
     from claude_tap.live import LiveViewerServer
@@ -1289,11 +1579,47 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
     assert len(opened_urls) == 1
     assert all(url.startswith("http://127.0.0.1:") for url in opened_urls)
     assert migration_calls == []
+    output = capsys.readouterr().out
+    assert "Stop dashboard: claude-tap dashboard stop" in output
 
 
 @pytest.mark.asyncio
-async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatch, tmp_path):
-    """A second claude-tap run should attach to an existing dashboard and honor browser opens."""
+async def test_async_main_stop_hint_includes_custom_dashboard_address(monkeypatch, tmp_path, capsys):
+    """The dashboard stop hint should target the actual shared dashboard address."""
+    from claude_tap import async_main, parse_args
+
+    async def fake_run_client(*args, **kwargs):
+        return 0
+
+    async def fake_ensure_shared_dashboard(*, host, port, output_dir, open_browser, open_browser_fn):
+        return f"http://127.0.0.1:{port}", False
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", fake_ensure_shared_dashboard)
+
+    args = parse_args(
+        [
+            "--tap-output-dir",
+            str(tmp_path),
+            "--tap-live-port",
+            "3000",
+            "--tap-host",
+            "0.0.0.0",
+            "--tap-no-update-check",
+        ]
+    )
+
+    code = await async_main(args)
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert "Stop dashboard: claude-tap dashboard stop --tap-live-port 3000 --tap-host 0.0.0.0" in output
+
+
+@pytest.mark.asyncio
+async def test_async_main_reuses_existing_dashboard_without_reopening_browser(monkeypatch, tmp_path):
+    """A second claude-tap run should attach to an existing dashboard without opening another tab."""
     from claude_tap import async_main, parse_args
     from claude_tap.live import LiveViewerServer
 
@@ -1313,8 +1639,6 @@ async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatc
             if open_browser:
                 open_browser_fn(server.url)
             return server.url, True
-        if open_browser:
-            open_browser_fn(f"http://{host}:{port}")
         return f"http://{host}:{port}", False
 
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-shared.sqlite3"))
@@ -1330,7 +1654,7 @@ async def test_async_main_reuses_existing_dashboard_and_opens_browser(monkeypatc
         for server in spawned_servers:
             await server.stop()
 
-    assert len(opened_urls) == 2
+    assert len(opened_urls) == 1
 
 
 @pytest.mark.asyncio
@@ -1423,6 +1747,33 @@ async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypat
     assert code == 0
     assert opened_urls == []
     assert migration_calls == [tmp_path]
+
+
+@pytest.mark.asyncio
+async def test_async_main_export_prompt_preserves_client_failure(monkeypatch, tmp_path):
+    """Successful prompt export should not turn a failing client run into success."""
+    from claude_tap import async_main, parse_args
+
+    async def fake_run_client(*args, **kwargs):
+        return 7
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-export-failure.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli._export_prompt_from_session", lambda *_args: 0)
+
+    args = parse_args(
+        [
+            "--tap-output-dir",
+            str(tmp_path),
+            "--tap-no-update-check",
+            "--tap-no-live",
+            "--tap-no-open",
+            "--tap-export-prompt",
+            str(tmp_path / "prompt.md"),
+        ]
+    )
+
+    assert await async_main(args) == 7
 
 
 def test_parse_args_allow_path_validation():
@@ -1889,6 +2240,113 @@ def test_kimi_multiturn_tool_calls_reverse_proxy():
         _cleanup(trace_dir, fake_bin_dir, "kimi_multiturn")
 
 
+FAKE_KIMI_CODE_SCRIPT = r"""#!/usr/bin/env python3
+# Fake Kimi Code CLI: read base_url from KIMI_CODE_HOME/config.toml
+import json, os, sys, tomllib, urllib.request
+from pathlib import Path
+
+home = Path(os.environ["KIMI_CODE_HOME"])
+config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+provider = config["providers"]["managed:kimi-code"]
+base = provider["base_url"].rstrip("/")
+url = f"{base}/chat/completions"
+
+req_body = json.dumps({
+    "model": "kimi-k2-turbo-preview",
+    "messages": [{"role": "user", "content": "Reply with exactly: HELLO_KIMI_CODE"}],
+    "stream": True,
+}).encode()
+req = urllib.request.Request(url, data=req_body, headers={
+    "Content-Type": "application/json",
+    "Authorization": "Bearer kimi-test-key-12345678",
+})
+try:
+    with urllib.request.urlopen(req) as resp:
+        chunks = resp.read().decode()
+        print(f"[fake-kimi-code] status={resp.status} stream-bytes={len(chunks)}")
+except Exception as e:
+    print(f"[fake-kimi-code] Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("[fake-kimi-code] Done.")
+"""
+
+
+def test_kimi_code_client_reverse_proxy():
+    """Test --tap-client kimi-code in reverse mode using KIMI_CODE_HOME sandbox."""
+
+    async def handler(request):
+        body = await request.json()
+        assert request.path == "/chat/completions"
+        assert body["model"] == "kimi-k2-turbo-preview"
+        from aiohttp import web
+
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        chunks = [
+            {
+                "id": "kimi_code_chat_1",
+                "model": body["model"],
+                "choices": [{"delta": {"role": "assistant", "reasoning_content": "Need exact text."}}],
+            },
+            {
+                "id": "kimi_code_chat_1",
+                "model": body["model"],
+                "choices": [{"delta": {"content": "HELLO_KIMI_CODE"}}],
+            },
+            {
+                "id": "kimi_code_chat_1",
+                "model": body["model"],
+                "choices": [
+                    {
+                        "delta": {},
+                        "finish_reason": "stop",
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 2,
+                            "total_tokens": 15,
+                            "cached_tokens": 5,
+                        },
+                    }
+                ],
+            },
+        ]
+        for chunk in chunks:
+            await resp.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        await resp.write_eof()
+        return resp
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_kimi_code_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_kimi_code_")
+    fake_kimi = Path(fake_bin_dir) / "kimi"
+    fake_kimi.write_text(FAKE_KIMI_CODE_SCRIPT)
+    fake_kimi.chmod(fake_kimi.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19246, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19246,
+            tap_client="kimi-code",
+        )
+
+        assert proc.returncode == 0, f"kimi-code mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        records = read_trace_records(trace_dir)
+        assert len(records) == 1
+        record = records[0]
+        assert record["request"]["path"] == "/chat/completions"
+        assert record["upstream_base_url"] == "http://127.0.0.1:19246"
+        assert record["response"]["body"]["content"][1]["text"] == "HELLO_KIMI_CODE"
+        assert "KIMI_CODE_HOME=" in proc.stdout
+        assert "KIMI_CODE_BASE_URL=http://127.0.0.1:" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "kimi_code")
+
+
 ## ---------------------------------------------------------------------------
 ## Test 6b: test_codex_zstd_request_body — proxy decompresses zstd request bodies
 ## ---------------------------------------------------------------------------
@@ -1979,6 +2437,7 @@ def test_filter_headers():
         "Cosy-MachineId": "qoder-machine-id-secret-value",
         "Cosy-MachineType": "qoder-machine-type-secret-value",
         "Cosy-User": "qoder-user-id-secret-value",
+        "X-Amz-Security-Token": "aws-session-token-secret-value",
         "Transfer-Encoding": "chunked",
         "Connection": "keep-alive",
         "X-Custom": "custom-value",
@@ -2013,6 +2472,8 @@ def test_filter_headers():
     assert "machine-type-secret" not in out["Cosy-MachineType"]
     assert out["Cosy-User"] == "***"
     assert "user-id-secret" not in out["Cosy-User"]
+    assert out["X-Amz-Security-Token"] == "***"
+    assert "session-token-secret" not in out["X-Amz-Security-Token"]
     assert out["Content-Type"] == "application/json"
     assert out["X-Custom"] == "custom-value"
     print("  OK: secrets redacted")
@@ -2024,6 +2485,92 @@ def test_filter_headers():
     print("  OK: short key masked")
 
     print("\n  test_filter_headers PASSED")
+
+
+## ---------------------------------------------------------------------------
+## Test: double-serialized request body decoding
+## ---------------------------------------------------------------------------
+
+
+def test_double_serialized_request_body():
+    """Verify proxy decodes double-serialized JSON request bodies into dicts."""
+    import socket
+
+    received_bodies: list[object] = []
+
+    async def handler(request):
+        body = await request.json()
+        received_bodies.append(body)
+        from aiohttp import web
+
+        return web.json_response(
+            {
+                "id": "msg_test",
+                "type": "message",
+                "content": [{"type": "text", "text": "OK"}],
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+                "model": "claude-test",
+            }
+        )
+
+    # Build a fake claude script that sends a double-serialized body
+    double_serial_script = r'''#!/usr/bin/env python3
+"""Fake claude CLI — sends a double-serialized JSON body."""
+import json, os, sys, urllib.request
+
+base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+url = f"{base}/v1/messages"
+inner = {"model": "claude-test", "messages": [{"role": "user", "content": "hi"}]}
+# Double-serialize: the outer JSON is a string wrapping the real object
+payload = json.dumps(json.dumps(inner)).encode()
+
+req = urllib.request.Request(url, data=payload, headers={
+    "Content-Type": "application/json",
+    "x-api-key": "sk-test",
+})
+try:
+    resp = urllib.request.urlopen(req)
+    print(resp.read().decode())
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_double_serial_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_double_serial_")
+    fake_claude = Path(fake_bin_dir) / "claude"
+    fake_claude.write_text(double_serial_script)
+    fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IEXEC)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        upstream_port = sock.getsockname()[1]
+    stop = _start_fake_upstream(upstream_port, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            upstream_port,
+        )
+
+        assert proc.returncode == 0, f"double-serial test failed: stdout={proc.stdout} stderr={proc.stderr}"
+        assert len(received_bodies) == 1
+        assert isinstance(received_bodies[0], str)
+        upstream_body = json.loads(received_bodies[0])
+        assert upstream_body["model"] == "claude-test"
+
+        # Verify the trace record stored the body as a dict, not a string
+        records = read_trace_records(trace_dir)
+        assert len(records) >= 1
+        req_body = records[0]["request"]["body"]
+        assert isinstance(req_body, dict), f"Expected dict body, got {type(req_body)}: {req_body!r}"
+        assert req_body["model"] == "claude-test"
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "claude")
+
+    print("\n  test_double_serialized_request_body PASSED")
 
 
 ## ---------------------------------------------------------------------------
@@ -2199,6 +2746,60 @@ def test_upstream_unreachable():
         _cleanup(trace_dir, fake_bin_dir, "unreachable")
 
 
+@pytest.mark.asyncio
+async def test_reverse_proxy_ssl_error_returns_ca_diagnostics():
+    """Real localhost reverse proxy test for upstream TLS verification failures."""
+    import aiohttp
+    from aiohttp import web
+
+    from claude_tap.proxy import proxy_handler
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        upstream_port = await _start_fake_https_upstream(tmpdir_path)
+        store, session_id, writer = _writer_for_dir(tmpdir_path)
+        session = aiohttp.ClientSession(auto_decompress=False, trust_env=False)
+
+        app = web.Application(client_max_size=0)
+        app["trace_ctx"] = {
+            "target_url": f"https://127.0.0.1:{upstream_port}",
+            "writer": writer,
+            "session": session,
+            "turn_counter": 0,
+            "store_stream_events": False,
+        }
+        app.router.add_route("*", "/{path_info:.*}", proxy_handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        proxy_port = site._server.sockets[0].getsockname()[1]
+
+        try:
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                async with client.post(
+                    f"http://127.0.0.1:{proxy_port}/v1/messages",
+                    json={
+                        "model": "claude-test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "hello"}],
+                    },
+                ) as resp:
+                    assert resp.status == 502
+                    text = await resp.text()
+
+            assert "SSL_CERT_FILE" in text
+            assert "provider base URL" in text
+            assert "Configured target: https://127.0.0.1:" in text
+            assert "Upstream URL: https://127.0.0.1:" in text
+            writer.close()
+            assert store.export_jsonl(session_id) == ""
+        finally:
+            await runner.cleanup()
+            await session.close()
+            writer.close()
+
+
 ## ---------------------------------------------------------------------------
 ## Test: version check helpers
 ## ---------------------------------------------------------------------------
@@ -2229,8 +2830,6 @@ def test_detect_installer():
 ## Test: version check with fake PyPI
 ## ---------------------------------------------------------------------------
 
-FAKE_PYPI_PORT = 19210
-
 # Minimal fake claude that exits immediately without making any upstream
 # requests.  Used by version-check tests which only care about the update
 # banner printed by claude-tap itself, not about proxied API traffic.
@@ -2255,7 +2854,8 @@ def test_version_check_with_fake_pypi():
         def log_message(self, format, *args):
             pass  # silence logs
 
-    server = HTTPServer(("127.0.0.1", FAKE_PYPI_PORT), FakePyPI)
+    server = HTTPServer(("127.0.0.1", 0), FakePyPI)
+    pypi_port = server.server_port
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
 
@@ -2267,7 +2867,7 @@ def test_version_check_with_fake_pypi():
         env = os.environ.copy()
         env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
         env = e2e_env(env, trace_dir)
-        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{FAKE_PYPI_PORT}/pypi/claude-tap/json"
+        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{pypi_port}/pypi/claude-tap/json"
 
         proc = subprocess.run(
             [
@@ -2296,10 +2896,8 @@ def test_version_check_with_fake_pypi():
         raise AssertionError("claude_tap subprocess timed out (30s) — possible port conflict or hang") from exc
     finally:
         server.shutdown()
+        server.server_close()
         _cleanup(trace_dir, fake_bin_dir, "update_check")
-
-
-FAKE_PYPI_NOCHECK_PORT = 19211
 
 
 def test_version_check_no_update():
@@ -2318,7 +2916,8 @@ def test_version_check_no_update():
         def log_message(self, format, *args):
             pass
 
-    server = HTTPServer(("127.0.0.1", FAKE_PYPI_NOCHECK_PORT), FakePyPICurrent)
+    server = HTTPServer(("127.0.0.1", 0), FakePyPICurrent)
+    pypi_port = server.server_port
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
 
@@ -2330,7 +2929,7 @@ def test_version_check_no_update():
         env = os.environ.copy()
         env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
         env = e2e_env(env, trace_dir)
-        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{FAKE_PYPI_NOCHECK_PORT}/pypi/claude-tap/json"
+        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{pypi_port}/pypi/claude-tap/json"
 
         proc = subprocess.run(
             [
@@ -2357,6 +2956,7 @@ def test_version_check_no_update():
         raise AssertionError("claude_tap subprocess timed out (30s) — possible port conflict or hang") from exc
     finally:
         server.shutdown()
+        server.server_close()
         _cleanup(trace_dir, fake_bin_dir, "no_update")
 
 
@@ -2507,8 +3107,9 @@ def test_e2e_with_cleanup():
 
 def test_live_viewer_scroll_preservation():
     """Verify viewer.html contains preserveDetail parameter chain for scroll fix."""
-    viewer_path = Path(__file__).parent.parent / "claude_tap" / "viewer.html"
-    html = viewer_path.read_text(encoding="utf-8")
+    from claude_tap.viewer import _read_viewer_template
+
+    html = _read_viewer_template()
 
     # selectEntry should accept opts parameter
     assert "function selectEntry(idx, opts)" in html, "selectEntry should accept opts parameter"
@@ -2528,8 +3129,9 @@ def test_live_viewer_scroll_preservation():
 
 def test_live_viewer_diff_nav_update():
     """Verify viewer.html contains dynamic diff nav button update logic."""
-    viewer_path = Path(__file__).parent.parent / "claude_tap" / "viewer.html"
-    html = viewer_path.read_text(encoding="utf-8")
+    from claude_tap.viewer import _read_viewer_template
+
+    html = _read_viewer_template()
 
     # updateNavButtons function should exist
     assert "function updateNavButtons()" in html, "Should have updateNavButtons function"
@@ -2627,6 +3229,7 @@ def test_parse_dashboard_args():
     from claude_tap import parse_dashboard_args
 
     a = parse_dashboard_args([])
+    assert a.command is None
     assert a.output_dir == "./.traces"
     assert a.live_port == 0
     assert a.host == "127.0.0.1"
@@ -2639,6 +3242,14 @@ def test_parse_dashboard_args():
     assert a.live_port == 3000
     assert a.host == "0.0.0.0"
     assert a.open_viewer is False
+
+    a = parse_dashboard_args(["stop", "--tap-live-port", "3000"])
+    assert a.command == "stop"
+    assert a.live_port == 3000
+
+    a = parse_dashboard_args(["quit", "--tap-live-port", "3000"])
+    assert a.command == "quit"
+    assert a.live_port == 3000
 
     print("  test_parse_dashboard_args PASSED")
 
@@ -3122,6 +3733,7 @@ async def test_forward_proxy_local_reverse_bridge():
             session=session,
             local_reverse_target=f"https://127.0.0.1:{upstream_port}",
             local_reverse_allowed_path_prefixes=("/v1internal",),
+            capture_only=True,
         )
         proxy_port = await server.start()
 
@@ -3308,6 +3920,99 @@ async def test_forward_proxy_connect_websocket():
             await session.close()
 
     print("  test_forward_proxy_connect_websocket PASSED")
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_connect_websocket_capture_only(monkeypatch: pytest.MonkeyPatch):
+    """Capture-only WebSocket mode should synthesize a local response and trace the client prompt."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        ca_dir = tmpdir / "ca"
+
+        ca_cert_path, ca_key_path = ensure_ca(ca_dir)
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port = await _start_fake_wss_upstream(tmpdir)
+        store, session_id, writer = _writer_for_dir(tmpdir)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False)
+
+        def fail_ws_connect(*args, **kwargs):
+            raise AssertionError("capture-only websocket should not connect upstream")
+
+        monkeypatch.setattr(session, "ws_connect", fail_ws_connect)
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+            store_stream_events=True,
+            capture_only=True,
+        )
+        proxy_port = await server.start()
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/v1/responses",
+                    proxy=proxy_url,
+                    ssl=ssl_ctx,
+                )
+                await ws.send_json({"type": "session.update", "tools": []})
+                await ws.send_json({"model": "gpt-test", "instructions": "ws system", "input": "hello"})
+
+                received = []
+                while True:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        received.append(json.loads(msg.data))
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                    ):
+                        break
+                await ws.close()
+
+            assert [event["type"] for event in received] == ["response.created", "response.completed"]
+            assert received[-1]["response"]["status"] == "completed"
+            assert received[-1]["response"]["output"][0]["content"][0]["text"] == "captured"
+
+            await asyncio.sleep(0.1)
+            writer.close()
+            records = [json.loads(line) for line in store.export_jsonl(session_id).splitlines()]
+            assert len(records) == 1
+            assert records[0]["transport"] == "websocket"
+            assert records[0]["request"]["body"]["instructions"] == "ws system"
+            assert records[0]["response"]["status"] == 101
+            assert records[0]["response"]["body"]["status"] == "completed"
+            assert len(records[0]["request"]["ws_events"]) == 2
+            assert records[0]["request"]["ws_events"][1]["model"] == "gpt-test"
+            assert [event["type"] for event in records[0]["response"]["ws_events"]] == [
+                "response.created",
+                "response.completed",
+            ]
+        finally:
+            await server.stop()
+            await session.close()
+
+    print("  test_forward_proxy_connect_websocket_capture_only PASSED")
 
 
 @pytest.mark.asyncio
@@ -3855,6 +4560,50 @@ async def test_dashboard_main_serves_viewer(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_main_bind_all_opens_loopback_url(monkeypatch, tmp_path):
+    """A bind-all dashboard should open through loopback so token checks pass."""
+    import socket
+    from unittest.mock import AsyncMock
+
+    import aiohttp
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    opened_urls: list[str] = []
+    monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=False))
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        dashboard_port = sock.getsockname()[1]
+
+    args = parse_dashboard_args(
+        ["--tap-output-dir", str(tmp_path), "--tap-live-port", str(dashboard_port), "--tap-host", "0.0.0.0"]
+    )
+    task = asyncio.create_task(dashboard_main(args))
+    try:
+        for _ in range(50):
+            if opened_urls:
+                break
+            await asyncio.sleep(0.05)
+        assert opened_urls, "dashboard should open the browser"
+        assert opened_urls[0].startswith("http://127.0.0.1:")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(opened_urls[0]) as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert "session-list" in html
+                assert "DASHBOARD_QUIT_TOKEN" in html
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
 async def test_dashboard_main_opens_reused_dashboard(monkeypatch, tmp_path):
     """The standalone dashboard command should honor browser opens when reusing a server."""
     from unittest.mock import AsyncMock
@@ -3873,3 +4622,120 @@ async def test_dashboard_main_opens_reused_dashboard(monkeypatch, tmp_path):
     assert await dashboard_main(args) == 0
     assert opened_urls == ["http://127.0.0.1:23456"]
     assert migration_calls == [tmp_path]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_stops_stale_dashboard_before_start(monkeypatch, tmp_path):
+    """The standalone dashboard command should replace stale dashboard processes."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli._is_dashboard_reusable", AsyncMock(return_value=False))
+
+    async def fake_stop_stale(host: str, port: int, url: str) -> None:
+        calls.append(("stop_stale", (host, port, url)))
+
+    class FakeServer:
+        url = "http://127.0.0.1:23456"
+
+        def __init__(self, *, port: int, host: str, migrate_from: Path, dashboard_mode: bool) -> None:
+            calls.append(("server_init", (host, port, migrate_from, dashboard_mode)))
+
+        async def start(self) -> int:
+            calls.append(("start", None))
+            return 23456
+
+        async def wait_stopped(self) -> None:
+            calls.append(("wait_stopped", None))
+
+        async def stop(self) -> None:
+            calls.append(("stop", None))
+
+    monkeypatch.setattr("claude_tap.cli.stop_incompatible_dashboard_if_running", fake_stop_stale)
+    monkeypatch.setattr("claude_tap.cli.LiveViewerServer", FakeServer)
+
+    args = parse_dashboard_args(["--tap-output-dir", str(tmp_path), "--tap-live-port", "23456", "--tap-no-open"])
+
+    assert await dashboard_main(args) == 0
+    assert calls == [
+        ("stop_stale", ("127.0.0.1", 23456, "http://127.0.0.1:23456")),
+        ("server_init", ("127.0.0.1", 23456, tmp_path, True)),
+        ("start", None),
+        ("wait_stopped", None),
+        ("stop", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_stops_running_dashboard(monkeypatch, tmp_path):
+    """The dashboard stop command should stop an existing dashboard."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+    stop_dashboard = AsyncMock(return_value=True)
+    monkeypatch.setattr("claude_tap.cli.stop_dashboard_service", stop_dashboard)
+
+    args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 0
+    stop_dashboard.assert_awaited_once_with("127.0.0.1", 23456)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_quit_alias_stops_running_dashboard(monkeypatch, tmp_path):
+    """The dashboard quit alias should route to the same stop flow."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+    stop_dashboard = AsyncMock(return_value=True)
+    monkeypatch.setattr("claude_tap.cli.stop_dashboard_service", stop_dashboard)
+
+    args = parse_dashboard_args(["quit", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 0
+    stop_dashboard.assert_awaited_once_with("127.0.0.1", 23456)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_stop_reports_missing_dashboard(monkeypatch, tmp_path):
+    """The dashboard stop command should fail clearly when no dashboard is running."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=False))
+    stop_dashboard = AsyncMock(return_value=True)
+    monkeypatch.setattr("claude_tap.cli.stop_dashboard_service", stop_dashboard)
+
+    args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 1
+    stop_dashboard.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_main_stop_reports_stop_failure(monkeypatch, tmp_path):
+    """The dashboard stop command should report stop failures after health succeeds."""
+    from unittest.mock import AsyncMock
+
+    from claude_tap import dashboard_main, parse_dashboard_args
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
+    stop_dashboard = AsyncMock(return_value=False)
+    monkeypatch.setattr("claude_tap.cli.stop_dashboard_service", stop_dashboard)
+
+    args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
+
+    assert await dashboard_main(args) == 1
+    stop_dashboard.assert_awaited_once_with("127.0.0.1", 23456)

@@ -33,17 +33,27 @@ from aiohttp import WSMessage, WSMsgType
 from aiohttp._websocket.reader import WebSocketDataQueue, WebSocketReader
 from aiohttp.http_websocket import WS_KEY, WebSocketWriter
 
+from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
 from claude_tap.certs import CertificateAuthority
 from claude_tap.proxy import (
     HOP_BY_HOP,
     _build_record,
+    _parse_request_body_for_trace,
+    capture_only_content_type,
+    capture_only_response,
+    capture_only_stream_bytes,
     filter_headers,
+    is_capture_only_request,
+    is_capture_only_streaming_request,
 )
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
+from claude_tap.upstream import build_upstream_url, format_upstream_error
 from claude_tap.usage import normalize_usage
+from claude_tap.viewer import _decode_bedrock_eventstream_events
 from claude_tap.ws_proxy import (
     _get_ws_proxy_settings,
+    is_prompt_bearing_ws_request_body,
     reconstruct_ws_request_body,
     reconstruct_ws_response_body,
 )
@@ -214,6 +224,7 @@ class ForwardProxyServer:
         local_reverse_target: str | None = None,
         local_reverse_allowed_path_prefixes: tuple[str, ...] = (),
         store_stream_events: bool = False,
+        capture_only: bool = False,
     ) -> None:
         self.host = host
         self.port = port
@@ -223,6 +234,7 @@ class ForwardProxyServer:
         self._local_reverse_target = local_reverse_target
         self._local_reverse_allowed_path_prefixes = local_reverse_allowed_path_prefixes
         self._store_stream_events = store_stream_events
+        self._capture_only = capture_only
         self._server: asyncio.Server | None = None
         self._client_tasks: set[asyncio.Task] = set()
         self._client_writers: set[asyncio.StreamWriter] = set()
@@ -479,18 +491,42 @@ class ForwardProxyServer:
         t0 = time.monotonic()
         log_prefix = f"[Turn {turn}]"
 
-        # Parse request body for logging
-        try:
-            req_body = json.loads(body) if body else None
-        except (json.JSONDecodeError, ValueError):
-            req_body = body.decode("utf-8", errors="replace") if body else None
+        req_body = _parse_request_body_for_trace(body)
 
-        is_streaming = False
-        if isinstance(req_body, dict):
-            is_streaming = req_body.get("stream", False)
+        is_streaming = is_capture_only_streaming_request(path, req_body)
 
         model = req_body.get("model", "") if isinstance(req_body, dict) else ""
         log.info(f"{log_prefix} -> {method} {path} (model={model}, stream={is_streaming})")
+
+        if self._capture_only and is_capture_only_request(path, req_body):
+            resp_body = capture_only_response(path, req_body)
+            response_headers = {"Content-Type": capture_only_content_type(path, is_streaming)}
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            record = _build_record(
+                req_id,
+                turn,
+                duration_ms,
+                method,
+                path,
+                headers,
+                req_body,
+                200,
+                response_headers,
+                resp_body,
+            )
+            await self._writer.write(record)
+            body_bytes = (
+                capture_only_stream_bytes(path, req_body)
+                if is_streaming
+                else json.dumps(resp_body, separators=(",", ":")).encode("utf-8")
+            )
+            client_writer.write(b"HTTP/1.1 200 OK\r\n")
+            client_writer.write(f"Content-Type: {response_headers['Content-Type']}\r\n".encode("ascii"))
+            client_writer.write(f"Content-Length: {len(body_bytes)}\r\n\r\n".encode("ascii"))
+            client_writer.write(body_bytes)
+            await client_writer.drain()
+            log.info(f"{log_prefix} <- 200 capture-only ({duration_ms}ms, upstream skipped)")
+            return
 
         # Prepare forwarding headers
         fwd_headers = filter_headers(headers)
@@ -510,8 +546,8 @@ class ForwardProxyServer:
             )
         except Exception as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
-            log.error(f"{log_prefix} upstream error: {exc}")
-            error_text = str(exc)
+            error_text = format_upstream_error(exc, target_url=upstream_url, upstream_url=upstream_url)
+            log.error(f"{log_prefix} upstream error: {error_text}")
             error_body = error_text.encode("utf-8", errors="replace")
             record = _build_record(
                 req_id,
@@ -586,7 +622,9 @@ class ForwardProxyServer:
         client_writer.write(b"\r\n")
         await client_writer.drain()
 
+        is_bedrock_stream = is_bedrock_eventstream_path(path)
         reassembler = SSEReassembler(store_events=self._store_stream_events)
+        raw_chunks: list[bytes] = []
 
         try:
             async for chunk in upstream_resp.content.iter_any():
@@ -594,7 +632,10 @@ class ForwardProxyServer:
                 chunk_header = f"{len(chunk):x}\r\n".encode()
                 client_writer.write(chunk_header + chunk + b"\r\n")
                 await client_writer.drain()
-                reassembler.feed_bytes(chunk)
+                if is_bedrock_stream:
+                    raw_chunks.append(chunk)
+                else:
+                    reassembler.feed_bytes(chunk)
         except (ConnectionError, asyncio.CancelledError):
             pass
 
@@ -606,9 +647,20 @@ class ForwardProxyServer:
             pass
 
         duration_ms = int((time.monotonic() - t0) * 1000)
-        reconstructed = reassembler.reconstruct()
 
-        usage = normalize_usage(reconstructed.get("usage", {}) if reconstructed else {})
+        if is_bedrock_stream:
+            raw_body = b"".join(raw_chunks).decode("utf-8", errors="replace")
+            bedrock_events = _decode_bedrock_eventstream_events(raw_body)
+            for event in bedrock_events:
+                reassembler.add_event(event["event"], event["data"])
+            reconstructed = reassembler.reconstruct()
+            if not reconstructed:
+                reconstructed = raw_body
+            reconstructed = attach_bedrock_errors(reconstructed, bedrock_events)
+        else:
+            reconstructed = reassembler.reconstruct()
+
+        usage = normalize_usage(reconstructed.get("usage", {}) if isinstance(reconstructed, dict) else {})
         in_tok = usage.get("input_tokens", 0)
         out_tok = usage.get("output_tokens", 0)
         cache_read = usage.get("cache_read_input_tokens", 0)
@@ -777,6 +829,21 @@ class ForwardProxyServer:
             protocols = tuple(p.strip() for p in ws_protocol.split(",") if p.strip())
 
         log.info(f"{log_prefix} -> WS UPGRADE {path} (upstream={upstream_ws_url})")
+
+        if self._capture_only:
+            await self._capture_only_websocket(
+                req_id,
+                turn,
+                t0,
+                path,
+                headers,
+                protocols,
+                reader,
+                writer,
+                upstream_base_url,
+                log_prefix,
+            )
+            return
 
         ws_connect_kwargs: dict[str, object] = {}
         proxy_settings = _get_ws_proxy_settings(upstream_ws_url) if self._session.trust_env else None
@@ -968,6 +1035,123 @@ class ForwardProxyServer:
             f"{len(client_messages)} client→upstream, {len(server_messages)} upstream→client)"
         )
 
+    async def _capture_only_websocket(
+        self,
+        req_id: str,
+        turn: int,
+        t0: float,
+        path: str,
+        headers: dict[str, str],
+        protocols: tuple[str, ...],
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        upstream_base_url: str,
+        log_prefix: str,
+    ) -> None:
+        sec_key = headers.get("Sec-WebSocket-Key") or headers.get("sec-websocket-key")
+        if not sec_key:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            return
+
+        response_lines = [
+            "HTTP/1.1 101 Switching Protocols",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            f"Sec-WebSocket-Accept: {_build_ws_accept(sec_key)}",
+        ]
+        if protocols:
+            response_lines.append(f"Sec-WebSocket-Protocol: {protocols[0]}")
+        writer.write(("\r\n".join(response_lines) + "\r\n\r\n").encode("utf-8"))
+        await writer.drain()
+
+        raw_protocol = _RawWSProtocol()
+        queue = WebSocketDataQueue(raw_protocol, 2**16, loop=asyncio.get_running_loop())
+        ws_reader = WebSocketReader(queue, max_msg_size=0)
+        ws_writer = WebSocketWriter(raw_protocol, writer.transport, use_mask=False)
+
+        async def _pump_client_bytes() -> None:
+            try:
+                while True:
+                    chunk = await reader.read(65536)
+                    if not chunk:
+                        break
+                    ws_reader.feed_data(chunk)
+            except (ConnectionError, asyncio.CancelledError):
+                pass
+            finally:
+                ws_reader.feed_eof()
+
+        client_messages: list[str] = []
+        pump_task = asyncio.create_task(_pump_client_bytes())
+        try:
+            deadline = time.monotonic() + 30
+            while True:
+                timeout = max(0.1, deadline - time.monotonic())
+                try:
+                    msg: WSMessage = await asyncio.wait_for(queue.read(), timeout=timeout)
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                    break
+                if msg.type == WSMsgType.TEXT:
+                    client_messages.append(msg.data)
+                    req_body = reconstruct_ws_request_body(client_messages) or {}
+                    if is_prompt_bearing_ws_request_body(req_body):
+                        break
+                    if time.monotonic() >= deadline:
+                        break
+                    continue
+                if msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED, WSMsgType.ERROR):
+                    break
+        finally:
+            pump_task.cancel()
+            try:
+                await pump_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        req_body = reconstruct_ws_request_body(client_messages) or {}
+        response_body = capture_only_response(path, req_body)
+        response_events = [
+            {"type": "response.created", "response": {**response_body, "status": "in_progress"}},
+            {"type": "response.completed", "response": {**response_body, "status": "completed"}},
+        ]
+        completed_response_body = response_events[-1]["response"]
+        for event in response_events:
+            await ws_writer.send_frame(json.dumps(event, separators=(",", ":")).encode("utf-8"), WSMsgType.TEXT)
+            await writer.drain()
+        try:
+            await ws_writer.close()
+            await writer.drain()
+        except Exception:
+            pass
+
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        request_record = {
+            "method": "WEBSOCKET",
+            "path": path,
+            "headers": filter_headers(headers, redact_keys=True),
+            "body": req_body,
+        }
+        if self._store_stream_events:
+            request_record["ws_events"] = [
+                json.loads(msg) if msg.startswith("{") else {"raw": msg} for msg in client_messages
+            ]
+        response_record = {"status": 101, "headers": {}, "body": completed_response_body}
+        if self._store_stream_events:
+            response_record["ws_events"] = response_events
+        record = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "request_id": req_id,
+            "turn": turn,
+            "duration_ms": duration_ms,
+            "transport": "websocket",
+            "request": request_record,
+            "response": response_record,
+            "upstream_base_url": upstream_base_url,
+        }
+        await self._writer.write(record)
+        log.info(f"{log_prefix} <- WS capture-only ({duration_ms}ms, upstream skipped)")
+
     async def _handle_plain_proxy(
         self,
         method: str,
@@ -1003,7 +1187,7 @@ class ForwardProxyServer:
             and self._local_reverse_target
             and _matches_path_prefix(path, self._local_reverse_allowed_path_prefixes)
         ):
-            upstream_url = self._local_reverse_target.rstrip("/") + "/" + path.lstrip("/")
+            upstream_url = build_upstream_url(self._local_reverse_target, path)
             await self._forward_and_record(method, path, headers, body, upstream_url, writer)
             return
 

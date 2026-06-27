@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
+from claude_tap.compact_trace import COMPACT_TRACE_MARKER, is_compact_trace_bundle
 from claude_tap.sse import SSEReassembler
 from claude_tap.usage import normalize_usage
 
@@ -18,7 +20,25 @@ except Exception:
 # Threshold: traces with more entries than this use lazy mode
 LAZY_THRESHOLD = 50
 VIEWER_TEMPLATE_PATH = Path(__file__).parent / "viewer.html"
+VIEWER_ASSETS_DIR = Path(__file__).parent / "viewer_assets"
+VIEWER_CSS_PATH = VIEWER_ASSETS_DIR / "viewer.css"
+VIEWER_JS_PATHS = (
+    VIEWER_ASSETS_DIR / "state.js",
+    VIEWER_ASSETS_DIR / "responses.js",
+    VIEWER_ASSETS_DIR / "lazy_loading.js",
+    VIEWER_ASSETS_DIR / "i18n_ui.js",
+    VIEWER_ASSETS_DIR / "live_bootstrap.js",
+    VIEWER_ASSETS_DIR / "filters_search.js",
+    VIEWER_ASSETS_DIR / "sidebar.js",
+    VIEWER_ASSETS_DIR / "detail_trace.js",
+    VIEWER_ASSETS_DIR / "renderers.js",
+    VIEWER_ASSETS_DIR / "sections_json.js",
+    VIEWER_ASSETS_DIR / "diff.js",
+    VIEWER_ASSETS_DIR / "utilities_mobile.js",
+)
 VIEWER_I18N_PATH = Path(__file__).parent / "viewer_i18n.json"
+VIEWER_STYLE_TEMPLATE_ANCHOR = "<!-- CLAUDE_TAP_VIEWER_STYLE -->"
+VIEWER_SCRIPT_TEMPLATE_ANCHOR = "<!-- CLAUDE_TAP_VIEWER_SCRIPT -->"
 VIEWER_SCRIPT_ANCHOR = "<script>\nconst $ = s =>"
 
 
@@ -41,13 +61,21 @@ def _viewer_i18n_script() -> str:
 
 def _read_viewer_template() -> str:
     html = VIEWER_TEMPLATE_PATH.read_text(encoding="utf-8")
-    if VIEWER_SCRIPT_ANCHOR not in html:
-        raise ValueError("viewer.html is missing the main script anchor.")
-    return html.replace(
-        VIEWER_SCRIPT_ANCHOR,
-        f"<script>\n{_viewer_i18n_script()}</script>\n{VIEWER_SCRIPT_ANCHOR}",
+    if VIEWER_STYLE_TEMPLATE_ANCHOR not in html:
+        raise ValueError("viewer.html is missing the style asset anchor.")
+    if VIEWER_SCRIPT_TEMPLATE_ANCHOR not in html:
+        raise ValueError("viewer.html is missing the script asset anchor.")
+    css = VIEWER_CSS_PATH.read_text(encoding="utf-8").rstrip()
+    js = "".join(path.read_text(encoding="utf-8") for path in VIEWER_JS_PATHS).rstrip()
+    html = html.replace(VIEWER_STYLE_TEMPLATE_ANCHOR, f"<style>\n{css}\n</style>", 1)
+    html = html.replace(
+        VIEWER_SCRIPT_TEMPLATE_ANCHOR,
+        f"<script>\n{_viewer_i18n_script()}</script>\n<script>\n{js}\n</script>",
         1,
     )
+    if VIEWER_SCRIPT_ANCHOR not in html:
+        raise ValueError("viewer asset script is missing the main script anchor.")
+    return html
 
 
 def _iter_response_events(resp: dict) -> list[dict]:
@@ -58,6 +86,16 @@ def _iter_response_events(resp: dict) -> list[dict]:
     if isinstance(events, list) and events:
         return events
     events = resp.get("ws_events")
+    if isinstance(events, list):
+        return events
+    return []
+
+
+def _iter_request_events(req: dict) -> list[dict]:
+    """Return request-side WebSocket events when a raw trace stores them."""
+    if not isinstance(req, dict):
+        return []
+    events = req.get("ws_events")
     if isinstance(events, list):
         return events
     return []
@@ -82,15 +120,178 @@ def _event_payload(event: dict) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
-    """Extract Anthropic stream events from a decoded AWS EventStream body.
+def _first_bool(*values: object) -> bool | None:
+    for value in values:
+        if isinstance(value, bool):
+            return value
+    return None
 
-    Bedrock invoke-with-response-stream responses are binary AWS EventStream
-    frames. Legacy traces may contain those bytes decoded as text with invalid
-    frame bytes replaced, but the JSON payloads inside the frames remain intact.
+
+def _response_payload_from_event(event: dict) -> dict:
+    data = _event_payload(event)
+    if not isinstance(data, dict):
+        return {}
+    response = data.get("response")
+    if isinstance(response, dict):
+        return response
+    return data
+
+
+def _last_response_payload_for_event(events: list[dict], event_type: str) -> dict:
+    for event in reversed(events):
+        if _event_type(event) == event_type:
+            return _response_payload_from_event(event)
+    return {}
+
+
+def _response_output_count_from_events(events: list[dict]) -> int:
+    completed = _last_response_payload_for_event(events, "response.completed")
+    output = completed.get("output")
+    if isinstance(output, list):
+        return len(output)
+    return sum(1 for event in events if _event_type(event) == "response.output_item.done")
+
+
+def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
+    """Extract normalized stream events from a decoded AWS EventStream body.
+
+    Bedrock streaming responses are binary AWS EventStream frames. Legacy
+    traces may contain those bytes decoded as text with invalid frame bytes
+    replaced, but the JSON payloads inside the frames remain intact.
     """
-    if not isinstance(body, str) or '"bytes"' not in body:
+    error_event_keys = {
+        "internalServerException",
+        "modelStreamErrorException",
+        "modelTimeoutException",
+        "serviceUnavailableException",
+        "throttlingException",
+        "validationException",
+    }
+    if not isinstance(body, str):
         return []
+    stream_event_keys = (
+        "bytes",
+        "chunk",
+        "type",
+        "messageStart",
+        "contentBlockStart",
+        "contentBlockDelta",
+        "contentBlockStop",
+        "messageStop",
+        "metadata",
+        *error_event_keys,
+    )
+    if not any(f'"{key}"' in body for key in stream_event_keys):
+        return []
+
+    def _converse_event_payload(payload: dict) -> tuple[str | None, dict | None]:
+        message_start = payload.get("messageStart")
+        if isinstance(message_start, dict):
+            return "message_start", {
+                "message": {
+                    "type": "message",
+                    "role": message_start.get("role") or "assistant",
+                    "content": [],
+                }
+            }
+
+        block_start = payload.get("contentBlockStart")
+        if isinstance(block_start, dict):
+            start = block_start.get("start") if isinstance(block_start.get("start"), dict) else {}
+            tool_use = start.get("toolUse") if isinstance(start, dict) else None
+            block: dict = {}
+            if isinstance(tool_use, dict):
+                block = {
+                    "type": "tool_use",
+                    "id": tool_use.get("toolUseId", ""),
+                    "name": tool_use.get("name", ""),
+                    "input": {},
+                }
+            return "content_block_start", {
+                "index": block_start.get("contentBlockIndex", payload.get("contentBlockIndex", 0)),
+                "content_block": block,
+            }
+
+        block_delta = payload.get("contentBlockDelta")
+        if isinstance(block_delta, dict):
+            delta = block_delta.get("delta") if isinstance(block_delta.get("delta"), dict) else {}
+            normalized_delta: dict = {}
+            if isinstance(delta.get("text"), str):
+                normalized_delta = {"type": "text_delta", "text": delta["text"]}
+            elif isinstance(delta.get("reasoningContent"), dict):
+                reasoning = delta["reasoningContent"]
+                text = reasoning.get("text") if isinstance(reasoning.get("text"), str) else ""
+                normalized_delta = {"type": "thinking_delta", "thinking": text}
+                signature = reasoning.get("signature") if isinstance(reasoning.get("signature"), str) else ""
+                if signature:
+                    normalized_delta["signature"] = signature
+            elif isinstance(delta.get("toolUse"), dict):
+                tool_delta = delta["toolUse"]
+                partial = tool_delta.get("input") if isinstance(tool_delta.get("input"), str) else ""
+                normalized_delta = {"type": "input_json_delta", "partial_json": partial}
+            if normalized_delta:
+                return "content_block_delta", {
+                    "index": block_delta.get("contentBlockIndex", payload.get("contentBlockIndex", 0)),
+                    "delta": normalized_delta,
+                }
+
+        block_stop = payload.get("contentBlockStop")
+        if isinstance(block_stop, dict):
+            return "content_block_stop", {
+                "index": block_stop.get("contentBlockIndex", payload.get("contentBlockIndex", 0)),
+            }
+
+        message_stop = payload.get("messageStop")
+        if isinstance(message_stop, dict):
+            return "message_delta", {
+                "delta": {"stop_reason": message_stop.get("stopReason")},
+            }
+
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict) and isinstance(metadata.get("usage"), dict):
+            return "message_delta", {"usage": metadata["usage"]}
+
+        return None, None
+
+    def _event_payload_from_frame(frame: dict) -> tuple[str | None, dict | None]:
+        encoded = frame.get("bytes")
+        if not isinstance(encoded, str):
+            chunk = frame.get("chunk")
+            if isinstance(chunk, dict):
+                encoded = chunk.get("bytes")
+        if isinstance(encoded, str):
+            try:
+                payload_bytes = base64.b64decode(encoded, validate=True)
+                payload = json.loads(payload_bytes)
+            except (ValueError, json.JSONDecodeError):
+                return None, None
+            if not isinstance(payload, dict):
+                return None, None
+
+            event_type = payload.get("type")
+            if isinstance(event_type, str) and event_type:
+                return event_type, payload
+            event_type, event_payload = _converse_event_payload(payload)
+            if event_type and event_payload:
+                return event_type, event_payload
+            for event_type in error_event_keys:
+                event_payload = payload.get(event_type)
+                if isinstance(event_payload, dict):
+                    return event_type, event_payload
+            return None, None
+
+        event_type = frame.get("type")
+        if isinstance(event_type, str) and event_type:
+            return event_type, frame
+        event_type, event_payload = _converse_event_payload(frame)
+        if event_type and event_payload:
+            return event_type, event_payload
+
+        for event_type in error_event_keys:
+            payload = frame.get(event_type)
+            if isinstance(payload, dict):
+                return event_type, payload
+        return None, None
 
     events: list[dict] = []
     decoder = json.JSONDecoder()
@@ -108,19 +309,8 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
 
         if not isinstance(frame, dict):
             continue
-        encoded = frame.get("bytes")
-        if not isinstance(encoded, str):
-            continue
-        try:
-            payload_bytes = base64.b64decode(encoded, validate=True)
-            payload = json.loads(payload_bytes)
-        except (ValueError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-
-        event_type = payload.get("type")
-        if isinstance(event_type, str) and event_type:
+        event_type, payload = _event_payload_from_frame(frame)
+        if event_type and payload:
             events.append({"event": event_type, "data": payload})
 
     return events
@@ -202,18 +392,29 @@ def _parse_sse_data_frames(body: object) -> list[dict]:
     return events
 
 
+def _looks_like_gemini_request(value: object) -> bool:
+    return isinstance(value, dict) and (
+        isinstance(value.get("contents"), list) or isinstance(value.get("systemInstruction"), dict)
+    )
+
+
 def _gemini_request(body: dict) -> dict:
     req = body.get("request")
-    return req if isinstance(req, dict) else {}
+    if _looks_like_gemini_request(req):
+        return req
+    return body if _looks_like_gemini_request(body) else {}
 
 
 def _is_gemini_request_body(body: dict) -> bool:
     req = _gemini_request(body)
-    return bool(req) and (
-        isinstance(req.get("contents"), list)
-        or isinstance(req.get("systemInstruction"), dict)
-        or isinstance(req.get("tools"), list)
-    )
+    return _looks_like_gemini_request(req)
+
+
+def _model_from_path(path: object) -> str:
+    if not isinstance(path, str):
+        return ""
+    match = re.search(r"/models?/([^:?/]+)", path)
+    return match.group(1) if match else ""
 
 
 def _gemini_text_from_parts(parts: object) -> str:
@@ -572,15 +773,135 @@ def _tool_display_name(tool: dict) -> str:
     return ""
 
 
-def _extract_metadata(record_json: str) -> dict | None:
-    """Extract sidebar-relevant metadata from a raw JSON record string.
+def _clean_session_user_text(text: str) -> str:
+    value = text.strip()
+    if not value:
+        return ""
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, str) and decoded.strip():
+            value = decoded.strip()
 
-    Returns a lightweight dict with only the fields needed for sidebar
-    rendering, filtering, and search — avoiding full parse of large records.
-    """
+    request = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", value, flags=re.DOTALL | re.IGNORECASE)
+    if request:
+        return request.group(1).strip()
+
+    codex_request = re.search(
+        r"^#+\s*My request for Codex:\s*(.*?)\s*$",
+        value,
+        flags=re.DOTALL | re.IGNORECASE | re.MULTILINE,
+    )
+    if codex_request:
+        return codex_request.group(1).strip()
+
+    session = re.fullmatch(r"<session>\s*(.*?)\s*</session>", value, flags=re.DOTALL | re.IGNORECASE)
+    if session:
+        return session.group(1).strip()
+
+    first_tag = re.match(r"^<([A-Za-z_-]+)", value)
+    if first_tag and first_tag.group(1).lower() in {
+        "artifacts",
+        "codex_internal_context",
+        "environment_context",
+        "local-command-caveat",
+        "session_context",
+        "skills",
+        "slash_commands",
+        "subagents",
+        "system-reminder",
+        "user_information",
+    }:
+        return ""
+
+    if value.startswith(("# AGENTS.md instructions", "<INSTRUCTIONS>")):
+        return ""
+    if value.startswith("# Files mentioned by the user:"):
+        return ""
+    if re.match(r"^</?image(_input)?(\s+[^>]*)?>$", value, flags=re.IGNORECASE):
+        return ""
+    if re.match(r"^\[SUGGESTION MODE:", value, flags=re.IGNORECASE):
+        return ""
+    if re.match(r"^(web page content|page content|网页内容)\s*[:：]", value, flags=re.IGNORECASE):
+        return ""
+    if re.match(r"^\[Image:\s*source:", value, flags=re.IGNORECASE):
+        return ""
+    return re.sub(r"^\[Image #\d+\]\s*", "", value, flags=re.IGNORECASE).strip()
+
+
+def _session_text_from_content(content: object) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return _clean_session_user_text(content)
+    if isinstance(content, dict):
+        item_type = content.get("type")
+        if item_type in {"tool_result", "function_call_output"}:
+            return ""
+        for key in ("text", "output"):
+            value = content.get(key)
+            if isinstance(value, str):
+                cleaned = _clean_session_user_text(value)
+                if cleaned:
+                    return cleaned
+        if "content" in content:
+            return _session_text_from_content(content.get("content"))
+        return ""
+    if isinstance(content, list):
+        for item in content:
+            text = _session_text_from_content(item)
+            if text:
+                return text
+    return ""
+
+
+def _is_tool_result_only_message(message: dict) -> bool:
+    content = message.get("content")
+    if not isinstance(content, list) or not content:
+        return False
+    return all(
+        isinstance(block, dict) and block.get("type") in {"tool_result", "function_call_output"} for block in content
+    )
+
+
+def _first_user_text(messages: list[dict]) -> str:
+    for message in messages:
+        if message.get("role") != "user" or _is_tool_result_only_message(message):
+            continue
+        text = _session_text_from_content(message.get("content"))
+        if text:
+            return text
+    return ""
+
+
+def _latest_user_text(messages: list[dict]) -> str:
+    for message in reversed(messages):
+        if message.get("role") != "user" or _is_tool_result_only_message(message):
+            continue
+        text = _session_text_from_content(message.get("content"))
+        if text:
+            return text
+    return ""
+
+
+def _extract_metadata(record_json: str) -> dict | None:
+    """Extract sidebar-relevant metadata from a raw JSON record string."""
     try:
         r = json.loads(record_json)
     except (json.JSONDecodeError, TypeError):
+        return None
+    return _extract_metadata_from_record(r)
+
+
+def _extract_metadata_from_record(r: dict) -> dict | None:
+    """Extract sidebar metadata from a raw record without embedding full payloads.
+
+    The returned dict contains only fields needed for sidebar rendering,
+    filtering, and search previews.
+    """
+    if not isinstance(r, dict):
         return None
 
     req = _dict_or_empty(r.get("request"))
@@ -588,9 +909,17 @@ def _extract_metadata(record_json: str) -> dict | None:
     resp = _dict_or_empty(r.get("response"))
     raw_resp_body = resp.get("body")
     resp_body = _dict_or_empty(raw_resp_body)
+    request_events = _iter_request_events(req)
     stream_events = _iter_response_events(resp)
     if not stream_events:
         stream_events = _parse_sse_data_frames(raw_resp_body)
+    created_response = _last_response_payload_for_event(stream_events, "response.created")
+    completed_response = _last_response_payload_for_event(stream_events, "response.completed")
+    request_event_bodies = [_event_payload(event) for event in request_events]
+    response_output = resp_body.get("output")
+    response_output_count = (
+        len(response_output) if isinstance(response_output, list) else _response_output_count_from_events(stream_events)
+    )
 
     # Token usage — from response.body.usage or terminal stream event
     usage = resp_body.get("usage") or _extract_gemini_response_usage(raw_resp_body) or {}
@@ -625,8 +954,14 @@ def _extract_metadata(record_json: str) -> dict | None:
     # Messages
     msgs = _extract_request_messages(body)
 
+    metadata = _dict_or_empty(body.get("metadata"))
+    headers = _dict_or_empty(req.get("headers"))
+    codex_app_session_id = metadata.get("codex_app_session_id") or headers.get("x-codex-app-session-id")
+    if not isinstance(codex_app_session_id, str):
+        codex_app_session_id = ""
+
     # Tool names from request
-    tools = body.get("tools") or _extract_gemini_tools(body)
+    tools = _extract_gemini_tools(body) or body.get("tools") or []
     tool_names = [_tool_display_name(t) for t in tools if isinstance(t, dict)]
 
     # Response tool names (tool_use blocks in response content)
@@ -665,9 +1000,21 @@ def _extract_metadata(record_json: str) -> dict | None:
         "request_id": r.get("request_id", ""),
         "timestamp": r.get("timestamp", ""),
         "duration_ms": r.get("duration_ms", 0),
+        "transport": r.get("transport", ""),
         "method": req.get("method", ""),
         "path": req.get("path", ""),
-        "model": body.get("model", ""),
+        "model": body.get("model", "") or _model_from_path(req.get("path", "")),
+        "request_generate": _first_bool(
+            body.get("generate"),
+            *(event_body.get("generate") for event_body in request_event_bodies if isinstance(event_body, dict)),
+            created_response.get("generate"),
+        ),
+        "response_generate": _first_bool(
+            resp_body.get("generate"),
+            completed_response.get("generate"),
+            created_response.get("generate"),
+        ),
+        "response_output_count": response_output_count,
         "status": resp.get("status", 0),
         "error_message": error_msg,
         "input_tokens": usage.get("input_tokens", 0),
@@ -676,6 +1023,8 @@ def _extract_metadata(record_json: str) -> dict | None:
         "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
         "has_system": bool(sys_text),
         "message_count": len(msgs),
+        "session_user_text": _latest_user_text(msgs) or _first_user_text(msgs),
+        "codex_app_session_id": codex_app_session_id,
         "sys_hint": sys_text[:200],
         "tool_names": tool_names,
         "response_tool_names": response_tool_names,
@@ -690,10 +1039,21 @@ def _generate_html_viewer(
     display_html_path: str | Path | None = None,
 ) -> None:
     """Read viewer.html template, embed JSONL data, write self-contained HTML."""
-    if not VIEWER_TEMPLATE_PATH.exists():
-        return
+    if trace_path.exists():
+        text = trace_path.read_text(encoding="utf-8")
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if is_compact_trace_bundle(parsed):
+            _generate_html_viewer_from_compact_bundle(
+                parsed,
+                html_path,
+                display_trace_path=display_trace_path if display_trace_path is not None else trace_path.absolute(),
+                display_html_path=display_html_path if display_html_path is not None else html_path.absolute(),
+            )
+            return
 
-    # Read JSONL records
     records: list[str] = []
     if trace_path.exists():
         with open(trace_path, "r", encoding="utf-8") as f:
@@ -701,6 +1061,96 @@ def _generate_html_viewer(
                 line = line.strip()
                 if line:
                     records.append(_normalize_record_for_viewer(line))
+    _generate_html_viewer_from_records(
+        records,
+        html_path,
+        display_trace_path=display_trace_path if display_trace_path is not None else trace_path.absolute(),
+        display_html_path=display_html_path if display_html_path is not None else html_path.absolute(),
+    )
+
+
+def _generate_html_viewer_from_compact_bundle(
+    compact_bundle: dict,
+    html_path: Path,
+    *,
+    display_trace_path: str | Path,
+    display_html_path: str | Path,
+) -> None:
+    """Write a self-contained HTML viewer that embeds compact trace data."""
+    if not VIEWER_TEMPLATE_PATH.exists():
+        return
+    if not is_compact_trace_bundle(compact_bundle):
+        raise ValueError(f"Expected {COMPACT_TRACE_MARKER} compact trace bundle.")
+
+    trace_path_label = str(display_trace_path)
+    html_path_label = str(display_html_path)
+    compact_js = json.dumps(compact_bundle, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    jsonl_path_js = json.dumps(trace_path_label)
+    html_path_js = json.dumps(html_path_label)
+    version_js = json.dumps(CLAUDE_TAP_VERSION)
+    data_js = (
+        f"const EMBEDDED_TRACE_COMPACT_DATA = {compact_js};\n"
+        f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
+        f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
+        f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
+    )
+
+    html = _read_viewer_template()
+    html = html.replace(
+        VIEWER_SCRIPT_ANCHOR,
+        f"<script>\n{data_js}</script>\n{VIEWER_SCRIPT_ANCHOR}",
+        1,
+    )
+    html_path.write_text(html, encoding="utf-8")
+
+
+def _generate_html_viewer_from_metadata(
+    metadata: list[dict],
+    html_path: Path,
+    *,
+    display_trace_path: str | Path,
+    display_html_path: str | Path,
+    records_api_path: str | Path,
+) -> None:
+    """Write an online viewer that fetches full records on demand."""
+    if not VIEWER_TEMPLATE_PATH.exists():
+        return
+
+    trace_path_label = str(display_trace_path)
+    html_path_label = str(display_html_path)
+    records_api_label = str(records_api_path)
+    meta_js = json.dumps(metadata, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    jsonl_path_js = json.dumps(trace_path_label)
+    html_path_js = json.dumps(html_path_label)
+    records_api_js = json.dumps(records_api_label)
+    version_js = json.dumps(CLAUDE_TAP_VERSION)
+    data_js = (
+        f"const EMBEDDED_TRACE_META = {meta_js};\n"
+        f"const __TRACE_JSONL_PATH__ = {jsonl_path_js};\n"
+        f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
+        f"const __TRACE_RECORDS_API__ = {records_api_js};\n"
+        f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
+    )
+
+    html = _read_viewer_template()
+    html = html.replace(
+        VIEWER_SCRIPT_ANCHOR,
+        f"<script>\n{data_js}</script>\n{VIEWER_SCRIPT_ANCHOR}",
+        1,
+    )
+    html_path.write_text(html, encoding="utf-8")
+
+
+def _generate_html_viewer_from_records(
+    record_json_lines: list[str],
+    html_path: Path,
+    *,
+    display_trace_path: str | Path,
+    display_html_path: str | Path,
+) -> None:
+    """Write a self-contained HTML viewer from already-loaded JSON records."""
+    if not VIEWER_TEMPLATE_PATH.exists():
+        return
 
     # Escape </ sequences so embedded record JSON cannot prematurely close the
     # surrounding <script> / <script type="text/plain"> blocks. Forward-proxy
@@ -708,10 +1158,10 @@ def _generate_html_viewer(
     # contain </script>; without this, the browser closes the data block early
     # and renders the captured HTML as page content. JSON's \/ is a valid
     # escape for /, so the parsed JSON value is unchanged.
-    records = [rec.replace("</", "<\\/") for rec in records]
+    records = [rec.replace("</", "<\\/") for rec in record_json_lines]
 
-    trace_path_label = str(display_trace_path) if display_trace_path is not None else str(trace_path.absolute())
-    html_path_label = str(display_html_path) if display_html_path is not None else str(html_path.absolute())
+    trace_path_label = str(display_trace_path)
+    html_path_label = str(display_html_path)
     jsonl_path_js = json.dumps(trace_path_label)
     html_path_js = json.dumps(html_path_label)
     version_js = json.dumps(CLAUDE_TAP_VERSION)

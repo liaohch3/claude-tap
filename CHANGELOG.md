@@ -8,8 +8,162 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [0.1.123] - 2026-06-27
+
+### Changed
+- fix: refresh stale dashboard after updates (#348)
+- feat: support Claude Code Vertex and Bedrock gateways (#349)
+### Added
+- Add Claude Code Vertex `ANTHROPIC_VERTEX_BASE_URL` target detection and proxy routing support.
+- Add Claude Code compatibility for Anthropic-compatible Bedrock gateway models such as `bedrock/claude-opus-4-6`.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## [0.1.122] - 2026-06-24
+
+### Changed
+- [codex] Fix viewer search for duplicate request ids (#342)
+- Fix Gemini SSE response reconstruction (#339)
+- fix(sse): reconstruct Responses output from streaming item events (#343)
+## [0.1.121] - 2026-06-22
+
+### Changed
+- feat: add MiMo Code client support (#338)
+## [0.1.120] - 2026-06-18
+
+### Changed
+- fix upstream target diagnostics
+## [0.1.119] - 2026-06-17
+
+### Changed
+- fix: do not proxy loopback upstream targets
+## [0.1.118] - 2026-06-17
+
+### Changed
+- feat: add back button on session detail page
+## [0.1.117] - 2026-06-17
+
+### Changed
+- fix: mock codex provider detection in reverse-inject test
+## [0.1.116] - 2026-06-17
+
+### Changed
+- feat(viewer): add cache hit rate display in header stats bar
+## [0.1.115] - 2026-06-15
+
+### Changed
+- feat: add Codex App transcript listener (#297)
+## [0.1.114] - 2026-06-12
+
+### Changed
+- fix: decode double-serialized JSON request bodies
+## [0.1.113] - 2026-06-12
+
+### Changed
+- docs: add Phistory ecosystem showcase (#321)
+## [0.1.112] - 2026-06-12
+
+### Changed
+- fix: prevent Windows pip background update corruption (#319)
+## [0.1.111] - 2026-06-12
+
+### Changed
+- feat: add Kimi Code tap client
+## [0.1.110] - 2026-06-12
+
+### Changed
+- Add bulk session deletion and lazy dashboard paging (#298)
+## [0.1.109] - 2026-06-12
+
+### Changed
+- perf: compact repeated message content in traces
+## [0.1.108] - 2026-06-10
+
+### Changed
+- fix: render direct Gemini native traces (#312)
+## [0.1.107] - 2026-06-10
+
+### Changed
+- fix: keep Gemini native traces visible
+## [0.1.106] - 2026-06-10
+
+### Changed
+- feat: clarify shared dashboard lifecycle controls (#293)
+## [0.1.105] - 2026-06-09
+
+### Changed
+- fix: guard against None values in usage token fields causing dashboard 500 (#303)
+## [0.1.104] - 2026-06-09
+
+### Changed
+- Document local proxy upstream support
+## [0.1.103] - 2026-06-08
+
+### Changed
+- Fix Codex display turn numbering (#266)
+## [0.1.102] - 2026-06-06
+
+### Changed
+- Add capture-only prompt snapshot export
+## [0.1.101] - 2026-06-03
+
+### Changed
+- Add dashboard session delete action (#236)
+## [0.1.100] - 2026-06-02
+
+### Changed
+- feat: add AWS Bedrock support for Claude Code tracing
+## [0.1.99] - 2026-06-02
+
+### Changed
+- refactor: split viewer assets (#271)
+- docs: add agent trace viewer seo pages
+## [0.1.98] - 2026-06-02
+
+### Changed
+- Fix dashboard first prompt extraction (#270)
+## [0.1.97] - 2026-06-01
+
+### Changed
+- Add dashboard HTML export (#265)
+## [0.1.96] - 2026-06-01
+
+### Changed
+- perf: compact repeated trace payload fields (#250)
+- fix: hide Windows background subprocess consoles (#260)
+## [0.1.95] - 2026-06-01
+
+### Changed
+- feat: add readable tool call parameters (#261)
+- fix: support VSCode Claude wrapper browser controls (#244)
 ## [0.1.94] - 2026-05-31
 
 ### Changed

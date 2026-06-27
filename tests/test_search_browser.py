@@ -349,6 +349,70 @@ def _write_search_trace(path: Path, count: int = 1) -> None:
     )
 
 
+def _write_duplicate_request_id_tool_trace(path: Path) -> str:
+    call_id = "call_kL48GiOmxdX2R6uxH6DqTz0o"
+    records = [
+        {
+            "timestamp": "2026-05-29T08:00:00+00:00",
+            "request_id": "req_shared_search",
+            "turn": 1,
+            "duration_ms": 800,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "headers": {"Host": "api.anthropic.com"},
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "messages": [{"role": "user", "content": "Check status."}],
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "content": [{"type": "text", "text": "I will inspect the repo."}],
+                },
+            },
+        },
+        {
+            "timestamp": "2026-05-29T08:00:01+00:00",
+            "request_id": "req_shared_search",
+            "turn": 1,
+            "duration_ms": 900,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "headers": {"Host": "api.anthropic.com"},
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "messages": [{"role": "user", "content": "Run git status."}],
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": call_id,
+                            "name": "exec_command",
+                            "input": {"cmd": "git status --short --branch"},
+                        }
+                    ],
+                },
+            },
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return call_id
+
+
 def test_json_key_query_without_key_quotes_matches(tmp_path):
     trace_path = tmp_path / "quote_trace.jsonl"
     html_path = tmp_path / "quote_viewer.html"
@@ -372,6 +436,38 @@ def test_json_key_query_without_key_quotes_matches(tmp_path):
             assert " of " in count_text
             assert "0 of 0" not in count_text
             assert "subagent_type" in marked_text
+        finally:
+            browser.close()
+
+
+def test_global_search_distinguishes_duplicate_request_ids(tmp_path):
+    trace_path = tmp_path / "duplicate_request_id_trace.jsonl"
+    html_path = tmp_path / "duplicate_request_id_viewer.html"
+    call_id = _write_duplicate_request_id_tool_trace(trace_path)
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 760})
+            page.goto(f"file://{html_path}")
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+            page.locator(".sidebar-item[data-idx='1']").click()
+            page.wait_for_function(
+                "callId => document.querySelector('#detail')?.innerText.includes(callId)",
+                arg=call_id,
+            )
+
+            _dispatch_find_shortcut(page, meta=False, ctrl=True)
+            page.fill("#global-search-input", call_id)
+            page.wait_for_function("() => document.querySelector('#global-search-count')?.textContent !== '0 of 0'")
+            page.wait_for_function(
+                "callId => [...document.querySelectorAll('mark.global-search-hit')].some(mark => mark.textContent === callId)",
+                arg=call_id,
+            )
+
+            count_text = page.inner_text("#global-search-count")
+            assert "0 of 0" not in count_text
         finally:
             browser.close()
 

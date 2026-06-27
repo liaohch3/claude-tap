@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from claude_tap.cli_clients import _extend_no_proxy
 from claude_tap.trace_store import get_trace_store, reset_trace_store
 
 
@@ -17,6 +18,7 @@ def trace_db_path(trace_dir: str | Path) -> Path:
 def e2e_env(env: dict[str, str], trace_dir: str | Path) -> dict[str, str]:
     updated = dict(env)
     updated["CLOUDTAP_DB"] = str(trace_db_path(trace_dir))
+    _extend_no_proxy(updated, ("localhost", "127.0.0.1", "::1"))
     return updated
 
 

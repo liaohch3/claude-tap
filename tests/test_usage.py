@@ -55,6 +55,24 @@ def test_normalize_usage_prefers_openai_tokens_over_zero_aliases() -> None:
     assert usage["cache_read_input_tokens"] == 0
 
 
+def test_normalize_usage_maps_bedrock_converse_tokens() -> None:
+    usage = normalize_usage(
+        {
+            "inputTokens": 12,
+            "outputTokens": 3,
+            "totalTokens": 15,
+            "cacheReadInputTokens": 7,
+            "cacheWriteInputTokens": 5,
+        }
+    )
+
+    assert usage["input_tokens"] == 12
+    assert usage["output_tokens"] == 3
+    assert usage["total_tokens"] == 15
+    assert usage["cache_read_input_tokens"] == 7
+    assert usage["cache_creation_input_tokens"] == 5
+
+
 def test_normalize_usage_preserves_explicit_anthropic_cache_read() -> None:
     usage = normalize_usage(
         {
@@ -66,6 +84,22 @@ def test_normalize_usage_preserves_explicit_anthropic_cache_read() -> None:
     )
 
     assert usage["cache_read_input_tokens"] == 4
+
+
+def test_normalize_usage_drops_null_token_fields_before_alias_mapping() -> None:
+    usage = normalize_usage(
+        {
+            "input_tokens": None,
+            "output_tokens": None,
+            "prompt_tokens": 8,
+            "completion_tokens": 5,
+            "cache_creation_input_tokens": None,
+        }
+    )
+
+    assert usage["input_tokens"] == 8
+    assert usage["output_tokens"] == 5
+    assert "cache_creation_input_tokens" not in usage
 
 
 @pytest.mark.asyncio

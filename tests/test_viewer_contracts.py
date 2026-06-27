@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from claude_tap.viewer import _generate_html_viewer
+from claude_tap.compact_trace import build_compact_trace_bundle
+from claude_tap.viewer import _generate_html_viewer, _generate_html_viewer_from_compact_bundle, _read_viewer_template
 
 pw_missing = False
 try:
@@ -942,6 +943,65 @@ def _gemini_record() -> dict[str, Any]:
     }
 
 
+def _bedrock_converse_record() -> dict[str, Any]:
+    return {
+        "timestamp": "2026-05-13T13:30:00+00:00",
+        "request_id": "req_bedrock_converse_contract",
+        "turn": 1,
+        "duration_ms": 100,
+        "request": {
+            "method": "POST",
+            "path": "/model/anthropic.claude-sonnet-4-20250514-v1:0/converse",
+            "headers": {},
+            "body": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Use Bedrock Converse to answer."}],
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "description": "Look up a value.",
+                        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                    }
+                ],
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"text": "Bedrock Converse final OK."},
+                            {
+                                "reasoningContent": {
+                                    "reasoningText": {
+                                        "text": "Bedrock reasoning OK.",
+                                        "signature": "sig-contract",
+                                    }
+                                }
+                            },
+                            {"toolUse": {"toolUseId": "tool-1", "name": "lookup", "input": {"query": "bedrock"}}},
+                        ],
+                    }
+                },
+                "usage": {
+                    "inputTokens": 180,
+                    "outputTokens": 18,
+                    "totalTokens": 198,
+                    "cacheReadInputTokens": 60,
+                    "cacheWriteInputTokens": 12,
+                },
+            },
+        },
+    }
+
+
 def _contract_cases() -> tuple[ViewerContractCase, ...]:
     return (
         ViewerContractCase(
@@ -1076,6 +1136,27 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             expected_usage={"input_tokens": 170, "output_tokens": 13, "cache_read_input_tokens": 80},
             required_detail_text=("Use shell to inspect the workspace.", "Output: /repo", "Gemini final OK."),
             min_stream_events=2,
+        ),
+        ViewerContractCase(
+            name="bedrock_converse",
+            records=(_bedrock_converse_record(),),
+            expected_sections=("Tools", "Messages", "Response"),
+            expected_system=None,
+            expected_roles=("user",),
+            expected_tools=("lookup",),
+            expected_output_types=("text", "thinking", "tool_use"),
+            expected_usage={
+                "input_tokens": 180,
+                "output_tokens": 18,
+                "cache_read_input_tokens": 60,
+                "cache_creation_input_tokens": 12,
+            },
+            required_detail_text=(
+                "Use Bedrock Converse to answer.",
+                "Bedrock Converse final OK.",
+                "Bedrock reasoning OK.",
+                "lookup",
+            ),
         ),
         ViewerContractCase(
             name="content_block_boundaries",
@@ -1252,6 +1333,435 @@ def _claude_code_session_round_records() -> tuple[dict[str, Any], ...]:
     )
 
 
+def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
+    records: list[dict[str, Any]] = []
+    session_id = "codex-session-alpha"
+    prompts = [
+        "Write Codex App runtime wiki",
+        "Review live dashboard capture",
+        "Fix duplicate Codex App trace rows",
+    ]
+    for turn in range(1, 61):
+        prompt_index = (turn - 1) // 20
+        prompt = prompts[prompt_index]
+        step = (turn - 1) % 20
+        hour = 10 + (turn - 1) // 60
+        minute = (turn - 1) % 60
+        injected_user_messages = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "# AGENTS.md instructions\nSkip maintainer automation notes."}
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "<environment_context>\nskip cwd\n</environment_context>"}],
+            },
+        ]
+        prior_messages: list[dict[str, Any]] = []
+        for prior_prompt in prompts[:prompt_index]:
+            prior_messages.extend(
+                [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": prior_prompt}],
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": f"Finished {prior_prompt}."}],
+                    },
+                ]
+            )
+        user_message = {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": prompt}],
+        }
+        continuation_messages: list[dict[str, Any]] = []
+        if step:
+            continuation_messages = [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": f"Working on {prompt} step {step}."}],
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": f"call-{turn}",
+                    "output": f"step {step} output",
+                },
+            ]
+        records.append(
+            {
+                "timestamp": f"2026-06-13T{hour:02d}:{minute:02d}:00+00:00",
+                "request_id": f"req_codexapp_{turn}",
+                "turn": turn,
+                "duration_ms": 0,
+                "transport": "codex-app-transcript",
+                "request": {
+                    "method": "CODEX_APP_TRANSCRIPT",
+                    "path": "/v1/responses",
+                    "headers": {"x-codex-app-session-id": session_id},
+                    "body": {
+                        "model": "gpt-5.5",
+                        "metadata": {"codex_app_session_id": session_id},
+                        "input": [
+                            *injected_user_messages,
+                            *prior_messages,
+                            user_message,
+                            *continuation_messages,
+                        ],
+                    },
+                },
+                "response": {
+                    "status": 200,
+                    "headers": {},
+                    "body": {
+                        "id": f"resp_codexapp_{turn}",
+                        "status": "completed",
+                        "model": "gpt-5.5",
+                        "output": [
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": f"Answer {turn}."}],
+                            }
+                        ],
+                        "usage": {"input_tokens": turn, "output_tokens": 1, "total_tokens": turn + 1},
+                    },
+                },
+            }
+        )
+    return tuple(records)
+
+
+def _codex_display_turn_records() -> tuple[dict[str, Any], ...]:
+    return (
+        {
+            "timestamp": "2026-06-01T00:57:34.069390+00:00",
+            "request_id": "req_models",
+            "turn": 1,
+            "duration_ms": 4031,
+            "request": {
+                "method": "GET",
+                "path": "/v1/models?client_version=0.134.0",
+                "headers": {},
+                "body": None,
+            },
+            "response": {"status": 200, "headers": {}, "body": {"data": []}},
+        },
+        {
+            "timestamp": "2026-06-01T00:57:40.306340+00:00",
+            "request_id": "req_prefetch",
+            "turn": 2,
+            "duration_ms": 1643,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {"type": "response.create", "model": "gpt-5.5", "generate": False, "input": []},
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_prefetch",
+                    "model": "gpt-5.5",
+                    "generate": False,
+                    "output": [],
+                    "usage": {"input_tokens": 10088, "output_tokens": 0},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:58:53.101027+00:00",
+            "request_id": "req_first_visible",
+            "turn": "2.2",
+            "duration_ms": 74200,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Clean local branches."}],
+                        }
+                    ],
+                },
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_first_visible",
+                    "model": "gpt-5.5",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "I will inspect the worktree."}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 23768, "output_tokens": 407},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:59:02.416139+00:00",
+            "request_id": "req_second_visible",
+            "turn": "2.3",
+            "duration_ms": 83000,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "previous_response_id": "resp_first_visible",
+                    "input": [{"type": "function_call_output", "call_id": "call_status", "output": "{}"}],
+                },
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_second_visible",
+                    "model": "gpt-5.5",
+                    "previous_response_id": "resp_first_visible",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "name": "exec_command",
+                            "call_id": "call_branch",
+                            "arguments": '{"cmd":"git branch"}',
+                        }
+                    ],
+                    "usage": {"input_tokens": 25076, "output_tokens": 303},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:59:12.416139+00:00",
+            "request_id": "req_zero_output_visible",
+            "turn": "2.4",
+            "duration_ms": 5000,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "simple",
+                    "previous_response_id": "resp_second_visible",
+                    "input": [{"type": "function_call_output", "call_id": "call_branch", "output": "{}"}],
+                },
+            },
+            "response": {
+                "status": 500,
+                "headers": {},
+                "body": {
+                    "error": {"message": "upstream timeout"},
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
+            },
+        },
+    )
+
+
+def _codex_lazy_display_turn_records() -> tuple[dict[str, Any], ...]:
+    records = list(_codex_display_turn_records())
+    for idx in range(60):
+        records.append(
+            {
+                "timestamp": f"2026-06-01T01:{idx % 60:02d}:00.000000+00:00",
+                "request_id": f"req_model_{idx}",
+                "turn": 100 + idx,
+                "duration_ms": 10,
+                "request": {
+                    "method": "GET",
+                    "path": "/v1/models",
+                    "headers": {},
+                    "body": None,
+                },
+                "response": {"status": 200, "headers": {}, "body": {"data": []}},
+            }
+        )
+    return tuple(records)
+
+
+def _codex_direct_generate_false_records() -> tuple[dict[str, Any], ...]:
+    visible = json.loads(json.dumps(_responses_record()))
+    visible["request_id"] = "req_direct_visible"
+    visible["turn"] = 2
+    visible["request"]["body"]["model"] = "gpt-5.5"
+    visible["response"]["body"]["id"] = "resp_direct_visible"
+    visible["response"]["body"]["usage"] = {"input_tokens": 12, "output_tokens": 1}
+
+    return (
+        {
+            "timestamp": "2026-06-01T02:00:00.000000+00:00",
+            "request_id": "req_direct_prefetch",
+            "turn": 1,
+            "duration_ms": 20,
+            "request": {
+                "method": "POST",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {"model": "gpt-5.5", "generate": False, "input": []},
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "id": "resp_direct_prefetch",
+                    "model": "gpt-5.5",
+                    "generate": False,
+                    "output": [],
+                    "usage": {"input_tokens": 9, "output_tokens": 0},
+                },
+            },
+        },
+        visible,
+    )
+
+
+def _codex_lazy_event_generate_false_records() -> tuple[dict[str, Any], ...]:
+    records: list[dict[str, Any]] = [
+        {
+            "timestamp": "2026-06-01T02:10:00.000000+00:00",
+            "request_id": "req_event_prefetch",
+            "turn": 1,
+            "duration_ms": 20,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {"type": "response.create", "model": "gpt-5.5", "input": []},
+                "ws_events": [
+                    {
+                        "type": "response.create",
+                        "data": {"model": "gpt-5.5", "generate": False, "input": []},
+                    }
+                ],
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": None,
+                "ws_events": [
+                    {
+                        "type": "response.created",
+                        "data": {
+                            "response": {
+                                "id": "resp_event_prefetch",
+                                "model": "gpt-5.5",
+                                "generate": False,
+                            }
+                        },
+                    },
+                    {
+                        "type": "response.completed",
+                        "data": {
+                            "response": {
+                                "id": "resp_event_prefetch",
+                                "model": "gpt-5.5",
+                                "generate": False,
+                                "output": [],
+                                "usage": {"input_tokens": 11, "output_tokens": 0},
+                            }
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            "timestamp": "2026-06-01T02:10:01.000000+00:00",
+            "request_id": "req_event_visible",
+            "turn": 2,
+            "duration_ms": 50,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {"type": "response.create", "model": "gpt-5.5", "input": []},
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": None,
+                "ws_events": [
+                    {
+                        "type": "response.created",
+                        "data": {"response": {"id": "resp_event_visible", "model": "gpt-5.5"}},
+                    },
+                    {
+                        "type": "response.output_item.done",
+                        "data": {
+                            "output_index": 0,
+                            "item": {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "event visible"}],
+                            },
+                        },
+                    },
+                    {
+                        "type": "response.completed",
+                        "data": {
+                            "response": {
+                                "id": "resp_event_visible",
+                                "model": "gpt-5.5",
+                                "output": [
+                                    {
+                                        "type": "message",
+                                        "role": "assistant",
+                                        "content": [{"type": "output_text", "text": "event visible"}],
+                                    }
+                                ],
+                                "usage": {"input_tokens": 12, "output_tokens": 1},
+                            }
+                        },
+                    },
+                ],
+            },
+        },
+    ]
+    for idx in range(60):
+        records.append(
+            {
+                "timestamp": f"2026-06-01T02:11:{idx % 60:02d}.000000+00:00",
+                "request_id": f"req_event_model_{idx}",
+                "turn": 100 + idx,
+                "duration_ms": 10,
+                "request": {
+                    "method": "GET",
+                    "path": "/v1/models",
+                    "headers": {},
+                    "body": None,
+                },
+                "response": {"status": 200, "headers": {}, "body": {"data": []}},
+            }
+        )
+    return tuple(records)
+
+
 def _write_trace(trace_path: Path, records: tuple[dict[str, Any], ...]) -> None:
     trace_path.write_text(
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
@@ -1265,6 +1775,39 @@ def _generate_case_html(tmp_path: Path, name: str, records: tuple[dict[str, Any]
     _write_trace(trace_path, records)
     _generate_html_viewer(trace_path, html_path)
     return html_path
+
+
+def _compact_contract_records() -> tuple[dict[str, Any], ...]:
+    records = []
+    for turn in (1, 2):
+        record = json.loads(json.dumps(_responses_record()))
+        record["request_id"] = f"req_compact_contract_{turn}"
+        record["turn"] = turn
+        record["request"]["body"]["instructions"] = "Shared compact system prompt. " * 120
+        record["request"]["body"]["tools"] = [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "description": "Large repeated tool schema. " * 120,
+                "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}},
+            }
+        ]
+        record["request"]["body"]["input"] = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": f"Compact bundle turn {turn}."}],
+            }
+        ]
+        record["response"]["body"]["output"] = [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": f"Compact response {turn}."}],
+            }
+        ]
+        records.append(record)
+    return tuple(records)
 
 
 def _open_viewer_with_error_capture(page: Page, html_path: Path) -> list[str]:
@@ -1448,6 +1991,133 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert remaining_tabs == ["default", "trace"]
 
 
+def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Path, chromium_browser) -> None:
+    record = json.loads(json.dumps(_responses_record()))
+    decoded_command = "python - <<'PY'\nprint(\"hello\")\nPY"
+    record["response"]["body"]["output"][0]["arguments"] = json.dumps(
+        {"cmd": decoded_command, "yield_time_ms": 1000},
+        ensure_ascii=False,
+    )
+    html_path = _generate_case_html(tmp_path, "tool_call_param_escapes", (record,))
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").first.click()
+        page.wait_for_selector("#detail .section", timeout=5000)
+        page.wait_for_selector("#detail .tool-input-toggle", timeout=5000)
+        page.evaluate(
+            """() => {
+              window.__copiedToolInput = '';
+              window.copyToClipboard = (text) => {
+                window.__copiedToolInput = text;
+                return Promise.resolve();
+              };
+            }"""
+        )
+
+        input_view = page.locator("#detail .tool-input-view").first
+        raw_text = input_view.inner_text()
+        input_view_count = page.locator("#detail .tool-input-view").count()
+        toggle_text_before = page.locator("#detail .tool-input-toggle").first.inner_text()
+        copy_button_count = page.locator("#detail .tool-input-copy").count()
+        page.locator("#detail .tool-input-copy").first.click()
+        copied_raw_text = page.evaluate("window.__copiedToolInput")
+        page.locator("#detail .tool-input-toggle").first.click()
+        page.wait_for_selector("#detail .tool-input-view.expanded", timeout=5000)
+        decoded_text = input_view.inner_text()
+        toggle_text_expanded = page.locator("#detail .tool-input-toggle").first.inner_text()
+        page.locator("#detail .tool-input-copy").first.click()
+        copied_decoded_text = page.evaluate("window.__copiedToolInput")
+        expanded_view_count = page.locator("#detail .tool-input-view").count()
+        decoded_box_count = page.locator("#detail .tool-input-decoded").count()
+        decoded_copy_button_count = page.locator("#detail .tool-input-copy-decoded").count()
+        page.locator("#detail .tool-input-toggle").first.click()
+        restored_text = input_view.inner_text()
+        full_json_buttons = page.locator("#detail .json-view .tool-input-toggle").count()
+        full_json_copy_buttons = page.locator("#detail .json-view .tool-input-copy").count()
+    finally:
+        page.close()
+
+    assert errors == []
+    assert "\\nprint" in raw_text
+    assert "python - <<'PY'\nprint(\"hello\")\nPY" in decoded_text
+    assert copied_raw_text == raw_text
+    assert copied_decoded_text == decoded_text
+    assert toggle_text_before == "\u21b5"
+    assert toggle_text_expanded == "Raw"
+    assert restored_text == raw_text
+    assert input_view_count == expanded_view_count == 1
+    assert decoded_box_count == 0
+    assert copy_button_count == 1
+    assert decoded_copy_button_count == 0
+    assert full_json_buttons == 0
+    assert full_json_copy_buttons == 0
+
+
+def test_viewer_renders_embedded_and_dropped_compact_trace_bundle(tmp_path: Path, chromium_browser) -> None:
+    records = _compact_contract_records()
+    bundle = build_compact_trace_bundle(list(records))
+    html_path = tmp_path / "compact.html"
+    bundle_path = tmp_path / "compact.ctap.json"
+    blank_html_path = tmp_path / "blank.html"
+
+    _generate_html_viewer_from_compact_bundle(
+        bundle,
+        html_path,
+        display_trace_path=bundle_path,
+        display_html_path=html_path,
+    )
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    blank_html_path.write_text(_read_viewer_template(), encoding="utf-8")
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").nth(1).click()
+        page.wait_for_selector("#detail .section", timeout=5000)
+        embedded_state = page.evaluate(
+            """() => ({
+              entryCount: entries.length,
+              hasBlobRef: JSON.stringify(EMBEDDED_TRACE_COMPACT_DATA).includes('__claude_tap_blob_ref__'),
+              detailText: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert embedded_state["entryCount"] == 2
+    assert embedded_state["hasBlobRef"] is True
+    assert "Compact bundle turn 2." in embedded_state["detailText"]
+    assert "Compact response 2." in embedded_state["detailText"]
+
+    drop_page = chromium_browser.new_page()
+    drop_errors: list[str] = []
+    drop_page.on("pageerror", lambda exc: drop_errors.append(f"pageerror: {exc}"))
+    drop_page.on(
+        "console", lambda msg: drop_errors.append(f"console.error: {msg.text}") if msg.type == "error" else None
+    )
+    try:
+        drop_page.goto(blank_html_path.resolve().as_uri(), timeout=10000)
+        drop_page.set_input_files("#file-input", str(bundle_path))
+        drop_page.wait_for_selector(".sidebar-item", timeout=5000)
+        dropped_state = drop_page.evaluate(
+            """() => ({
+              entryCount: entries.length,
+              sidebarText: document.querySelector('#sidebar')?.innerText || '',
+              detailText: document.querySelector('#detail')?.innerText || '',
+            })"""
+        )
+    finally:
+        drop_page.close()
+
+    assert drop_errors == []
+    assert dropped_state["entryCount"] == 2
+    assert "Compact bundle turn 1." in dropped_state["detailText"]
+    assert "gpt-5.4" in dropped_state["sidebarText"]
+
+
 def test_viewer_does_not_synthesize_messages_for_empty_responses_input(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "responses_empty_input", (_responses_empty_input_record(),))
 
@@ -1532,26 +2202,26 @@ def test_viewer_sidebar_order_can_switch_between_model_turn_and_session_sequence
     assert model_state["buttons"] == [
         {"mode": "model", "label": "Model", "active": True},
         {"mode": "turn", "label": "Turn", "active": False},
-        {"mode": "session", "label": "Session", "active": False},
+        {"mode": "session", "label": "Query", "active": False},
     ]
     assert model_state["groups"] == ["aws.claude-opus-4.6", "aws.claude-sonnet-4.6", "other-model"]
     assert model_state["turns"] == ["Turn 3", "Turn 2", "Turn 1"]
     assert turn_state["buttons"] == [
         {"mode": "model", "label": "Model", "active": False},
         {"mode": "turn", "label": "Turn", "active": True},
-        {"mode": "session", "label": "Session", "active": False},
+        {"mode": "session", "label": "Query", "active": False},
     ]
     assert turn_state["groupCount"] == 0
     assert turn_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
     assert session_state["buttons"] == [
         {"mode": "model", "label": "Model", "active": False},
         {"mode": "turn", "label": "Turn", "active": False},
-        {"mode": "session", "label": "Session", "active": True},
+        {"mode": "session", "label": "Query", "active": True},
     ]
     assert session_state["groups"] == [
-        "Session 1 - First sidebar task",
-        "Session 2 - Second sidebar task",
-        "Session 3 - Second sidebar task",
+        "Query 1 - First sidebar task",
+        "Query 2 - Second sidebar task",
+        "Query 3 - Second sidebar task",
     ]
     assert session_state["counts"] == ["1", "1", "1"]
     assert session_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
@@ -1577,13 +2247,295 @@ def test_viewer_session_order_groups_claude_code_tool_loop_rounds(tmp_path: Path
 
     assert errors == []
     assert state["groups"] == [
-        "Session 1 - Check configured MCP settings",
-        "Session 2 - Diagnose portfolio holdings",
-        "Session 3 - Add portfolio positions",
+        "Query 1 - Check configured MCP settings",
+        "Query 2 - Diagnose portfolio holdings",
+        "Query 3 - Add portfolio positions",
     ]
     assert state["counts"] == ["3", "2", "2"]
     assert state["turns"] == ["Turn 1", "Turn 2", "Turn 3", "Turn 4", "Turn 5", "Turn 6", "Turn 7"]
     assert "SUGGESTION MODE" not in state["headerText"]
+
+
+def test_viewer_session_order_groups_large_codex_app_sessions_in_virtual_mode(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "codex_app_large_sessions", _codex_app_large_session_records())
+
+    page = chromium_browser.new_page()
+    page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'session')")
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              virtualMode,
+              groups: Array.from(document.querySelectorAll('.sidebar-group-header .group-name')).map(el => el.textContent),
+              counts: Array.from(document.querySelectorAll('.sidebar-group-header .group-count')).map(el => el.textContent),
+              virtualGroups: vsFilteredItems
+                .filter(row => row.type === 'group')
+                .map(row => row.group.userText),
+              virtualCounts: vsFilteredItems
+                .filter(row => row.type === 'group')
+                .map(row => String(row.group.items.length)),
+              rowCount: vsFilteredItems.length,
+              visualCount: visualOrder.length,
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["virtualMode"] is True
+    assert state["groups"] == ["Query 1 - Write Codex App runtime wiki"]
+    assert state["counts"] == ["20"]
+    assert state["virtualGroups"] == [
+        "Write Codex App runtime wiki",
+        "Review live dashboard capture",
+        "Fix duplicate Codex App trace rows",
+    ]
+    assert state["virtualCounts"] == ["20", "20", "20"]
+    assert state["rowCount"] == 63
+    assert state["visualCount"] == 60
+
+
+def test_viewer_codex_display_turns_skip_capture_control_records(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "codex_display_turns", _codex_display_turn_records())
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              sidebarTurns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+              codexEntries: entries
+                .filter(entry => entry.request?.path === '/v1/responses')
+                .map(entry => ({
+                  turn: entry.turn,
+                  displayTurn: entry.display_turn,
+                  captureTurn: entry.capture_turn,
+                  requestId: entry.request_id,
+                })),
+              resetTurns: (() => {
+                const extra = JSON.parse(JSON.stringify(entries.find(entry => entry.request?.path === '/v1/responses' && entry.display_turn === 3)));
+                delete extra.display_turn;
+                extra.turn = '2.5';
+                extra.capture_turn = '2.5';
+                extra.request_id = 'req_after_reset';
+                return normalizeDisplayTurns([...entries, extra], true)
+                  .filter(entry => entry.request?.path === '/v1/responses' && entry.display_turn !== undefined)
+                  .map(entry => entry.display_turn);
+              })(),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["sidebarTurns"] == ["Turn 1", "Turn 2", "Turn 3"]
+    assert state["codexEntries"] == [
+        {
+            "turn": "2.2",
+            "displayTurn": 1,
+            "captureTurn": "2.2",
+            "requestId": "req_first_visible",
+        },
+        {
+            "turn": "2.3",
+            "displayTurn": 2,
+            "captureTurn": "2.3",
+            "requestId": "req_second_visible",
+        },
+        {
+            "turn": "2.4",
+            "displayTurn": 3,
+            "captureTurn": "2.4",
+            "requestId": "req_zero_output_visible",
+        },
+    ]
+    assert state["resetTurns"] == [1, 2, 3, 4]
+
+
+def test_viewer_direct_responses_generate_false_is_not_navigable(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(
+        tmp_path,
+        "codex_direct_generate_false",
+        _codex_direct_generate_false_records(),
+    )
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              sidebarTurns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+              filteredRequestIds: filtered.map(entry => entry.request_id),
+              entriesById: Object.fromEntries(entries.map(entry => [entry.request_id, {
+                displayTurn: entry.display_turn ?? null,
+                captureTurn: entry.capture_turn ?? null,
+                navigable: isNavigableTraceEntry(entry),
+              }])),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["sidebarTurns"] == ["Turn 1"]
+    assert state["filteredRequestIds"] == ["req_direct_visible"]
+    assert state["entriesById"]["req_direct_prefetch"] == {
+        "displayTurn": None,
+        "captureTurn": 1,
+        "navigable": False,
+    }
+    assert state["entriesById"]["req_direct_visible"] == {
+        "displayTurn": 1,
+        "captureTurn": 2,
+        "navigable": True,
+    }
+
+
+def test_viewer_codex_lazy_display_turns_skip_capture_control_records(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "codex_lazy_display_turns", _codex_lazy_display_turn_records())
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              usesLazyMode: typeof EMBEDDED_TRACE_META !== 'undefined',
+              sidebarTurns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+              sidebarPaths: Array.from(document.querySelectorAll('.sidebar-item .si-path')).map(el => el.textContent),
+              codexEntries: entries
+                .filter(entry => entry.request?.path === '/v1/responses')
+                .map(entry => ({
+                  turn: entry.turn,
+                  displayTurn: entry.display_turn ?? null,
+                  captureTurn: entry.capture_turn ?? null,
+                  generate: entry.request?.body?.generate ?? null,
+                })),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["usesLazyMode"] is True
+    assert state["sidebarTurns"] == ["Turn 1", "Turn 2", "Turn 3"]
+    assert state["sidebarPaths"] == ["WEBSOCKET /v1/responses", "WEBSOCKET /v1/responses", "WEBSOCKET /v1/responses"]
+    assert state["codexEntries"][0] == {
+        "turn": 2,
+        "displayTurn": None,
+        "captureTurn": 2,
+        "generate": False,
+    }
+    assert state["codexEntries"][1]["displayTurn"] == 1
+    assert state["codexEntries"][2]["displayTurn"] == 2
+    assert state["codexEntries"][3]["displayTurn"] == 3
+
+
+def test_viewer_codex_lazy_stubs_read_generate_from_websocket_events(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(
+        tmp_path,
+        "codex_lazy_event_generate_false",
+        _codex_lazy_event_generate_false_records(),
+    )
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => ({
+              usesLazyMode: typeof EMBEDDED_TRACE_META !== 'undefined',
+              sidebarTurns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
+              filteredRequestIds: filtered.map(entry => entry.request_id),
+              eventEntries: entries
+                .filter(entry => entry.request_id.startsWith('req_event_') && entry.request?.path === '/v1/responses')
+                .map(entry => ({
+                  requestId: entry.request_id,
+                  displayTurn: entry.display_turn ?? null,
+                  captureTurn: entry.capture_turn ?? null,
+                  requestGenerate: entry.request?.body?.generate ?? null,
+                  responseGenerate: entry.response?.body?.generate ?? null,
+                  responseOutputCount: entry.response?.body?.output?.length ?? 0,
+                  outputTokens: entry.response?.body?.usage?.output_tokens ?? 0,
+                  navigable: isNavigableTraceEntry(entry),
+                })),
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["usesLazyMode"] is True
+    assert state["sidebarTurns"] == ["Turn 1"]
+    assert state["filteredRequestIds"] == ["req_event_visible"]
+    assert state["eventEntries"] == [
+        {
+            "requestId": "req_event_prefetch",
+            "displayTurn": None,
+            "captureTurn": 1,
+            "requestGenerate": False,
+            "responseGenerate": False,
+            "responseOutputCount": 0,
+            "outputTokens": 0,
+            "navigable": False,
+        },
+        {
+            "requestId": "req_event_visible",
+            "displayTurn": 1,
+            "captureTurn": 2,
+            "requestGenerate": None,
+            "responseGenerate": None,
+            "responseOutputCount": 1,
+            "outputTokens": 1,
+            "navigable": True,
+        },
+    ]
+
+
+def test_viewer_codex_lazy_trace_tab_preserves_display_turn_metadata(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(
+        tmp_path,
+        "codex_lazy_trace_display_turns",
+        _codex_lazy_display_turn_records(),
+    )
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => {
+              function metadataText() {
+                const blocks = Array.from(document.querySelectorAll('#detail .trace-block'));
+                const block = blocks.find(el => el.querySelector('.trace-title')?.textContent === 'Metadata');
+                return block?.innerText || '';
+              }
+              const idx = filtered.findIndex(entry => entry.request?.path === '/v1/responses' && entry.display_turn === 1);
+              selectEntry(idx);
+              document.querySelector('#detail .detail-tab[data-tab="trace"]').click();
+              const jsonMetadata = metadataText();
+              document.querySelector('#detail .trace-format-btn[data-format="yaml"]').click();
+              const yamlMetadata = metadataText();
+              document.querySelector('#detail .trace-format-btn[data-format="pretty"]').click();
+              const prettyMetadata = metadataText();
+              return {
+                selectedIdx: idx,
+                activeDisplayTurn: filtered[activeIdx]?.display_turn ?? null,
+                jsonMetadata,
+                yamlMetadata,
+                prettyMetadata,
+              };
+            }"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["selectedIdx"] >= 0
+    assert state["activeDisplayTurn"] == 1
+    assert '"display_turn": 1' in state["jsonMetadata"]
+    assert '"capture_turn": "2.2"' in state["jsonMetadata"]
+    assert "display_turn: 1" in state["yamlMetadata"]
+    assert "capture_turn: 2.2" in state["yamlMetadata"]
+    assert "display_turn" in state["prettyMetadata"]
+    assert "capture_turn" in state["prettyMetadata"]
 
 
 def test_viewer_session_group_hover_shows_full_truncated_user_input(tmp_path: Path, chromium_browser) -> None:
@@ -1967,11 +2919,36 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
               if (entries.length) {
                 sessionTurnDiscriminator(entries[0]);
                 sessionKeyForEntry(entries[0], null);
+                matchSearch(entries[0], '1');
+                const originalPrompt = window.prompt;
+                window.prompt = () => '1';
+                promptJumpToTurn();
+                window.prompt = originalPrompt;
+                _buildDiffTargetOptions(Math.min(1, filtered.length - 1));
+                if (filtered.length > 1) showDiffForIdx(1, null, 0);
               }
+              const stubEntry = buildStubEntry({
+                turn: '2.2',
+                transport: 'websocket',
+                method: 'WEBSOCKET',
+                path: '/v1/responses',
+                model: 'gpt-5.5',
+                request_generate: true,
+                response_output_count: 1,
+                output_tokens: 1,
+              }, 0);
+              normalizeDisplayTurns([stubEntry], true);
               renderImageElement('data:image/png;base64,abc', 'coverage image');
               renderImageElementForBlock(imageBlock);
               document.body.insertAdjacentHTML('beforeend', renderImageBlock(imageBlock, 0, 1, { frameBlocks: true }));
               renderViewerActions();
+              valueHasReadableEscapes({ cmd: 'printf "coverage\\\\n"' });
+              decodeEscapedTextForView('line1\\\\nline2\\\\t\\\\u4e00');
+              document.body.insertAdjacentHTML(
+                'beforeend',
+                renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
+              );
+              document.querySelector('.tool-input-toggle')?.click();
               const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
               if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
               tooltipTrigger.dataset.fullUserInput = 'coverage tooltip prompt';
@@ -2213,8 +3190,186 @@ def test_viewer_session_identical_prompts_image_tags_and_early_title_generation(
 
     assert errors == []
     assert state["groups"] == [
-        "Session 1 - 继续",
-        "Session 2 - 继续",
-        "Session 3 - Analyze the flowchart",
+        "Query 1 - 继续",
+        "Query 2 - 继续",
+        "Query 3 - Analyze the flowchart",
     ]
     assert state["counts"] == ["2", "2", "1"]
+
+
+def test_viewer_codex_global_search_skips_non_navigable_and_orders_by_capture_turn(
+    tmp_path: Path, chromium_browser
+) -> None:
+    records = (
+        {
+            "timestamp": "2026-06-01T00:57:34.000Z",
+            "request_id": "req_models",
+            "turn": 1,
+            "duration_ms": 100,
+            "request": {
+                "method": "GET",
+                "path": "/v1/models",
+                "headers": {},
+                "body": None,
+            },
+            "response": {"status": 200, "headers": {}, "body": {"data": []}},
+        },
+        {
+            "timestamp": "2026-06-01T00:57:40.000Z",
+            "request_id": "req_prefetch",
+            "turn": 2,
+            "duration_ms": 100,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-hidden-model",
+                    "generate": False,
+                    "input": [],
+                },
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_prefetch",
+                    "model": "gpt-hidden-model",
+                    "generate": False,
+                    "output": [],
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:58:53.000Z",
+            "request_id": "req_response_2",
+            "turn": 2,
+            "duration_ms": 100,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": "hello",
+                        }
+                    ],
+                },
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_response_2",
+                    "model": "gpt-5.5",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": "hi",
+                        }
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 10},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:59:00.000Z",
+            "request_id": "req_mcp_between",
+            "turn": 3,
+            "duration_ms": 100,
+            "request": {
+                "method": "POST",
+                "path": "/v1/mcp/list",
+                "headers": {},
+                "body": {"query": "mcp-query"},
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {"tools": []},
+            },
+        },
+        {
+            "timestamp": "2026-06-01T00:59:02.000Z",
+            "request_id": "req_response_4",
+            "turn": 4,
+            "duration_ms": 100,
+            "transport": "websocket",
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "type": "response.create",
+                    "model": "gpt-5.5",
+                    "previous_response_id": "resp_response_2",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": "then what",
+                        }
+                    ],
+                },
+            },
+            "response": {
+                "status": 101,
+                "headers": {},
+                "body": {
+                    "id": "resp_response_4",
+                    "model": "gpt-5.5",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": "that is it",
+                        }
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 10},
+                },
+            },
+        },
+    )
+
+    html_path = _generate_case_html(tmp_path, "codex_search_sort", records)
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        # Verify global search skips the hidden model
+        page.evaluate("() => openGlobalSearch()")
+        page.evaluate("() => { $('#global-search-input').value = 'gpt-hidden-model'; recalcGlobalSearchMatches(); }")
+        search_state = page.evaluate("() => ({ totalMatches: globalSearchState.totalMatches })")
+
+        # Expand paths and check sorting (should be chronological: turn 2 -> 3 -> 4)
+        page.evaluate("() => { closeGlobalSearch(); activePaths.add('/v1/mcp/list'); applyFilter(); }")
+        debug_state = page.evaluate(
+            """() => ({
+              entries: entries.map(e => ({
+                request_id: e.request_id,
+                turn: e.turn,
+                capture_turn: e.capture_turn,
+                display_turn: e.display_turn,
+                captureTurnValue: captureTurnValue(e),
+                displayTurnValue: displayTurnValue(e),
+                isNavigable: isNavigableTraceEntry(e),
+              })),
+              filtered: filtered.map(e => e.request_id),
+            })"""
+        )
+        sorted_ids = [rid for rid in debug_state["filtered"] if rid != "req_models"]
+    finally:
+        page.close()
+
+    assert errors == []
+    assert search_state["totalMatches"] == 0
+    assert sorted_ids == ["req_response_2", "req_mcp_between", "req_response_4"]
