@@ -6,6 +6,9 @@ import asyncio
 import ipaddress
 import json
 import os
+import re
+import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -238,6 +241,127 @@ async def stop_shared_dashboard(host: str, port: int) -> bool:
     return await wait_for_dashboard_stopped(host, port)
 
 
+async def stop_dashboard_service(host: str, port: int) -> bool:
+    """Stop a current dashboard, including older dashboards without a quit endpoint."""
+    if await stop_shared_dashboard(host, port):
+        return True
+    if not await is_legacy_dashboard_healthy(host, port):
+        return False
+    return await stop_legacy_dashboard_process(host, port)
+
+
+async def stop_legacy_dashboard_process(host: str, port: int) -> bool:
+    pids = await asyncio.to_thread(_dashboard_listening_pids_for_port, port)
+    if not pids:
+        return False
+    terminated = await asyncio.to_thread(_terminate_legacy_dashboard_pids, pids, port)
+    return terminated and await wait_for_dashboard_stopped(host, port)
+
+
+def _dashboard_listening_pids_for_port(port: int) -> list[int]:
+    if port <= 0:
+        return []
+    pids: set[int] = set()
+    lsof = shutil.which("lsof")
+    if lsof:
+        try:
+            result = subprocess.run(
+                [lsof, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result and result.returncode in {0, 1}:
+            for line in result.stdout.splitlines():
+                if line.strip().isdigit():
+                    pids.add(int(line.strip()))
+
+    if pids:
+        return sorted(pids)
+
+    ss = shutil.which("ss")
+    if ss:
+        try:
+            result = subprocess.run(
+                [ss, "-ltnp", f"sport = :{port}"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result and result.returncode == 0:
+            for match in re.finditer(r"pid=(\d+)", result.stdout):
+                pids.add(int(match.group(1)))
+
+    return sorted(pids)
+
+
+def _dashboard_process_command(pid: int) -> str:
+    if pid <= 0:
+        return ""
+    if sys.platform.startswith("linux"):
+        try:
+            parts = [
+                part.decode("utf-8", errors="replace")
+                for part in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+                if part
+            ]
+        except OSError:
+            parts = []
+        if parts:
+            return " ".join(parts)
+
+    ps = shutil.which("ps")
+    if not ps:
+        return ""
+    try:
+        result = subprocess.run(
+            [ps, "-p", str(pid), "-o", "command="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _looks_like_legacy_dashboard_command(command: str, port: int) -> bool:
+    normalized = " ".join(command.split())
+    lower = normalized.lower()
+    if "claude_tap" not in lower and "claude-tap" not in lower:
+        return False
+    if not re.search(r"(^|\s)dashboard($|\s)", lower):
+        return False
+    if "--tap-live-port" in lower and str(port) not in lower:
+        return False
+    return True
+
+
+def _terminate_legacy_dashboard_pids(pids: list[int], port: int) -> bool:
+    terminated = False
+    for pid in pids:
+        if pid == os.getpid():
+            continue
+        command = _dashboard_process_command(pid)
+        if not _looks_like_legacy_dashboard_command(command, port):
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            continue
+        terminated = True
+    return terminated
+
+
 async def stop_incompatible_dashboard_if_running(host: str, port: int, url: str) -> None:
     """Stop a dashboard that is listening on the shared port but cannot be reused.
 
@@ -246,12 +370,12 @@ async def stop_incompatible_dashboard_if_running(host: str, port: int, url: str)
     """
     if not await is_dashboard_healthy(host, port, require_current_db=False):
         return
-    if await stop_shared_dashboard(host, port):
+    if await stop_dashboard_service(host, port):
         return
     raise RuntimeError(
         "A different or outdated claude-tap dashboard is already running on "
-        f"{url}. Stop it first with `claude-tap dashboard stop --tap-live-port {port}` "
-        "or terminate the old dashboard process."
+        f"{url}. Stop it first with `claude-tap dashboard stop --tap-live-port {port}`. "
+        "If that fails, terminate the old dashboard process manually."
     )
 
 

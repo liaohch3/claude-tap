@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 import subprocess
 from pathlib import Path
 
@@ -11,14 +12,17 @@ from claude_tap.shared_dashboard import (
     DEFAULT_DASHBOARD_PORT,
     _dashboard_lock_path,
     _dashboard_spawn_lock,
+    _looks_like_legacy_dashboard_command,
     _spawn_dashboard_subprocess,
     _sync_dashboard_healthy_for_current_db,
+    _terminate_legacy_dashboard_pids,
     dashboard_connect_host,
     dashboard_url,
     ensure_shared_dashboard,
     is_dashboard_healthy,
     is_legacy_dashboard_healthy,
     resolve_dashboard_port,
+    stop_dashboard_service,
     stop_shared_dashboard,
 )
 from claude_tap.trace_store import resolve_db_path
@@ -357,6 +361,63 @@ async def test_stop_shared_dashboard_handles_post_client_error(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
+async def test_stop_dashboard_service_falls_back_to_legacy_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def fake_stop_shared_dashboard(_host: str, _port: int) -> bool:
+        calls.append("shared")
+        return False
+
+    async def fake_is_legacy_dashboard_healthy(_host: str, _port: int) -> bool:
+        calls.append("legacy")
+        return True
+
+    async def fake_stop_legacy_dashboard_process(_host: str, _port: int) -> bool:
+        calls.append("process")
+        return True
+
+    monkeypatch.setattr("claude_tap.shared_dashboard.stop_shared_dashboard", fake_stop_shared_dashboard)
+    monkeypatch.setattr("claude_tap.shared_dashboard.is_legacy_dashboard_healthy", fake_is_legacy_dashboard_healthy)
+    monkeypatch.setattr("claude_tap.shared_dashboard.stop_legacy_dashboard_process", fake_stop_legacy_dashboard_process)
+
+    assert await stop_dashboard_service("127.0.0.1", 19527) is True
+    assert calls == ["shared", "legacy", "process"]
+
+
+def test_looks_like_legacy_dashboard_command_is_strict() -> None:
+    assert _looks_like_legacy_dashboard_command(
+        "/usr/bin/python -m claude_tap dashboard --tap-live-port 19527",
+        19527,
+    )
+    assert not _looks_like_legacy_dashboard_command(
+        "/usr/bin/python -m claude_tap dashboard --tap-live-port 3000",
+        19527,
+    )
+    assert not _looks_like_legacy_dashboard_command(
+        "/usr/bin/python -m claude_tap proxy --tap-live-port 19527",
+        19527,
+    )
+    assert not _looks_like_legacy_dashboard_command(
+        "/usr/bin/python -m other_app dashboard --tap-live-port 19527",
+        19527,
+    )
+
+
+def test_terminate_legacy_dashboard_pids_filters_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands = {
+        111: "/usr/bin/python -m claude_tap dashboard --tap-live-port 19527",
+        222: "/usr/bin/python -m claude_tap proxy --tap-live-port 19527",
+    }
+    killed: list[tuple[int, signal.Signals]] = []
+
+    monkeypatch.setattr("claude_tap.shared_dashboard._dashboard_process_command", commands.__getitem__)
+    monkeypatch.setattr("claude_tap.shared_dashboard.os.kill", lambda pid, sig: killed.append((pid, sig)))
+
+    assert _terminate_legacy_dashboard_pids([111, 222], 19527) is True
+    assert killed == [(111, signal.SIGTERM)]
+
+
+@pytest.mark.asyncio
 async def test_is_dashboard_healthy_prefers_lightweight_health_route(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -478,7 +539,7 @@ async def test_ensure_shared_dashboard_stops_stale_dashboard_before_spawn(
         calls.append(("health", require_current_db))
         return not require_current_db
 
-    async def fake_stop_shared_dashboard(_host: str, _port: int) -> bool:
+    async def fake_stop_dashboard_service(_host: str, _port: int) -> bool:
         calls.append(("stop", None))
         return True
 
@@ -491,7 +552,7 @@ async def test_ensure_shared_dashboard_stops_stale_dashboard_before_spawn(
         return True
 
     monkeypatch.setattr("claude_tap.shared_dashboard.is_dashboard_healthy", fake_is_dashboard_healthy)
-    monkeypatch.setattr("claude_tap.shared_dashboard.stop_shared_dashboard", fake_stop_shared_dashboard)
+    monkeypatch.setattr("claude_tap.shared_dashboard.stop_dashboard_service", fake_stop_dashboard_service)
     monkeypatch.setattr("claude_tap.shared_dashboard._spawn_dashboard_subprocess_if_needed", fake_spawn_if_needed)
     monkeypatch.setattr("claude_tap.shared_dashboard.wait_for_dashboard_healthy", fake_wait_for_dashboard_healthy)
 
@@ -515,11 +576,11 @@ async def test_ensure_shared_dashboard_reports_unstoppable_stale_dashboard(
     async def fake_is_dashboard_healthy(_host: str, _port: int, *, require_current_db: bool = True) -> bool:
         return not require_current_db
 
-    async def fake_stop_shared_dashboard(_host: str, _port: int) -> bool:
+    async def fake_stop_dashboard_service(_host: str, _port: int) -> bool:
         return False
 
     monkeypatch.setattr("claude_tap.shared_dashboard.is_dashboard_healthy", fake_is_dashboard_healthy)
-    monkeypatch.setattr("claude_tap.shared_dashboard.stop_shared_dashboard", fake_stop_shared_dashboard)
+    monkeypatch.setattr("claude_tap.shared_dashboard.stop_dashboard_service", fake_stop_dashboard_service)
 
     with pytest.raises(RuntimeError, match="outdated claude-tap dashboard"):
         await ensure_shared_dashboard(
