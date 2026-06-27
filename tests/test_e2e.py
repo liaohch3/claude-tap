@@ -4532,7 +4532,7 @@ async def test_dashboard_main_stops_running_dashboard(monkeypatch, tmp_path):
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
     stop_dashboard = AsyncMock(return_value=True)
-    monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
+    monkeypatch.setattr("claude_tap.cli.stop_dashboard_service", stop_dashboard)
 
     args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
 
@@ -4550,7 +4550,7 @@ async def test_dashboard_main_quit_alias_stops_running_dashboard(monkeypatch, tm
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
     stop_dashboard = AsyncMock(return_value=True)
-    monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
+    monkeypatch.setattr("claude_tap.cli.stop_dashboard_service", stop_dashboard)
 
     args = parse_dashboard_args(["quit", "--tap-live-port", "23456"])
 
@@ -4568,7 +4568,7 @@ async def test_dashboard_main_stop_reports_missing_dashboard(monkeypatch, tmp_pa
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=False))
     stop_dashboard = AsyncMock(return_value=True)
-    monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
+    monkeypatch.setattr("claude_tap.cli.stop_dashboard_service", stop_dashboard)
 
     args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
 
@@ -4586,7 +4586,7 @@ async def test_dashboard_main_stop_reports_stop_failure(monkeypatch, tmp_path):
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "dashboard.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.is_dashboard_healthy", AsyncMock(return_value=True))
     stop_dashboard = AsyncMock(return_value=False)
-    monkeypatch.setattr("claude_tap.cli.stop_shared_dashboard", stop_dashboard)
+    monkeypatch.setattr("claude_tap.cli.stop_dashboard_service", stop_dashboard)
 
     args = parse_dashboard_args(["stop", "--tap-live-port", "23456"])
 
