@@ -75,9 +75,9 @@ from claude_tap.shared_dashboard import (
     dashboard_url,
     ensure_shared_dashboard,
     is_dashboard_healthy,
-    is_legacy_dashboard_healthy,
     resolve_dashboard_port,
-    stop_shared_dashboard,
+    stop_dashboard_service,
+    stop_incompatible_dashboard_if_running,
 )
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
@@ -179,7 +179,7 @@ def _open_browser(url: str) -> None:
 
 
 async def _is_dashboard_reusable(host: str, port: int) -> bool:
-    return await is_dashboard_healthy(host, port) or await is_legacy_dashboard_healthy(host, port)
+    return await is_dashboard_healthy(host, port)
 
 
 def _dashboard_stop_command(host: str, port: int) -> str:
@@ -995,7 +995,7 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         if not await is_dashboard_healthy(host, port, require_current_db=False):
             print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
             return 1
-        if not await stop_shared_dashboard(host, port):
+        if not await stop_dashboard_service(host, port):
             print(f"Unable to stop claude-tap dashboard on {dashboard_url(host, port)}")
             return 1
         print(f"Stopped claude-tap dashboard on {dashboard_url(host, port)}")
@@ -1011,6 +1011,9 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         if args.open_viewer:
             _open_browser(url)
         return 0
+
+    url = dashboard_url(host, port)
+    await stop_incompatible_dashboard_if_running(host, port, url)
 
     server = LiveViewerServer(
         port=port,

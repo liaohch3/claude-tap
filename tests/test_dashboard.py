@@ -679,6 +679,9 @@ def test_dashboard_template_exposes_session_delete_controls() -> None:
 def test_dashboard_template_exposes_quit_control() -> None:
     template = read_dashboard_template()
 
+    assert 'id="logo-version"' in template
+    assert 'const CLAUDE_TAP_VERSION = "";' in template
+    assert "function applyVersionBadge()" in template
     assert 'id="dashboard-quit"' in template
     assert "quit_dashboard_confirm" in template
     assert "Stop dashboard service" in template
@@ -1467,7 +1470,7 @@ async def test_dashboard_server_sse_events(trace_db) -> None:
 
 @pytest.mark.asyncio
 async def test_dashboard_server_quit_route_stops_dashboard(trace_db) -> None:
-    from claude_tap.shared_dashboard import is_dashboard_healthy, wait_for_dashboard_stopped
+    from claude_tap.shared_dashboard import CLAUDE_TAP_VERSION, is_dashboard_healthy, wait_for_dashboard_stopped
 
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()
@@ -1477,6 +1480,7 @@ async def test_dashboard_server_quit_route_stops_dashboard(trace_db) -> None:
             async with session.get(f"http://127.0.0.1:{port}/dashboard") as resp:
                 assert resp.status == 200
                 html = await resp.text()
+                assert f'const CLAUDE_TAP_VERSION = "{CLAUDE_TAP_VERSION}";' in html
                 assert f'const DASHBOARD_QUIT_TOKEN = "{server._dashboard_quit_token}";' in html
                 assert "const DASHBOARD_CAN_STOP = true;" in html
 
@@ -1488,6 +1492,7 @@ async def test_dashboard_server_quit_route_stops_dashboard(trace_db) -> None:
             async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:
                 assert resp.status == 200
                 health = await resp.json()
+                assert health["version"] == CLAUDE_TAP_VERSION
                 assert health["quit_token"] == server._dashboard_quit_token
 
             async with session.post(
@@ -1505,7 +1510,7 @@ async def test_dashboard_server_quit_route_stops_dashboard(trace_db) -> None:
 
 @pytest.mark.asyncio
 async def test_dashboard_quit_token_requires_trusted_host_and_origin(trace_db) -> None:
-    from claude_tap.shared_dashboard import is_dashboard_healthy
+    from claude_tap.shared_dashboard import CLAUDE_TAP_VERSION, is_dashboard_healthy
 
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()
@@ -1518,6 +1523,7 @@ async def test_dashboard_quit_token_requires_trusted_host_and_origin(trace_db) -
             ) as resp:
                 assert resp.status == 200
                 html = await resp.text()
+                assert f'const CLAUDE_TAP_VERSION = "{CLAUDE_TAP_VERSION}";' in html
                 assert 'const DASHBOARD_QUIT_TOKEN = "";' in html
                 assert "const DASHBOARD_CAN_STOP = false;" in html
                 assert "session-list" in html
@@ -1530,6 +1536,7 @@ async def test_dashboard_quit_token_requires_trusted_host_and_origin(trace_db) -
                 payload = await resp.json()
                 assert payload["ok"] is True
                 assert payload["dashboard_mode"] is True
+                assert payload["version"] == CLAUDE_TAP_VERSION
                 assert "quit_token" not in payload
 
             async with session.get(f"http://127.0.0.1:{port}/dashboard/health") as resp:

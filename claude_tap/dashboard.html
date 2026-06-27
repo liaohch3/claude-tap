@@ -97,6 +97,12 @@ button { cursor: pointer; }
 .header .logo { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .header .logo svg { width: 22px; height: 22px; }
 .header .logo span { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: -0.3px; }
+.header .logo .logo-version {
+  display: none; align-items: center; height: 20px; padding: 0 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-secondary); background: var(--bg-hover);
+  font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0;
+}
 .header .divider { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; }
 .path-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; flex: 1 1 0; }
 .filter-chip {
@@ -967,6 +973,7 @@ pre {
   <div class="logo">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     <span>claude-tap</span>
+    <span class="logo-version" id="logo-version"></span>
   </div>
   <div class="divider"></div>
   <div class="path-filter" id="agent-list"></div>
@@ -1107,6 +1114,7 @@ pre {
 
 <script>
 const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
+const CLAUDE_TAP_VERSION = "";
 const DASHBOARD_QUIT_TOKEN = "";
 const DASHBOARD_CAN_STOP = false;
 
@@ -1151,6 +1159,18 @@ const $ = selector => document.querySelector(selector);
 	let deleteSessionReturnFocusEl = null;
 	let searchRefreshTimer = null;
 	let dashboardEvents = null;
+
+function applyVersionBadge() {
+  const badge = $("#logo-version");
+  if (!badge) return;
+  const rawVersion = String(CLAUDE_TAP_VERSION || "").trim();
+  if (!rawVersion) {
+    badge.style.display = "none";
+    return;
+  }
+  badge.textContent = rawVersion.startsWith("v") ? rawVersion : `v${rawVersion}`;
+  badge.style.display = "inline-flex";
+}
 
 function initialSessionId() {
   const routeMatch = window.location.pathname.match(SESSION_DETAIL_ROUTE);
@@ -2490,6 +2510,7 @@ if (dashboardQuitButton) {
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));
 
 	applyI18n();
+	applyVersionBadge();
 	initTheme();
 	updateClock();
 	setInterval(updateClock, 1000);
