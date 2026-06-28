@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+
+## [0.1.124] - 2026-06-28
+
+### Changed
+- fix: hide Windows console for update subprocesses
 ## [0.1.123] - 2026-06-27
 
 ### Changed
