@@ -313,6 +313,9 @@ class MacOSMenuApp:
         self.refresh_menu()
 
     def open_dashboard(self) -> None:
+        if not self.controller.is_running() and not self._confirm_start_monitor():
+            self.refresh_menu()
+            return
         self.controller.open_dashboard()
         self.refresh_menu()
 

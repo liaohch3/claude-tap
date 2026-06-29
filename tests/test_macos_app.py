@@ -547,6 +547,25 @@ def test_menu_app_start_monitor_cancel_does_not_start() -> None:
     assert calls == ["refresh"]
 
 
+def test_menu_app_open_dashboard_cancel_does_not_start_when_stopped() -> None:
+    class FakeController:
+        def is_running(self) -> bool:
+            return False
+
+        def open_dashboard(self) -> None:
+            pytest.fail("open dashboard should not start without confirmation")
+
+    app = object.__new__(MacOSMenuApp)
+    app.controller = FakeController()
+    calls: list[str] = []
+    app.refresh_menu = lambda: calls.append("refresh")  # type: ignore[method-assign]
+    app._confirm_start_monitor = lambda: False  # type: ignore[method-assign]
+
+    app.open_dashboard()
+
+    assert calls == ["refresh"]
+
+
 class FakeObjC:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str, tuple[object, ...]]] = []
@@ -644,6 +663,9 @@ def test_menu_app_wrappers_refresh_and_quit() -> None:
     events: list[str] = []
 
     class FakeController:
+        def is_running(self) -> bool:
+            return True
+
         def stop(self) -> bool:
             events.append("stop")
             return True
