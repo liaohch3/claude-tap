@@ -19,7 +19,7 @@ from claude_tap.shared_dashboard import dashboard_url, resolve_dashboard_port
 
 _NS_VARIABLE_STATUS_ITEM_LENGTH = -1.0
 _NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
-_NS_IMAGE_LEFT = 2
+_NS_IMAGE_ONLY = 1
 _NS_ALERT_FIRST_BUTTON_RETURN = 1000
 # Absolute default so the app works when launched from Finder (cwd is "/").
 _DEFAULT_OUTPUT_DIR = Path.home() / ".claude-tap" / "traces"
@@ -369,15 +369,15 @@ class MacOSMenuApp:
             "imageWithSystemSymbolName:accessibilityDescription:",
             ctypes.c_void_p,
             [ctypes.c_void_p, ctypes.c_void_p],
-            objc.nsstring("sparkles"),
-            objc.nsstring("Claude Tap"),
+            objc.nsstring("rectangle.grid.2x2"),
+            objc.nsstring("Dashboard"),
         )
         if image:
             objc.msg(image, "setTemplate:", None, [ctypes.c_bool], True)
             objc.msg(button, "setImage:", None, [ctypes.c_void_p], image)
-            objc.msg(button, "setImagePosition:", None, [ctypes.c_ulong], _NS_IMAGE_LEFT)
-        objc.msg(button, "setTitle:", None, [ctypes.c_void_p], objc.nsstring("Claude"))
-        objc.msg(button, "setToolTip:", None, [ctypes.c_void_p], objc.nsstring("Claude Tap"))
+            objc.msg(button, "setImagePosition:", None, [ctypes.c_ulong], _NS_IMAGE_ONLY)
+        objc.msg(button, "setTitle:", None, [ctypes.c_void_p], objc.nsstring(""))
+        objc.msg(button, "setToolTip:", None, [ctypes.c_void_p], objc.nsstring("Dashboard"))
 
     def _add_menu_item(self, menu: int, title: str, action: str | None, *, enabled: bool = True) -> int:
         objc = self._objc

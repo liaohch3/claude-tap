@@ -659,6 +659,51 @@ def test_menu_app_run_builds_menu_and_refreshes_without_auto_start(monkeypatch: 
     assert "Latest: codex (2) - hello from trace" in titles
 
 
+def test_menu_app_status_item_uses_dashboard_icon_without_visible_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_objc = FakeObjC()
+    monkeypatch.setattr(macos_app, "_ObjC", lambda: fake_objc)
+    monkeypatch.setattr(macos_app, "list_trace_sessions", lambda: [])
+
+    class FakeController:
+        def is_running(self) -> bool:
+            return False
+
+        def can_stop(self) -> bool:
+            return False
+
+        def start(self) -> str:
+            pytest.fail("auto_start=False should not start")
+
+    app = MacOSMenuApp(FakeController(), auto_start=False)  # type: ignore[arg-type]
+
+    assert app.run() == 0
+
+    image_symbols = [
+        (fake_objc.strings[args[0]], fake_objc.strings[args[1]])
+        for _receiver, selector, args in fake_objc.calls
+        if selector == "imageWithSystemSymbolName:accessibilityDescription:"
+    ]
+    assert image_symbols == [("rectangle.grid.2x2", "Dashboard")]
+
+    image_positions = [args[0] for _receiver, selector, args in fake_objc.calls if selector == "setImagePosition:"]
+    assert image_positions == [macos_app._NS_IMAGE_ONLY]
+
+    status_titles = [
+        fake_objc.strings[args[0]]
+        for _receiver, selector, args in fake_objc.calls
+        if selector == "setTitle:" and args and args[0] in fake_objc.strings
+    ]
+    assert "" in status_titles
+    assert "Claude" not in status_titles
+
+    tooltips = [
+        fake_objc.strings[args[0]] for _receiver, selector, args in fake_objc.calls if selector == "setToolTip:"
+    ]
+    assert tooltips == ["Dashboard"]
+
+
 def test_menu_app_wrappers_refresh_and_quit() -> None:
     events: list[str] = []
 
