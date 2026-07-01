@@ -208,6 +208,7 @@ class LiveViewerServer:
         app.router.add_get("/viewer", self._handle_index)
         app.router.add_get("/dashboard", self._handle_dashboard_index)
         app.router.add_get("/dashboard/session/{session_id}", self._handle_dashboard_session_detail)
+        app.router.add_get("/dashboard/chat/{session_id}", self._handle_dashboard_chat)
         app.router.add_get("/dashboard/health", self._handle_dashboard_health)
         app.router.add_get("/dashboard/events", self._handle_dashboard_sse)
         app.router.add_post("/dashboard/quit", self._handle_dashboard_quit)
@@ -343,6 +344,15 @@ class LiveViewerServer:
         if ensure_trace_store().load_session_row(request.match_info["session_id"]) is None:
             return web.Response(status=404, text="Session not found")
         return await self._handle_dashboard_index(request)
+
+    async def _handle_dashboard_chat(self, request: web.Request) -> web.Response:
+        """Serve the chat-style session viewer page."""
+        chat_html_path = Path(__file__).parent / "chat.html"
+        try:
+            html = chat_html_path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return web.Response(status=404, text="chat.html not found")
+        return web.Response(text=html, content_type="text/html")
 
     async def _handle_dashboard_health(self, request: web.Request) -> web.Response:
         payload = {
