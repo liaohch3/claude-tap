@@ -519,8 +519,19 @@ function normalizeChatCompletionsChoiceOutput(body) {
   for (const choice of body.choices) {
     const message = choice?.message || choice?.delta;
     if (!message || typeof message !== 'object') continue;
-    if (typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) {
+    if (Array.isArray(message.reasoning_details)) {
+      for (const detail of message.reasoning_details) {
+        const text = detail?.text;
+        if (typeof text === 'string' && text.trim()) {
+          appendMergeableResponseBlock(content, { type: 'thinking', thinking: text });
+        }
+      }
+    }
+    if (!content.length && typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) {
       appendMergeableResponseBlock(content, { type: 'thinking', thinking: message.reasoning_content });
+    }
+    if (!content.length && typeof message.reasoning === 'string' && message.reasoning.trim()) {
+      appendMergeableResponseBlock(content, { type: 'thinking', thinking: message.reasoning });
     }
     if (typeof message.thinking === 'string' && message.thinking.trim()) {
       appendMergeableResponseBlock(content, { type: 'thinking', thinking: message.thinking });
