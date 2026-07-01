@@ -9,7 +9,7 @@
 
 [English](README.md)
 
-`claude-tap` 是给 AI 编程 agent 用的本地代理和 trace 查看器。把 CLI 通过它启动，或监听本地 app transcript，就能看到真实 API 流量和 agent 上下文：system prompt、对话历史、工具 schema、工具调用、流式响应、token 用量和请求 diff。
+`claude-tap` 是给 AI 编程 agent 用的本地代理和 trace 查看器。把客户端通过它启动，就能看到真实 API 流量和 agent 上下文：system prompt、对话历史、工具 schema、工具调用、流式响应、token 用量和请求 diff。
 
 网站：[本地 AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · 指南：[如何本地查看 Agent traces](docs/guides/agent-trace-viewer.zh.md)
 
@@ -72,7 +72,7 @@
 |--------|----------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API、AWS Bedrock、DeepSeek / GLM 等 Claude 兼容网关，或 CC Switch 等本地代理上游 |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
-| [Codex App](https://openai.com/codex/) | 从 `CODEX_HOME` 或 `~/.codex` 导入本地 Codex App 会话；自动尽力补充 CDP WebSocket 证据 |
+| [Codex App](https://openai.com/codex/) | 通过 forward proxy 捕获 Codex App 上游 HTTP/WebSocket 流量 |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist 的多 Google 端点流量 |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | 旧版 kimi-cli 和新版 Kimi Code CLI |
 | [MiMo Code](https://mimo.xiaomi.com/en/mimocode) | MiMo Code 会话（基于 OpenCode 的多提供方 fork） |
@@ -113,7 +113,7 @@ claude-tap --tap-no-live
 # Codex CLI
 claude-tap --tap-client codex
 
-# Codex App 本地会话监听
+# Codex App
 claude-tap --tap-client codexapp
 
 # Gemini CLI
@@ -298,19 +298,16 @@ claude-tap --tap-client codex -- --full-auto
 </details>
 
 <details>
-<summary>Codex App 监听示例</summary>
+<summary>Codex App 捕获示例</summary>
 
-Codex App 会话会从 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 下的本地 JSONL 文件导入。这个模式不会启动 Codex，也不会创建网络代理；它会保持一个 claude-tap dashboard session，并在 Codex App 运行中或完成后追加可查看的记录。
+默认情况下，claude-tap 会通过 forward proxy 启动 Codex App，这样 dashboard 可以捕获原始上游 HTTP/WebSocket 流量，包括请求头和请求体。请先关闭已经运行的 Codex App，确保新启动进程继承代理和 CA 环境变量。
 
 ```bash
-# 监听本地 Codex App 会话，并在 dashboard 中查看
+# 启动 Codex App，并在 dashboard 中查看捕获到的上游流量
 claude-tap --tap-client codexapp
-
-# 使用自定义 Codex home 目录
-CODEX_HOME=/path/to/codex-home claude-tap --tap-client codexapp
 ```
 
-`--tap-client codexapp` 会自动导入本地 transcript，并在 Codex App debug endpoint 可用时静默补充 CDP WebSocket 证据。CDP capture 是旁路观测，不是代理；如果前端没有通过 Chrome DevTools Protocol 暴露模型流量，Codex App 复盘仍以本地 session transcript 为准。
+macOS 默认启动 `/Applications/Codex.app/Contents/MacOS/Codex`，并在需要时自动把本地 CA 信任到当前用户 login keychain。如果安装位置不同，可设置 `CODEX_APP_EXECUTABLE=/path/to/Codex.app/Contents/MacOS/Codex`。如果 Codex App 已经在运行，claude-tap 会直接失败，因为已有 app-server 不会可靠继承新的代理环境。
 
 </details>
 
@@ -568,8 +565,8 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 --tap-store-stream-events 捕获时把原始 SSE/WebSocket event 数组写入 trace 存储，以便查看器/导出结果展示（默认关闭）
 --tap-no-update-check    禁用启动时的 PyPI 更新检查
 --tap-no-auto-update     仅检查更新，不自动下载
---tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi/kimi-code/openclaw/codebuddy 用 reverse，agy/gemini/mimo/opencode/pi/hermes/cursor/qoder 用 forward；codexapp 是 transcript-only）
---tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy 会自动执行）
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi/kimi-code/openclaw/codebuddy 用 reverse，agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder 用 forward）
+--tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy/codexapp 会自动执行）
 ```
 
 </details>

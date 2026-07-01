@@ -23,7 +23,7 @@ English version: [Support Matrix](support-matrix.md).
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | WebSocket | 已验证 |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | 已验证 |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | 已验证 |
-| Codex App | Codex App 中的 ChatGPT 账号 | `codex-app://sessions` | n/a | 本地 session JSONL transcript import；当 Codex App debug endpoint 可用时自动尽力补充 CDP WebSocket 证据 | 单测覆盖 |
+| Codex App | Codex App 中的 ChatGPT 账号 | `codex-app://sessions` | n/a | 通过 forward proxy 捕获原始上游 HTTP/WebSocket 流量 | 单测覆盖 |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy（Google 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | Gemini CLI | API key / Vertex 兼容配置（`--tap-proxy-mode reverse`） | `https://generativelanguage.googleapis.com` | 无 | HTTP/SSE | 单测覆盖 |
 | Kimi CLI（旧版 kimi-cli） | Kimi CLI 认证/配置 | `https://api.kimi.com/coding/v1` | 无 | HTTP/SSE Chat Completions | 单测覆盖（`KIMI_BASE_URL`） |
@@ -53,7 +53,7 @@ English version: [Support Matrix](support-matrix.md).
 |--------|----------|------|
 | `claude` | `reverse` | 单 provider，原生支持 Claude provider base URL 环境变量（`ANTHROPIC_BASE_URL`、`ANTHROPIC_BEDROCK_BASE_URL`、`ANTHROPIC_VERTEX_BASE_URL`） |
 | `codex` | `reverse` | 单 provider，原生支持 `OPENAI_BASE_URL` 环境变量 |
-| `codexapp` | `transcript` | 监听 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 的 transcript 客户端；不会创建代理。Codex App 暴露 debug endpoint 时会自动追加 CDP WebSocket 证据 |
+| `codexapp` | `forward` | 默认通过 forward proxy 启动 Codex App，捕获原始上游 HTTP/WebSocket 流量 |
 | `gemini` | `forward` | Google OAuth / Code Assist 会访问多个 Google 端点；forward proxy 不依赖单一 base URL，更适合作为默认 |
 | `kimi` | `reverse` | 旧版 kimi-cli；原生 `KIMI_BASE_URL` 环境变量 |
 | `kimi-code` | `reverse` | 通过临时 `KIMI_CODE_HOME` sandbox 补丁 `~/.kimi-code/config.toml` |
@@ -67,7 +67,7 @@ English version: [Support Matrix](support-matrix.md).
 | `agy` | `forward` | Antigravity 会访问多个 Google / Antigravity 端点；claude-tap 用 `HTTPS_PROXY` 捕获辅助流量，并用 `CLOUD_CODE_URL` 捕获 Code Assist 模型流量 |
 | `codebuddy` | `reverse` | 单 provider，原生支持 `CODEBUDDY_BASE_URL` 环境变量；支持 `--settings` 环境变量注入；上游 endpoint 自动从 CodeBuddy 登录缓存识别 |
 
-用户可以通过 `--tap-proxy-mode {reverse,forward}` 覆盖有代理的客户端。`codexapp` 是 transcript-only，`--tap-proxy-mode` 不适用。
+用户可以通过 `--tap-proxy-mode {reverse,forward}` 覆盖有代理的客户端。`codexapp` 只支持 forward 模式，会为 Codex App 注入 `HTTP_PROXY` / `HTTPS_PROXY`、`SSL_CERT_FILE`、`CODEX_CA_CERTIFICATE`，并附加 Chromium `--proxy-server` 参数。这个模式必须启动新的 Codex App 进程；请先退出已经运行的 Codex App，确保代理环境变量被继承。如果检测到已有 Codex App 进程，claude-tap 会直接失败；只有设置 `CLAUDE_TAP_ALLOW_RUNNING_CODEX_APP=1` 时才会继续启动。
 
 ## 子命令 argv 改写
 
@@ -113,10 +113,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 
 - `test_codex_upstream_url_construction`：验证全部 5 个矩阵组合的 URL 构造
 - `test_codex_client_reverse_proxy`：使用 fake upstream 覆盖 OAuth 类 reverse proxy e2e
-- `test_build_codex_app_transcript_records_preserves_turn_context`：验证 Codex App session JSONL 会导入为 viewer 友好的 Responses 记录，并保留 usage、tools 和 tool results
-- `test_import_codex_app_transcripts_appends_only_new_completed_records`：验证 Codex App transcript 轮询只追加新的已完成记录
-- `test_cdp_recorder_writes_viewer_friendly_websocket_record`：验证 Codex App CDP WebSocket frame 会重建为 viewer 友好的 WebSocket 记录
-- `test_async_main_codexapp_starts_cdp_enrichment_by_default`：验证 `--tap-client codexapp` 默认启动 CDP 补充采集，并遵循全局原始 stream event 存储设置
+- `test_run_client_codexapp_forward_launches_desktop_app_with_proxy_env`：验证 Codex App forward 启动会注入代理、CA 和 Chromium proxy switch 设置
 - `test_gemini_registered_in_client_configs`：验证 Gemini CLI 注册和默认 forward 模式
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs`：验证 Gemini forward proxy 启动环境变量
 - `test_run_client_gemini_reverse_sets_both_base_url_envs`：验证 Gemini reverse proxy base URL 环境变量注入
@@ -157,8 +154,7 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Repl
 
 # Codex App
 uv run python -m claude_tap --tap-client codexapp
-# 启动或继续一个 Codex App 任务，并验证 dashboard 收到 transcript records。
-# 如果 Codex App 暴露 debug endpoint，websocket 证据会自动追加。
+# 启动一个 Codex App 任务，并验证 dashboard 收到 raw proxy records。
 
 # Qoder CLI
 uv run python -m claude_tap --tap-client qoder -- -p "Reply OK" --permission-mode dont_ask

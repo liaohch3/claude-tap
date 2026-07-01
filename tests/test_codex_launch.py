@@ -12,6 +12,7 @@ from claude_tap.cli import (
     parse_args,
     run_client,
 )
+from claude_tap.cli_clients import _codex_app_bundle_marker, _codex_app_process_already_running
 
 
 class _DummyProc:
@@ -106,6 +107,183 @@ async def test_run_client_codex_forward_sets_rust_tls_ca_env(monkeypatch) -> Non
     assert captured["env"]["HTTPS_PROXY"] == "http://127.0.0.1:43123"
     assert captured["env"]["SSL_CERT_FILE"] == str(ca_path)
     assert captured["env"]["CODEX_CA_CERTIFICATE"] == str(ca_path)
+
+
+@pytest.mark.asyncio
+async def test_run_client_codexapp_forward_launches_desktop_app_with_proxy_env(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    ca_path = tmp_path / "claude-tap-ca.pem"
+    codex_app = tmp_path / "Codex.app" / "Contents" / "MacOS" / "Codex"
+    codex_app.parent.mkdir(parents=True)
+    codex_app.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setenv("CODEX_APP_EXECUTABLE", str(codex_app))
+    monkeypatch.setattr("claude_tap.cli_clients._codex_app_process_already_running", lambda _: False)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, [], client="codexapp", proxy_mode="forward", ca_cert_path=ca_path)
+
+    assert code == 0
+    assert captured["cmd"] == (str(codex_app), "--proxy-server=http://127.0.0.1:43123")
+    env = captured["env"]
+    assert env["HTTP_PROXY"] == "http://127.0.0.1:43123"
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:43123"
+    assert env["ALL_PROXY"] == "http://127.0.0.1:43123"
+    assert env["SSL_CERT_FILE"] == str(ca_path)
+    assert env["CODEX_CA_CERTIFICATE"] == str(ca_path)
+
+
+@pytest.mark.asyncio
+async def test_run_client_codexapp_forward_preserves_existing_proxy_switch(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    codex_app = tmp_path / "Codex"
+    codex_app.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    monkeypatch.setenv("CODEX_APP_EXECUTABLE", str(codex_app))
+    monkeypatch.setattr("claude_tap.cli_clients._codex_app_process_already_running", lambda _: False)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(
+        43123,
+        ["--proxy-server=http://127.0.0.1:9999"],
+        client="codexapp",
+        proxy_mode="forward",
+    )
+
+    assert code == 0
+    assert captured["cmd"] == (str(codex_app), "--proxy-server=http://127.0.0.1:9999")
+
+
+@pytest.mark.asyncio
+async def test_run_client_codexapp_forward_requires_desktop_app_executable(monkeypatch) -> None:
+    monkeypatch.delenv("CODEX_APP_EXECUTABLE", raising=False)
+    monkeypatch.setattr("claude_tap.cli_clients._codex_app_executable_candidates", lambda: ())
+
+    code = await run_client(43123, [], client="codexapp", proxy_mode="forward")
+
+    assert code == 1
+
+
+@pytest.mark.asyncio
+async def test_run_client_codexapp_forward_rejects_already_running_app(monkeypatch, tmp_path: Path) -> None:
+    codex_app = tmp_path / "Codex"
+    codex_app.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    async def fail_create_subprocess_exec(*cmd, **kwargs):
+        raise AssertionError(f"Codex App should not be launched when already running: {cmd}")
+
+    monkeypatch.setenv("CODEX_APP_EXECUTABLE", str(codex_app))
+    monkeypatch.delenv("CLAUDE_TAP_ALLOW_RUNNING_CODEX_APP", raising=False)
+    monkeypatch.setattr("claude_tap.cli_clients._codex_app_process_already_running", lambda _: True)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_create_subprocess_exec)
+
+    code = await run_client(43123, [], client="codexapp", proxy_mode="forward")
+
+    assert code == 1
+
+
+@pytest.mark.asyncio
+async def test_run_client_codexapp_forward_allows_running_app_with_override(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    codex_app = tmp_path / "Codex"
+    codex_app.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    monkeypatch.setenv("CODEX_APP_EXECUTABLE", str(codex_app))
+    monkeypatch.setenv("CLAUDE_TAP_ALLOW_RUNNING_CODEX_APP", "1")
+    monkeypatch.setattr("claude_tap.cli_clients._codex_app_process_already_running", lambda _: True)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, [], client="codexapp", proxy_mode="forward")
+
+    assert code == 0
+    assert captured["cmd"] == (str(codex_app), "--proxy-server=http://127.0.0.1:43123")
+
+
+def test_codex_app_process_detection_matches_bundle_helpers(monkeypatch, tmp_path: Path) -> None:
+    codex_app = tmp_path / "Codex.app" / "Contents" / "MacOS" / "Codex"
+    helper = tmp_path / "Codex.app" / "Contents" / "Frameworks" / "Codex Framework.framework" / "Helper"
+    codex_app.parent.mkdir(parents=True)
+    codex_app.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    class Result:
+        returncode = 0
+        stdout = f"123 {helper} --type=renderer\n456 /usr/bin/other\n"
+
+    monkeypatch.setattr("claude_tap.cli_clients.sys.platform", "darwin")
+    monkeypatch.setattr("claude_tap.cli_clients.subprocess.run", lambda *_, **__: Result())
+    monkeypatch.setattr("claude_tap.cli_clients.os.getpid", lambda: 999)
+
+    assert _codex_app_process_already_running(str(codex_app)) is True
+
+
+def test_codex_app_process_detection_skips_non_macos(monkeypatch) -> None:
+    monkeypatch.setattr("claude_tap.cli_clients.sys.platform", "linux")
+    monkeypatch.setattr(
+        "claude_tap.cli_clients.subprocess.run",
+        lambda *_, **__: (_ for _ in ()).throw(AssertionError("ps should not run outside macOS")),
+    )
+
+    assert _codex_app_process_already_running("/Applications/Codex.app/Contents/MacOS/Codex") is False
+
+
+def test_codex_app_process_detection_ignores_ps_failures(monkeypatch) -> None:
+    monkeypatch.setattr("claude_tap.cli_clients.sys.platform", "darwin")
+    monkeypatch.setattr(
+        "claude_tap.cli_clients.subprocess.run",
+        lambda *_, **__: (_ for _ in ()).throw(OSError("ps unavailable")),
+    )
+
+    assert _codex_app_process_already_running("/Applications/Codex.app/Contents/MacOS/Codex") is False
+
+
+def test_codex_app_process_detection_ignores_nonzero_ps(monkeypatch) -> None:
+    class Result:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr("claude_tap.cli_clients.sys.platform", "darwin")
+    monkeypatch.setattr("claude_tap.cli_clients.subprocess.run", lambda *_, **__: Result())
+
+    assert _codex_app_process_already_running("/Applications/Codex.app/Contents/MacOS/Codex") is False
+
+
+def test_codex_app_process_detection_ignores_bad_and_current_process_lines(monkeypatch, tmp_path: Path) -> None:
+    codex_app = tmp_path / "Codex.app" / "Contents" / "MacOS" / "Codex"
+    codex_app.parent.mkdir(parents=True)
+    codex_app.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    class Result:
+        returncode = 0
+        stdout = f"not-a-pid {codex_app}\n777 {codex_app}\n888 /usr/bin/other\n"
+
+    monkeypatch.setattr("claude_tap.cli_clients.sys.platform", "darwin")
+    monkeypatch.setattr("claude_tap.cli_clients.subprocess.run", lambda *_, **__: Result())
+    monkeypatch.setattr("claude_tap.cli_clients.os.getpid", lambda: 777)
+
+    assert _codex_app_process_already_running(str(codex_app)) is False
+
+
+def test_codex_app_bundle_marker_returns_none_for_plain_executable(tmp_path: Path) -> None:
+    executable = tmp_path / "Codex"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert _codex_app_bundle_marker(str(executable)) is None
 
 
 def test_has_config_override_detects_cli_forms() -> None:
