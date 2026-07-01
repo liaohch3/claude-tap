@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.1.125] - 2026-07-01
+
+### Changed
+- Show macOS monitor startup failures (#335)
 ### Added
 - Add a local macOS menu bar app launcher with dashboard monitor controls.
 
