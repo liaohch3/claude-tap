@@ -118,9 +118,7 @@ def main() -> int:
 
     # -- Step 6: force-quit while active -> monitor-restore recovers ---------
     print("\n== Step 6: force-quit while active -> claude-tap monitor-restore ==")
-    orphan = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(120)", "claude_tap", "--tap-no-launch"]
-    )
+    orphan = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "claude_tap", "--tap-no-launch"])
     time.sleep(0.3)
     # Enable with the orphan recorded, then simulate a force-quit by NOT calling
     # disable(): injected config + monitor-state remain on disk, app is gone.
@@ -134,8 +132,12 @@ def main() -> int:
 
     # Real recovery command: `claude-tap monitor-restore`.
     proc = subprocess.run(
-        [sys.executable, "-c", "import sys; sys.argv=['claude-tap','monitor-restore']; "
-         "from claude_tap.cli import main_entry; main_entry()"],
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.argv=['claude-tap','monitor-restore']; "
+            "from claude_tap.cli import main_entry; main_entry()",
+        ],
         env={**os.environ, "HOME": str(tmp), "CODEX_HOME": str(tmp / ".codex")},
         capture_output=True,
         text=True,
