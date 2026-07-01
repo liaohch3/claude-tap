@@ -183,6 +183,58 @@ def test_chat_completions_reasoning_content_is_mirrored_as_thinking() -> None:
     assert snap["content"][1] == {"type": "text", "text": "Done."}
 
 
+def test_chat_completions_reasoning_is_mirrored_as_thinking() -> None:
+    """Some OpenAI-compatible providers stream thinking as `delta.reasoning`.
+
+    opencode users reported this shape with MiniMax-M2.7; it should render the
+    same viewer thinking block as `delta.reasoning_content`.
+    """
+    r = SSEReassembler()
+    r.feed_bytes(
+        b'data: {"id":"c_minimax","model":"MiniMax-M2.7",'
+        b'"choices":[{"delta":{"role":"assistant","reasoning":"Think "}}]}\n\n'
+        b'data: {"id":"c_minimax","choices":[{"delta":{"reasoning":"carefully."}}]}\n\n'
+        b'data: {"id":"c_minimax","choices":[{"delta":{"content":"Done."}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    snap = r.reconstruct()
+    assert snap is not None
+    assert snap["choices"][0]["message"]["reasoning"] == "Think carefully."
+    assert snap["choices"][0]["message"]["content"] == "Done."
+    assert snap["content"][0] == {"type": "thinking", "thinking": "Think carefully."}
+    assert snap["content"][1] == {"type": "text", "text": "Done."}
+
+
+def test_chat_completions_reasoning_details_buffer_is_mirrored_as_thinking() -> None:
+    """MiniMax can stream thinking in `reasoning_details[].text` buffers."""
+    r = SSEReassembler()
+    r.feed_bytes(
+        b'data: {"id":"c_minimax","model":"MiniMax-M2.7",'
+        b'"choices":[{"delta":{"role":"assistant","reasoning_details":'
+        b'[{"index":0,"type":"reasoning.text","text":"Think "},'
+        b'{"index":1,"type":"reasoning.text","text":"Check "}]}}]}\n\n'
+        b'data: {"id":"c_minimax","choices":[{"delta":{"reasoning_details":'
+        b'[{"index":0,"type":"reasoning.text","text":"Think carefully."},'
+        b'{"index":1,"type":"reasoning.text","text":"Check result."}],'
+        b'"reasoning_content":"Think carefully.\\n\\nCheck result."}}]}\n\n'
+        b'data: {"id":"c_minimax","choices":[{"delta":{"content":"Done."}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    snap = r.reconstruct()
+    assert snap is not None
+    msg = snap["choices"][0]["message"]
+    assert msg["reasoning_details"] == [
+        {"index": 0, "type": "reasoning.text", "text": "Think carefully."},
+        {"index": 1, "type": "reasoning.text", "text": "Check result."},
+    ]
+    assert "reasoning_content" not in msg
+    assert msg["content"] == "Done."
+    assert snap["content"][0] == {"type": "thinking", "thinking": "Think carefully.\n\nCheck result."}
+    assert snap["content"][1] == {"type": "text", "text": "Done."}
+
+
 def test_chat_completions_tool_call_accumulation() -> None:
     """Tool calls stream as indexed deltas with name/arguments concatenated
     across multiple chunks. Final snapshot must have the assembled call."""

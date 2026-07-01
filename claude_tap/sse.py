@@ -311,9 +311,14 @@ class SSEReassembler:
 
         if isinstance(delta.get("role"), str) and delta["role"]:
             msg["role"] = delta["role"]
-        if isinstance(delta.get("reasoning_content"), str) and delta["reasoning_content"]:
-            msg["reasoning_content"] = (msg.get("reasoning_content") or "") + delta["reasoning_content"]
-            self._mirror_reasoning_to_content(msg["reasoning_content"])
+        reasoning_details = self._merge_chat_completion_reasoning_details(msg, delta.get("reasoning_details"))
+        if reasoning_details:
+            self._mirror_reasoning_to_content(reasoning_details)
+        else:
+            for reasoning_key in ("reasoning_content", "reasoning"):
+                if isinstance(delta.get(reasoning_key), str) and delta[reasoning_key]:
+                    msg[reasoning_key] = (msg.get(reasoning_key) or "") + delta[reasoning_key]
+                    self._mirror_reasoning_to_content(msg[reasoning_key])
         if isinstance(delta.get("content"), str) and delta["content"]:
             msg["content"] = (msg.get("content") or "") + delta["content"]
             text_block["text"] = (text_block.get("text") or "") + delta["content"]
@@ -532,6 +537,32 @@ class SSEReassembler:
         block = self._chat_completion_thinking_block(create=True)
         if block is not None:
             block["thinking"] = reasoning
+
+    def _merge_chat_completion_reasoning_details(self, msg: dict, details) -> str:
+        """Merge MiniMax reasoning_details buffers and return display text."""
+        if not isinstance(details, list):
+            return ""
+        existing = msg.setdefault("reasoning_details", [])
+        if not isinstance(existing, list):
+            existing = []
+            msg["reasoning_details"] = existing
+
+        for fallback_index, detail in enumerate(details):
+            if not isinstance(detail, dict):
+                continue
+            index = detail.get("index", fallback_index)
+            if not isinstance(index, int) or index < 0:
+                index = fallback_index
+            while len(existing) <= index:
+                existing.append({})
+            existing[index] = copy.deepcopy(detail)
+
+        texts = [
+            detail["text"]
+            for detail in existing
+            if isinstance(detail, dict) and isinstance(detail.get("text"), str) and detail["text"]
+        ]
+        return "\n\n".join(texts)
 
     def _merge_chat_completion_usage(self, usage: dict) -> None:
         """Merge an OpenAI-shape usage dict into the snapshot, exposing both
