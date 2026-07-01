@@ -1,0 +1,33 @@
+HOME=/var/folders/zk/rd35z49x7jj7_j48_zq3jh3c0000gn/T/claude-tap-e2e-61ri2mov
+claude sha=178e77b3c57ab72b… mode=0o600
+codex  sha=551461707325d546… mode=0o600
+
+== Step 3: Start Monitor -> inject base URLs ==
+  [PASS] monitor state is active after enable()
+  [PASS] monitor-state.json written with 0o600
+  [PASS] claude settings.json points at local proxy
+  [PASS] pre-existing claude env preserved
+  [PASS] codex openai_base_url points at local proxy
+  [PASS] codex custom provider base_url ALSO rerouted (not just legacy key)
+  [PASS] settings.json backup exists with original 0o600 perms
+  [PASS] config.toml backup exists with original 0o600 perms
+
+== Step 5: Stop Monitor -> restore ==
+  [PASS] monitor state cleared after disable()
+  [PASS] settings.json restored BYTE-FOR-BYTE
+  [PASS] settings.json restored with original perms
+  [PASS] settings.json backup removed
+  [PASS] config.toml restored BYTE-FOR-BYTE
+  [PASS] config.toml restored with original perms
+  [PASS] config.toml backup removed
+
+== Step 6: force-quit while active -> claude-tap monitor-restore ==
+  [PASS] state present after simulated force-quit (injection left behind)
+  [PASS] config still injected pre-restore
+  [PASS] monitor-restore exited 0 (got 0)
+  [PASS] monitor state cleared by monitor-restore
+  [PASS] settings.json restored BYTE-FOR-BYTE by monitor-restore
+  [PASS] config.toml restored BYTE-FOR-BYTE by monitor-restore
+  [PASS] orphaned monitor proxy terminated by monitor-restore
+
+==== 22/22 checks passed ====
