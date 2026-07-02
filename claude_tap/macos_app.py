@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import os
 import subprocess
 import sys
 import time
 import webbrowser
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,40 @@ _NS_ALERT_FIRST_BUTTON_RETURN = 1000
 _DEFAULT_OUTPUT_DIR = Path.home() / ".claude-tap" / "traces"
 _CALLBACKS: list[Any] = []
 _ACTIVE_APP: MacOSMenuApp | None = None
+
+# Bump this string whenever the menu-bar logic changes so a debug log immediately
+# reveals whether a still-running (stale in-memory) app instance is being used.
+_DEBUG_BUILD_MARKER = "menubar-debug-2026-07-02a"
+_DEBUG_LOG_PATH: Path | None = None
+
+
+def _resolve_debug_log_path() -> Path | None:
+    """Resolve ``<repo>/dist/claude-tap-macos-debug.log`` for the checkout build."""
+    try:
+        dist_dir = Path(__file__).resolve().parents[1] / "dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        return dist_dir / "claude-tap-macos-debug.log"
+    except OSError:
+        return None
+
+
+def _enable_debug_logging() -> None:
+    global _DEBUG_LOG_PATH
+    _DEBUG_LOG_PATH = _resolve_debug_log_path()
+
+
+def _debug_log(message: str) -> None:
+    """Append a timestamped line to the debug log. No-op unless logging is enabled
+    (only ``main`` enables it, so unit tests never write a log)."""
+    path = _DEBUG_LOG_PATH
+    if path is None:
+        return
+    try:
+        line = f"{datetime.now().isoformat(timespec='milliseconds')} [pid={os.getpid()}] {message}\n"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+    except OSError:
+        pass
 
 
 def build_dashboard_command(
@@ -124,14 +160,49 @@ class DashboardMonitorController:
     def url(self) -> str:
         return dashboard_url(self.host, self.port)
 
+    def _debug_state(self) -> str:
+        """Snapshot every signal the running-state logic depends on, for debugging."""
+
+        def _safe(fn: Callable[[], object]) -> object:
+            try:
+                return fn()
+            except Exception as exc:  # noqa: BLE001 - debug snapshot must never raise
+                return f"error:{exc!r}"
+
+        owned_process = self._process.poll() if self._process is not None else "none"
+        owned_proxies = [getattr(p, "pid", None) for p in self._proxy_processes]
+        owned_proxy_polls = [p.poll() for p in self._proxy_processes]
+        listeners: dict[str, object] = {}
+        for label, port in (
+            ("dashboard", self.port),
+            ("claude", self.claude_proxy_port),
+            ("codex", self.codex_proxy_port),
+        ):
+            def _port_listeners(port: int = port) -> object:
+                return {pid: global_inject._monitor_process_command(pid) for pid in global_inject._listening_pids_for_port(port)}
+
+            listeners[f"{label}:{port}"] = _safe(_port_listeners)
+        return (
+            f"injection_active={_safe(self._injection_is_active)} "
+            f"owned_process_poll={owned_process} owned_proxy_pids={owned_proxies} owned_proxy_polls={owned_proxy_polls} "
+            f"recorded_proxy={_safe(lambda: self._recorded_proxy_processes_are_running(claude_port=self.claude_proxy_port, codex_port=self.codex_proxy_port))} "
+            f"proxies_running={_safe(self._proxy_processes_are_running)} "
+            f"dashboard_healthy={_safe(lambda: self._is_healthy(self.host, self.port))} "
+            f"monitor_is_running={_safe(self._monitor_is_running)} listeners={listeners}"
+        )
+
     def start(self) -> str:
+        _debug_log(f"controller.start: entry | {self._debug_state()}")
         if self._monitor_is_running():
+            _debug_log("controller.start: monitor already running -> returning url, no spawn/inject")
             return self.url
 
         try:
             if self._injection_is_active():
+                _debug_log("controller.start: stale injection active -> disabling before restart")
                 self._disable_injection()
             if not self._is_healthy(self.host, self.port):
+                _debug_log("controller.start: dashboard not healthy -> spawning dashboard subprocess")
                 cmd = build_dashboard_command(
                     python_executable=self.python_executable,
                     host=self.host,
@@ -139,21 +210,31 @@ class DashboardMonitorController:
                     output_dir=self.output_dir,
                 )
                 self._process = self._popen(cmd, **self._subprocess_kwargs())
+            else:
+                _debug_log("controller.start: dashboard already healthy -> reusing existing dashboard")
             self._start_proxy("claude", self.claude_proxy_port)
             self._start_proxy("codex", self.codex_proxy_port)
+            _debug_log(
+                "controller.start: spawned proxies "
+                f"pids={[getattr(p, 'pid', None) for p in self._proxy_processes]} on "
+                f"claude={self.claude_proxy_port} codex={self.codex_proxy_port}"
+            )
             self._verify_started_processes()
             self._enable_injection(
                 claude_port=self.claude_proxy_port,
                 codex_port=self.codex_proxy_port,
                 processes=self._monitor_process_records(),
             )
-        except Exception:
+            _debug_log("controller.start: injection enabled -> monitor started ok")
+        except Exception as exc:
+            _debug_log(f"controller.start: FAILED {exc!r} -> terminating owned processes + disabling injection")
             self._terminate_owned_processes()
             self._disable_injection()
             raise
         return self.url
 
     def stop(self) -> bool:
+        _debug_log(f"controller.stop: entry | {self._debug_state()}")
         was_running = self._process_is_running() or self._proxy_processes_are_running() or self._injection_is_active()
         if not was_running:
             self._process = None
@@ -174,11 +255,15 @@ class DashboardMonitorController:
             process.wait(timeout=5.0)
 
     def open_dashboard(self) -> None:
+        _debug_log("controller.open_dashboard: begin (will call start())")
         self.start()
+        _debug_log(f"controller.open_dashboard: opening browser at {self.url}")
         self._open_browser(self.url)
 
     def is_running(self) -> bool:
-        return self._monitor_is_running()
+        result = self._monitor_is_running()
+        _debug_log(f"controller.is_running -> {result} | {self._debug_state()}")
+        return result
 
     def can_stop(self) -> bool:
         return self._process_is_running() or self._proxy_processes_are_running() or self._injection_is_active()
@@ -289,6 +374,7 @@ class MacOSMenuApp:
         global _ACTIVE_APP
 
         _ACTIVE_APP = self
+        _debug_log(f"app.run: build_marker={_DEBUG_BUILD_MARKER} auto_start={self.auto_start}")
         objc = self._objc
         pool = objc.alloc_init("NSAutoreleasePool")
         self._app = objc.msg(objc.cls("NSApplication"), "sharedApplication")
@@ -310,26 +396,37 @@ class MacOSMenuApp:
         return 0
 
     def start_monitor(self) -> None:
+        _debug_log("app.start_monitor: begin")
         if not self._confirm_start_monitor():
+            _debug_log("app.start_monitor: user cancelled confirmation")
             self.refresh_menu()
             return
         try:
             self.controller.start()
         except Exception as exc:
+            _debug_log(f"app.start_monitor: controller.start raised {exc!r}")
             self.refresh_menu()
             self._show_error("Unable to start Claude Tap monitor", _exception_text(exc))
             return
+        _debug_log("app.start_monitor: controller.start returned ok")
         self.refresh_menu()
 
     def stop_monitor(self) -> None:
+        _debug_log("app.stop_monitor: begin")
         self.controller.stop()
         self.refresh_menu()
 
     def open_dashboard(self) -> None:
-        if not self.controller.is_running() and not self._confirm_start_monitor():
-            self.refresh_menu()
-            return
+        running = self.controller.is_running()
+        _debug_log(f"app.open_dashboard: begin is_running={running}")
+        if not running:
+            confirmed = self._confirm_start_monitor()
+            _debug_log(f"app.open_dashboard: monitor not running -> confirm_dialog_result={confirmed}")
+            if not confirmed:
+                self.refresh_menu()
+                return
         self.controller.open_dashboard()
+        _debug_log("app.open_dashboard: controller.open_dashboard returned")
         self.refresh_menu()
 
     def quit(self) -> None:
@@ -338,6 +435,7 @@ class MacOSMenuApp:
 
     def refresh_menu(self) -> None:
         running = self.controller.is_running()
+        _debug_log(f"app.refresh_menu: label will show Monitor: {'Running' if running else 'Stopped'}")
         sessions = _menu_sessions()
         latest = sessions[0] if sessions else None
         latest_text = _latest_session_text(latest)
@@ -613,17 +711,27 @@ def main(argv: list[str] | None = None) -> int:
         print("claude-tap macos-app is only supported on macOS.", file=sys.stderr)
         return 1
 
+    _enable_debug_logging()
     try:
         args = parse_macos_app_args(argv)
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        port = resolve_dashboard_port(args.live_port)
         controller = DashboardMonitorController(
             host=args.host,
-            port=resolve_dashboard_port(args.live_port),
+            port=port,
             output_dir=output_dir,
+        )
+        _debug_log(
+            "======== app launch ======== "
+            f"build_marker={_DEBUG_BUILD_MARKER} python={sys.executable} argv={argv} "
+            f"host={args.host} dashboard_port={port} "
+            f"claude_proxy_port={controller.claude_proxy_port} codex_proxy_port={controller.codex_proxy_port} "
+            f"output_dir={output_dir} auto_start={args.auto_start}"
         )
         return MacOSMenuApp(controller, auto_start=args.auto_start).run()
     except Exception:
+        _debug_log("main: unhandled exception -> writing crash log")
         _write_crash_log()
         raise
 
