@@ -182,14 +182,20 @@ class DashboardMonitorController:
             ("claude", self.claude_proxy_port),
             ("codex", self.codex_proxy_port),
         ):
+
             def _port_listeners(port: int = port) -> object:
-                return {pid: global_inject._monitor_process_command(pid) for pid in global_inject._listening_pids_for_port(port)}
+                return {
+                    pid: global_inject._monitor_process_command(pid)
+                    for pid in global_inject._listening_pids_for_port(port)
+                }
 
             listeners[f"{label}:{port}"] = _safe(_port_listeners)
         return (
             f"injection_active={_safe(self._injection_is_active)} "
             f"owned_process_poll={owned_process} owned_proxy_pids={owned_proxies} owned_proxy_polls={owned_proxy_polls} "
-            f"recorded_proxy={_safe(lambda: self._recorded_proxy_processes_are_running(claude_port=self.claude_proxy_port, codex_port=self.codex_proxy_port))} "
+            f"recorded_proxy={_safe(lambda: self._recorded_proxy_processes_are_running(
+                    claude_port=self.claude_proxy_port, codex_port=self.codex_proxy_port
+                ))} "
             f"proxies_running={_safe(self._proxy_processes_are_running)} "
             f"dashboard_healthy={_safe(lambda: self._is_healthy(self.host, self.port))} "
             f"monitor_is_running={_safe(self._monitor_is_running)} listeners={listeners}"
