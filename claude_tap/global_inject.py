@@ -303,23 +303,46 @@ def _terminate_recorded_processes(processes: list[object]) -> None:
         pid = entry.get("pid")
         if not isinstance(pid, int) or pid <= 0 or pid == os.getpid():
             continue
-        command = _monitor_process_command(pid)
-        if not _looks_like_monitor_process(command):
+        if not _looks_like_monitor_process(_monitor_process_command(pid)):
             continue
+        _terminate_pid(pid)
+
+
+def terminate_proxies_on_ports(*, claude_port: int | None = None, codex_port: int | None = None) -> None:
+    """SIGTERM/SIGKILL any claude-tap reverse proxy currently listening on the
+    given ports.
+
+    Used on monitor stop to reap proxies the menu bar app *reused* rather than
+    spawned -- e.g. one left behind by a previous session's force-quit. Those
+    are not tracked as owned subprocesses and are absent from the state file, so
+    neither ``_terminate_owned_processes`` nor state-based termination reaches
+    them. Matching is scoped by command line and port, so only actual claude-tap
+    proxies on our own ports are killed."""
+    for port, client in ((claude_port, "claude"), (codex_port, "codex")):
+        if not port:
+            continue
+        for pid in _listening_pids_for_port(port):
+            if pid == os.getpid():
+                continue
+            if _looks_like_proxy_process(_monitor_process_command(pid), client, port):
+                _terminate_pid(pid)
+
+
+def _terminate_pid(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if not _pid_exists(pid):
+            break
+        time.sleep(0.05)
+    if _pid_exists(pid):
         try:
-            os.kill(pid, signal.SIGTERM)
+            os.kill(pid, signal.SIGKILL)
         except OSError:
-            continue
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            if not _pid_exists(pid):
-                break
-            time.sleep(0.05)
-        if _pid_exists(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
+            pass
 
 
 def _monitor_process_command(pid: int) -> str:

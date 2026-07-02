@@ -134,6 +134,8 @@ class DashboardMonitorController:
         disable_injection: Callable[[], None] = global_inject.disable,
         injection_is_active: Callable[[], bool] = global_inject.is_active,
         recorded_proxy_processes_are_running: Callable[..., bool] = global_inject.recorded_proxy_processes_are_running,
+        proxy_is_healthy: Callable[[int, str], bool] = global_inject._proxy_port_is_running,
+        terminate_proxies_on_ports: Callable[..., None] = global_inject.terminate_proxies_on_ports,
         startup_check_delay: float = 0.15,
         sleep: Callable[[float], object] = time.sleep,
     ) -> None:
@@ -150,6 +152,8 @@ class DashboardMonitorController:
         self._disable_injection = disable_injection
         self._injection_is_active = injection_is_active
         self._recorded_proxy_processes_are_running = recorded_proxy_processes_are_running
+        self._proxy_is_healthy = proxy_is_healthy
+        self._terminate_proxies_on_ports = terminate_proxies_on_ports
         self._startup_check_delay = startup_check_delay
         self._sleep = sleep
         self._process: subprocess.Popen[bytes] | None = None
@@ -244,6 +248,10 @@ class DashboardMonitorController:
 
         self._disable_injection()
         self._terminate_owned_processes()
+        # Owned proxies are gone; also reap any proxy we reused this session
+        # (adopted from a prior session) that we hold no Popen handle for.
+        self._terminate_proxies_on_ports(claude_port=self.claude_proxy_port, codex_port=self.codex_proxy_port)
+        _debug_log("controller.stop: reaped reused proxies on owned ports")
         return True
 
     def _terminate_process(self, process: subprocess.Popen[bytes]) -> None:
@@ -292,6 +300,14 @@ class DashboardMonitorController:
         )
 
     def _start_proxy(self, client: str, port: int) -> None:
+        # Mirror the dashboard-reuse path above: if a matching proxy is already
+        # serving this port (e.g. one this app spawned in a prior session and
+        # left behind), reuse it instead of spawning a duplicate. A duplicate
+        # cannot bind the port, exits with code 1, and makes the whole monitor
+        # start fail -- the crash-loop seen in the debug log.
+        if self._proxy_is_healthy(port, client):
+            _debug_log(f"controller.start: {client} proxy already healthy on {port} -> reusing existing proxy")
+            return
         cmd = build_proxy_command(
             python_executable=self.python_executable,
             client=client,

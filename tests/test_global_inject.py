@@ -299,6 +299,40 @@ def test_disable_can_terminate_recorded_monitor_processes(_home: Path, monkeypat
     assert not state_file.exists()
 
 
+def test_terminate_proxies_on_ports_kills_matching_listeners(monkeypatch: pytest.MonkeyPatch) -> None:
+    listeners = {19528: [4321], 19529: [5432]}
+    commands = {
+        4321: "python -m claude_tap --tap-no-launch --tap-client claude --tap-port 19528",
+        5432: "python -m claude_tap --tap-no-launch --tap-client codex --tap-port 19529",
+    }
+    killed: list[int] = []
+    monkeypatch.setattr(global_inject, "_listening_pids_for_port", lambda port: listeners.get(port, []))
+    monkeypatch.setattr(global_inject, "_monitor_process_command", lambda pid: commands[pid])
+    monkeypatch.setattr(global_inject, "_terminate_pid", lambda pid: killed.append(pid))
+
+    global_inject.terminate_proxies_on_ports(claude_port=19528, codex_port=19529)
+
+    assert killed == [4321, 5432]
+
+
+def test_terminate_proxies_on_ports_skips_self_and_unrelated_listeners(monkeypatch: pytest.MonkeyPatch) -> None:
+    self_pid = os.getpid()
+    listeners = {19528: [self_pid, 9999, 4321]}
+    commands = {
+        self_pid: "python -m claude_tap --tap-no-launch --tap-client claude --tap-port 19528",
+        9999: "nginx: worker process",  # unrelated process happens to hold the port
+        4321: "python -m claude_tap --tap-no-launch --tap-client claude --tap-port 19528",
+    }
+    killed: list[int] = []
+    monkeypatch.setattr(global_inject, "_listening_pids_for_port", lambda port: listeners.get(port, []))
+    monkeypatch.setattr(global_inject, "_monitor_process_command", lambda pid: commands[pid])
+    monkeypatch.setattr(global_inject, "_terminate_pid", lambda pid: killed.append(pid))
+
+    global_inject.terminate_proxies_on_ports(claude_port=19528, codex_port=None)
+
+    assert killed == [4321]
+
+
 def test_recorded_proxy_processes_are_running_requires_both_proxy_roles(
     _home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -129,6 +129,7 @@ def test_monitor_controller_reuses_healthy_dashboard_and_starts_proxies(tmp_path
         python_executable="/usr/bin/python3",
         popen=fake_popen,
         is_healthy=lambda _host, _port: True,
+        proxy_is_healthy=lambda _port, _client: False,
         enable_injection=fake_enable_injection,
         injection_is_active=lambda: active,
     )
@@ -158,6 +159,7 @@ def test_monitor_controller_spawns_dashboard_process(tmp_path: Path) -> None:
         python_executable=sys.executable,
         popen=fake_popen,
         is_healthy=lambda _host, _port: False,
+        proxy_is_healthy=lambda _port, _client: False,
     )
 
     assert controller.start() == "http://127.0.0.1:19527"
@@ -192,6 +194,7 @@ def test_monitor_controller_start_spawns_proxies_and_enables_global_injection(tm
         python_executable=sys.executable,
         popen=fake_popen,
         is_healthy=lambda _host, _port: False,
+        proxy_is_healthy=lambda _port, _client: False,
         enable_injection=lambda *, claude_port, codex_port, processes: injected.append(
             (claude_port, codex_port, processes)
         ),
@@ -213,6 +216,56 @@ def test_monitor_controller_start_spawns_proxies_and_enables_global_injection(tm
                 {"pid": 4201, "role": "dashboard"},
                 {"pid": 4202, "role": "claude proxy"},
                 {"pid": 4203, "role": "codex proxy"},
+            ],
+        )
+    ]
+
+
+def test_monitor_controller_reuses_healthy_proxy_instead_of_spawning_duplicate(tmp_path: Path) -> None:
+    spawned: list[list[str]] = []
+    injected: list[tuple[int, int, list[dict[str, object]]]] = []
+
+    class FakeProcess:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def poll(self) -> int | None:
+            return None
+
+    def fake_popen(cmd: list[str], **_kwargs: object) -> FakeProcess:
+        spawned.append(cmd)
+        return FakeProcess(4200 + len(spawned))
+
+    controller = DashboardMonitorController(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        python_executable=sys.executable,
+        popen=fake_popen,
+        is_healthy=lambda _host, _port: False,
+        # A claude proxy left behind by a prior session is still serving 19528;
+        # codex has no listener yet.
+        proxy_is_healthy=lambda port, _client: port == 19528,
+        enable_injection=lambda *, claude_port, codex_port, processes: injected.append(
+            (claude_port, codex_port, processes)
+        ),
+    )
+
+    assert controller.start() == "http://127.0.0.1:19527"
+
+    # Dashboard + codex spawn; the healthy claude proxy is reused, not duplicated.
+    assert len(spawned) == 2
+    assert spawned[0][:4] == [sys.executable, "-m", "claude_tap", "dashboard"]
+    assert spawned[1][3:7] == ["--tap-no-launch", "--tap-client", "codex", "--tap-port"]
+    assert spawned[1][7] == "19529"
+    # Injection still covers both ports; only owned pids are recorded.
+    assert injected == [
+        (
+            19528,
+            19529,
+            [
+                {"pid": 4201, "role": "dashboard"},
+                {"pid": 4202, "role": "codex proxy"},
             ],
         )
     ]
@@ -422,6 +475,7 @@ def test_monitor_controller_restores_stale_injection_before_spawning_proxies(tmp
         python_executable=sys.executable,
         popen=fake_popen,
         is_healthy=lambda _host, _port: True,
+        proxy_is_healthy=lambda _port, _client: False,
         injection_is_active=lambda: True,
         disable_injection=lambda: events.append("restore"),
         enable_injection=lambda **_kwargs: events.append("inject"),
@@ -462,6 +516,7 @@ def test_monitor_controller_start_fails_when_proxy_exits_immediately(tmp_path: P
         python_executable=sys.executable,
         popen=lambda _cmd, **_kwargs: next(processes),
         is_healthy=lambda _host, _port: True,
+        proxy_is_healthy=lambda _port, _client: False,
         enable_injection=lambda **_kwargs: injected.append("inject"),
         disable_injection=lambda: restored.append("restore"),
         startup_check_delay=0,
@@ -503,6 +558,8 @@ def test_monitor_controller_stop_terminates_owned_process(tmp_path: Path) -> Non
         python_executable=sys.executable,
         popen=lambda _cmd, **_kwargs: process,
         is_healthy=lambda _host, _port: False,
+        proxy_is_healthy=lambda _port, _client: False,
+        terminate_proxies_on_ports=lambda **_kwargs: None,
     )
     controller.start()
 
@@ -540,6 +597,8 @@ def test_monitor_controller_stop_restores_injection_and_stops_all_processes(tmp_
         python_executable=sys.executable,
         popen=lambda _cmd, **_kwargs: next(processes),
         is_healthy=lambda _host, _port: False,
+        proxy_is_healthy=lambda _port, _client: False,
+        terminate_proxies_on_ports=lambda **_kwargs: None,
         disable_injection=lambda: restored.append("restore"),
     )
     controller.start()
@@ -554,6 +613,24 @@ def test_monitor_controller_stop_restores_injection_and_stops_all_processes(tmp_
         "terminate:codex",
         "wait:codex:5.0",
     ]
+
+
+def test_monitor_controller_stop_reaps_reused_proxies_on_owned_ports(tmp_path: Path) -> None:
+    reaped: list[tuple[int | None, int | None]] = []
+
+    controller = DashboardMonitorController(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        # Injection active but no owned Popen handles -- the claude/codex proxies
+        # were reused from a prior session, so only the port reaper can stop them.
+        injection_is_active=lambda: True,
+        disable_injection=lambda: None,
+        terminate_proxies_on_ports=lambda *, claude_port, codex_port: reaped.append((claude_port, codex_port)),
+    )
+
+    assert controller.stop() is True
+    assert reaped == [(19528, 19529)]
 
 
 def test_parse_macos_app_args_ignores_launch_services_process_serial_number() -> None:
