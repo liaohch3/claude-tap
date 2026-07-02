@@ -299,6 +299,134 @@ def test_disable_can_terminate_recorded_monitor_processes(_home: Path, monkeypat
     assert not state_file.exists()
 
 
+def test_terminate_proxies_on_ports_kills_matching_listeners(monkeypatch: pytest.MonkeyPatch) -> None:
+    listeners = {19528: [4321], 19529: [5432]}
+    commands = {
+        4321: "python -m claude_tap --tap-no-launch --tap-client claude --tap-port 19528",
+        5432: "python -m claude_tap --tap-no-launch --tap-client codex --tap-port 19529",
+    }
+    killed: list[int] = []
+    monkeypatch.setattr(global_inject, "_listening_pids_for_port", lambda port: listeners.get(port, []))
+    monkeypatch.setattr(global_inject, "_monitor_process_command", lambda pid: commands[pid])
+    monkeypatch.setattr(global_inject, "_terminate_pid", lambda pid: killed.append(pid))
+
+    global_inject.terminate_proxies_on_ports(claude_port=19528, codex_port=19529)
+
+    assert killed == [4321, 5432]
+
+
+def test_terminate_proxies_on_ports_skips_self_and_unrelated_listeners(monkeypatch: pytest.MonkeyPatch) -> None:
+    self_pid = os.getpid()
+    listeners = {19528: [self_pid, 9999, 4321]}
+    commands = {
+        self_pid: "python -m claude_tap --tap-no-launch --tap-client claude --tap-port 19528",
+        9999: "nginx: worker process",  # unrelated process happens to hold the port
+        4321: "python -m claude_tap --tap-no-launch --tap-client claude --tap-port 19528",
+    }
+    killed: list[int] = []
+    monkeypatch.setattr(global_inject, "_listening_pids_for_port", lambda port: listeners.get(port, []))
+    monkeypatch.setattr(global_inject, "_monitor_process_command", lambda pid: commands[pid])
+    monkeypatch.setattr(global_inject, "_terminate_pid", lambda pid: killed.append(pid))
+
+    global_inject.terminate_proxies_on_ports(claude_port=19528, codex_port=None)
+
+    assert killed == [4321]
+
+
+def test_recorded_proxy_processes_are_running_requires_both_proxy_roles(
+    _home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_file = _home / ".claude-tap" / "monitor-state.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "files": [],
+                "processes": [
+                    {"pid": 1111, "role": "dashboard"},
+                    {"pid": 2222, "role": "claude proxy"},
+                    {"pid": 3333, "role": "codex proxy"},
+                ],
+            }
+        )
+    )
+    commands = {
+        1111: "python -m claude_tap dashboard",
+        2222: "python -m claude_tap --tap-no-launch --tap-client claude",
+        3333: "python -m claude_tap --tap-no-launch --tap-client codex",
+    }
+    monkeypatch.setattr(global_inject, "_monitor_process_command", lambda pid: commands[pid])
+
+    assert global_inject.recorded_proxy_processes_are_running() is True
+
+
+def test_recorded_proxy_processes_are_running_rejects_missing_or_stale_proxy(
+    _home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_file = _home / ".claude-tap" / "monitor-state.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "files": [],
+                "processes": [
+                    {"pid": 2222, "role": "claude proxy"},
+                    {"pid": 3333, "role": "codex proxy"},
+                ],
+            }
+        )
+    )
+    commands = {
+        2222: "python -m claude_tap --tap-no-launch --tap-client claude",
+        3333: "",
+    }
+    monkeypatch.setattr(global_inject, "_monitor_process_command", lambda pid: commands[pid])
+
+    assert global_inject.recorded_proxy_processes_are_running() is False
+
+
+def test_recorded_proxy_processes_are_running_accepts_live_proxy_ports_with_stale_state_pids(
+    _home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_file = _home / ".claude-tap" / "monitor-state.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "files": [],
+                "processes": [
+                    {"pid": 2222, "role": "claude proxy"},
+                    {"pid": 3333, "role": "codex proxy"},
+                ],
+            }
+        )
+    )
+    commands = {
+        4444: "python -m claude_tap --tap-no-launch --tap-client claude --tap-port 19528",
+        5555: "python -m claude_tap --tap-no-launch --tap-client codex --tap-port 19529",
+    }
+    monkeypatch.setattr(global_inject, "_listening_pids_for_port", lambda port: {19528: [4444], 19529: [5555]}[port])
+    monkeypatch.setattr(global_inject, "_monitor_process_command", lambda pid: commands[pid])
+
+    assert global_inject.recorded_proxy_processes_are_running(claude_port=19528, codex_port=19529) is True
+
+
+def test_recorded_proxy_processes_are_running_rejects_wrong_live_proxy_port(
+    _home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_file = _home / ".claude-tap" / "monitor-state.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(json.dumps({"files": [], "processes": []}))
+    monkeypatch.setattr(global_inject, "_listening_pids_for_port", lambda _port: [4444])
+    monkeypatch.setattr(
+        global_inject,
+        "_monitor_process_command",
+        lambda _pid: "python -m claude_tap --tap-no-launch --tap-client claude --tap-port 19528",
+    )
+
+    assert global_inject.recorded_proxy_processes_are_running(claude_port=19528, codex_port=19529) is False
+
+
 def test_disable_ignores_invalid_state_and_restores_no_files(_home: Path) -> None:
     state_file = _home / ".claude-tap" / "monitor-state.json"
     state_file.parent.mkdir(parents=True)

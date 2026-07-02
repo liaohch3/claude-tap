@@ -50,6 +50,75 @@ def is_active() -> bool:
     return _state_file().exists()
 
 
+def recorded_proxy_processes_are_running(
+    *,
+    claude_port: int | None = None,
+    codex_port: int | None = None,
+) -> bool:
+    """True if monitor state and live reverse-proxy processes are present."""
+    state_file = _state_file()
+    if not state_file.exists():
+        return False
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    processes = state.get("processes", []) if isinstance(state, dict) else []
+    if not isinstance(processes, list):
+        return False
+
+    if claude_port is not None and codex_port is not None:
+        return _proxy_port_is_running(claude_port, "claude") and _proxy_port_is_running(codex_port, "codex")
+
+    live_roles: set[str] = set()
+    for entry in processes:
+        if not isinstance(entry, dict):
+            continue
+        role = entry.get("role")
+        pid = entry.get("pid")
+        if not isinstance(role, str) or not isinstance(pid, int) or pid <= 0:
+            continue
+        command = _monitor_process_command(pid)
+        if _looks_like_monitor_process(command):
+            live_roles.add(role)
+
+    return {"claude proxy", "codex proxy"} <= live_roles
+
+
+def _proxy_port_is_running(port: int, client: str) -> bool:
+    if port <= 0:
+        return False
+    return any(
+        _looks_like_proxy_process(_monitor_process_command(pid), client, port) for pid in _listening_pids_for_port(port)
+    )
+
+
+def _listening_pids_for_port(port: int) -> list[int]:
+    if port <= 0:
+        return []
+    lsof = shutil.which("lsof")
+    if not lsof:
+        return []
+    try:
+        result = subprocess.run(
+            [lsof, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode not in {0, 1}:
+        return []
+    pids: list[int] = []
+    for line in result.stdout.splitlines():
+        text = line.strip()
+        if text.isdigit():
+            pids.append(int(text))
+    return pids
+
+
 def enable(
     *,
     claude_port: int | None = None,
@@ -234,23 +303,46 @@ def _terminate_recorded_processes(processes: list[object]) -> None:
         pid = entry.get("pid")
         if not isinstance(pid, int) or pid <= 0 or pid == os.getpid():
             continue
-        command = _monitor_process_command(pid)
-        if not _looks_like_monitor_process(command):
+        if not _looks_like_monitor_process(_monitor_process_command(pid)):
             continue
+        _terminate_pid(pid)
+
+
+def terminate_proxies_on_ports(*, claude_port: int | None = None, codex_port: int | None = None) -> None:
+    """SIGTERM/SIGKILL any claude-tap reverse proxy currently listening on the
+    given ports.
+
+    Used on monitor stop to reap proxies the menu bar app *reused* rather than
+    spawned -- e.g. one left behind by a previous session's force-quit. Those
+    are not tracked as owned subprocesses and are absent from the state file, so
+    neither ``_terminate_owned_processes`` nor state-based termination reaches
+    them. Matching is scoped by command line and port, so only actual claude-tap
+    proxies on our own ports are killed."""
+    for port, client in ((claude_port, "claude"), (codex_port, "codex")):
+        if not port:
+            continue
+        for pid in _listening_pids_for_port(port):
+            if pid == os.getpid():
+                continue
+            if _looks_like_proxy_process(_monitor_process_command(pid), client, port):
+                _terminate_pid(pid)
+
+
+def _terminate_pid(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if not _pid_exists(pid):
+            break
+        time.sleep(0.05)
+    if _pid_exists(pid):
         try:
-            os.kill(pid, signal.SIGTERM)
+            os.kill(pid, signal.SIGKILL)
         except OSError:
-            continue
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            if not _pid_exists(pid):
-                break
-            time.sleep(0.05)
-        if _pid_exists(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
+            pass
 
 
 def _monitor_process_command(pid: int) -> str:
@@ -273,6 +365,17 @@ def _looks_like_monitor_process(command: str) -> bool:
     has_claude_tap = "claude_tap" in command or "claude-tap" in command
     has_monitor_role = " dashboard" in command or "--tap-no-launch" in command
     return has_claude_tap and has_monitor_role
+
+
+def _looks_like_proxy_process(command: str, client: str, port: int) -> bool:
+    normalized = " ".join(command.split()).lower()
+    if not _looks_like_monitor_process(normalized):
+        return False
+    return (
+        "--tap-no-launch" in normalized
+        and f"--tap-client {client.lower()}" in normalized
+        and f"--tap-port {port}" in normalized
+    )
 
 
 def _pid_exists(pid: int) -> bool:
