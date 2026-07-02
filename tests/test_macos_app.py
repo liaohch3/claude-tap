@@ -104,6 +104,40 @@ def test_build_proxy_command_starts_reverse_proxy_without_dashboard(tmp_path: Pa
     ]
 
 
+def test_debug_log_helpers_resolve_enable_write_and_ignore_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_file = tmp_path / "src" / "claude_tap" / "macos_app.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("")
+    monkeypatch.setattr(macos_app, "__file__", str(source_file))
+    monkeypatch.setattr(macos_app, "_DEBUG_LOG_PATH", None)
+
+    log_path = macos_app._resolve_debug_log_path()
+
+    assert log_path == tmp_path / "src" / "dist" / "claude-tap-macos-debug.log"
+
+    macos_app._enable_debug_logging()
+    macos_app._debug_log("hello debug")
+
+    assert log_path is not None
+    assert "hello debug" in log_path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(macos_app, "_DEBUG_LOG_PATH", tmp_path)
+    macos_app._debug_log("ignored")
+
+
+def test_monitor_controller_debug_state_reports_probe_errors(tmp_path: Path) -> None:
+    controller = DashboardMonitorController(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        injection_is_active=lambda: (_ for _ in ()).throw(RuntimeError("state failed")),
+    )
+
+    assert "injection_active=error:RuntimeError('state failed')" in controller._debug_state()
+
+
 def test_monitor_controller_reuses_healthy_dashboard_and_starts_proxies(tmp_path: Path) -> None:
     spawned: list[list[str]] = []
     injected: list[tuple[int, int]] = []
