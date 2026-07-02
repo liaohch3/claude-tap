@@ -26,6 +26,7 @@ def _isolate_global_config(tmp_path_factory: pytest.TempPathFactory, monkeypatch
     fake_home = tmp_path_factory.mktemp("home")
     monkeypatch.setattr(Path, "home", lambda: fake_home)
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setattr(macos_app, "_stop_incompatible_dashboard_sync", lambda _host, _port, _url: None)
 
 
 def test_build_dashboard_command_starts_dashboard_without_opening_browser(tmp_path: Path) -> None:
@@ -358,29 +359,40 @@ def test_monitor_controller_running_when_dashboard_health_check_fails(tmp_path: 
     assert controller.is_running() is True
 
 
-def test_monitor_controller_open_dashboard_does_not_restart_running_monitor(tmp_path: Path) -> None:
-    """Open Dashboard on a running monitor must open the browser directly without
-    re-spawning proxies or re-injecting, even when the dashboard health check fails."""
+def test_monitor_controller_open_dashboard_repairs_stale_dashboard_without_restarting_proxies(
+    tmp_path: Path,
+) -> None:
     opened: list[str] = []
+    spawned: list[list[str]] = []
+    stopped: list[tuple[str, int, str]] = []
 
     class FakeProcess:
         def poll(self) -> int | None:
             return None
 
+    def fake_popen(cmd: list[str], **_kwargs: object) -> FakeProcess:
+        spawned.append(cmd)
+        return FakeProcess()
+
     controller = DashboardMonitorController(
         host="127.0.0.1",
         port=19527,
         output_dir=tmp_path,
-        popen=lambda _cmd, **_kwargs: pytest.fail("running monitor should not spawn proxies"),
+        python_executable=sys.executable,
+        popen=fake_popen,
         is_healthy=lambda _host, _port: False,
         injection_is_active=lambda: True,
         enable_injection=lambda **_kwargs: pytest.fail("running monitor should not re-inject"),
+        stop_incompatible_dashboard=lambda host, port, url: stopped.append((host, port, url)),
         open_browser=opened.append,
     )
     controller._proxy_processes = [FakeProcess(), FakeProcess()]  # type: ignore[list-item]
 
     controller.open_dashboard()
 
+    assert len(spawned) == 1
+    assert spawned[0][:4] == [sys.executable, "-m", "claude_tap", "dashboard"]
+    assert stopped == [("127.0.0.1", 19527, "http://127.0.0.1:19527")]
     assert opened == ["http://127.0.0.1:19527"]
 
 
@@ -882,6 +894,7 @@ def test_menu_app_run_builds_menu_and_refreshes_without_auto_start(monkeypatch: 
     assert "Monitor: Stopped" in titles
     assert "Sessions: 1" in titles
     assert "Latest: codex (2) - hello from trace" in titles
+    assert any(selector == "setDelegate:" for _receiver, selector, _args in fake_objc.calls)
 
 
 def test_menu_app_status_item_uses_dashboard_icon_without_visible_title(
@@ -983,6 +996,21 @@ def test_new_menu_target_registers_callbacks() -> None:
     assert target > 0
     assert fake_objc.objc.registered == [901]
     assert fake_objc.objc.methods == [b"v@:@"] * 5
+
+
+def test_application_termination_callback_stops_monitor_before_quit(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+
+    class FakeApp:
+        def prepare_to_quit(self) -> None:
+            events.append("stop")
+
+    monkeypatch.setattr(macos_app, "_ACTIVE_APP", FakeApp())
+
+    result = macos_app._application_should_terminate_callback(0, 0, 0)
+
+    assert events == ["stop"]
+    assert result == macos_app._NS_TERMINATE_NOW
 
 
 def test_menu_callbacks_forward_to_active_app(monkeypatch: pytest.MonkeyPatch) -> None:
