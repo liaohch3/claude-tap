@@ -268,6 +268,13 @@ class DashboardMonitorController:
         _debug_log("controller.stop: reaped reused proxies on owned ports")
         return True
 
+    def restore_config_for_quit(self) -> bool:
+        _debug_log(f"controller.restore_config_for_quit: entry | {self._debug_state()}")
+        if not self._injection_is_active():
+            return False
+        self._disable_injection()
+        return True
+
     def _terminate_process(self, process: subprocess.Popen[bytes]) -> None:
         process.terminate()
         try:
@@ -492,8 +499,8 @@ class MacOSMenuApp:
         self._objc.msg(self._app, "terminate:", None, [ctypes.c_void_p], None)
 
     def prepare_to_quit(self) -> None:
-        _debug_log("app.prepare_to_quit: stopping monitor before app termination")
-        self.controller.stop()
+        _debug_log("app.prepare_to_quit: restoring config before app termination")
+        self.controller.restore_config_for_quit()
 
     def refresh_menu(self) -> None:
         running = self.controller.is_running()

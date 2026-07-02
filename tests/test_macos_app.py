@@ -679,6 +679,31 @@ def test_monitor_controller_stop_reaps_reused_proxies_on_owned_ports(tmp_path: P
     assert reaped == [(19528, 19529)]
 
 
+def test_monitor_controller_restore_config_for_quit_does_not_stop_processes(tmp_path: Path) -> None:
+    events: list[str] = []
+
+    class FakeProcess:
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            events.append("terminate")
+
+    controller = DashboardMonitorController(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        injection_is_active=lambda: True,
+        disable_injection=lambda: events.append("restore"),
+        terminate_proxies_on_ports=lambda **_kwargs: events.append("reap"),
+    )
+    controller._process = FakeProcess()  # type: ignore[assignment]
+    controller._proxy_processes = [FakeProcess()]  # type: ignore[list-item]
+
+    assert controller.restore_config_for_quit() is True
+    assert events == ["restore"]
+
+
 def test_parse_macos_app_args_ignores_launch_services_process_serial_number() -> None:
     args = parse_macos_app_args(["-psn_0_12345", "--tap-no-auto-start"])
 
@@ -953,6 +978,10 @@ def test_menu_app_wrappers_refresh_and_quit() -> None:
             events.append("stop")
             return True
 
+        def restore_config_for_quit(self) -> bool:
+            events.append("restore")
+            return True
+
         def open_dashboard(self) -> None:
             events.append("open")
 
@@ -966,7 +995,7 @@ def test_menu_app_wrappers_refresh_and_quit() -> None:
     app.open_dashboard()
     app.quit()
 
-    assert events == ["stop", "refresh", "open", "refresh", "stop"]
+    assert events == ["stop", "refresh", "open", "refresh", "restore"]
     assert any(selector == "terminate:" for _receiver, selector, _args in app._objc.calls)
 
 
