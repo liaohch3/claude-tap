@@ -97,6 +97,7 @@ class DashboardMonitorController:
         enable_injection: Callable[..., None] = global_inject.enable,
         disable_injection: Callable[[], None] = global_inject.disable,
         injection_is_active: Callable[[], bool] = global_inject.is_active,
+        recorded_proxy_processes_are_running: Callable[..., bool] = global_inject.recorded_proxy_processes_are_running,
         startup_check_delay: float = 0.15,
         sleep: Callable[[float], object] = time.sleep,
     ) -> None:
@@ -112,6 +113,7 @@ class DashboardMonitorController:
         self._enable_injection = enable_injection
         self._disable_injection = disable_injection
         self._injection_is_active = injection_is_active
+        self._recorded_proxy_processes_are_running = recorded_proxy_processes_are_running
         self._startup_check_delay = startup_check_delay
         self._sleep = sleep
         self._process: subprocess.Popen[bytes] | None = None
@@ -185,13 +187,24 @@ class DashboardMonitorController:
         return self._process is not None and self._process.poll() is None
 
     def _monitor_is_running(self) -> bool:
-        return self._dashboard_is_running() and self._proxy_processes_are_running() and self._injection_is_active()
-
-    def _dashboard_is_running(self) -> bool:
-        return self._process_is_running() or self._is_healthy(self.host, self.port)
+        # A started monitor is defined by active injection plus live reverse
+        # proxies. The dashboard's version/db-matched HTTP health check is
+        # intentionally excluded here: a reused or version-mismatched dashboard
+        # fails that check, which would make a genuinely-running monitor read as
+        # stopped -- spuriously re-prompting "Start Monitor?" on Open Dashboard,
+        # flipping the menu label to Stopped, and triggering a proxy restart that
+        # collides on the ports already held by the live proxies. Whether a fresh
+        # dashboard needs spawning is decided separately in ``start`` via
+        # ``self._is_healthy``.
+        return self._injection_is_active() and self._proxy_processes_are_running()
 
     def _proxy_processes_are_running(self) -> bool:
-        return bool(self._proxy_processes) and all(process.poll() is None for process in self._proxy_processes)
+        if bool(self._proxy_processes) and all(process.poll() is None for process in self._proxy_processes):
+            return True
+        return not self._proxy_processes and self._recorded_proxy_processes_are_running(
+            claude_port=self.claude_proxy_port,
+            codex_port=self.codex_proxy_port,
+        )
 
     def _start_proxy(self, client: str, port: int) -> None:
         cmd = build_proxy_command(

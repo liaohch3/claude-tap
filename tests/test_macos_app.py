@@ -18,6 +18,16 @@ from claude_tap.macos_app import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_global_config(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect $HOME so controller tests exercising the real ``global_inject``
+    callables never read or write the developer's real ~/.claude, ~/.codex, or
+    ~/.claude-tap monitor state."""
+    fake_home = tmp_path_factory.mktemp("home")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+
+
 def test_build_dashboard_command_starts_dashboard_without_opening_browser(tmp_path: Path) -> None:
     cmd = build_dashboard_command(
         python_executable="/usr/bin/python3",
@@ -224,6 +234,67 @@ def test_monitor_controller_start_returns_existing_monitor_url(tmp_path: Path) -
     controller._proxy_processes = [FakeProcess(), FakeProcess()]  # type: ignore[list-item]
 
     assert controller.start() == "http://127.0.0.1:19527"
+
+
+def test_monitor_controller_recognizes_active_monitor_after_app_relaunch(tmp_path: Path) -> None:
+    controller = DashboardMonitorController(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        popen=lambda _cmd, **_kwargs: pytest.fail("already-running monitor should not spawn"),
+        is_healthy=lambda _host, _port: True,
+        injection_is_active=lambda: True,
+        recorded_proxy_processes_are_running=lambda **_kwargs: True,
+    )
+
+    assert controller.is_running() is True
+
+
+def test_monitor_controller_running_when_dashboard_health_check_fails(tmp_path: Path) -> None:
+    """A reused/version-mismatched dashboard (health check False) must not make a
+    running monitor (active injection + live proxies) read as stopped."""
+
+    class FakeProcess:
+        def poll(self) -> int | None:
+            return None
+
+    controller = DashboardMonitorController(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        popen=lambda _cmd, **_kwargs: pytest.fail("running monitor should not spawn"),
+        is_healthy=lambda _host, _port: False,
+        injection_is_active=lambda: True,
+    )
+    controller._proxy_processes = [FakeProcess(), FakeProcess()]  # type: ignore[list-item]
+
+    assert controller.is_running() is True
+
+
+def test_monitor_controller_open_dashboard_does_not_restart_running_monitor(tmp_path: Path) -> None:
+    """Open Dashboard on a running monitor must open the browser directly without
+    re-spawning proxies or re-injecting, even when the dashboard health check fails."""
+    opened: list[str] = []
+
+    class FakeProcess:
+        def poll(self) -> int | None:
+            return None
+
+    controller = DashboardMonitorController(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        popen=lambda _cmd, **_kwargs: pytest.fail("running monitor should not spawn proxies"),
+        is_healthy=lambda _host, _port: False,
+        injection_is_active=lambda: True,
+        enable_injection=lambda **_kwargs: pytest.fail("running monitor should not re-inject"),
+        open_browser=opened.append,
+    )
+    controller._proxy_processes = [FakeProcess(), FakeProcess()]  # type: ignore[list-item]
+
+    controller.open_dashboard()
+
+    assert opened == ["http://127.0.0.1:19527"]
 
 
 def test_monitor_controller_stop_clears_dead_owned_processes(tmp_path: Path) -> None:
@@ -564,6 +635,49 @@ def test_menu_app_open_dashboard_cancel_does_not_start_when_stopped() -> None:
     app.open_dashboard()
 
     assert calls == ["refresh"]
+
+
+def test_menu_app_open_dashboard_running_does_not_confirm() -> None:
+    events: list[str] = []
+
+    class FakeController:
+        def is_running(self) -> bool:
+            return True
+
+        def open_dashboard(self) -> None:
+            events.append("open")
+
+    app = object.__new__(MacOSMenuApp)
+    app.controller = FakeController()
+    app.refresh_menu = lambda: events.append("refresh")  # type: ignore[method-assign]
+    app._confirm_start_monitor = lambda: pytest.fail("running monitor should open dashboard without confirmation")
+
+    app.open_dashboard()
+
+    assert events == ["open", "refresh"]
+
+
+def test_menu_app_open_dashboard_active_monitor_after_relaunch_does_not_confirm(tmp_path: Path) -> None:
+    opened: list[str] = []
+
+    controller = DashboardMonitorController(
+        host="127.0.0.1",
+        port=19527,
+        output_dir=tmp_path,
+        popen=lambda _cmd, **_kwargs: pytest.fail("already-running monitor should not spawn"),
+        is_healthy=lambda _host, _port: True,
+        injection_is_active=lambda: True,
+        recorded_proxy_processes_are_running=lambda **_kwargs: True,
+        open_browser=opened.append,
+    )
+    app = object.__new__(MacOSMenuApp)
+    app.controller = controller
+    app.refresh_menu = lambda: None  # type: ignore[method-assign]
+    app._confirm_start_monitor = lambda: pytest.fail("active monitor should open dashboard without confirmation")
+
+    app.open_dashboard()
+
+    assert opened == ["http://127.0.0.1:19527"]
 
 
 class FakeObjC:
