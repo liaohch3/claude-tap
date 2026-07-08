@@ -2123,6 +2123,42 @@ async def test_search_uncached_records_fallback(trace_db) -> None:
     assert sessions[0]["id"] == session_id
 
 
+def test_search_matches_compacted_record_blobs(trace_db) -> None:
+    from claude_tap.trace_store import SessionQuery
+
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    hidden_term = "dashboard-needle-inside-compacted-user-message"
+    long_prompt = "intro " * 120 + hidden_term
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-07-08T10:15:00+00:00",
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "messages": [{"role": "user", "content": long_prompt}],
+                },
+            },
+            "response": {"status": 200, "body": {"content": [{"type": "text", "text": "ok"}]}},
+        },
+    )
+
+    conn = store._connect()
+    payload_json = conn.execute(
+        "SELECT payload_json FROM records WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()["payload_json"]
+    assert hidden_term not in payload_json
+    assert conn.execute("SELECT COUNT(*) FROM record_blobs WHERE session_id = ?", (session_id,)).fetchone()[0] > 0
+
+    sessions = store.list_session_rows(query=SessionQuery(search=hidden_term))
+
+    assert [row["id"] for row in sessions] == [session_id]
+
+
 @pytest.mark.asyncio
 async def test_kimi_code_model_probe_error_does_not_mark_successful_session_failed(trace_db) -> None:
     store = get_trace_store()
