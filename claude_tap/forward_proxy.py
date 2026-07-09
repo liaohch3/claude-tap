@@ -30,8 +30,19 @@ from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import WSMessage, WSMsgType
-from aiohttp._websocket.reader import WebSocketDataQueue, WebSocketReader
-from aiohttp.http_websocket import WS_KEY, WebSocketWriter
+from aiohttp.http_websocket import WS_KEY, WebSocketWriter, WebSocketReader
+
+# Support aiohttp 3.9.x, 3.10-3.12, and 3.13+
+try:
+    # aiohttp 3.13+
+    from aiohttp.websocket import WebSocketDataQueue
+except ImportError:
+    try:
+        # aiohttp 3.10-3.12 internal path
+        from aiohttp._websocket.reader import WebSocketDataQueue
+    except ImportError:
+        # aiohttp 3.9.x: DataQueue is WebSocketDataQueue
+        from aiohttp.http_websocket import DataQueue as WebSocketDataQueue
 
 from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
 from claude_tap.certs import CertificateAuthority
