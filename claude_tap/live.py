@@ -14,6 +14,7 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
+from claude_tap.compact_trace import build_compact_trace_bundle
 from claude_tap.dashboard import (
     build_session_query,
     dashboard_trace_snapshot,
@@ -31,7 +32,7 @@ from claude_tap.viewer import (
     VIEWER_SCRIPT_ANCHOR,
     VIEWER_TEMPLATE_PATH,
     _extract_metadata_from_record,
-    _generate_html_viewer,
+    _generate_html_viewer_from_compact_bundle,
     _generate_html_viewer_from_metadata,
     _read_viewer_template,
 )
@@ -701,13 +702,11 @@ class LiveViewerServer:
             return web.Response(status=404, text="Session not found")
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
-            trace_path = tmp_path / f"session-{session_id[:8]}.jsonl"
             html_path = tmp_path / f"trace_{session_id[:8]}.html"
-            trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
-            _generate_html_viewer(
-                trace_path,
+            _generate_html_viewer_from_compact_bundle(
+                build_compact_trace_bundle(store.load_records(session_id)),
                 html_path,
-                display_trace_path=f"/api/sessions/{quote(session_id)}/export/jsonl",
+                display_trace_path=f"/api/sessions/{quote(session_id)}/export/compact",
                 display_html_path=f"/api/sessions/{quote(session_id)}/export/html",
             )
             if not html_path.exists():

@@ -2201,7 +2201,6 @@ async function loadMoreSessionRecords(session, records, button) {
         <details class="export-menu">
           <summary class="act-btn" data-detail-i18n="export_menu">${esc(t("export_menu"))}</summary>
           <div class="export-menu-list">
-            <a class="export-menu-item" data-detail-i18n="export_jsonl" href="/api/sessions/${encodeURIComponent(session.id)}/export/jsonl" download>${esc(t("export_jsonl"))}</a>
             <a class="export-menu-item" data-detail-i18n="export_compact" href="/api/sessions/${encodeURIComponent(session.id)}/export/compact" download>${esc(t("export_compact"))}</a>
             <a class="export-menu-item" data-detail-i18n="export_log" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
             <a class="export-menu-item" data-detail-i18n="export_html" href="/api/sessions/${encodeURIComponent(session.id)}/export/html" download>${esc(t("export_html"))}</a>

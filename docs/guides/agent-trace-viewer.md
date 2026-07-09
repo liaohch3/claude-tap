@@ -65,10 +65,10 @@ claude-tap --tap-client codexapp
 claude-tap --tap-client gemini -- -p "hello"
 ```
 
-Open the local dashboard or export a standalone HTML file:
+Open the local dashboard or export a standalone HTML file with embedded compact trace data:
 
 ```bash
-claude-tap export --format html trace.jsonl
+claude-tap export trace.jsonl --format html
 ```
 
 ## What to inspect first

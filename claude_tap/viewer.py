@@ -8,7 +8,7 @@ import re
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
-from claude_tap.compact_trace import COMPACT_TRACE_MARKER, is_compact_trace_bundle
+from claude_tap.compact_trace import COMPACT_TRACE_MARKER, build_compact_trace_bundle, is_compact_trace_bundle
 from claude_tap.sse import SSEReassembler
 from claude_tap.usage import normalize_usage
 
@@ -1054,15 +1054,20 @@ def _generate_html_viewer(
             )
             return
 
-    records: list[str] = []
+    records: list[dict] = []
     if trace_path.exists():
         with open(trace_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
-                    records.append(_normalize_record_for_viewer(line))
-    _generate_html_viewer_from_records(
-        records,
+                    try:
+                        record = json.loads(_normalize_record_for_viewer(line))
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(record, dict):
+                        records.append(record)
+    _generate_html_viewer_from_compact_bundle(
+        build_compact_trace_bundle(records),
         html_path,
         display_trace_path=display_trace_path if display_trace_path is not None else trace_path.absolute(),
         display_html_path=display_html_path if display_html_path is not None else html_path.absolute(),

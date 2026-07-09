@@ -10,11 +10,7 @@ from pathlib import Path
 from claude_tap.compact_trace import build_compact_trace_bundle, dump_compact_trace, is_compact_trace_bundle
 from claude_tap.prompt_snapshot import render_prompt_markdown, snapshot_from_records
 from claude_tap.usage import normalize_usage
-from claude_tap.viewer import (
-    _generate_html_viewer_from_compact_bundle,
-    _generate_html_viewer_from_records,
-    _normalize_record_for_viewer,
-)
+from claude_tap.viewer import _generate_html_viewer_from_compact_bundle, _normalize_record_for_viewer
 
 
 def _as_dict(value: object) -> dict:
@@ -55,11 +51,6 @@ def _usage_from(record: dict) -> dict:
 def _turn_sort_key(record: dict) -> int:
     turn = record.get("turn")
     return turn if isinstance(turn, int) else 0
-
-
-def _compact_output_suffix(path: Path) -> bool:
-    name = path.name.lower()
-    return name.endswith(".ctap") or name.endswith(".ctap.json") or name.endswith(".compact.json")
 
 
 def _load_records_from_text(text: str) -> tuple[list[dict], dict | None]:
@@ -108,7 +99,7 @@ def export_main(argv: list[str] | None = None) -> int:
         "--format",
         choices=["markdown", "json", "html", "compact", "prompt-md"],
         default=None,
-        help="Output format (default: inferred from -o extension, or markdown)",
+        help="Output format (default: compact, except .html/.htm and prompt snapshot output suffixes)",
     )
 
     args = parser.parse_args(argv)
@@ -156,18 +147,14 @@ def export_main(argv: list[str] | None = None) -> int:
     if fmt is None:
         if args.output:
             suffix = args.output.suffix.lower()
-            if suffix == ".json":
-                fmt = "json"
-            elif suffix in {".html", ".htm"}:
+            if suffix in {".html", ".htm"}:
                 fmt = "html"
-            elif _compact_output_suffix(args.output):
-                fmt = "compact"
             elif _is_prompt_markdown_output(args.output):
                 fmt = "prompt-md"
             else:
-                fmt = "markdown"
+                fmt = "compact"
         else:
-            fmt = "markdown"
+            fmt = "compact"
 
     if not records:
         print("Error: no valid records found in trace file", file=sys.stderr)
@@ -196,11 +183,8 @@ def export_main(argv: list[str] | None = None) -> int:
                 display_html_path=html_path.absolute(),
             )
         else:
-            _generate_html_viewer_from_records(
-                [
-                    _normalize_record_for_viewer(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
-                    for record in records
-                ],
+            _generate_html_viewer_from_compact_bundle(
+                build_compact_trace_bundle(_normalize_records_for_export(records)),
                 html_path,
                 display_trace_path=html_source_path.absolute(),
                 display_html_path=html_path.absolute(),

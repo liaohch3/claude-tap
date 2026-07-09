@@ -177,11 +177,12 @@ def _opencode_homepage_payload() -> str:
 
 
 def test_html_viewer_inline_path_escapes_script_close_in_string_body(tmp_path: Path) -> None:
-    """Regression: small traces (<= LAZY_THRESHOLD) inline records as a JS
-    array literal inside <script>...</script>. If a captured response.body is
-    a string containing </script> (e.g. opencode.ai homepage HTML), the
-    surrounding script tag would close prematurely and the HTML would render
-    as page content. The inline path must escape </ -> <\\/ before embedding.
+    """Regression: embedded trace data must escape captured </script> text.
+
+    If a captured response.body is a string containing </script> (e.g.
+    opencode.ai homepage HTML), the surrounding script tag would close
+    prematurely and the HTML would render as page content. The embedded compact
+    data block must escape </ -> <\\/ before embedding.
     """
     trace_path = tmp_path / "trace.jsonl"
     rec = _record(None, _opencode_homepage_payload(), request_id="req_oc_home", turn=5)
@@ -191,10 +192,10 @@ def test_html_viewer_inline_path_escapes_script_close_in_string_body(tmp_path: P
     _generate_html_viewer(trace_path, html_path)
     html = html_path.read_text(encoding="utf-8")
 
-    # Locate the inlined data block.
-    anchor = "const EMBEDDED_TRACE_DATA = ["
+    # Locate the embedded compact data block.
+    anchor = "const EMBEDDED_TRACE_COMPACT_DATA = "
     start = html.find(anchor)
-    assert start >= 0, "EMBEDDED_TRACE_DATA block not found in inline path"
+    assert start >= 0, "EMBEDDED_TRACE_COMPACT_DATA block not found"
     # Find where the JS data block is meant to end. It is followed by the
     # surrounding `</script>` that closes the data <script> block. Between
     # `start` and that close there must be NO unescaped </script>.
@@ -239,9 +240,8 @@ def test_extract_metadata_recognizes_openai_function_tool_shape() -> None:
     assert meta["tool_names"] == ["question", "bash", "edit"]
 
 
-def test_html_viewer_lazy_path_still_escapes_script_close(tmp_path: Path) -> None:
-    """Regression: lazy path (> LAZY_THRESHOLD) embeds records in a
-    <script type="text/plain" id="trace-raw"> block. Same </script> hazard."""
+def test_html_viewer_large_trace_escapes_script_close_in_compact_data(tmp_path: Path) -> None:
+    """Regression: large trace exports still escape captured </script> text."""
     trace_path = tmp_path / "trace.jsonl"
     lines: list[str] = []
     for i in range(LAZY_THRESHOLD + 5):
@@ -261,11 +261,11 @@ def test_html_viewer_lazy_path_still_escapes_script_close(tmp_path: Path) -> Non
     _generate_html_viewer(trace_path, html_path)
     html = html_path.read_text(encoding="utf-8")
 
-    anchor = '<script type="text/plain" id="trace-raw">'
+    anchor = "const EMBEDDED_TRACE_COMPACT_DATA = "
     start = html.find(anchor)
-    assert start >= 0, "trace-raw block not found in lazy path"
+    assert start >= 0, "EMBEDDED_TRACE_COMPACT_DATA block not found"
     block_close = html.find("</script>", start)
     assert block_close >= 0
-    raw_block = html[start + len(anchor) : block_close]
-    assert "</script>" not in raw_block
-    assert "<\\/script>" in raw_block
+    data_block = html[start:block_close]
+    assert "</script>" not in data_block
+    assert "<\\/script>" in data_block

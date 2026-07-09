@@ -520,11 +520,11 @@ claude-tap build-macos-app --self-contained
 # 如果菜单栏 App 在监控中被强制退出，用它恢复 Claude/Codex 配置
 claude-tap monitor-restore
 
-# 从已有 JSONL trace 重新生成自包含 HTML 查看器
+# 从已有 JSONL 或紧凑 trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
-# 导出可独立搬运的压缩 trace，再按需渲染
-claude-tap export <session-id> --format compact -o trace.ctap.json
+# 导出可独立搬运的压缩 trace，再按需渲染；压缩格式是默认导出格式
+claude-tap export <session-id> -o trace.ctap.json
 claude-tap export trace.ctap.json -o trace.html
 
 # 在 iframe 中嵌入导出的查看器，并减少外层 chrome

@@ -65,10 +65,10 @@ claude-tap --tap-client codexapp
 claude-tap --tap-client gemini -- -p "hello"
 ```
 
-打开本地 dashboard，或导出独立 HTML 文件：
+打开本地 dashboard，或导出内嵌紧凑 trace 数据的独立 HTML 文件：
 
 ```bash
-claude-tap export --format html trace.jsonl
+claude-tap export trace.jsonl --format html
 ```
 
 ## 先看哪些内容？

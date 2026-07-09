@@ -527,11 +527,12 @@ claude-tap build-macos-app --self-contained
 # Restore Claude/Codex configs if the menu app is force-killed while monitoring
 claude-tap monitor-restore
 
-# Regenerate a self-contained HTML viewer from JSONL
+# Regenerate a self-contained HTML viewer from JSONL or compact trace input
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
-# Export a portable compact trace bundle, then render it later
-claude-tap export <session-id> --format compact -o trace.ctap.json
+# Export a portable compact trace bundle, then render it later.
+# Compact is the default export format.
+claude-tap export <session-id> -o trace.ctap.json
 claude-tap export trace.ctap.json -o trace.html
 
 # Embed the exported viewer in an iframe with reduced chrome

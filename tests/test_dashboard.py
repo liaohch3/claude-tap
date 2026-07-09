@@ -1122,9 +1122,10 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 assert resp.charset == "utf-8"
                 assert f'filename="trace_{session_id[:8]}.html"' in resp.headers["Content-Disposition"]
                 html = await resp.text()
-                assert "EMBEDDED_TRACE_DATA" in html
+                assert "EMBEDDED_TRACE_COMPACT_DATA" in html
+                assert "const EMBEDDED_TRACE_DATA =" not in html
                 assert "req_claude" in html
-                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/jsonl";' in html
+                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/compact";' in html
                 assert f'const __TRACE_HTML_PATH__ = "/api/sessions/{session_id}/export/html";' in html
                 assert f"session-{session_id[:8]}.jsonl" not in html
 
@@ -1633,11 +1634,10 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 export_button = page.locator(".detail-inspector-bar .export-menu > summary")
                 assert await export_button.count() == 1
                 assert await export_button.inner_text() == "Export"
-                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 4
+                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 3
                 hrefs = await page.locator(".detail-inspector-bar .export-menu-item").evaluate_all(
                     "(links) => links.map((link) => link.getAttribute('href'))"
                 )
-                assert f"/api/sessions/{session_id}/export/jsonl" in hrefs
                 assert f"/api/sessions/{session_id}/export/compact" in hrefs
                 assert f"/api/sessions/{session_id}/export/log" in hrefs
                 assert f"/api/sessions/{session_id}/export/html" in hrefs
@@ -1650,7 +1650,8 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 download_path = await download.path()
                 assert download_path is not None
                 exported_html = Path(download_path).read_text(encoding="utf-8")
-                assert "EMBEDDED_TRACE_DATA" in exported_html
+                assert "EMBEDDED_TRACE_COMPACT_DATA" in exported_html
+                assert "const EMBEDDED_TRACE_DATA =" not in exported_html
                 assert "req_claude" in exported_html
             finally:
                 await browser.close()
@@ -1682,7 +1683,7 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                 await page.locator(".detail-inspector-bar .export-menu > summary").click()
                 menu = page.locator(".detail-inspector-bar .export-menu-list")
                 assert await menu.is_visible()
-                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 4
+                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 3
 
                 layout = await page.evaluate(
                     """() => {
