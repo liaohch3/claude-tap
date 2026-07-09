@@ -34,6 +34,7 @@ from claude_tap.viewer import (
     _extract_metadata_from_record,
     _generate_html_viewer_from_compact_bundle,
     _generate_html_viewer_from_metadata,
+    _normalize_record_for_viewer,
     _read_viewer_template,
 )
 
@@ -703,8 +704,16 @@ class LiveViewerServer:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             html_path = tmp_path / f"trace_{session_id[:8]}.html"
+            records = []
+            for record in store.load_records(session_id):
+                try:
+                    normalized = json.loads(_normalize_record_for_viewer(json.dumps(record, ensure_ascii=False)))
+                except (TypeError, json.JSONDecodeError):
+                    normalized = record
+                if isinstance(normalized, dict):
+                    records.append(normalized)
             _generate_html_viewer_from_compact_bundle(
-                build_compact_trace_bundle(store.load_records(session_id)),
+                build_compact_trace_bundle(records),
                 html_path,
                 display_trace_path=f"/api/sessions/{quote(session_id)}/export/compact",
                 display_html_path=f"/api/sessions/{quote(session_id)}/export/html",

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -116,6 +117,48 @@ def _antigravity_record() -> dict:
                 "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 5},
             },
         },
+    }
+
+
+def _bedrock_frame(payload: dict) -> str:
+    encoded = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+    return "\x00\x00binary-prefix" + json.dumps({"bytes": encoded, "p": "abcdefghijk"}) + "\ufffd"
+
+
+def _bedrock_stream_record() -> dict:
+    body = "".join(
+        [
+            _bedrock_frame(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_dashboard_bedrock",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-opus-4-6",
+                        "content": [],
+                        "usage": {"input_tokens": 3, "output_tokens": 0},
+                    },
+                }
+            ),
+            _bedrock_frame({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            _bedrock_frame({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "OK"}}),
+            _bedrock_frame({"type": "content_block_stop", "index": 0}),
+            _bedrock_frame({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+            _bedrock_frame({"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3}}),
+        ]
+    )
+    return {
+        "timestamp": "2026-05-20T08:30:00+00:00",
+        "request_id": "req_bedrock_dashboard",
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/model/global.anthropic.claude-opus-4-6-v1/invoke-with-response-stream",
+            "headers": {"Host": "bedrock-runtime.us-east-1.amazonaws.com"},
+            "body": {"messages": [{"role": "user", "content": [{"type": "text", "text": "ping"}]}]},
+        },
+        "response": {"status": 200, "headers": {"Content-Type": "application/vnd.amazon.eventstream"}, "body": body},
     }
 
 
@@ -1147,6 +1190,28 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 assert resp.status == 404
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_export_html_normalizes_bedrock_eventstream(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(session_id, _bedrock_stream_record())
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/html") as resp:
+                assert resp.status == 200
+                html = await resp.text()
+    finally:
+        await server.stop()
+
+    assert "EMBEDDED_TRACE_COMPACT_DATA" in html
+    assert '"sse_events":' in html
+    assert '"content":[{"type":"text","text":"OK"}]' in html
+    assert "binary-prefix" not in html
 
 
 @pytest.mark.asyncio
