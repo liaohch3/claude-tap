@@ -129,6 +129,18 @@ def test_export_defaults_to_compact_trace(tmp_path, capsys) -> None:
     assert f"Exported 1 turns to {compact_path}" in capsys.readouterr().out
 
 
+def test_export_stdout_defaults_to_compact_trace(tmp_path, capsys) -> None:
+    from claude_tap.compact_trace import load_compact_trace
+
+    trace_path = _write_trace(tmp_path)
+
+    assert export_main([str(trace_path)]) == 0
+
+    output = capsys.readouterr().out
+    assert "__claude_tap_compact_trace__" in output
+    assert load_compact_trace(output)[0]["request"]["body"]["messages"][0]["content"] == "hello from trace"
+
+
 def test_export_compact_trace_is_standalone_and_html_renderable(tmp_path, capsys) -> None:
     from claude_tap.compact_trace import load_compact_trace
 
