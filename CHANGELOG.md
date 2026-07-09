@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.127] - 2026-07-09
+
+### Changed
+- fix(dashboard): search compacted trace blobs
 ## [0.1.126] - 2026-07-01
 
 ### Changed
