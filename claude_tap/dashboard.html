@@ -441,6 +441,31 @@ body.detail-route .main {
 }
 [data-theme="dark"] .session-table td { border-bottom-color: var(--border-light); }
 .session-table tr:last-child td { border-bottom: 0; }
+.pinned-panel .table-scroll { max-height: min(40vh, 460px); }
+.session-section-title {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--text-tertiary);
+}
+.section-hint {
+  font-weight: 400; letter-spacing: .04em; text-transform: none;
+  color: var(--text-tertiary); opacity: .75;
+}
+.pin-btn {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: none; color: var(--text-tertiary);
+  padding: 3px 7px; font-size: 12px; line-height: 1; cursor: pointer;
+  transition: all .15s;
+}
+.pin-btn:hover { border-color: var(--blue); color: var(--blue); }
+.pin-btn.pinned { color: var(--blue); border-color: var(--blue); }
+.session-row.drag-source { opacity: .45; }
+.session-row.drop-above td { box-shadow: inset 0 2px 0 var(--blue); }
+.session-row.drop-below td { box-shadow: inset 0 -2px 0 var(--blue); }
+#pinned-session-list .session-row { cursor: grab; }
+#pinned-session-list .session-row:active { cursor: grabbing; }
 .session-row {
   cursor: pointer;
   transition: background .12s;
@@ -1577,6 +1602,32 @@ pre {
 	        <button id="delete-selected-sessions" class="bulk-action danger" type="button" data-i18n="delete_selected">Delete selected</button>
 	        <button id="done-edit-sessions" class="bulk-action" type="button" data-i18n="done">Done</button>
 	      </div>
+	      <div id="pinned-panel" class="pinned-panel hidden">
+	        <div class="session-section-title">
+	          <span data-i18n="pinned_sessions">Pinned</span>
+	          <span class="section-hint" data-i18n="pinned_hint">drag rows to reorder</span>
+	        </div>
+	        <div class="table-scroll">
+	          <table class="session-table">
+	            <thead>
+	              <tr>
+	                <th class="session-select-col" aria-label="Select"></th>
+	                <th data-i18n="table_first_message">First Message</th>
+	                <th data-i18n="table_traces">Traces</th>
+	                <th data-i18n="table_tokens">Tokens</th>
+	                <th data-i18n="table_model">Model</th>
+	                <th data-i18n="table_agent">Agent</th>
+	                <th data-i18n="table_status">Status</th>
+	                <th data-i18n="table_actions">Actions</th>
+	              </tr>
+	            </thead>
+	            <tbody id="pinned-session-list"></tbody>
+	          </table>
+	        </div>
+	        <div class="session-section-title">
+	          <span data-i18n="unsorted_sessions">Unsorted</span>
+	        </div>
+	      </div>
 	      <div class="table-scroll">
 	        <table class="session-table">
 	          <thead>
@@ -1716,8 +1767,41 @@ const CLAUDE_TAP_VERSION = "";
 const DASHBOARD_QUIT_TOKEN = "";
 const DASHBOARD_CAN_STOP = false;
 
+const PINNED_SESSIONS_KEY = "claude-tap-pinned-sessions";
+
+function loadPinnedSessionIds() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(PINNED_SESSIONS_KEY) || "[]");
+    return Array.isArray(stored) ? stored.filter(id => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePinnedSessionIds(ids) {
+  localStorage.setItem(PINNED_SESSIONS_KEY, JSON.stringify(ids));
+}
+
+function partitionSessions(sessions, pinnedIds) {
+  const byId = new Map(sessions.map(session => [session.id, session]));
+  const pinned = pinnedIds.map(id => byId.get(id)).filter(Boolean);
+  const pinnedSet = new Set(pinned.map(session => session.id));
+  return {pinned, rest: sessions.filter(session => !pinnedSet.has(session.id))};
+}
+
+function movePinnedSessionId(ids, sessionId, targetIndex) {
+  const withoutDragged = ids.filter(id => id !== sessionId);
+  const draggedIndex = ids.indexOf(sessionId);
+  let insertAt = targetIndex;
+  if (draggedIndex >= 0 && draggedIndex < targetIndex) insertAt -= 1;
+  insertAt = Math.max(0, Math.min(insertAt, withoutDragged.length));
+  withoutDragged.splice(insertAt, 0, sessionId);
+  return withoutDragged;
+}
+
 const state = {
   sessions: [],
+  pinnedSessionIds: loadPinnedSessionIds(),
   agents: [],
   selectedAgent: "cli",
   selectedSessionId: null,
@@ -1822,6 +1906,11 @@ const DASHBOARD_I18N = {
     language: "Language",
     nav_analyze: "Analyze",
     nav_analyze_title: "Open the trace analysis lab",
+    pinned_sessions: "Pinned",
+    pinned_hint: "drag rows to reorder, drag here to pin",
+    unsorted_sessions: "Unsorted",
+    pin_session: "Pin to top",
+    unpin_session: "Unpin",
     quit_dashboard: "Stop dashboard service",
     quit_dashboard_confirm: "Stop the claude-tap dashboard service?",
     quitting_dashboard: "Stopping",
@@ -1990,6 +2079,11 @@ const DASHBOARD_I18N = {
     language: "语言",
     nav_analyze: "分析",
     nav_analyze_title: "打开抓包分析实验台",
+    pinned_sessions: "置顶",
+    pinned_hint: "拖拽排序，拖入此区置顶",
+    unsorted_sessions: "未整理",
+    pin_session: "置顶",
+    unpin_session: "取消置顶",
     quit_dashboard: "停止面板服务",
     quit_dashboard_confirm: "停止 claude-tap dashboard 服务？",
     quitting_dashboard: "正在停止",
@@ -2570,15 +2664,22 @@ function renderAgents() {
 	  renderCostLab(sessions);
 	  renderSessionPagination();
 	  if (state.loadingSessions && !state.sessions.length) {
+	    $("#pinned-panel").classList.add("hidden");
 	    $("#session-list").innerHTML = `<tr><td class="loading-cell" colspan="9">${loadingMarkup(t("loading_sessions"))}</td></tr>`;
 	    return;
 	  }
 	  if (!sessions.length) {
+	    $("#pinned-panel").classList.add("hidden");
 	    $("#session-list").innerHTML = `<tr><td class="table-empty" colspan="9">${esc(t("no_matching_sessions"))}</td></tr>`;
 	    return;
 	  }
 
-	  $("#session-list").innerHTML = sessions.map(session => sessionRow(session)).join("");
+	  const {pinned, rest} = partitionSessions(sessions, state.pinnedSessionIds);
+	  $("#pinned-panel").classList.toggle("hidden", !pinned.length);
+	  $("#pinned-session-list").innerHTML = pinned.map(session => sessionRow(session, {pinned: true})).join("");
+	  $("#session-list").innerHTML = rest.length
+	    ? rest.map(session => sessionRow(session)).join("")
+	    : `<tr><td class="table-empty" colspan="9">${esc(t("no_matching_sessions"))}</td></tr>`;
 	  document.querySelectorAll("[data-session]").forEach(row => {
 	    row.addEventListener("click", event => {
 	      if (isSessionRowActionTarget(event.target)) return;
@@ -2614,13 +2715,20 @@ function renderAgents() {
 	      openSession(button.dataset.openSession);
 	    });
 	  });
+	  document.querySelectorAll("[data-pin-session]").forEach(button => {
+	    button.addEventListener("click", event => {
+	      event.preventDefault();
+	      event.stopPropagation();
+	      toggleSessionPinned(button.dataset.pinSession);
+	    });
+	  });
 	}
 
 function isSessionRowActionTarget(target) {
   return target instanceof Element && Boolean(target.closest("button, a, input, select, textarea"));
 }
 
-	function sessionRow(session) {
+	function sessionRow(session, {pinned = false} = {}) {
 	  const preview = session.first_user || "";
 	  const firstMessage = preview || t("no_user_prompt");
 	  const status = statusInfo(session);
@@ -2631,12 +2739,13 @@ function isSessionRowActionTarget(target) {
 	  const selectTitle = canSelect
 	    ? t("select_all_sessions")
 	    : (session.live ? t("delete_live_session_title") : t("delete_active_session_title"));
+	  const pinTitle = pinned ? t("unpin_session") : t("pin_session");
 	  return `
-	    <tr class="session-row ${state.selectedSessionId === session.id ? "active" : ""} ${isSelected ? "selected" : ""} ${!canSelect ? "select-disabled" : ""}" data-session="${esc(session.id)}" tabindex="0">
+	    <tr class="session-row ${state.selectedSessionId === session.id ? "active" : ""} ${isSelected ? "selected" : ""} ${!canSelect ? "select-disabled" : ""}" data-session="${esc(session.id)}" tabindex="0" draggable="true">
 	      <td class="session-select-col">
 	        <input class="session-checkbox" type="checkbox" data-select-session="${esc(session.id)}" aria-label="${esc(selectTitle)}" ${isSelected ? "checked" : ""} ${!canSelect || isDeleting ? "disabled" : ""}>
 	      </td>
-	      <td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
+	      ${pinned ? "" : `<td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>`}
 	      <td><div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></td>
 	      <td><span class="trace-count">${fmtNumber(session.record_count)}</span></td>
       <td><span class="token-pill">${fmtNumber(session.total_tokens)}</span></td>
@@ -2645,11 +2754,97 @@ function isSessionRowActionTarget(target) {
       <td><span class="status-pill ${status.className}">${esc(status.label)}</span></td>
 	      <td>
 	        <div class="row-actions">
+	          <button class="pin-btn ${pinned ? "pinned" : ""}" type="button" data-pin-session="${esc(session.id)}" title="${esc(pinTitle)}" aria-label="${esc(pinTitle)}">${pinned ? "&#9733;" : "&#9734;"}</button>
 	          <button class="row-action" type="button" data-open-session="${esc(session.id)}" aria-label="${esc(t("view_details"))}" aria-busy="${isLoading ? "true" : "false"}" ${isLoading ? "disabled" : ""}>${esc(isLoading ? t("loading_session") : t("details"))}</button>
 	        </div>
 	      </td>
 	    </tr>
 	  `;
+	}
+
+	function toggleSessionPinned(sessionId) {
+	  if (state.pinnedSessionIds.includes(sessionId)) {
+	    unpinSession(sessionId);
+	    return;
+	  }
+	  state.pinnedSessionIds = [...state.pinnedSessionIds, sessionId];
+	  savePinnedSessionIds(state.pinnedSessionIds);
+	  renderSessions();
+	}
+
+	function unpinSession(sessionId) {
+	  const next = state.pinnedSessionIds.filter(id => id !== sessionId);
+	  if (next.length === state.pinnedSessionIds.length) return;
+	  state.pinnedSessionIds = next;
+	  savePinnedSessionIds(next);
+	  clearDropMarkers();
+	  renderSessions();
+	}
+
+	let draggedSessionId = null;
+
+	function dropBelowRow(event, row) {
+	  const rect = row.getBoundingClientRect();
+	  return event.clientY > rect.top + rect.height / 2;
+	}
+
+	function clearDropMarkers() {
+	  document.querySelectorAll(".drop-above, .drop-below").forEach(el => el.classList.remove("drop-above", "drop-below"));
+	}
+
+	function initSessionDragAndDrop() {
+	  const pinnedList = $("#pinned-session-list");
+	  const inboxList = $("#session-list");
+	  for (const list of [pinnedList, inboxList]) {
+	    list.addEventListener("dragstart", event => {
+	      const row = event.target.closest(".session-row");
+	      if (!row || !row.dataset.session) return;
+	      draggedSessionId = row.dataset.session;
+	      row.classList.add("drag-source");
+	      event.dataTransfer.effectAllowed = "move";
+	      event.dataTransfer.setData("text/plain", row.dataset.session);
+	    });
+	    list.addEventListener("dragend", event => {
+	      draggedSessionId = null;
+	      clearDropMarkers();
+	      event.target.closest(".session-row")?.classList.remove("drag-source");
+	    });
+	  }
+	  pinnedList.addEventListener("dragover", event => {
+	    if (!draggedSessionId) return;
+	    event.preventDefault();
+	    event.dataTransfer.dropEffect = "move";
+	    const row = event.target.closest(".session-row");
+	    clearDropMarkers();
+	    if (row) row.classList.add(dropBelowRow(event, row) ? "drop-below" : "drop-above");
+	  });
+	  pinnedList.addEventListener("drop", event => {
+	    if (!draggedSessionId) return;
+	    event.preventDefault();
+	    const row = event.target.closest(".session-row");
+	    const ids = state.pinnedSessionIds;
+	    let targetIndex = ids.length;
+	    if (row && row.dataset.session) {
+	      const base = ids.indexOf(row.dataset.session);
+	      targetIndex = base < 0 ? ids.length : base + (dropBelowRow(event, row) ? 1 : 0);
+	    }
+	    state.pinnedSessionIds = movePinnedSessionId(ids, draggedSessionId, targetIndex);
+	    savePinnedSessionIds(state.pinnedSessionIds);
+	    draggedSessionId = null;
+	    clearDropMarkers();
+	    renderSessions();
+	  });
+	  inboxList.addEventListener("dragover", event => {
+	    if (!draggedSessionId || !state.pinnedSessionIds.includes(draggedSessionId)) return;
+	    event.preventDefault();
+	    event.dataTransfer.dropEffect = "move";
+	  });
+	  inboxList.addEventListener("drop", event => {
+	    if (!draggedSessionId) return;
+	    event.preventDefault();
+	    unpinSession(draggedSessionId);
+	    draggedSessionId = null;
+	  });
 	}
 
 function renderOverview() {
@@ -2933,6 +3128,11 @@ function renderOverview() {
 	    const deleted = new Set(sessionIds);
 	    state.sessions = state.sessions.filter(session => !deleted.has(session.id));
 	    for (const id of deleted) state.selectedSessionIds.delete(id);
+	    const remainingPinned = state.pinnedSessionIds.filter(id => !deleted.has(id));
+	    if (remainingPinned.length !== state.pinnedSessionIds.length) {
+	      state.pinnedSessionIds = remainingPinned;
+	      savePinnedSessionIds(remainingPinned);
+	    }
 	    if (deleted.has(state.selectedSessionId)) {
 	      state.selectedSessionId = null;
 	      state.view = "list";
@@ -4068,6 +4268,7 @@ $("#compare-swap")?.addEventListener("click", swapComparisonSides);
 	applyVersionBadge();
 	initTheme();
 	initAnalyzeLink().catch(console.error);
+	initSessionDragAndDrop();
 	updateClock();
 	setInterval(updateClock, 1000);
 	const hasDashboardEvents = connectEvents();
