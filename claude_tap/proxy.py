@@ -121,6 +121,8 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/models",
     "/v1/embeddings",
     "/v1/files",
+    # Codex CLI web search tool (codex-api SearchClient posts to {base_url}/alpha/search)
+    "/v1/alpha/search",
     # OpenAI Responses API (after strip_path_prefix removes /v1)
     "/responses",
     "/chat/completions",
@@ -128,6 +130,7 @@ ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
     "/models",
     "/embeddings",
     "/files",
+    "/alpha/search",
     # Gemini API
     "/v1beta/models",
     "/v1alpha/models",
