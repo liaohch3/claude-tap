@@ -1081,6 +1081,24 @@ pre {
 }
 .compare-lab-open:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 5px 14px rgba(59, 130, 246, .22); }
 .compare-lab-open:disabled { cursor: not-allowed; opacity: .42; }
+.compare-lab-actions { display: inline-flex; align-items: center; gap: 8px; }
+.compare-lab-pin {
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  transition: color .12s, border-color .12s, background .12s;
+}
+.compare-lab-pin:hover { color: var(--blue); border-color: var(--blue); }
+.compare-lab-pin.active {
+  color: var(--blue);
+  border-color: color-mix(in srgb, var(--blue) 45%, transparent);
+  background: var(--blue-bg);
+}
 
 .compare-view {
   width: 100%;
@@ -1513,7 +1531,10 @@ pre {
             <span class="diff-legend-item removed"><span class="diff-legend-sign">−</span><span data-i18n="compare_deleted">Deleted from baseline</span></span>
             <span class="diff-legend-item added"><span class="diff-legend-sign">+</span><span data-i18n="compare_added">Added in compared</span></span>
           </div>
-          <button id="compare-lab-open" class="compare-lab-open" type="button" data-i18n="compare_lab_open" disabled>Open Diff</button>
+          <div class="compare-lab-actions">
+            <button id="compare-lab-pin" class="compare-lab-pin" type="button" hidden></button>
+            <button id="compare-lab-open" class="compare-lab-open" type="button" data-i18n="compare_lab_open" disabled>Open Diff</button>
+          </div>
         </section>
       </div>
   </section>
@@ -1706,6 +1727,8 @@ const DASHBOARD_I18N = {
 	    compare_lab_title: "Diff lab",
 	    compare_lab_hint: "e.g. send both models a \"Hi\", then diff their system prompts",
 	    compare_lab_open: "Open Diff",
+	    compare_lab_pin: "Pin this pair",
+	    compare_lab_unpin: "Unpin pair",
 	    compare_lab_empty: "At least two sessions are required",
 	    compare_deleted: "Only in baseline",
 	    compare_added: "Only in compared",
@@ -1853,6 +1876,8 @@ const DASHBOARD_I18N = {
 	    compare_lab_title: "Diff 实验台",
 	    compare_lab_hint: "例：给两个模型各发一句 “Hi”，对比它们 system prompt 的差异",
 	    compare_lab_open: "打开 Diff",
+	    compare_lab_pin: "固定此对",
+	    compare_lab_unpin: "取消固定",
 	    compare_lab_empty: "至少需要两个会话",
 	    compare_deleted: "仅基线有",
 	    compare_added: "仅对比项有",
@@ -2492,32 +2517,79 @@ function renderOverview() {
 	  return partner ? [latest, partner] : candidates.slice(0, 2);
 	}
 
+	const COMPARE_PIN_KEY = "claude-tap-compare-pin";
+
+	function pinnedCompareIds() {
+	  try {
+	    const ids = JSON.parse(localStorage.getItem(COMPARE_PIN_KEY) || "null");
+	    return Array.isArray(ids) && ids.length === 2 ? ids : null;
+	  } catch (err) {
+	    return null;
+	  }
+	}
+
+	function setPinnedCompareIds(ids) {
+	  if (ids) localStorage.setItem(COMPARE_PIN_KEY, JSON.stringify(ids));
+	  else localStorage.removeItem(COMPARE_PIN_KEY);
+	}
+
 	function compareLabSessions(sessions) {
 	  const byId = new Map(state.sessions.map(session => [session.id, session]));
 	  const selected = Array.from(state.selectedSessionIds)
 	    .map(id => byId.get(id))
 	    .filter(canCompareSession);
-	  const pair = state.selectedSessionIds.size > 0
-	    ? selected
-	    : defaultCompareLabPair(sessions.filter(canCompareSession));
-	  if (pair.length !== 2) return pair;
+	  const pinned = (pinnedCompareIds() || []).map(id => byId.get(id)).filter(canCompareSession);
+	  let pair;
+	  let source;
+	  if (state.selectedSessionIds.size > 0) {
+	    pair = selected;
+	    source = "selected";
+	  } else if (pinned.length === 2) {
+	    pair = pinned;
+	    source = "pinned";
+	  } else {
+	    pair = defaultCompareLabPair(sessions.filter(canCompareSession));
+	    source = "default";
+	  }
+	  if (pair.length !== 2) return {pair, source};
 	  const startTime = session => new Date(session.started_at || session.updated_at || 0).getTime() || 0;
-	  return [...pair].sort((a, b) => startTime(a) - startTime(b));
+	  return {pair: [...pair].sort((a, b) => startTime(a) - startTime(b)), source};
 	}
 
 	function renderCompareLab(sessions) {
-	  const pair = compareLabSessions(sessions);
+	  const {pair, source} = compareLabSessions(sessions);
 	  const pairLabel = $("#compare-lab-pair");
 	  const button = $("#compare-lab-open");
+	  const pinButton = $("#compare-lab-pin");
 	  if (!pairLabel || !button) return;
 	  const ready = pair.length === 2;
+	  const pinMark = source === "pinned" ? "📌 " : "";
 	  pairLabel.textContent = ready
-	    ? `${pair[0].model || pair[0].agent || t("unknown")} ↔ ${pair[1].model || pair[1].agent || t("unknown")}`
+	    ? `${pinMark}${pair[0].model || pair[0].agent || t("unknown")} ↔ ${pair[1].model || pair[1].agent || t("unknown")}`
 	    : t("compare_lab_empty");
 	  button.disabled = !ready;
 	  button.dataset.left = ready ? pair[0].id : "";
 	  button.dataset.right = ready ? pair[1].id : "";
 	  button.title = ready ? t("compare_lab_open") : t("compare_lab_empty");
+	  if (pinButton) {
+	    const hasPin = Boolean(pinnedCompareIds());
+	    pinButton.hidden = !hasPin && !(source === "selected" && ready);
+	    pinButton.textContent = t(hasPin ? "compare_lab_unpin" : "compare_lab_pin");
+	    pinButton.title = pinButton.textContent;
+	    pinButton.classList.toggle("active", hasPin);
+	  }
+	}
+
+	function toggleCompareLabPin() {
+	  if (pinnedCompareIds()) {
+	    setPinnedCompareIds(null);
+	  } else {
+	    const button = $("#compare-lab-open");
+	    const ids = [button?.dataset.left, button?.dataset.right].filter(Boolean);
+	    if (ids.length !== 2) return;
+	    setPinnedCompareIds(ids);
+	  }
+	  renderSessions();
 	}
 
 	function pruneSelectedSessions() {
@@ -3547,6 +3619,7 @@ $("#status-filter").addEventListener("change", event => {
 	$("#select-all-sessions").addEventListener("change", event => toggleSelectAllVisible(event.target.checked));
 	$("#compare-selected-sessions").addEventListener("click", openComparison);
 	$("#compare-lab-open").addEventListener("click", openCompareLab);
+	$("#compare-lab-pin").addEventListener("click", toggleCompareLabPin);
 	$("#delete-selected-sessions").addEventListener("click", () => {
 	  showDeleteSessionDialog(selectedDeletableSessions().map(session => session.id));
 	});

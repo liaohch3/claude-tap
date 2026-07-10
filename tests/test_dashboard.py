@@ -2121,6 +2121,21 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                     await page.locator(f'[data-select-session="{session_id}"]').check()
                 assert not await compare_button.is_disabled()
 
+                pin_button = page.locator("#compare-lab-pin")
+                assert await pin_button.inner_text() == "Pin this pair"
+                await pin_button.click()
+                assert await pin_button.inner_text() == "Unpin pair"
+                assert await page.locator("#compare-lab-pair").inner_text() == ("claude-fable-5 ↔ claude-opus-4-8")
+                for session_id in session_ids:
+                    await page.locator(f'[data-select-session="{session_id}"]').uncheck()
+                assert await page.locator("#compare-lab-pair").inner_text() == ("📌 claude-fable-5 ↔ claude-opus-4-8")
+                await pin_button.click()
+                assert await page.locator("#compare-lab-pair").inner_text() == ("claude-opus-4-8 ↔ claude-fable-5")
+                assert await pin_button.is_hidden()
+                for session_id in session_ids:
+                    await page.locator(f'[data-select-session="{session_id}"]').check()
+                assert not await compare_button.is_disabled()
+
                 await compare_button.click()
                 await page.wait_for_selector("#compare-view:not(.hidden) .compare-identities", timeout=5000)
                 assert "/dashboard/compare?" in page.url
