@@ -80,6 +80,22 @@ These rules apply to every local dashboard restart, UI check, trace validation, 
 8. Close every browser context created by verification. Do not leave tabs, windows, browser processes, or generated Playwright state behind.
 9. After a dashboard restart, confirm that no new user Chrome tab was created. If an automated check opens a visible page unexpectedly, stop that workflow and disclose it immediately.
 
+## Dashboard Lab Experiments
+
+The dashboard's bottom lab strip hosts experiment cards (diff lab, token
+cost lab, and future experiments). Every lab card must follow these rules:
+
+1. **Static targets.** An experiment analyzes one pinned capture (or pinned
+   pair). Cards must never silently retarget to newly streamed sessions:
+   opening an experiment pins its target, and only an explicit user action
+   (selecting sessions, pin/unpin) changes it. A "latest session" fallback is
+   allowed only while nothing is pinned or selected.
+2. **Real data only.** Charts and metrics derive from the pinned capture's
+   stored usage records; no synthetic or cross-session aggregate numbers
+   inside an experiment view.
+3. **Self-contained rendering.** Experiment pages are client-rendered from
+   existing dashboard APIs with hand-rolled SVG; no external chart libraries.
+
 ## 标准目录
 
 - 硬性规则与仓库策略：`.agents/docs/standards/hard-rules.md`

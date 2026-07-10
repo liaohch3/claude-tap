@@ -2223,6 +2223,24 @@ async def test_dashboard_cost_lab_renders_token_analysis(trace_db) -> None:
         store.append_record(session_id, record)
     store.finalize_session(session_id, {"api_calls": len(usages)})
 
+    # newer capture with OpenAI-shaped usage: prompt_tokens include cached
+    newer_record = _anthropic_record(turn=1)
+    newer_record["request_id"] = "req_cost_newer"
+    newer_record["request"]["body"]["model"] = "gpt-5.4-mini"
+    newer_record["response"]["body"]["model"] = "gpt-5.4-mini"
+    newer_record["response"]["body"]["usage"] = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 50,
+        "prompt_tokens_details": {"cached_tokens": 800},
+    }
+    newer_session_id = store.create_session(
+        client="claude",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 7, 10, 12, 10, 0, tzinfo=timezone.utc),
+    )
+    store.append_record(newer_session_id, newer_record)
+    store.finalize_session(newer_session_id, {"api_calls": 1})
+
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()
     try:
@@ -2233,12 +2251,19 @@ async def test_dashboard_cost_lab_renders_token_analysis(trace_db) -> None:
                 await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
                 lab = page.locator("#cost-lab")
                 await lab.wait_for(state="visible", timeout=5000)
-                assert "claude-fable-5" in await page.locator("#cost-lab-target").inner_text()
+                # nothing pinned or selected: the card falls back to the latest capture
+                assert "gpt-5.4-mini" in await page.locator("#cost-lab-target").inner_text()
                 assert not await page.locator("#cost-lab-open").is_disabled()
 
+                # an explicit selection retargets the card
+                await page.locator("#edit-sessions").click()
+                await page.locator(f'[data-select-session="{session_id}"]').check()
+                assert "claude-fable-5" in await page.locator("#cost-lab-target").inner_text()
+
+                # opening the analysis pins its target
                 await page.locator("#cost-lab-open").click()
                 await page.wait_for_selector("#cost-view:not(.hidden)", timeout=5000)
-                assert "/dashboard/cost?" in page.url
+                assert f"session={session_id}" in page.url
                 await page.wait_for_selector("#cost-content .cost-tile", timeout=5000)
 
                 tiles = await page.locator("#cost-content .cost-tile").all_inner_texts()
@@ -2249,9 +2274,12 @@ async def test_dashboard_cost_lab_renders_token_analysis(trace_db) -> None:
                 assert "69,200" in tile_values
                 assert "36,100" in tile_values
 
-                assert await page.locator("#cost-content .cost-card").count() == 3
-                assert await page.locator("#cost-content .cost-svg").count() == 2
+                assert await page.locator("#cost-content .cost-card").count() == 5
+                assert await page.locator("#cost-content .cost-svg").count() == 3
                 assert await page.locator("#cost-content .cost-svg rect").first.is_visible()
+                # the cumulative chart draws two curves; the context chart adds one more
+                assert await page.locator("#cost-content .cost-svg polyline").count() == 3
+                assert await page.locator("#cost-content .cost-formula-row").count() == 4
 
                 amortize = await page.locator(".cost-amortize").inner_text()
                 assert "54,649" in amortize
@@ -2261,6 +2289,29 @@ async def test_dashboard_cost_lab_renders_token_analysis(trace_db) -> None:
                 await page.locator("[data-cost-back]").click()
                 await page.wait_for_selector("#list-view:not(.hidden)", timeout=5000)
                 assert page.url == f"http://127.0.0.1:{port}/dashboard"
+
+                # the pinned capture holds even though a newer session exists
+                target = await page.locator("#cost-lab-target").inner_text()
+                assert "📌" in target
+                assert "claude-fable-5" in target
+                pin_button = page.locator("#cost-lab-pin")
+                assert await pin_button.inner_text() == "Unpin capture"
+                await pin_button.click()
+                assert "gpt-5.4-mini" in await page.locator("#cost-lab-target").inner_text()
+
+                # OpenAI-shaped usage: cached tokens are split out of prompt_tokens
+                await page.locator("#cost-lab-open").click()
+                await page.wait_for_selector("#cost-view:not(.hidden)", timeout=5000)
+                assert f"session={newer_session_id}" in page.url
+                await page.wait_for_selector("#cost-content .cost-tile", timeout=5000)
+                tiles = await page.locator("#cost-content .cost-tile").all_inner_texts()
+                tile_values = [tile.split("\n")[-1].strip() for tile in tiles]
+                assert "200" in tile_values
+                assert "800" in tile_values
+                assert "50" in tile_values
+                amortize = await page.locator(".cost-amortize").inner_text()
+                assert "1,000" in amortize
+                assert "280" in amortize
             finally:
                 await browser.close()
     finally:
