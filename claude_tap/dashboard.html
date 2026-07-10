@@ -1034,6 +1034,7 @@ pre {
   animation: lab-card-enter .2s ease-out both;
   scroll-snap-align: start;
 }
+#hi-model-lab { grid-template-columns: auto minmax(0, 1fr) auto; }
 [data-theme="dark"] .lab-card { border-color: var(--border); }
 @keyframes lab-card-enter {
   from { opacity: 0; transform: translateY(6px); }
@@ -1669,7 +1670,7 @@ pre {
             <div class="lab-card-copy">
               <div class="lab-card-title">
                 <span data-i18n="compare_lab_title">Diff lab</span>
-                <span class="lab-card-hint" data-i18n="compare_lab_hint">send each model a "Hi", then diff their system prompts here</span>
+                <span class="lab-card-hint" data-i18n="compare_lab_hint">same agent, different models: send “Hi” and diff their system prompts</span>
               </div>
               <div id="compare-lab-pair" class="lab-card-pair"></div>
             </div>
@@ -1680,6 +1681,19 @@ pre {
             <div class="lab-card-actions">
               <button id="compare-lab-pin" class="lab-card-secondary" type="button" hidden></button>
               <button id="compare-lab-open" class="lab-card-open" type="button" data-i18n="compare_lab_open" disabled>Open Diff</button>
+            </div>
+          </section>
+          <section id="hi-model-lab" class="lab-card" role="listitem" aria-label="Cross-agent model experiment">
+            <div class="lab-card-mark" aria-hidden="true">H</div>
+            <div class="lab-card-copy">
+              <div class="lab-card-title">
+                <span data-i18n="hi_model_lab_title">Cross-agent model experiment</span>
+                <span class="lab-card-hint" data-i18n="hi_model_lab_hint">same “Hi”, Claude Code/F5 vs Codex CLI/5.6 SOL</span>
+              </div>
+              <div id="hi-model-lab-pair" class="lab-card-pair"></div>
+            </div>
+            <div class="lab-card-actions">
+              <button id="hi-model-lab-open" class="lab-card-open" type="button" data-i18n="hi_model_lab_open" disabled>Compare Models</button>
             </div>
           </section>
           <section id="cost-lab" class="lab-card" role="listitem" aria-label="Token lab">
@@ -2028,11 +2042,15 @@ const DASHBOARD_I18N = {
 	    compare_selected: "Compare",
 	    compare_requires_two: "Select exactly two sessions to compare",
 	    compare_lab_title: "Diff lab",
-	    compare_lab_hint: "send each model a \"Hi\", then diff their system prompts here",
+	    compare_lab_hint: "same agent, different models: send “Hi” and diff their system prompts",
 	    compare_lab_open: "Open Diff",
 	    compare_lab_pin: "Pin this pair",
 	    compare_lab_unpin: "Unpin pair",
 	    compare_lab_empty: "At least two sessions are required",
+	    hi_model_lab_title: "Cross-agent model experiment",
+	    hi_model_lab_hint: "same “Hi”, Claude Code/F5 vs Codex CLI/5.6 SOL",
+	    hi_model_lab_open: "Compare Models",
+	    hi_model_lab_empty: "F5 and 5.6 SOL CLI “Hi” captures are required",
 	    compare_deleted: "Only in baseline",
 	    compare_added: "Only in compared",
 	    cost_lab_title: "Token lab",
@@ -2240,11 +2258,15 @@ const DASHBOARD_I18N = {
 	    compare_selected: "对比",
 	    compare_requires_two: "请选择恰好两个会话进行对比",
 	    compare_lab_title: "Diff 实验台",
-	    compare_lab_hint: "给每个模型各发一句 “Hi”，在这里对比它们 system prompt 的差异",
+	    compare_lab_hint: "同一 Agent、不同模型：用 “Hi” 对比 system prompt",
 	    compare_lab_open: "打开 Diff",
 	    compare_lab_pin: "固定此对",
 	    compare_lab_unpin: "取消固定",
 	    compare_lab_empty: "至少需要两个会话",
+	    hi_model_lab_title: "跨 Agent 模型实验",
+	    hi_model_lab_hint: "同一句 “Hi”：Claude Code/F5 与 Codex CLI/5.6 SOL",
+	    hi_model_lab_open: "对比模型",
+	    hi_model_lab_empty: "需要 F5 和 5.6 SOL CLI 的 “Hi” 抓包",
 	    cost_lab_title: "Token 实验台",
 	    cost_lab_hint: "选中一条抓包，拆解它的 token 都花在哪了",
 	    cost_lab_open: "打开分析",
@@ -2849,6 +2871,7 @@ function renderAgents() {
 	  renderOverview();
 	  renderBulkEditControls(sessions);
 	  renderCompareLab(sessions);
+	  renderHiModelLab(state.sessions);
 	  renderCostLab(sessions);
 	  renderCompactionLab(sessions);
 	  renderSessionPagination();
@@ -3072,8 +3095,19 @@ function renderOverview() {
 
 	function defaultCompareLabPair(candidates) {
 	  if (candidates.length < 2) return candidates.slice(0, 2);
-	  const [latest] = candidates;
 	  const labModel = session => session.model || session.agent || "";
+	  const groups = new Map();
+	  for (const session of candidates) {
+	    const agentKey = session.agent_key || session.agent || "unknown";
+	    if (!groups.has(agentKey)) groups.set(agentKey, []);
+	    groups.get(agentKey).push(session);
+	  }
+	  for (const group of groups.values()) {
+	    const [latest] = group;
+	    const partner = group.find(session => session !== latest && labModel(session) !== labModel(latest));
+	    if (partner) return [latest, partner];
+	  }
+	  const [latest] = candidates;
 	  const partner = candidates.find(session => session !== latest && labModel(session) !== labModel(latest));
 	  return partner ? [latest, partner] : candidates.slice(0, 2);
 	}
@@ -3356,6 +3390,45 @@ function openComparison() {
 
 function openCompareLab() {
   const button = $("#compare-lab-open");
+  const sessionIds = [button?.dataset.left, button?.dataset.right].filter(Boolean);
+  if (sessionIds.length !== 2) return;
+  window.location.assign(`${sessionCompareUrl(sessionIds)}#diff-system`);
+}
+
+const HI_MODEL_EXPERIMENT = [
+  {model: "claude-fable-5", agentKey: "claude-code"},
+  {model: "gpt-5.6-sol", agentKey: "codex"},
+];
+
+function hiModelLabSessions(sessions) {
+  const candidates = (Array.isArray(sessions) ? sessions : [])
+    .filter(canCompareSession)
+    .filter(isHiProbeSession);
+  return HI_MODEL_EXPERIMENT
+    .map(({model, agentKey}) => candidates
+      .filter(session => String(session.model || "").toLowerCase() === model)
+      .filter(session => String(session.agent_key || "").toLowerCase() === agentKey)
+      .sort((a, b) => new Date(b.started_at || b.updated_at || 0) - new Date(a.started_at || a.updated_at || 0))[0])
+    .filter(Boolean);
+}
+
+function renderHiModelLab(sessions) {
+  const pair = hiModelLabSessions(sessions);
+  const pairLabel = $("#hi-model-lab-pair");
+  const button = $("#hi-model-lab-open");
+  if (!pairLabel || !button) return;
+  const ready = pair.length === HI_MODEL_EXPERIMENT.length;
+  pairLabel.textContent = ready
+    ? `${pair[0].model} ↔ ${pair[1].model}`
+    : t("hi_model_lab_empty");
+  button.disabled = !ready;
+  button.dataset.left = ready ? pair[0].id : "";
+  button.dataset.right = ready ? pair[1].id : "";
+  button.title = ready ? t("hi_model_lab_open") : t("hi_model_lab_empty");
+}
+
+function openHiModelLab() {
+  const button = $("#hi-model-lab-open");
   const sessionIds = [button?.dataset.left, button?.dataset.right].filter(Boolean);
   if (sessionIds.length !== 2) return;
   window.location.assign(`${sessionCompareUrl(sessionIds)}#diff-system`);
@@ -3950,13 +4023,35 @@ function comparisonRequestBody(record) {
 
 function primaryComparisonRecord(records) {
   const items = Array.isArray(records) ? records : [];
-  return items.find(record => recordKind(record) === "generation") || items[0] || {};
+  const generations = items.filter(record => recordKind(record) === "generation");
+  const substantive = generations.find(record => {
+    const body = comparisonRequestBody(record);
+    if (body.generate === false) return false;
+    const input = Array.isArray(body.input) ? body.input : [];
+    const hasConversationInput = input.some(item => item?.role === "user" || item?.role === "developer");
+    return Boolean(
+      body.system
+      || body.instructions
+      || body.systemInstruction
+      || (Array.isArray(body.messages) && body.messages.length)
+      || hasConversationInput
+      || (Array.isArray(body.tools) && body.tools.length)
+    );
+  });
+  return substantive || generations.find(record => comparisonRequestBody(record).generate !== false) || generations[0] || items[0] || {};
 }
 
 function comparisonSystemText(body) {
   const value = body.system ?? body.instructions ?? body.systemInstruction ?? "";
   const text = contentText(value);
-  return text || (value && typeof value === "object" ? JSON.stringify(value, null, 2) : String(value || ""));
+  if (text) return text;
+  if (value && typeof value === "object") return JSON.stringify(value, null, 2);
+  if (value) return String(value);
+  const developerMessages = (Array.isArray(body.input) ? body.input : [])
+    .filter(item => item?.role === "developer" || item?.role === "system")
+    .map(item => contentText(item?.content))
+    .filter(Boolean);
+  return developerMessages.join("\n\n");
 }
 
 function comparisonMessagesText(body) {
@@ -4796,6 +4891,7 @@ $("#status-filter").addEventListener("change", event => {
 	$("#select-all-sessions").addEventListener("change", event => toggleSelectAllVisible(event.target.checked));
 	$("#compare-selected-sessions").addEventListener("click", openComparison);
 	$("#compare-lab-open").addEventListener("click", openCompareLab);
+	$("#hi-model-lab-open").addEventListener("click", openHiModelLab);
 	$("#cost-lab-open").addEventListener("click", openCostLab);
 	$("#cost-lab-pin").addEventListener("click", toggleCostLabPin);
 	$("#compaction-lab-open").addEventListener("click", openCompactionLab);

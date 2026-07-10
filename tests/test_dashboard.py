@@ -2737,6 +2737,68 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
     store.append_record(duplicate_model_session_id, duplicate_model_record)
     store.finalize_session(duplicate_model_session_id, {"api_calls": 1})
 
+    sol_record = {
+        "timestamp": "2026-05-19T11:00:00+00:00",
+        "request_id": "req_compare_sol_cli",
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/v1/responses",
+            "body": {
+                "model": "gpt-5.6-sol",
+                "tools": [{"type": "function", "name": "shell", "description": "Run a shell command"}],
+                "input": [
+                    {
+                        "role": "developer",
+                        "content": [
+                            {"type": "input_text", "text": "You are Codex."},
+                            {"type": "input_text", "text": "Use the shell tool when needed."},
+                        ],
+                    },
+                    {"role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+                ],
+            },
+        },
+        "response": {
+            "status": 200,
+            "body": {
+                "model": "gpt-5.6-sol",
+                "output": [{"role": "assistant", "content": [{"type": "output_text", "text": "Hi!"}]}],
+                "usage": {"input_tokens": 3000, "output_tokens": 14, "input_tokens_details": {"cached_tokens": 800}},
+            },
+        },
+    }
+    sol_session_id = store.create_session(
+        client="codex",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 7, 10, 11, 0, 0, tzinfo=timezone.utc),
+    )
+    store.append_record(
+        sol_session_id,
+        {
+            "timestamp": "2026-05-19T10:59:59+00:00",
+            "request_id": "req_compare_sol_handshake",
+            "turn": 1,
+            "request": {
+                "method": "WEBSOCKET",
+                "path": "/v1/responses",
+                "body": {
+                    "type": "response.create",
+                    "generate": False,
+                    "input": [
+                        {
+                            "role": "developer",
+                            "content": [{"type": "input_text", "text": "Handshake setup only."}],
+                        }
+                    ],
+                },
+            },
+            "response": {"status": 101, "body": {"status": "completed", "generate": False}},
+        },
+    )
+    store.append_record(sol_session_id, sol_record)
+    store.finalize_session(sol_session_id, {"api_calls": 2})
+
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()
     try:
@@ -2747,7 +2809,7 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
                 await page.wait_for_selector('[data-agent="cli"].active', timeout=5000)
                 assert await page.locator(f'[data-session="{codex_app_session_id}"]').count() == 0
-                assert await page.locator("#session-list .session-row").count() == 3
+                assert await page.locator("#session-list .session-row").count() == 4
                 lab = page.locator("#compare-lab")
                 await lab.wait_for(state="visible", timeout=5000)
                 assert await page.locator("#compare-lab-pair").inner_text() == ("claude-fable-5 ↔ claude-opus-4-8")
@@ -2758,6 +2820,14 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                     "+ Only in compared"
                 )
                 assert not await page.locator("#compare-lab-open").is_disabled()
+                model_lab = page.locator("#hi-model-lab")
+                await model_lab.wait_for(state="visible", timeout=5000)
+                assert await page.locator("#hi-model-lab-pair").inner_text() == ("claude-fable-5 ↔ gpt-5.6-sol")
+                model_lab_button = page.locator("#hi-model-lab-open")
+                assert not await model_lab_button.is_disabled()
+                model_lab_fable_id = await model_lab_button.get_attribute("data-left")
+                assert model_lab_fable_id
+                assert await model_lab_button.get_attribute("data-right") == sol_session_id
                 await page.locator("#edit-sessions").click()
                 compare_button = page.locator("#compare-selected-sessions")
                 assert await compare_button.is_disabled()
@@ -2860,6 +2930,22 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 await page.locator("#compare-swap").click()
                 assert f"left={session_ids[1]}" in page.url
                 assert f"right={session_ids[0]}" in page.url
+                assert page.url.endswith("#diff-system")
+
+                await page.locator("[data-compare-back]").click()
+                await page.wait_for_selector("#list-view:not(.hidden)", timeout=5000)
+                await page.locator("#hi-model-lab-open").click()
+                await page.wait_for_selector("#compare-view:not(.hidden) #diff-system", timeout=5000)
+                assert await page.locator(".compare-model").all_text_contents() == [
+                    "claude-fable-5",
+                    "gpt-5.6-sol",
+                ]
+                system_diff = await page.locator("#diff-system").inner_text()
+                assert "You are Codex." in system_diff
+                assert "Use the shell tool when needed." in system_diff
+                assert "Handshake setup only." not in system_diff
+                assert f"left={model_lab_fable_id}" in page.url
+                assert f"right={sol_session_id}" in page.url
                 assert page.url.endswith("#diff-system")
             finally:
                 await browser.close()

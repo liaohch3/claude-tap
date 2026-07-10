@@ -13,6 +13,43 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _hi_model_lab_sessions(sessions: list[dict]) -> list[dict]:
+    experiment = [
+        {"model": "claude-fable-5", "agent_key": "claude-code"},
+        {"model": "gpt-5.6-sol", "agent_key": "codex"},
+    ]
+    candidates = [
+        session
+        for session in sessions
+        if session.get("record_count", 0) > 0 and str(session.get("first_user", "")).strip().lower() == "hi"
+    ]
+    pair = []
+    for target in experiment:
+        matches = [
+            session
+            for session in candidates
+            if str(session.get("model", "")).lower() == target["model"]
+            and str(session.get("agent_key", "")).lower() == target["agent_key"]
+        ]
+        if matches:
+            pair.append(max(matches, key=lambda session: session.get("started_at", "")))
+    return pair
+
+
+def _default_compare_lab_pair(sessions: list[dict]) -> list[dict]:
+    groups: dict[str, list[dict]] = {}
+    for session in sessions:
+        groups.setdefault(session.get("agent_key", "unknown"), []).append(session)
+    for group in groups.values():
+        latest = group[0]
+        partner = next((item for item in group[1:] if item.get("model") != latest.get("model")), None)
+        if partner:
+            return [latest, partner]
+    latest = sessions[0]
+    partner = next((item for item in sessions[1:] if item.get("model") != latest.get("model")), None)
+    return [latest, partner] if partner else sessions[:2]
+
+
 def _line_diff_rows(left_text: str, right_text: str) -> list[tuple[str, str, str]]:
     """Mirror dashboard.html lineDiffRows for fast alignment coverage."""
     left = left_text.split("\n")[:800] if left_text else []
@@ -85,6 +122,59 @@ def test_line_diff_rows_handles_content_present_on_only_one_side() -> None:
     assert _line_diff_rows("", "tool: Research") == [
         ("", "tool: Research", "added"),
     ]
+
+
+def test_hi_model_lab_pairs_latest_fable_with_codex_cli_sol_probe() -> None:
+    sessions = [
+        {
+            "id": "fable-old",
+            "model": "claude-fable-5",
+            "agent_key": "claude-code",
+            "first_user": "Hi",
+            "record_count": 1,
+            "started_at": "2026-07-10T10:00:00Z",
+        },
+        {
+            "id": "fable-new",
+            "model": "claude-fable-5",
+            "agent_key": "claude-code",
+            "first_user": "hi",
+            "record_count": 1,
+            "started_at": "2026-07-10T11:00:00Z",
+        },
+        {
+            "id": "sol-app",
+            "model": "gpt-5.6-sol",
+            "agent_key": "codex-app",
+            "first_user": "Hi",
+            "record_count": 1,
+            "started_at": "2026-07-10T13:00:00Z",
+        },
+        {
+            "id": "sol-cli",
+            "model": "gpt-5.6-sol",
+            "agent_key": "codex",
+            "first_user": "Hi",
+            "record_count": 4,
+            "started_at": "2026-07-10T12:00:00Z",
+        },
+    ]
+
+    pair = _hi_model_lab_sessions(sessions)
+
+    assert [session["id"] for session in pair] == ["fable-new", "sol-cli"]
+
+
+def test_default_diff_lab_keeps_comparison_within_one_agent() -> None:
+    sessions = [
+        {"id": "sol", "model": "gpt-5.6-sol", "agent_key": "codex"},
+        {"id": "opus", "model": "claude-opus-4-8", "agent_key": "claude-code"},
+        {"id": "fable", "model": "claude-fable-5", "agent_key": "claude-code"},
+    ]
+
+    pair = _default_compare_lab_pair(sessions)
+
+    assert [session["id"] for session in pair] == ["opus", "fable"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required for dashboard JS unit tests")
