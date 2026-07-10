@@ -1883,71 +1883,15 @@ def test_viewer_semantic_contracts_across_supported_trace_shapes(
         assert text in result["detailText"]
 
 
-def test_viewer_detail_tabs_query_can_default_to_trace_and_expose_default_view(
-    tmp_path: Path, chromium_browser
-) -> None:
+def test_viewer_detail_tabs_expose_only_default_view(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "detail_tabs", (_responses_record(),))
 
     page = chromium_browser.new_page()
     try:
         errors = _open_viewer_with_error_capture(page, html_path, "?detail=trace")
         page.locator(".sidebar-item").first.click()
-        page.wait_for_selector('#detail .detail-tab[data-tab="trace"].active', timeout=5000)
-        trace_state = page.evaluate(
-            """() => ({
-              tabs: Array.from(document.querySelectorAll('#detail .detail-tab')).map(el => ({
-                mode: el.dataset.tab,
-                label: el.querySelector('span:not(.tab-count)')?.textContent || '',
-                active: el.classList.contains('active'),
-              })),
-              sectionCount: document.querySelectorAll('#detail .section').length,
-              blockTitles: Array.from(document.querySelectorAll('#detail .trace-block-title .trace-title')).map(el => el.textContent),
-              copyButtons: Array.from(document.querySelectorAll('#detail .trace-copy-btn')).map(el => el.textContent),
-              formats: Array.from(document.querySelectorAll('#detail .trace-format-btn')).map(el => ({
-                format: el.dataset.format,
-                label: el.textContent,
-                active: el.classList.contains('active'),
-              })),
-              text: document.querySelector('#detail')?.innerText || '',
-            })"""
-        )
-        page.evaluate(
-            """() => {
-              window.__copiedTraceText = '';
-              window.copyToClipboard = (text, btn) => {
-                window.__copiedTraceText = text;
-                if (btn) btn.textContent = t('copied');
-                return Promise.resolve();
-              };
-            }"""
-        )
-        page.locator("#detail .trace-copy-btn").first.click()
-        page.wait_for_function("window.__copiedTraceText.includes('Run pwd.')")
-        copied_trace_text = page.evaluate("window.__copiedTraceText")
-
-        page.locator('#detail .trace-format-btn[data-format="yaml"]').click()
-        page.wait_for_selector('#detail .trace-format-btn[data-format="yaml"].active', timeout=5000)
-        yaml_state = page.evaluate(
-            """() => ({
-              text: document.querySelector('#detail')?.innerText || '',
-              codeFormat: document.querySelector('#detail .trace-code')?.dataset.format || '',
-              prettyCount: document.querySelectorAll('#detail .trace-pretty').length,
-            })"""
-        )
-
-        page.locator('#detail .trace-format-btn[data-format="pretty"]').click()
-        page.wait_for_selector('#detail .trace-format-btn[data-format="pretty"].active', timeout=5000)
-        pretty_state = page.evaluate(
-            """() => ({
-              text: document.querySelector('#detail')?.innerText || '',
-              codeCount: document.querySelectorAll('#detail .trace-code').length,
-              prettyCount: document.querySelectorAll('#detail .trace-pretty').length,
-            })"""
-        )
-
-        page.locator('#detail .detail-tab[data-tab="default"]').click()
         page.wait_for_selector('#detail .detail-tab[data-tab="default"].active', timeout=5000)
-        default_state = page.evaluate(
+        state = page.evaluate(
             """() => ({
               tabs: Array.from(document.querySelectorAll('#detail .detail-tab')).map(el => ({
                 mode: el.dataset.tab,
@@ -1955,50 +1899,23 @@ def test_viewer_detail_tabs_query_can_default_to_trace_and_expose_default_view(
                 active: el.classList.contains('active'),
               })),
               sectionTitles: Array.from(document.querySelectorAll('#detail .section .title')).map(el => el.textContent),
+              traceBlockCount: document.querySelectorAll('#detail .trace-block').length,
+              traceFormatCount: document.querySelectorAll('#detail .trace-format-btn').length,
               text: document.querySelector('#detail')?.innerText || '',
             })"""
-        )
-
-        remaining_tabs = page.evaluate(
-            "() => Array.from(document.querySelectorAll('#detail .detail-tab')).map(el => el.dataset.tab)"
         )
     finally:
         page.close()
 
     assert errors == []
-    assert trace_state["tabs"] == [
-        {"mode": "default", "label": "Default", "active": False},
-        {"mode": "trace", "label": "Trace", "active": True},
-    ]
-    assert trace_state["sectionCount"] == 0
-    assert trace_state["blockTitles"] == ["Input", "Output", "Metadata"]
-    assert trace_state["copyButtons"] == ["Copy", "Copy", "Copy"]
-    assert '"messages"' in copied_trace_text
-    assert "Run pwd." in copied_trace_text
-    assert trace_state["formats"] == [
-        {"format": "json", "label": "JSON", "active": True},
-        {"format": "yaml", "label": "YAML", "active": False},
-        {"format": "pretty", "label": "Pretty", "active": False},
-    ]
-    assert '"messages"' in trace_state["text"]
-    assert "req_responses_contract" in trace_state["text"]
-    assert "Responses final OK." in trace_state["text"]
-    assert yaml_state["codeFormat"] == "yaml"
-    assert yaml_state["prettyCount"] == 0
-    assert "messages:" in yaml_state["text"]
-    assert "req_responses_contract" in yaml_state["text"]
-    assert pretty_state["codeCount"] == 0
-    assert pretty_state["prettyCount"] == 3
-    assert "messages" in pretty_state["text"]
-    assert "req_responses_contract" in pretty_state["text"]
-    assert default_state["tabs"] == [
+    assert state["tabs"] == [
         {"mode": "default", "label": "Default", "active": True},
-        {"mode": "trace", "label": "Trace", "active": False},
     ]
-    assert default_state["sectionTitles"] == ["Tools", "System Prompt", "Messages", "Response", "Full JSON"]
-    assert "Responses final OK." in default_state["text"]
-    assert "Diff with Prev" in default_state["text"]
-    assert remaining_tabs == ["default", "trace"]
+    assert state["sectionTitles"] == ["Tools", "System Prompt", "Messages", "Response", "Full JSON"]
+    assert state["traceBlockCount"] == 0
+    assert state["traceFormatCount"] == 0
+    assert "Responses final OK." in state["text"]
+    assert "Diff with Prev" in state["text"]
 
 
 def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Path, chromium_browser) -> None:
@@ -2538,7 +2455,7 @@ def test_viewer_codex_lazy_trace_tab_preserves_display_turn_metadata(tmp_path: P
               }
               const idx = filtered.findIndex(entry => entry.request?.path === '/v1/responses' && entry.display_turn === 1);
               selectEntry(idx);
-              document.querySelector('#detail .detail-tab[data-tab="trace"]').click();
+              setDetailViewMode('trace');
               const jsonMetadata = metadataText();
               document.querySelector('#detail .trace-format-btn[data-format="yaml"]').click();
               const yamlMetadata = metadataText();

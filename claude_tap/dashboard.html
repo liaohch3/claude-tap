@@ -2911,7 +2911,7 @@ function ensureViewerFrame(session) {
       <iframe
         class="viewer-frame"
         data-viewer-frame
-        src="/api/sessions/${encodeURIComponent(session.id)}/html?detail=trace"
+        src="/api/sessions/${encodeURIComponent(session.id)}/html"
         title="${esc(t("session_details", {agent: session.agent || t("session_detail")}))}"
       ></iframe>
     </div>

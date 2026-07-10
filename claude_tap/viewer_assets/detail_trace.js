@@ -3,7 +3,7 @@
 // Persist section collapse state across turn switches.
 // Key: section title text, Value: true = open, false = collapsed.
 const sectionCollapseState = {};
-let detailViewMode = new URLSearchParams(window.location.search || '').get('detail') === 'trace' ? 'trace' : 'default';
+let detailViewMode = 'default';
 let traceFormatMode = 'json';
 let detailLoadToken = 0;
 
@@ -56,7 +56,6 @@ function detailTabButton(mode, label) {
 function renderDetailViewTabs() {
   return `<div class="detail-inspector-bar" role="tablist" aria-label="Detail view mode"><div class="detail-tabs">
     ${detailTabButton('default', t('tab_default'))}
-    ${detailTabButton('trace', t('tab_trace'))}
   </div></div>`;
 }
 
