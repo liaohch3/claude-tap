@@ -227,6 +227,7 @@ class LiveViewerServer:
         app.router.add_get("/viewer", self._handle_index)
         app.router.add_get("/dashboard", self._handle_dashboard_index)
         app.router.add_get("/dashboard/compare", self._handle_dashboard_compare)
+        app.router.add_get("/dashboard/cost", self._handle_dashboard_cost)
         app.router.add_get("/dashboard/session/{session_id}", self._handle_dashboard_session_detail)
         app.router.add_get("/dashboard/health", self._handle_dashboard_health)
         app.router.add_get("/dashboard/events", self._handle_dashboard_sse)
@@ -376,6 +377,15 @@ class LiveViewerServer:
             return web.Response(status=400, text="Two distinct session ids are required")
         store = ensure_trace_store()
         if any(store.load_session_row(session_id) is None for session_id in session_ids):
+            return web.Response(status=404, text="Session not found")
+        return await self._handle_dashboard_index(request)
+
+    async def _handle_dashboard_cost(self, request: web.Request) -> web.Response:
+        """Serve the dashboard shell for a single-session token cost route."""
+        session_id = request.query.get("session", "")
+        if not session_id:
+            return web.Response(status=400, text="A session id is required")
+        if ensure_trace_store().load_session_row(session_id) is None:
             return web.Response(status=404, text="Session not found")
         return await self._handle_dashboard_index(request)
 

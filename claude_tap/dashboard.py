@@ -204,6 +204,8 @@ def load_trace_session(
     )
     summary = redact_dashboard_summary(summary)
     records = redact_dashboard_records(store.load_records(session_id, limit=record_limit, offset=record_offset))
+    for record in records:
+        record["usage"] = _record_usage(record)
     return {"session": summary, "records": records}
 
 

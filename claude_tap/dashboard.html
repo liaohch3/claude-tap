@@ -1375,6 +1375,76 @@ pre {
 }
 .compare-empty { padding: 34px 18px; color: var(--text-tertiary); text-align: center; }
 
+.cost-view {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+.cost-shell { display: flex; flex-direction: column; gap: 14px; }
+.cost-empty { padding: 34px 18px; color: var(--text-tertiary); text-align: center; }
+.cost-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.cost-tile {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+.cost-tile-label {
+  color: var(--text-tertiary);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.cost-tile-value { margin-top: 4px; font-size: 20px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.cost-card {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+.cost-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.cost-card-title { font-size: 13px; font-weight: 700; }
+.cost-legend { display: inline-flex; flex-wrap: wrap; gap: 10px; margin-left: auto; }
+.cost-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-tertiary);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.cost-legend-dot { width: 9px; height: 9px; border-radius: 3px; }
+.cost-svg { display: block; width: 100%; height: auto; }
+.cost-axis { fill: var(--text-tertiary); font-family: var(--mono); font-size: 9.5px; }
+.cost-amortize { display: flex; flex-direction: column; gap: 8px; }
+.cost-amortize-row {
+  display: grid;
+  grid-template-columns: minmax(180px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.cost-amortize-label { color: var(--text-secondary); font-size: 12px; }
+.cost-amortize-track {
+  overflow: hidden;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+}
+.cost-amortize-fill { height: 100%; border-radius: 999px; background: var(--blue); }
+.cost-amortize-value { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+.cost-amortize-note { color: var(--text-tertiary); font-size: 11px; }
+
 @media (max-width: 900px) {
   body { overflow: auto; height: auto; min-height: 100vh; }
   .header { flex-wrap: wrap; padding: 10px 12px; }
@@ -1547,6 +1617,19 @@ pre {
               <button id="compare-lab-open" class="lab-card-open" type="button" data-i18n="compare_lab_open" disabled>Open Diff</button>
             </div>
           </section>
+          <section id="cost-lab" class="lab-card" role="listitem" aria-label="Token lab">
+            <div class="lab-card-mark" aria-hidden="true">Σ</div>
+            <div class="lab-card-copy">
+              <div class="lab-card-title">
+                <span data-i18n="cost_lab_title">Token lab</span>
+                <span class="lab-card-hint" data-i18n="cost_lab_hint">pick a capture, then break down where its tokens went</span>
+              </div>
+              <div id="cost-lab-target" class="lab-card-pair"></div>
+            </div>
+            <div class="lab-card-actions">
+              <button id="cost-lab-open" class="lab-card-open" type="button" data-i18n="cost_lab_open" disabled>Open Analysis</button>
+            </div>
+          </section>
         </div>
       </div>
   </section>
@@ -1591,6 +1674,19 @@ pre {
       <div class="compare-empty" data-i18n="compare_loading">Loading comparison...</div>
     </div>
   </section>
+
+  <section id="cost-view" class="cost-view hidden">
+    <div class="compare-page-head">
+      <button class="back-btn" type="button" data-cost-back title="Back to session list" aria-label="Back to session list">←</button>
+      <div class="compare-heading">
+        <div class="compare-title" data-i18n="cost_title">Token cost analysis</div>
+        <div class="compare-subtitle" id="cost-subtitle"></div>
+      </div>
+    </div>
+    <div id="cost-content" class="cost-shell">
+      <div class="cost-empty" data-i18n="cost_loading">Loading cost analysis...</div>
+    </div>
+  </section>
 </div>
 
 <div id="delete-session-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="delete-session-title" aria-describedby="delete-session-message">
@@ -1615,6 +1711,7 @@ pre {
 <script>
 const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
 const SESSION_COMPARE_ROUTE = /^\/dashboard\/compare\/?$/;
+const SESSION_COST_ROUTE = /^\/dashboard\/cost\/?$/;
 const CLAUDE_TAP_VERSION = "";
 const DASHBOARD_QUIT_TOKEN = "";
 const DASHBOARD_CAN_STOP = false;
@@ -1629,7 +1726,10 @@ const state = {
   compareSessionIds: [],
   comparePayloads: null,
   compareRequestId: 0,
-  view: initialComparisonIds().length === 2 ? "compare" : "list",
+  pendingCostSessionId: initialCostSessionId(),
+  costSessionId: null,
+  costRequestId: 0,
+  view: initialComparisonIds().length === 2 ? "compare" : initialCostSessionId() ? "cost" : "list",
 	  activeTab: "conversation",
   search: "",
   date: "all",
@@ -1691,6 +1791,11 @@ function initialComparisonIds() {
   return sessionIds.length === 2 && sessionIds[0] !== sessionIds[1] ? sessionIds : [];
 }
 
+function initialCostSessionId() {
+  if (!window.location.pathname.match(SESSION_COST_ROUTE)) return null;
+  return new URLSearchParams(window.location.search).get("session") || null;
+}
+
 function sessionDetailUrl(sessionId) {
   return `/dashboard/session/${encodeURIComponent(sessionId)}`;
 }
@@ -1698,6 +1803,10 @@ function sessionDetailUrl(sessionId) {
 function sessionCompareUrl(sessionIds) {
   const params = new URLSearchParams({left: sessionIds[0], right: sessionIds[1]});
   return `/dashboard/compare?${params.toString()}`;
+}
+
+function sessionCostUrl(sessionId) {
+  return `/dashboard/cost?${new URLSearchParams({session: sessionId}).toString()}`;
 }
 
 const DASHBOARD_I18N = {
@@ -1744,6 +1853,25 @@ const DASHBOARD_I18N = {
 	    compare_lab_empty: "At least two sessions are required",
 	    compare_deleted: "Only in baseline",
 	    compare_added: "Only in compared",
+	    cost_lab_title: "Token lab",
+	    cost_lab_hint: "pick a capture, then break down where its tokens went",
+	    cost_lab_open: "Open Analysis",
+	    cost_lab_empty: "A session with records is required",
+	    cost_title: "Token cost analysis",
+	    cost_loading: "Loading cost analysis...",
+	    cost_unable: "Unable to load cost analysis: {error}",
+	    cost_no_usage: "No usage data found in this session's records",
+	    cost_calls: "API calls",
+	    cost_total_input: "Input",
+	    cost_total_output: "Output",
+	    cost_cache_read: "Cache read",
+	    cost_cache_write: "Cache write",
+	    cost_chart_stack: "Per-call token composition",
+	    cost_chart_context: "Prompt size per call (input + cache)",
+	    cost_chart_amortize: "Cache amortization (weighted input units)",
+	    cost_amortize_full: "Without cache (all full price)",
+	    cost_amortize_actual: "With cache (input ×1, read ×0.1, write ×1.25)",
+	    cost_amortize_note: "Weighted input cost is {percent}% of the no-cache equivalent",
 	    delete_selected: "Delete selected",
 	    load_more_sessions: "Load more sessions",
 	    loading_more_sessions: "Loading more sessions...",
@@ -1891,6 +2019,25 @@ const DASHBOARD_I18N = {
 	    compare_lab_pin: "固定此对",
 	    compare_lab_unpin: "取消固定",
 	    compare_lab_empty: "至少需要两个会话",
+	    cost_lab_title: "Token 实验台",
+	    cost_lab_hint: "选中一条抓包，拆解它的 token 都花在哪了",
+	    cost_lab_open: "打开分析",
+	    cost_lab_empty: "需要一条有记录的会话",
+	    cost_title: "Token 成本分析",
+	    cost_loading: "正在加载成本分析...",
+	    cost_unable: "无法加载成本分析：{error}",
+	    cost_no_usage: "该会话的记录中没有 usage 数据",
+	    cost_calls: "API 调用",
+	    cost_total_input: "输入",
+	    cost_total_output: "输出",
+	    cost_cache_read: "缓存读取",
+	    cost_cache_write: "缓存创建",
+	    cost_chart_stack: "逐调用 token 构成",
+	    cost_chart_context: "每次调用的 prompt 规模（输入 + 缓存）",
+	    cost_chart_amortize: "缓存摊销（加权输入单位）",
+	    cost_amortize_full: "无缓存（全部按全价）",
+	    cost_amortize_actual: "有缓存（输入 ×1，读 ×0.1，写 ×1.25）",
+	    cost_amortize_note: "加权后的输入成本是无缓存情况的 {percent}%",
 	    compare_deleted: "仅基线有",
 	    compare_added: "仅对比项有",
 	    delete_selected: "删除所选",
@@ -2253,6 +2400,13 @@ function updateTracePathBar(session = null) {
     `;
     return;
   }
+  if (state.view === "cost" && state.costSessionId) {
+    $("#trace-path-bar").innerHTML = `
+      <span class="tp-label">${esc(t("cost_title"))}</span>
+      <span class="tp-val">${esc(state.costSessionId)}</span>
+    `;
+    return;
+  }
   if (state.view === "detail" && session) {
     $("#trace-path-bar").innerHTML = `
       <span class="tp-label">${esc(t("session_id"))}</span>
@@ -2289,16 +2443,23 @@ function updateTracePathBar(session = null) {
 	    const visible = filteredSessions();
 	    const pendingSessionId = state.pendingSessionId;
 	    const pendingComparisonIds = state.pendingComparisonIds;
+	    const pendingCostSessionId = state.pendingCostSessionId;
 	    if (pendingComparisonIds.length === 2) {
 	      state.pendingComparisonIds = [];
 	      state.compareSessionIds = pendingComparisonIds;
 	      state.view = "compare";
+	    } else if (pendingCostSessionId) {
+	      state.pendingCostSessionId = null;
+	      state.costSessionId = pendingCostSessionId;
+	      state.view = "cost";
 	    } else if (pendingSessionId) {
 	      state.pendingSessionId = null;
 	      state.selectedSessionId = pendingSessionId;
 	      state.view = "detail";
 	    } else if (state.view === "compare" && state.compareSessionIds.length === 2) {
 	      state.view = "compare";
+	    } else if (state.view === "cost" && state.costSessionId) {
+	      state.view = "cost";
 	    } else if (state.view === "detail" && state.selectedSessionId) {
 	      state.view = "detail";
 	    } else {
@@ -2308,7 +2469,7 @@ function updateTracePathBar(session = null) {
         state.view = "list";
       }
     }
-    if (state.view !== "detail" && state.view !== "compare") {
+    if (state.view !== "detail" && state.view !== "compare" && state.view !== "cost") {
       state.selectedSessionId = null;
       state.view = "list";
     }
@@ -2316,6 +2477,9 @@ function updateTracePathBar(session = null) {
     if (state.view === "compare" && state.compareSessionIds.length === 2) {
       showCompareView();
       await loadComparison(state.compareSessionIds);
+    } else if (state.view === "cost" && state.costSessionId) {
+      showCostView();
+      await loadCostAnalysis(state.costSessionId);
     } else if (state.view === "detail" && state.selectedSessionId) {
       showDetailView();
       const selected = state.sessions.find(session => session.id === state.selectedSessionId);
@@ -2403,6 +2567,7 @@ function renderAgents() {
 	  renderOverview();
 	  renderBulkEditControls(sessions);
 	  renderCompareLab(sessions);
+	  renderCostLab(sessions);
 	  renderSessionPagination();
 	  if (state.loadingSessions && !state.sessions.length) {
 	    $("#session-list").innerHTML = `<tr><td class="loading-cell" colspan="9">${loadingMarkup(t("loading_sessions"))}</td></tr>`;
@@ -2807,6 +2972,222 @@ function openCompareLab() {
   window.location.assign(`${sessionCompareUrl(sessionIds)}#diff-system`);
 }
 
+const COST_SERIES = [
+  {key: "cacheRead", labelKey: "cost_cache_read", color: "var(--blue)"},
+  {key: "cacheWrite", labelKey: "cost_cache_write", color: "var(--purple)"},
+  {key: "input", labelKey: "cost_total_input", color: "var(--orange)"},
+  {key: "output", labelKey: "cost_total_output", color: "var(--green)"},
+];
+const COST_WEIGHTS = {input: 1, cacheRead: 0.1, cacheWrite: 1.25};
+
+function costLabSession(sessions) {
+  const byId = new Map(state.sessions.map(session => [session.id, session]));
+  const selected = Array.from(state.selectedSessionIds)
+    .map(id => byId.get(id))
+    .filter(canCompareSession);
+  if (selected.length) return selected[0];
+  return sessions.filter(canCompareSession)[0] || null;
+}
+
+function renderCostLab(sessions) {
+  const target = $("#cost-lab-target");
+  const button = $("#cost-lab-open");
+  if (!target || !button) return;
+  const session = costLabSession(sessions);
+  const ready = Boolean(session);
+  target.textContent = ready
+    ? `${session.model || session.agent || t("unknown")} · ${fmtTableTime(session.started_at || session.updated_at)}`
+    : t("cost_lab_empty");
+  button.disabled = !ready;
+  button.dataset.session = ready ? session.id : "";
+  button.title = ready ? t("cost_lab_open") : t("cost_lab_empty");
+}
+
+function openCostLab() {
+  const button = $("#cost-lab-open");
+  const sessionId = button?.dataset.session;
+  if (!sessionId) return;
+  window.location.assign(sessionCostUrl(sessionId));
+}
+
+function costUsageRows(payload) {
+  const records = Array.isArray(payload?.records) ? payload.records : [];
+  return records
+    .map((record, index) => {
+      const usage = record?.usage || record?.response?.body?.usage || {};
+      return {
+        turn: Number(record?.turn) || index + 1,
+        model: record?.request?.body?.model || "",
+        input: Number(usage.input_tokens) || 0,
+        output: Number(usage.output_tokens) || 0,
+        cacheRead: Number(usage.cache_read_input_tokens) || 0,
+        cacheWrite: Number(usage.cache_creation_input_tokens) || 0,
+      };
+    })
+    .filter(row => row.input || row.output || row.cacheRead || row.cacheWrite);
+}
+
+function costRowTotal(row) {
+  return row.input + row.output + row.cacheRead + row.cacheWrite;
+}
+
+function fmtTok(value) {
+  return Math.round(value).toLocaleString("en-US");
+}
+
+function costStackChart(rows) {
+  const width = 940;
+  const height = 250;
+  const pad = {top: 12, right: 10, bottom: 30, left: 70};
+  const innerW = width - pad.left - pad.right;
+  const innerH = height - pad.top - pad.bottom;
+  const max = Math.max(...rows.map(costRowTotal), 1);
+  const step = innerW / rows.length;
+  const barW = Math.max(Math.min(step * 0.62, 48), 2.5);
+  const labelEvery = Math.max(1, Math.ceil(rows.length / 14));
+  let grid = "";
+  for (let line = 0; line <= 4; line += 1) {
+    const y = pad.top + innerH - (innerH * line) / 4;
+    grid += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${width - pad.right}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-dasharray="3 3"></line>`
+      + `<text x="${pad.left - 8}" y="${(y + 3).toFixed(1)}" text-anchor="end" class="cost-axis">${fmtTok((max * line) / 4)}</text>`;
+  }
+  let bars = "";
+  rows.forEach((row, index) => {
+    const x = pad.left + step * index + (step - barW) / 2;
+    let y = pad.top + innerH;
+    let segments = "";
+    for (const series of COST_SERIES) {
+      const value = row[series.key];
+      if (!value) continue;
+      const segH = (innerH * value) / max;
+      y -= segH;
+      segments += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(segH, 0.8).toFixed(1)}" fill="${series.color}" rx="1"></rect>`;
+    }
+    const title = `#${row.turn} · ${COST_SERIES.map(series => `${t(series.labelKey)} ${fmtTok(row[series.key])}`).join(" · ")}`;
+    bars += `<g><title>${esc(title)}</title>${segments}</g>`;
+    if (index % labelEvery === 0) {
+      bars += `<text x="${(x + barW / 2).toFixed(1)}" y="${height - 10}" text-anchor="middle" class="cost-axis">#${row.turn}</text>`;
+    }
+  });
+  return `<svg class="cost-svg" viewBox="0 0 ${width} ${height}" role="img">${grid}${bars}</svg>`;
+}
+
+function costContextChart(rows) {
+  const width = 940;
+  const height = 190;
+  const pad = {top: 12, right: 10, bottom: 30, left: 70};
+  const innerW = width - pad.left - pad.right;
+  const innerH = height - pad.top - pad.bottom;
+  const prompts = rows.map(row => row.input + row.cacheRead + row.cacheWrite);
+  const max = Math.max(...prompts, 1);
+  const baseY = pad.top + innerH;
+  const pointX = index => pad.left + (rows.length > 1 ? (innerW * index) / (rows.length - 1) : innerW / 2);
+  const pointY = value => pad.top + innerH - (innerH * value) / max;
+  let grid = "";
+  for (let line = 0; line <= 3; line += 1) {
+    const y = pad.top + innerH - (innerH * line) / 3;
+    grid += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${width - pad.right}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-dasharray="3 3"></line>`
+      + `<text x="${pad.left - 8}" y="${(y + 3).toFixed(1)}" text-anchor="end" class="cost-axis">${fmtTok((max * line) / 3)}</text>`;
+  }
+  const points = prompts.map((value, index) => `${pointX(index).toFixed(1)},${pointY(value).toFixed(1)}`);
+  const area = `M${pad.left},${baseY} L${points.join(" L")} L${pointX(rows.length - 1).toFixed(1)},${baseY} Z`;
+  const labelEvery = Math.max(1, Math.ceil(rows.length / 14));
+  let dots = "";
+  rows.forEach((row, index) => {
+    dots += `<circle cx="${pointX(index).toFixed(1)}" cy="${pointY(prompts[index]).toFixed(1)}" r="3" fill="var(--blue)"><title>#${row.turn} · ${fmtTok(prompts[index])}</title></circle>`;
+    if (index % labelEvery === 0) {
+      dots += `<text x="${pointX(index).toFixed(1)}" y="${height - 10}" text-anchor="middle" class="cost-axis">#${row.turn}</text>`;
+    }
+  });
+  return `<svg class="cost-svg" viewBox="0 0 ${width} ${height}" role="img">${grid}`
+    + `<path d="${area}" fill="var(--blue)" opacity="0.12"></path>`
+    + `<polyline points="${points.join(" ")}" fill="none" stroke="var(--blue)" stroke-width="2"></polyline>`
+    + `${dots}</svg>`;
+}
+
+function costAmortizeBlock(totals) {
+  const weighted = totals.input * COST_WEIGHTS.input
+    + totals.cacheRead * COST_WEIGHTS.cacheRead
+    + totals.cacheWrite * COST_WEIGHTS.cacheWrite;
+  const full = totals.input + totals.cacheRead + totals.cacheWrite;
+  const maxUnits = Math.max(weighted, full, 1);
+  const bar = (labelKey, units) => `
+    <div class="cost-amortize-row">
+      <div class="cost-amortize-label">${esc(t(labelKey))}</div>
+      <div class="cost-amortize-track"><div class="cost-amortize-fill" style="width:${((units / maxUnits) * 100).toFixed(1)}%"></div></div>
+      <div class="cost-amortize-value">${fmtTok(units)}</div>
+    </div>`;
+  const percent = full > 0 ? ((weighted / full) * 100).toFixed(1) : "100.0";
+  return `
+    <div class="cost-amortize">
+      ${bar("cost_amortize_full", full)}
+      ${bar("cost_amortize_actual", weighted)}
+      <div class="cost-amortize-note">${esc(t("cost_amortize_note", {percent}))}</div>
+    </div>`;
+}
+
+function renderCostAnalysis(payload) {
+  const session = payload?.session || {};
+  const rows = costUsageRows(payload);
+  $("#cost-subtitle").textContent = [session.model || session.agent || "", session.id || state.costSessionId || ""]
+    .filter(Boolean)
+    .join(" · ");
+  if (!rows.length) {
+    $("#cost-content").innerHTML = `<div class="cost-empty">${esc(t("cost_no_usage"))}</div>`;
+    return;
+  }
+  const totals = rows.reduce(
+    (acc, row) => ({
+      input: acc.input + row.input,
+      output: acc.output + row.output,
+      cacheRead: acc.cacheRead + row.cacheRead,
+      cacheWrite: acc.cacheWrite + row.cacheWrite,
+    }),
+    {input: 0, output: 0, cacheRead: 0, cacheWrite: 0},
+  );
+  const tiles = [
+    {label: t("cost_calls"), value: fmtTok(rows.length)},
+    {label: t("cost_total_input"), value: fmtTok(totals.input)},
+    {label: t("cost_total_output"), value: fmtTok(totals.output)},
+    {label: t("cost_cache_read"), value: fmtTok(totals.cacheRead)},
+    {label: t("cost_cache_write"), value: fmtTok(totals.cacheWrite)},
+  ];
+  const legend = COST_SERIES
+    .map(series => `<span class="cost-legend-item"><span class="cost-legend-dot" style="background:${series.color}"></span>${esc(t(series.labelKey))}</span>`)
+    .join("");
+  $("#cost-content").innerHTML = `
+    <div class="cost-tiles">${tiles
+      .map(tile => `<div class="cost-tile"><div class="cost-tile-label">${esc(tile.label)}</div><div class="cost-tile-value">${tile.value}</div></div>`)
+      .join("")}</div>
+    <div class="cost-card">
+      <div class="cost-card-head"><span class="cost-card-title">${esc(t("cost_chart_stack"))}</span><span class="cost-legend">${legend}</span></div>
+      ${costStackChart(rows)}
+    </div>
+    <div class="cost-card">
+      <div class="cost-card-head"><span class="cost-card-title">${esc(t("cost_chart_context"))}</span></div>
+      ${costContextChart(rows)}
+    </div>
+    <div class="cost-card">
+      <div class="cost-card-head"><span class="cost-card-title">${esc(t("cost_chart_amortize"))}</span></div>
+      ${costAmortizeBlock(totals)}
+    </div>
+  `;
+}
+
+async function loadCostAnalysis(sessionId) {
+  const requestId = state.costRequestId + 1;
+  state.costRequestId = requestId;
+  $("#cost-content").innerHTML = `<div class="cost-empty">${loadingMarkup(t("cost_loading"))}</div>`;
+  try {
+    const payload = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionId)}/records?offset=0&limit=2000`);
+    if (requestId !== state.costRequestId || state.view !== "cost") return;
+    renderCostAnalysis(payload);
+  } catch (error) {
+    if (requestId !== state.costRequestId) return;
+    $("#cost-content").innerHTML = `<div class="cost-empty">${esc(t("cost_unable", {error: error.message}))}</div>`;
+  }
+}
+
 function swapComparisonSides() {
   if (state.view !== "compare" || state.compareSessionIds.length !== 2) return;
   state.compareSessionIds = [state.compareSessionIds[1], state.compareSessionIds[0]];
@@ -3142,30 +3523,48 @@ function showListView() {
   state.detailSession = null;
   state.compareSessionIds = [];
   state.comparePayloads = null;
-  document.body.classList.remove("detail-route", "compare-route");
+  state.costSessionId = null;
+  document.body.classList.remove("detail-route", "compare-route", "cost-route");
   $("#list-view").classList.remove("hidden");
   $("#detail-view").classList.add("hidden");
   $("#compare-view").classList.add("hidden");
+  $("#cost-view").classList.add("hidden");
   updateTracePathBar();
-  if (window.location.pathname.match(SESSION_DETAIL_ROUTE) || window.location.pathname.match(SESSION_COMPARE_ROUTE)) {
+  if (
+    window.location.pathname.match(SESSION_DETAIL_ROUTE)
+    || window.location.pathname.match(SESSION_COMPARE_ROUTE)
+    || window.location.pathname.match(SESSION_COST_ROUTE)
+  ) {
     history.replaceState(null, "", "/dashboard");
   }
 }
 
 function showDetailView() {
   document.body.classList.add("detail-route");
-  document.body.classList.remove("compare-route");
+  document.body.classList.remove("compare-route", "cost-route");
   $("#list-view").classList.add("hidden");
   $("#detail-view").classList.remove("hidden");
   $("#compare-view").classList.add("hidden");
+  $("#cost-view").classList.add("hidden");
 }
 
 function showCompareView() {
   document.body.classList.add("compare-route");
-  document.body.classList.remove("detail-route");
+  document.body.classList.remove("detail-route", "cost-route");
   $("#list-view").classList.add("hidden");
   $("#detail-view").classList.add("hidden");
   $("#compare-view").classList.remove("hidden");
+  $("#cost-view").classList.add("hidden");
+  updateTracePathBar();
+}
+
+function showCostView() {
+  document.body.classList.add("cost-route");
+  document.body.classList.remove("detail-route", "compare-route");
+  $("#list-view").classList.add("hidden");
+  $("#detail-view").classList.add("hidden");
+  $("#compare-view").classList.add("hidden");
+  $("#cost-view").classList.remove("hidden");
   updateTracePathBar();
 }
 
@@ -3639,6 +4038,7 @@ $("#status-filter").addEventListener("change", event => {
 	$("#select-all-sessions").addEventListener("change", event => toggleSelectAllVisible(event.target.checked));
 	$("#compare-selected-sessions").addEventListener("click", openComparison);
 	$("#compare-lab-open").addEventListener("click", openCompareLab);
+	$("#cost-lab-open").addEventListener("click", openCostLab);
 	$("#compare-lab-pin").addEventListener("click", toggleCompareLabPin);
 	$("#delete-selected-sessions").addEventListener("click", () => {
 	  showDeleteSessionDialog(selectedDeletableSessions().map(session => session.id));
@@ -3661,6 +4061,7 @@ if (dashboardQuitButton) {
 }
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));
 document.querySelector("[data-compare-back]")?.addEventListener("click", showListView);
+document.querySelector("[data-cost-back]")?.addEventListener("click", showListView);
 $("#compare-swap")?.addEventListener("click", swapComparisonSides);
 
 	applyI18n();

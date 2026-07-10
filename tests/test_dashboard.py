@@ -1550,6 +1550,18 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
             ) as resp:
                 assert resp.status == 404
 
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/cost?session={session_id}") as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert "cost-lab" in html
+                assert "cost-content" in html
+
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/cost") as resp:
+                assert resp.status == 400
+
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/cost?session=missing") as resp:
+                assert resp.status == 404
+
             async with session.get(f"http://127.0.0.1:{port}/api/agents") as resp:
                 assert resp.status == 200
                 payload = await resp.json()
@@ -2162,6 +2174,93 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert "EMBEDDED_TRACE_COMPACT_DATA" in exported_html
                 assert "const EMBEDDED_TRACE_DATA =" not in exported_html
                 assert "req_claude" in exported_html
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_cost_lab_renders_token_analysis(trace_db) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    store = get_trace_store()
+    session_id = store.create_session(
+        client="claude",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    usages = [
+        {
+            "input_tokens": 2600,
+            "output_tokens": 180,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 34000,
+        },
+        {
+            "input_tokens": 2,
+            "output_tokens": 540,
+            "cache_read_input_tokens": 34000,
+            "cache_creation_input_tokens": 1200,
+        },
+        {
+            "input_tokens": 2,
+            "output_tokens": 1700,
+            "cache_read_input_tokens": 35200,
+            "cache_creation_input_tokens": 900,
+        },
+    ]
+    for index, usage in enumerate(usages):
+        record = _anthropic_record(turn=index + 1)
+        record["request_id"] = f"req_cost_{index}"
+        record["request"]["body"]["model"] = "claude-fable-5"
+        record["response"]["body"].update(
+            {
+                "model": "claude-fable-5",
+                "content": [{"type": "text", "text": f"Turn {index + 1}."}],
+                "usage": usage,
+            }
+        )
+        store.append_record(session_id, record)
+    store.finalize_session(session_id, {"api_calls": len(usages)})
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 1440, "height": 1000})
+                await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
+                lab = page.locator("#cost-lab")
+                await lab.wait_for(state="visible", timeout=5000)
+                assert "claude-fable-5" in await page.locator("#cost-lab-target").inner_text()
+                assert not await page.locator("#cost-lab-open").is_disabled()
+
+                await page.locator("#cost-lab-open").click()
+                await page.wait_for_selector("#cost-view:not(.hidden)", timeout=5000)
+                assert "/dashboard/cost?" in page.url
+                await page.wait_for_selector("#cost-content .cost-tile", timeout=5000)
+
+                tiles = await page.locator("#cost-content .cost-tile").all_inner_texts()
+                tile_values = [tile.split("\n")[-1].strip() for tile in tiles]
+                assert "3" in tile_values
+                assert "2,604" in tile_values
+                assert "2,420" in tile_values
+                assert "69,200" in tile_values
+                assert "36,100" in tile_values
+
+                assert await page.locator("#cost-content .cost-card").count() == 3
+                assert await page.locator("#cost-content .cost-svg").count() == 2
+                assert await page.locator("#cost-content .cost-svg rect").first.is_visible()
+
+                amortize = await page.locator(".cost-amortize").inner_text()
+                assert "54,649" in amortize
+                assert "107,904" in amortize
+                assert "50.6%" in amortize
+
+                await page.locator("[data-cost-back]").click()
+                await page.wait_for_selector("#list-view:not(.hidden)", timeout=5000)
+                assert page.url == f"http://127.0.0.1:{port}/dashboard"
             finally:
                 await browser.close()
     finally:
