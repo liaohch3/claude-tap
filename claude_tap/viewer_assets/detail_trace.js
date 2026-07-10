@@ -117,10 +117,12 @@ function renderDetail(e) {
   const continuation = getResponsesContinuationInfo(e);
   if (continuation) html += renderResponsesContinuationNotice(continuation);
 
-  const tools = getRequestTools(reqBody);
   const sysPrompt = extractSystem(reqBody);
   const sysBlocks = extractSystemBlocks(reqBody);
   const respOutput = getResponseOutput(e);
+  const respPayload = getResponsePayload(e);
+  const requestTools = getRequestTools(reqBody);
+  const tools = requestTools.length ? requestTools : getRequestTools(respPayload);
   const msgs = getMessages(reqBody);
   const contextOnly = shouldRenderRequestContext(e, reqBody, msgs, respOutput);
   const streamEvents = getResponseEvents(e);

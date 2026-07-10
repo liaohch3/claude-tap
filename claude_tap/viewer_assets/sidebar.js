@@ -513,7 +513,8 @@ function getTaskFingerprint(e) {
       .join('\n');
   }
   // Tool names sorted for stable fingerprint
-  const tools = getRequestTools(body);
+  const requestTools = getRequestTools(body);
+  const tools = requestTools.length ? requestTools : getRequestTools(getResponsePayload(e));
   const toolKey = tools.map(toolDisplayName).sort().join(',');
   // Build fingerprint from full system prompt + tool set
   const fp = sysText + '|' + toolKey;

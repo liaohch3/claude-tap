@@ -455,8 +455,20 @@ function stitchDirectResponsesEntry(entry, historyByResponseId) {
   const body = entry?.request?.body;
   const payload = getResponsePayload(entry) || {};
   if (!body || typeof body !== 'object') return entry;
-  if (!isDisplayableResponsesEntry(entry)) return null;
   const previousId = body.previous_response_id || payload.previous_response_id || '';
+  if (!isDisplayableResponsesEntry(entry)) {
+    const responseId = payload.id || '';
+    if (responseId) {
+      storeWebSocketResponseHistory(
+        historyByResponseId,
+        responseId,
+        previousId,
+        body,
+        responseBodyOutputMessages(payload.output),
+      );
+    }
+    return null;
+  }
   let nextEntry = entry;
   let requestBody = body;
   if (previousId) {
