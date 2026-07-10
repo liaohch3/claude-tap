@@ -973,7 +973,7 @@ pre {
   opacity: .65;
 }
 
-.compare-lab-wrap {
+.lab-strip-wrap {
   position: sticky;
   bottom: -1px;
   z-index: 6;
@@ -981,8 +981,17 @@ pre {
   padding-top: 16px;
   background: linear-gradient(to bottom, transparent, var(--bg) 14px);
 }
-.compare-lab {
+.lab-strip {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+.lab-card {
   display: grid;
+  flex: 1 0 min(640px, 100%);
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 16px;
@@ -992,14 +1001,15 @@ pre {
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-card) 94%, var(--blue-bg));
   box-shadow: 0 -8px 24px rgba(15, 23, 42, .06);
-  animation: compare-lab-enter .2s ease-out both;
+  animation: lab-card-enter .2s ease-out both;
+  scroll-snap-align: start;
 }
-[data-theme="dark"] .compare-lab { border-color: var(--border); }
-@keyframes compare-lab-enter {
+[data-theme="dark"] .lab-card { border-color: var(--border); }
+@keyframes lab-card-enter {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.compare-lab-mark {
+.lab-card-mark {
   display: grid;
   place-items: center;
   width: 38px;
@@ -1012,8 +1022,8 @@ pre {
   font-size: 15px;
   font-weight: 800;
 }
-.compare-lab-copy { min-width: 0; }
-.compare-lab-title {
+.lab-card-copy { min-width: 0; }
+.lab-card-title {
   display: flex;
   align-items: baseline;
   gap: 7px;
@@ -1022,8 +1032,8 @@ pre {
   font-size: 12px;
   font-weight: 750;
 }
-.compare-lab-title > span:first-child { flex-shrink: 0; }
-.compare-lab-hint {
+.lab-card-title > span:first-child { flex-shrink: 0; }
+.lab-card-hint {
   overflow: hidden;
   min-width: 0;
   color: var(--text-tertiary);
@@ -1032,7 +1042,7 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.compare-lab-pair {
+.lab-card-pair {
   margin-top: 4px;
   overflow: hidden;
   color: var(--text-secondary);
@@ -1068,7 +1078,7 @@ pre {
 }
 .diff-legend-item.removed .diff-legend-sign { color: var(--red); background: var(--red-bg); }
 .diff-legend-item.added .diff-legend-sign { color: var(--green); background: var(--green-bg); }
-.compare-lab-open {
+.lab-card-open {
   min-height: 34px;
   padding: 7px 13px;
   border: 1px solid var(--blue);
@@ -1079,10 +1089,10 @@ pre {
   font-weight: 700;
   transition: transform .12s, box-shadow .12s, opacity .12s;
 }
-.compare-lab-open:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 5px 14px rgba(59, 130, 246, .22); }
-.compare-lab-open:disabled { cursor: not-allowed; opacity: .42; }
-.compare-lab-actions { display: inline-flex; align-items: center; gap: 8px; }
-.compare-lab-pin {
+.lab-card-open:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 5px 14px rgba(59, 130, 246, .22); }
+.lab-card-open:disabled { cursor: not-allowed; opacity: .42; }
+.lab-card-actions { display: inline-flex; align-items: center; gap: 8px; }
+.lab-card-secondary {
   min-height: 34px;
   padding: 7px 12px;
   border: 1px solid var(--border);
@@ -1093,8 +1103,8 @@ pre {
   font-weight: 650;
   transition: color .12s, border-color .12s, background .12s;
 }
-.compare-lab-pin:hover { color: var(--blue); border-color: var(--blue); }
-.compare-lab-pin.active {
+.lab-card-secondary:hover { color: var(--blue); border-color: var(--blue); }
+.lab-card-secondary.active {
   color: var(--blue);
   border-color: color-mix(in srgb, var(--blue) 45%, transparent);
   background: var(--blue-bg);
@@ -1376,9 +1386,9 @@ pre {
 	  .control-panel { grid-template-columns: 1fr; }
   .history-actions { justify-content: flex-start; }
 	  .bulk-edit-bar { flex-wrap: wrap; }
-  .compare-lab { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; }
+  .lab-card { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; }
   .compare-lab-legend { display: none; }
-  .compare-lab-hint { display: none; }
+  .lab-card-hint { display: none; }
   .overview-card { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .table-scroll { max-height: none; }
   .detail-page-head { align-items: flex-start; }
@@ -1517,25 +1527,27 @@ pre {
 	      </div>
 	      <div id="session-pagination" class="session-pagination hidden"></div>
 	    </section>
-      <div class="compare-lab-wrap">
-        <section id="compare-lab" class="compare-lab" aria-label="Diff lab">
-          <div class="compare-lab-mark" aria-hidden="true">±</div>
-          <div class="compare-lab-copy">
-            <div class="compare-lab-title">
-              <span data-i18n="compare_lab_title">Diff lab</span>
-              <span class="compare-lab-hint" data-i18n="compare_lab_hint">send each model a "Hi", then diff their system prompts here</span>
+      <div class="lab-strip-wrap">
+        <div class="lab-strip" role="list">
+          <section id="compare-lab" class="lab-card" role="listitem" aria-label="Diff lab">
+            <div class="lab-card-mark" aria-hidden="true">±</div>
+            <div class="lab-card-copy">
+              <div class="lab-card-title">
+                <span data-i18n="compare_lab_title">Diff lab</span>
+                <span class="lab-card-hint" data-i18n="compare_lab_hint">send each model a "Hi", then diff their system prompts here</span>
+              </div>
+              <div id="compare-lab-pair" class="lab-card-pair"></div>
             </div>
-            <div id="compare-lab-pair" class="compare-lab-pair"></div>
-          </div>
-          <div class="compare-lab-legend" aria-label="Diff color legend">
-            <span class="diff-legend-item removed"><span class="diff-legend-sign">−</span><span data-i18n="compare_deleted">Deleted from baseline</span></span>
-            <span class="diff-legend-item added"><span class="diff-legend-sign">+</span><span data-i18n="compare_added">Added in compared</span></span>
-          </div>
-          <div class="compare-lab-actions">
-            <button id="compare-lab-pin" class="compare-lab-pin" type="button" hidden></button>
-            <button id="compare-lab-open" class="compare-lab-open" type="button" data-i18n="compare_lab_open" disabled>Open Diff</button>
-          </div>
-        </section>
+            <div class="compare-lab-legend" aria-label="Diff color legend">
+              <span class="diff-legend-item removed"><span class="diff-legend-sign">−</span><span data-i18n="compare_deleted">Deleted from baseline</span></span>
+              <span class="diff-legend-item added"><span class="diff-legend-sign">+</span><span data-i18n="compare_added">Added in compared</span></span>
+            </div>
+            <div class="lab-card-actions">
+              <button id="compare-lab-pin" class="lab-card-secondary" type="button" hidden></button>
+              <button id="compare-lab-open" class="lab-card-open" type="button" data-i18n="compare_lab_open" disabled>Open Diff</button>
+            </div>
+          </section>
+        </div>
       </div>
   </section>
 
