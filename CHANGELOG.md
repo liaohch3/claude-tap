@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.129] - 2026-07-10
+
+### Changed
+- fix(viewer): read Responses additional tools
+- test: add additional tools viewer evidence
+- fix(viewer): preserve Codex websocket tools
 ## [0.1.128] - 2026-07-10
 
 ### Changed
