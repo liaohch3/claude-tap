@@ -30,7 +30,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import WSMessage, WSMsgType
-from aiohttp.http_websocket import WS_KEY, WebSocketWriter, WebSocketReader
+from aiohttp.http_websocket import WS_KEY, WebSocketReader, WebSocketWriter
 
 # Support aiohttp 3.9.x, 3.10-3.12, and 3.13+
 try:
@@ -46,15 +46,6 @@ except ImportError:
 
         def WebSocketDataQueue(protocol: object, limit: int, *, loop: object) -> _DataQueue39:  # type: ignore[misc]
             return _DataQueue39(loop=loop)
-
-
-async def _ws_send_frame(writer: WebSocketWriter, message: bytes, opcode: int) -> None:
-    """aiohttp 3.13+ has send_frame(); older versions only have _send_frame()."""
-    if hasattr(writer, "send_frame"):
-        await writer.send_frame(message, opcode)
-    else:
-        await writer._send_frame(message, opcode)
-
 
 from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
 from claude_tap.certs import CertificateAuthority
@@ -82,6 +73,13 @@ from claude_tap.ws_proxy import (
 )
 
 log = logging.getLogger("claude-tap")
+
+
+async def _ws_send_frame(writer: WebSocketWriter, message: bytes, opcode: int) -> None:
+    if hasattr(writer, "send_frame"):
+        await writer.send_frame(message, opcode)
+    else:
+        await writer._send_frame(message, opcode)
 
 DEFAULT_TRACE_IGNORED_HOSTS = frozenset(
     {
