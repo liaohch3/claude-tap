@@ -13,10 +13,14 @@ from claude_tap.dashboard import (
     DASHBOARD_SUMMARY_VERSION,
     _clean_user_prompt_text,
     _content_text,
+    _defines_session_model,
     _event_payload,
     _first_error,
+    _first_user_preview,
     _infer_agent,
     _input_user_text,
+    _is_codex_memory_agent_request,
+    _is_prewarm_request,
     _parts_text,
     _preview,
     _record_host,
@@ -537,6 +541,158 @@ def test_dashboard_first_message_skips_codex_injected_plugin_context(trace_db, t
     summary = list_trace_sessions()[0]
 
     assert summary["first_user"] == "hi"
+
+
+def test_dashboard_codex_session_skips_memory_agent_and_prewarm(trace_db, tmp_path: Path) -> None:
+    """Codex's auto memory-writing agent and prewarm must not define the session."""
+    trace_path = tmp_path / "2026-07-11" / "trace_054500.jsonl"
+    _write_jsonl(
+        trace_path,
+        [
+            # Memory Writing Agent, Phase 1 — directive in `instructions`, cheap model.
+            {
+                "timestamp": "2026-07-11T05:45:00+00:00",
+                "turn": 1,
+                "request": {
+                    "method": "POST",
+                    "path": "/v1/responses",
+                    "body": {
+                        "model": "gpt-5.4-mini",
+                        "instructions": "## Memory Writing Agent: Phase 1 (Single Rollout)\n\nYou are a Memory Writing Agent.",
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "input_text",
+                                        "text": "Analyze this rollout and produce JSON with `raw_memory`.",
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                },
+                "response": {"status": 200, "body": {"model": "gpt-5.4-mini", "usage": {"input_tokens": 1}}},
+            },
+            # Prewarm — instructions/tools but no conversation input.
+            {
+                "timestamp": "2026-07-11T05:45:01+00:00",
+                "turn": 2,
+                "request": {
+                    "method": "POST",
+                    "path": "/v1/responses",
+                    "body": {
+                        "model": "gpt-5.4",
+                        "instructions": "You are Codex, a coding agent based on GPT-5.",
+                        "input": [],
+                    },
+                },
+                "response": {"status": 200, "body": {"model": "gpt-5.4", "usage": {"input_tokens": 1}}},
+            },
+            # Main task — the model that actually answers the user prompt.
+            {
+                "timestamp": "2026-07-11T05:45:02+00:00",
+                "turn": 3,
+                "request": {
+                    "method": "POST",
+                    "path": "/v1/responses",
+                    "body": {
+                        "model": "gpt-5.6-sol",
+                        "input": [
+                            {"role": "developer", "content": [{"type": "input_text", "text": "You are Codex."}]},
+                            {"role": "user", "content": [{"type": "input_text", "text": "查一下 Node.js 最新版本"}]},
+                        ],
+                    },
+                },
+                "response": {"status": 200, "body": {"model": "gpt-5.6-sol", "usage": {"input_tokens": 1}}},
+            },
+            # Memory Writing Agent, Phase 2 — directive in the user message.
+            {
+                "timestamp": "2026-07-11T05:45:03+00:00",
+                "turn": 4,
+                "request": {
+                    "method": "POST",
+                    "path": "/v1/responses",
+                    "body": {
+                        "model": "gpt-5.4",
+                        "instructions": "You are Codex, a coding agent based on GPT-5.",
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "input_text", "text": "## Memory Writing Agent: Phase 2 (Consolidation)"}
+                                ],
+                            },
+                        ],
+                    },
+                },
+                "response": {"status": 200, "body": {"model": "gpt-5.4", "usage": {"input_tokens": 1}}},
+            },
+        ],
+    )
+
+    _seed_legacy(tmp_path)
+    summary = list_trace_sessions()[0]
+
+    assert summary["model"] == "gpt-5.6-sol"
+    assert summary["model_provisional"] is False
+    assert summary["first_user"] == "查一下 Node.js 最新版本"
+
+
+def _codex_body(model: str, *, instructions: str = "", user_text: str = "", empty: bool = False) -> dict:
+    body: dict = {"model": model}
+    if instructions:
+        body["instructions"] = instructions
+    if empty:
+        body["input"] = []
+    elif user_text:
+        body["input"] = [{"role": "user", "content": [{"type": "input_text", "text": user_text}]}]
+    return body
+
+
+def test_codex_memory_agent_and_prewarm_classifiers() -> None:
+    phase1 = _codex_body(
+        "gpt-5.4-mini",
+        instructions="## Memory Writing Agent: Phase 1 (Single Rollout)",
+        user_text="Analyze this rollout and produce JSON with `raw_memory`.",
+    )
+    phase2 = _codex_body(
+        "gpt-5.4",
+        instructions="You are Codex, a coding agent based on GPT-5.",
+        user_text="## Memory Writing Agent: Phase 2 (Consolidation)",
+    )
+    prewarm = _codex_body("gpt-5.4", instructions="You are Codex.", empty=True)
+    main = _codex_body("gpt-5.6-sol", user_text="查一下 Node.js 最新版本")
+
+    assert _is_codex_memory_agent_request(phase1, _request_user_text(phase1))
+    assert _is_codex_memory_agent_request(phase2, _request_user_text(phase2))
+    assert not _is_codex_memory_agent_request(main, _request_user_text(main))
+
+    assert _is_prewarm_request(prewarm)
+    assert not _is_prewarm_request(main)
+
+    assert not _defines_session_model(phase1)  # memory agent
+    assert not _defines_session_model(prewarm)  # prewarm
+    assert _defines_session_model(main)
+
+
+def test_first_user_preview_no_fallback_skips_memory_agent() -> None:
+    memory_only = [
+        {
+            "request": {
+                "body": _codex_body(
+                    "gpt-5.4-mini",
+                    instructions="## Memory Writing Agent: Phase 1",
+                    user_text="Analyze this rollout and produce JSON.",
+                )
+            }
+        }
+    ]
+    # Streaming path (allow_fallback=False): a lone memory-agent record yields no
+    # preview, so first_user stays open for the real prompt arriving later.
+    assert _first_user_preview(memory_only, allow_fallback=False) == ""
+    # Batch path keeps a fallback so an all-auxiliary session still shows something.
+    assert _first_user_preview(memory_only, allow_fallback=True) != ""
 
 
 def test_dashboard_first_message_skips_claude_title_generation_request(trace_db, tmp_path: Path) -> None:

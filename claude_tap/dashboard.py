@@ -34,7 +34,7 @@ CLIENT_LABELS = {
     "pi": "Pi",
     "qoder": "Qoder",
 }
-DASHBOARD_SUMMARY_VERSION = 6
+DASHBOARD_SUMMARY_VERSION = 7
 VALID_SESSION_STATUSES = {"active", "complete", "error", "empty"}
 _REDACTED_VALUE = "REDACTED"
 _SENSITIVE_KEY_NAMES = {
@@ -243,6 +243,7 @@ def merge_record_into_summary(
             updated_at=row["updated_at"] or "",
             is_current=True,
             record_count=record_count,
+            allow_first_user_fallback=False,
         )
         if _is_auxiliary_status_error_record(record):
             initial_summary["status"] = "active"
@@ -271,10 +272,10 @@ def merge_record_into_summary(
     summary["duration_ms"] = int(summary.get("duration_ms") or 0) + _duration_ms(record)
     model = _record_model(record)
     if model and (not summary.get("model") or summary.get("model_provisional")):
-        is_aux = _is_auxiliary_request(_record_request_body(record))
-        if not summary.get("model") or not is_aux:
+        defines = _defines_session_model(_record_request_body(record))
+        if not summary.get("model") or defines:
             summary["model"] = model
-            summary["model_provisional"] = is_aux
+            summary["model_provisional"] = not defines
     timestamp = _timestamp_from_record(record)
     if timestamp:
         summary["updated_at"] = timestamp
@@ -282,7 +283,7 @@ def merge_record_into_summary(
             summary["started_at"] = timestamp
     summary["last_response"] = _last_response_preview([record])
     if not summary.get("first_user"):
-        summary["first_user"] = _first_user_preview([record])
+        summary["first_user"] = _first_user_preview([record], allow_fallback=False)
     if not summary.get("agent"):
         summary["agent"] = _infer_agent([record], manifest_entry)
         summary["agent_key"] = _agent_key(summary["agent"])
@@ -364,8 +365,8 @@ def _session_summary_from_row(
                 boundary_records = store.load_boundary_records(row["id"])
                 if boundary_records:
                     summary = _summary_from_boundary_records(row, boundary_records, cached)
-                    if summary.get("model_provisional"):
-                        summary = _repair_summary_model(store, row["id"], summary)
+                    if summary.get("model_provisional") or _boundary_summary_may_miss_main(summary):
+                        summary = _repair_summary_from_records(store, row["id"], summary)
                     store.store_summary(row["id"], summary)
                     return summary
             return _normalize_cached_session_summary(row, cached)
@@ -482,18 +483,31 @@ def _summary_from_boundary_records(
 _MODEL_REPAIR_SCAN_LIMIT = 25
 
 
-def _repair_summary_model(store: TraceStore, session_id: str, summary: dict[str, Any]) -> dict[str, Any]:
-    """Resolve the main-conversation model when boundary records are all auxiliary."""
+def _boundary_summary_may_miss_main(summary: dict[str, Any]) -> bool:
+    """True when first/last boundary records can miss the main model and prompt.
+
+    Codex wraps the user conversation in auto memory-writing and prewarm
+    requests, so the boundary records often carry neither the main model nor
+    the real user prompt.
+    """
+    return summary.get("agent") == "Codex"
+
+
+def _repair_summary_from_records(store: TraceStore, session_id: str, summary: dict[str, Any]) -> dict[str, Any]:
+    """Resolve the main-conversation model and prompt from an ordered record scan."""
     try:
         records = store.load_records(session_id, limit=_MODEL_REPAIR_SCAN_LIMIT)
     except (OSError, sqlite3.Error, ValueError):
         return summary
     for record in records:
         model = _record_model(record)
-        if model and not _is_auxiliary_request(_record_request_body(record)):
+        if model and _defines_session_model(_record_request_body(record)):
             summary["model"] = model
             summary["model_provisional"] = False
             break
+    primary_prompt = _first_user_preview(records, allow_fallback=False)
+    if primary_prompt:
+        summary["first_user"] = primary_prompt
     return summary
 
 
@@ -566,6 +580,7 @@ def _summarize_session(
     updated_at: str,
     is_current: bool,
     record_count: int | None = None,
+    allow_first_user_fallback: bool = True,
 ) -> dict[str, Any]:
     first_record = records[0] if records else {}
     last_record = records[-1] if records else {}
@@ -587,7 +602,7 @@ def _summarize_session(
         model = _record_model(record)
         if model:
             models[model] = models.get(model, 0) + 1
-            if not main_model and not _is_auxiliary_request(_record_request_body(record)):
+            if not main_model and _defines_session_model(_record_request_body(record)):
                 main_model = model
         duration_ms += _duration_ms(record)
         turn = record.get("turn")
@@ -634,7 +649,7 @@ def _summarize_session(
             "total_tokens": input_tokens + output_tokens + cache_read_tokens + cache_create_tokens,
             "model": main_model or _top_key(models) or _record_model(last_record) or "unknown",
             "model_provisional": not main_model,
-            "first_user": _first_user_preview(preview_records),
+            "first_user": _first_user_preview(preview_records, allow_fallback=allow_first_user_fallback),
             "last_response": _last_response_preview(preview_records),
             "error": _first_error(error_display_records),
         }
@@ -1065,7 +1080,7 @@ def _is_successful_primary_record(record: dict[str, Any]) -> bool:
     return 200 <= status_code < 400 and not _is_auxiliary_record(record)
 
 
-def _first_user_preview(records: list[dict[str, Any]]) -> str:
+def _first_user_preview(records: list[dict[str, Any]], *, allow_fallback: bool = True) -> str:
     title_request_fallback = ""
     side_request_fallback = ""
     for record in records:
@@ -1078,11 +1093,13 @@ def _first_user_preview(records: list[dict[str, Any]]) -> str:
             if not title_request_fallback:
                 title_request_fallback = text
             continue
-        if _is_agent_side_request(body, text):
+        if _is_codex_memory_agent_request(body, text) or _is_agent_side_request(body, text):
             if not side_request_fallback:
                 side_request_fallback = text
             continue
         return _preview(text, 220)
+    if not allow_fallback:
+        return ""
     fallback = title_request_fallback or side_request_fallback
     return _preview(fallback, 220) if fallback else ""
 
@@ -1132,11 +1149,50 @@ def _record_request_body(record: dict[str, Any]) -> Any:
     return request.get("body") if isinstance(request, dict) else None
 
 
+_CODEX_MEMORY_AGENT_MARKER = "Memory Writing Agent"
+_CODEX_MEMORY_AGENT_TEXT_PREFIXES = ("Analyze this rollout and produce JSON",)
+
+
+def _is_codex_memory_agent_request(body: Any, text: str) -> bool:
+    """Detect Codex's auto-triggered memory-writing agent (both phases).
+
+    Phase 1 carries the directive in ``instructions``; Phase 2 delivers it as
+    the user message. These run on cheaper models (gpt-5.x / -mini) and are not
+    the model that executes the user's prompt.
+    """
+    if not isinstance(body, dict):
+        return False
+    instructions = body.get("instructions")
+    if isinstance(instructions, str) and _CODEX_MEMORY_AGENT_MARKER in instructions:
+        return True
+    return _CODEX_MEMORY_AGENT_MARKER in text or text.startswith(_CODEX_MEMORY_AGENT_TEXT_PREFIXES)
+
+
+def _is_prewarm_request(body: Any) -> bool:
+    """True for warmup requests that carry instructions/tools but no conversation."""
+    if not isinstance(body, dict):
+        return False
+    for key in ("input", "messages", "contents"):
+        value = body.get(key)
+        if isinstance(value, list) and value:
+            return False
+    prompt = body.get("prompt")
+    return not (isinstance(prompt, str) and prompt.strip())
+
+
 def _is_auxiliary_request(body: Any) -> bool:
     """True for requests that support the session without carrying the main conversation."""
     if _is_claude_title_generation_request(body):
         return True
-    return _is_agent_side_request(body, _request_user_text(body))
+    text = _request_user_text(body)
+    if _is_codex_memory_agent_request(body, text):
+        return True
+    return _is_agent_side_request(body, text)
+
+
+def _defines_session_model(body: Any) -> bool:
+    """True when a record establishes the session's main-conversation model."""
+    return not _is_auxiliary_request(body) and not _is_prewarm_request(body)
 
 
 def _last_response_preview(records: list[dict[str, Any]]) -> str:
