@@ -1012,66 +1012,51 @@ pre {
   background: linear-gradient(to bottom, transparent, var(--bg) 14px);
 }
 .lab-strip {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   gap: 12px;
-  overflow-x: auto;
   padding-bottom: 2px;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
 }
 .lab-card {
   display: grid;
-  flex: 1 0 min(640px, 100%);
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 16px;
-  min-height: 66px;
-  padding: 11px 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px 12px;
+  min-height: 98px;
+  padding: 13px 14px;
   border: 1px solid #cfd8e7;
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-card) 94%, var(--blue-bg));
   box-shadow: 0 -8px 24px rgba(15, 23, 42, .06);
   animation: lab-card-enter .2s ease-out both;
-  scroll-snap-align: start;
 }
-#hi-model-lab { grid-template-columns: auto minmax(0, 1fr) auto; }
 [data-theme="dark"] .lab-card { border-color: var(--border); }
 @keyframes lab-card-enter {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .lab-card-mark {
-  display: grid;
-  place-items: center;
-  width: 38px;
-  height: 38px;
-  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--border));
-  border-radius: 7px;
-  background: var(--blue-bg);
+  display: none;
   color: var(--blue);
   font-family: var(--mono);
   font-size: 15px;
   font-weight: 800;
 }
-.lab-card-copy { min-width: 0; }
+.lab-card-copy { grid-column: 1 / -1; min-width: 0; }
 .lab-card-title {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
+  display: block;
   min-width: 0;
   color: var(--text);
   font-size: 12px;
   font-weight: 750;
 }
-.lab-card-title > span:first-child { flex-shrink: 0; }
 .lab-card-hint {
-  overflow: hidden;
-  min-width: 0;
+  display: block;
+  margin-top: 6px;
   color: var(--text-tertiary);
   font-size: 11px;
   font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
 }
 .lab-card-pair {
   margin-top: 4px;
@@ -1088,6 +1073,13 @@ pre {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+.lab-card > .compare-lab-legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 .diff-legend-item {
   display: inline-flex;
@@ -1110,8 +1102,8 @@ pre {
 .diff-legend-item.removed .diff-legend-sign { color: var(--red); background: var(--red-bg); }
 .diff-legend-item.added .diff-legend-sign { color: var(--green); background: var(--green-bg); }
 .lab-card-open {
-  min-height: 34px;
-  padding: 7px 13px;
+  min-height: 30px;
+  padding: 5px 10px;
   border: 1px solid var(--blue);
   border-radius: 6px;
   background: var(--blue);
@@ -1124,8 +1116,8 @@ pre {
 .lab-card-open:disabled { cursor: not-allowed; opacity: .42; }
 .lab-card-actions { display: inline-flex; align-items: center; gap: 8px; }
 .lab-card-secondary {
-  min-height: 34px;
-  padding: 7px 12px;
+  min-height: 30px;
+  padding: 5px 9px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-card);
@@ -1206,6 +1198,28 @@ pre {
   box-shadow: var(--shadow-sm);
 }
 [data-theme="dark"] .compare-shell { border-color: var(--border); }
+.compare-insights {
+  margin-bottom: 12px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--border));
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+.compare-insights-head {
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--border-light);
+  background: color-mix(in srgb, var(--blue-bg) 55%, var(--bg-card));
+}
+.compare-insights-title { color: var(--text); font-size: 14px; font-weight: 750; }
+.compare-insights-note { margin-top: 5px; color: var(--text-secondary); font-size: 11px; line-height: 1.55; }
+.compare-insight-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.compare-insight-card { padding: 14px 18px; border-bottom: 1px solid var(--border-light); }
+.compare-insight-card:nth-child(odd) { border-right: 1px solid var(--border-light); }
+.compare-insight-label { color: var(--text-tertiary); font-size: 10px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.compare-insight-takeaway { margin-top: 6px; color: var(--text); font-size: 12px; font-weight: 650; line-height: 1.5; }
+.compare-insight-values { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
+.compare-insight-value { padding: 8px 10px; border-radius: 6px; background: var(--bg); color: var(--text-secondary); font-family: var(--mono); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.compare-evidence-label { padding: 10px 18px; border-bottom: 1px solid var(--border); color: var(--text-tertiary); font-size: 10px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; background: var(--bg); }
 .compare-identities,
 .compare-metric-row,
 .compare-param-row,
@@ -1496,7 +1510,8 @@ pre {
 	  .control-panel { grid-template-columns: 1fr; }
   .history-actions { justify-content: flex-start; }
 	  .bulk-edit-bar { flex-wrap: wrap; }
-  .lab-card { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; }
+  .lab-strip { grid-template-columns: 1fr; }
+  .lab-card { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
   .compare-lab-legend { display: none; }
   .lab-card-hint { display: none; }
   .overview-card { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
@@ -1516,6 +1531,8 @@ pre {
     min-width: 620px;
   }
   .compare-shell { overflow-x: auto; }
+  .compare-insight-grid { grid-template-columns: 1fr; }
+  .compare-insight-card:nth-child(odd) { border-right: 0; }
   .compare-workbench-bar { align-items: flex-start; flex-direction: column; }
   .compare-jump-nav { margin-left: 0; }
   .compare-axis-label,
@@ -1696,6 +1713,19 @@ pre {
               <button id="hi-model-lab-open" class="lab-card-open" type="button" data-i18n="hi_model_lab_open" disabled>Compare Models</button>
             </div>
           </section>
+          <section id="node-model-lab" class="lab-card" role="listitem" aria-label="Node.js answer experiment">
+            <div class="lab-card-mark" aria-hidden="true">N</div>
+            <div class="lab-card-copy">
+              <div class="lab-card-title">
+                <span data-i18n="node_model_lab_title">Node.js answer experiment</span>
+                <span class="lab-card-hint" data-i18n="node_model_lab_hint">same version question, Claude Code/F5 vs Codex CLI/5.6 SOL</span>
+              </div>
+              <div id="node-model-lab-pair" class="lab-card-pair"></div>
+            </div>
+            <div class="lab-card-actions">
+              <button id="node-model-lab-open" class="lab-card-open" type="button" data-i18n="node_model_lab_open" disabled>Compare Answers</button>
+            </div>
+          </section>
           <section id="cost-lab" class="lab-card" role="listitem" aria-label="Token lab">
             <div class="lab-card-mark" aria-hidden="true">Σ</div>
             <div class="lab-card-copy">
@@ -1745,8 +1775,8 @@ pre {
     <div class="compare-page-head">
       <button class="back-btn" type="button" data-compare-back title="Back to session list" aria-label="Back to session list">←</button>
       <div class="compare-heading">
-        <div class="compare-title" data-i18n="compare_title">Session comparison</div>
-        <div class="compare-subtitle" data-i18n="compare_subtitle">Primary generation request</div>
+        <div id="compare-title" class="compare-title" data-i18n="compare_title">Session comparison</div>
+        <div id="compare-subtitle" class="compare-subtitle" data-i18n="compare_subtitle">Primary generation request</div>
       </div>
     </div>
     <div class="compare-workbench-bar">
@@ -1764,6 +1794,7 @@ pre {
         <a class="compare-jump-link" href="#diff-response" data-i18n="compare_response">Response</a>
       </nav>
     </div>
+    <section id="compare-insights" class="compare-insights hidden" aria-live="polite"></section>
     <div id="compare-content" class="compare-shell">
       <div class="compare-empty" data-i18n="compare_loading">Loading comparison...</div>
     </div>
@@ -1894,6 +1925,7 @@ const state = {
   pendingSessionId: initialSessionId(),
   pendingComparisonIds: initialComparisonIds(),
   compareSessionIds: [],
+  compareMode: initialComparisonMode(),
   comparePayloads: null,
   compareRequestId: 0,
   pendingCostSessionId: initialCostSessionId(),
@@ -1970,6 +2002,11 @@ function initialComparisonIds() {
   return sessionIds.length === 2 && sessionIds[0] !== sessionIds[1] ? sessionIds : [];
 }
 
+function initialComparisonMode() {
+  if (!window.location.pathname.match(SESSION_COMPARE_ROUTE)) return "diff";
+  return new URLSearchParams(window.location.search).get("mode") === "analysis" ? "analysis" : "diff";
+}
+
 function initialCostSessionId() {
   if (!window.location.pathname.match(SESSION_COST_ROUTE)) return null;
   return new URLSearchParams(window.location.search).get("session") || null;
@@ -1979,8 +2016,9 @@ function sessionDetailUrl(sessionId) {
   return `/dashboard/session/${encodeURIComponent(sessionId)}`;
 }
 
-function sessionCompareUrl(sessionIds) {
+function sessionCompareUrl(sessionIds, mode = "diff") {
   const params = new URLSearchParams({left: sessionIds[0], right: sessionIds[1]});
+  if (mode === "analysis") params.set("mode", "analysis");
   return `/dashboard/compare?${params.toString()}`;
 }
 
@@ -2051,6 +2089,10 @@ const DASHBOARD_I18N = {
 	    hi_model_lab_hint: "same “Hi”, Claude Code/F5 vs Codex CLI/5.6 SOL",
 	    hi_model_lab_open: "Compare Models",
 	    hi_model_lab_empty: "F5 and 5.6 SOL CLI “Hi” captures are required",
+	    node_model_lab_title: "Node.js answer experiment",
+	    node_model_lab_hint: "same version question, Claude Code/F5 vs Codex CLI/5.6 SOL",
+	    node_model_lab_open: "Compare Answers",
+	    node_model_lab_empty: "Matching F5 and 5.6 SOL CLI Node.js captures are required",
 	    compare_deleted: "Only in baseline",
 	    compare_added: "Only in compared",
 	    cost_lab_title: "Token lab",
@@ -2158,6 +2200,23 @@ const DASHBOARD_I18N = {
     session_details: "{agent} details",
     compare_title: "Session comparison",
     compare_subtitle: "Primary generation request",
+    compare_analysis_title: "Cross-agent difference analysis",
+    compare_analysis_subtitle: "Architecture and behavior first; raw line diffs are supporting evidence",
+    compare_analysis_heading: "What is materially different",
+    compare_analysis_note: "These captures use different agents and model families. Line overlap is not a useful score, so this overview compares how each runtime delivers instructions, exposes tools, executes the request, and produces the answer.",
+    compare_analysis_delivery: "Prompt architecture",
+    compare_analysis_delivery_takeaway: "The agents deliver instructions through different API structures.",
+    compare_analysis_tools: "Tool surface",
+    compare_analysis_tools_takeaway: "Compare exposed capabilities and orchestration, not tool-schema line order.",
+    compare_analysis_workflow: "Execution workflow",
+    compare_analysis_workflow_takeaway: "API calls reveal discovery, generation, and transport behavior.",
+    compare_analysis_answer: "Answer behavior",
+    compare_analysis_answer_takeaway: "Compare output size and source-link behavior for the same task.",
+    compare_analysis_evidence: "Raw evidence (expand only when needed)",
+    compare_analysis_system_channel: "{channel}; {chars} prompt chars; {blocks} instruction blocks",
+    compare_analysis_tool_value: "{count} tools: {names}",
+    compare_analysis_workflow_value: "{records} records; {generations} generations; {transport}",
+    compare_analysis_answer_value: "{chars} chars; {links} source links",
     compare_loading: "Loading comparison...",
     compare_unable: "Unable to compare sessions: {error}",
     compare_baseline: "Baseline",
@@ -2267,6 +2326,10 @@ const DASHBOARD_I18N = {
 	    hi_model_lab_hint: "同一句 “Hi”：Claude Code/F5 与 Codex CLI/5.6 SOL",
 	    hi_model_lab_open: "对比模型",
 	    hi_model_lab_empty: "需要 F5 和 5.6 SOL CLI 的 “Hi” 抓包",
+	    node_model_lab_title: "Node.js 回答实验",
+	    node_model_lab_hint: "同一版本问题：Claude Code/F5 与 Codex CLI/5.6 SOL",
+	    node_model_lab_open: "对比回答",
+	    node_model_lab_empty: "需要相同 Node.js 问题的 F5 与 5.6 SOL CLI 抓包",
 	    cost_lab_title: "Token 实验台",
 	    cost_lab_hint: "选中一条抓包，拆解它的 token 都花在哪了",
 	    cost_lab_open: "打开分析",
@@ -2374,6 +2437,23 @@ const DASHBOARD_I18N = {
     session_details: "{agent} 详情",
     compare_title: "会话对比",
     compare_subtitle: "主生成请求",
+    compare_analysis_title: "跨 Agent 差异分析",
+    compare_analysis_subtitle: "先看架构与行为差异，原始逐行 Diff 仅作为证据",
+    compare_analysis_heading: "真正值得关注的区别",
+    compare_analysis_note: "这两条抓包来自不同 Agent 与模型家族，逐行重合度没有可比意义。这里优先比较指令如何注入、工具如何暴露、请求如何执行，以及最终回答如何呈现。",
+    compare_analysis_delivery: "Prompt 架构",
+    compare_analysis_delivery_takeaway: "两个 Agent 通过不同的 API 结构传递系统级指令。",
+    compare_analysis_tools: "工具面",
+    compare_analysis_tools_takeaway: "重点看能力暴露和编排方式，不比较工具 Schema 的行序。",
+    compare_analysis_workflow: "执行流程",
+    compare_analysis_workflow_takeaway: "API 调用能看出模型发现、生成轮次和传输方式。",
+    compare_analysis_answer: "回答行为",
+    compare_analysis_answer_takeaway: "相同任务下，重点比较输出规模和来源链接行为。",
+    compare_analysis_evidence: "原始证据（需要时再展开）",
+    compare_analysis_system_channel: "{channel}；{chars} 个 prompt 字符；{blocks} 个指令块",
+    compare_analysis_tool_value: "{count} 个工具：{names}",
+    compare_analysis_workflow_value: "{records} 条记录；{generations} 次生成；{transport}",
+    compare_analysis_answer_value: "{chars} 个字符；{links} 个来源链接",
     compare_loading: "正在加载对比...",
     compare_unable: "无法对比会话：{error}",
     compare_baseline: "基线",
@@ -2872,6 +2952,7 @@ function renderAgents() {
 	  renderBulkEditControls(sessions);
 	  renderCompareLab(sessions);
 	  renderHiModelLab(state.sessions);
+	  renderNodeModelLab(state.sessions);
 	  renderCostLab(sessions);
 	  renderCompactionLab(sessions);
 	  renderSessionPagination();
@@ -3399,17 +3480,29 @@ const HI_MODEL_EXPERIMENT = [
   {model: "claude-fable-5", agentKey: "claude-code"},
   {model: "gpt-5.6-sol", agentKey: "codex"},
 ];
+const NODE_VERSION_PROMPT = "查一下 Node.js 当前最新的版本是多少？包括最新的 Current 版本和最新的 LTS 版本，并注明你的信息来源。";
 
-function hiModelLabSessions(sessions) {
+function fixedModelExperimentSessions(sessions, promptMatches) {
   const candidates = (Array.isArray(sessions) ? sessions : [])
     .filter(canCompareSession)
-    .filter(isHiProbeSession);
+    .filter(promptMatches);
   return HI_MODEL_EXPERIMENT
     .map(({model, agentKey}) => candidates
       .filter(session => String(session.model || "").toLowerCase() === model)
       .filter(session => String(session.agent_key || "").toLowerCase() === agentKey)
       .sort((a, b) => new Date(b.started_at || b.updated_at || 0) - new Date(a.started_at || a.updated_at || 0))[0])
     .filter(Boolean);
+}
+
+function hiModelLabSessions(sessions) {
+  return fixedModelExperimentSessions(sessions, isHiProbeSession);
+}
+
+function nodeModelLabSessions(sessions) {
+  return fixedModelExperimentSessions(
+    sessions,
+    session => String(session.first_user || "").trim() === NODE_VERSION_PROMPT,
+  );
 }
 
 function renderHiModelLab(sessions) {
@@ -3431,7 +3524,29 @@ function openHiModelLab() {
   const button = $("#hi-model-lab-open");
   const sessionIds = [button?.dataset.left, button?.dataset.right].filter(Boolean);
   if (sessionIds.length !== 2) return;
-  window.location.assign(`${sessionCompareUrl(sessionIds)}#diff-system`);
+  window.location.assign(`${sessionCompareUrl(sessionIds, "analysis")}#compare-insights`);
+}
+
+function renderNodeModelLab(sessions) {
+  const pair = nodeModelLabSessions(sessions);
+  const pairLabel = $("#node-model-lab-pair");
+  const button = $("#node-model-lab-open");
+  if (!pairLabel || !button) return;
+  const ready = pair.length === HI_MODEL_EXPERIMENT.length;
+  pairLabel.textContent = ready
+    ? `${pair[0].model} ↔ ${pair[1].model}`
+    : t("node_model_lab_empty");
+  button.disabled = !ready;
+  button.dataset.left = ready ? pair[0].id : "";
+  button.dataset.right = ready ? pair[1].id : "";
+  button.title = ready ? t("node_model_lab_open") : t("node_model_lab_empty");
+}
+
+function openNodeModelLab() {
+  const button = $("#node-model-lab-open");
+  const sessionIds = [button?.dataset.left, button?.dataset.right].filter(Boolean);
+  if (sessionIds.length !== 2) return;
+  window.location.assign(`${sessionCompareUrl(sessionIds, "analysis")}#compare-insights`);
 }
 
 const COST_SERIES = [
@@ -4005,7 +4120,7 @@ async function loadCompaction(sessionIds) {
 function swapComparisonSides() {
   if (state.view !== "compare" || state.compareSessionIds.length !== 2) return;
   state.compareSessionIds = [state.compareSessionIds[1], state.compareSessionIds[0]];
-  history.replaceState(null, "", `${sessionCompareUrl(state.compareSessionIds)}${window.location.hash}`);
+  history.replaceState(null, "", `${sessionCompareUrl(state.compareSessionIds, state.compareMode)}${window.location.hash}`);
   updateTracePathBar();
   if (Array.isArray(state.comparePayloads) && state.comparePayloads.length === 2) {
     renderComparison([state.comparePayloads[1], state.comparePayloads[0]]);
@@ -4024,20 +4139,20 @@ function comparisonRequestBody(record) {
 function primaryComparisonRecord(records) {
   const items = Array.isArray(records) ? records : [];
   const generations = items.filter(record => recordKind(record) === "generation");
-  const substantive = generations.find(record => {
+  const substantive = generations
+    .filter(record => comparisonRequestBody(record).generate !== false)
+    .map(record => {
     const body = comparisonRequestBody(record);
-    if (body.generate === false) return false;
     const input = Array.isArray(body.input) ? body.input : [];
-    const hasConversationInput = input.some(item => item?.role === "user" || item?.role === "developer");
-    return Boolean(
-      body.system
-      || body.instructions
-      || body.systemInstruction
-      || (Array.isArray(body.messages) && body.messages.length)
-      || hasConversationInput
-      || (Array.isArray(body.tools) && body.tools.length)
-    );
-  });
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    const hasUser = [...input, ...messages].some(item => item?.role === "user");
+    const systemSize = comparisonSystemText(body).length;
+    const toolCount = comparisonTools(body).length;
+    const messageSize = comparisonMessagesText(body).length;
+    return {record, score: (hasUser ? 1_000_000 : 0) + toolCount * 10_000 + systemSize + messageSize};
+  })
+    .filter(candidate => candidate.score > 0)
+    .sort((left, right) => right.score - left.score)[0]?.record;
   return substantive || generations.find(record => comparisonRequestBody(record).generate !== false) || generations[0] || items[0] || {};
 }
 
@@ -4073,11 +4188,31 @@ function comparisonResponseText(record) {
 }
 
 function comparisonTools(body) {
-  const tools = Array.isArray(body.tools) ? body.tools : [];
+  const directTools = Array.isArray(body.tools) ? body.tools : [];
+  const inputTools = (Array.isArray(body.input) ? body.input : [])
+    .flatMap(item => Array.isArray(item?.tools) ? item.tools : []);
+  const tools = [...directTools, ...inputTools];
   return tools.map((tool, index) => ({
     name: tool?.name || tool?.function?.name || tool?.type || `tool_${index + 1}`,
     value: tool,
   }));
+}
+
+function comparisonFinalResponse(records, fallbackRecord) {
+  const candidates = (Array.isArray(records) ? records : [])
+    .filter(record => recordKind(record) === "generation")
+    .map(record => comparisonResponseText(record))
+    .filter(Boolean)
+    .map(text => ({text, links: (text.match(/https?:\/\/[^\s)\]]+/g) || []).length}))
+    .sort((left, right) => right.links - left.links || right.text.length - left.text.length);
+  return candidates[0]?.text || comparisonResponseText(fallbackRecord);
+}
+
+function comparisonAllTools(records, fallbackBody) {
+  const tools = (Array.isArray(records) ? records : [])
+    .flatMap(record => comparisonTools(comparisonRequestBody(record)));
+  if (!tools.length) return comparisonTools(fallbackBody);
+  return Array.from(new Map(tools.map(tool => [tool.name, tool])).values());
 }
 
 function comparisonToolSummary(tool) {
@@ -4273,11 +4408,88 @@ function buildComparisonSide(payload) {
     record,
     body,
     system: comparisonSystemText(body),
-    tools: comparisonTools(body),
+    tools: comparisonAllTools(payload.records, body),
     messages: comparisonMessagesText(body),
-    response: comparisonResponseText(record),
+    response: comparisonFinalResponse(payload.records, record),
     params: comparisonParams(body),
+    records: Array.isArray(payload.records) ? payload.records : [],
   };
+}
+
+function comparisonInstructionProfile(side) {
+  const body = side.body;
+  const direct = body.system ?? body.instructions ?? body.systemInstruction;
+  const blocks = Array.isArray(direct)
+    ? direct.length
+    : direct
+      ? 1
+      : (Array.isArray(body.input) ? body.input : []).filter(item => item?.role === "developer" || item?.role === "system").length;
+  const channel = direct ? "system field" : "developer/system input";
+  return t("compare_analysis_system_channel", {
+    channel,
+    chars: fmtNumber(side.system.length),
+    blocks: fmtNumber(blocks),
+  });
+}
+
+function comparisonToolProfile(side) {
+  const names = side.tools.map(tool => tool.name);
+  const visible = names.slice(0, 5).join(", ") || "—";
+  const suffix = names.length > 5 ? ` +${names.length - 5}` : "";
+  return t("compare_analysis_tool_value", {count: fmtNumber(names.length), names: `${visible}${suffix}`});
+}
+
+function comparisonRecordRoute(record) {
+  return String(
+    record?.request?.path
+    || record?.request?.url
+    || record?.path
+    || record?.url
+    || record?.endpoint
+    || "",
+  );
+}
+
+function comparisonWorkflowProfile(side) {
+  const generations = side.records.filter(record => recordKind(record) === "generation").length;
+  const routes = side.records.map(comparisonRecordRoute).filter(Boolean);
+  let transport = routes.find(route => route.includes("/v1/responses")) || routes.find(route => route.includes("/v1/messages")) || "API";
+  if (side.records.some(record => Number(record?.response?.status || record?.status) === 101)) transport = `WebSocket ${transport}`;
+  else if (transport !== "API") transport = `HTTP ${transport}`;
+  return t("compare_analysis_workflow_value", {
+    records: fmtNumber(side.records.length),
+    generations: fmtNumber(generations),
+    transport,
+  });
+}
+
+function comparisonAnswerProfile(side) {
+  const links = (side.response.match(/https?:\/\/[^\s)\]]+/g) || []).length;
+  return t("compare_analysis_answer_value", {chars: fmtNumber(side.response.length), links: fmtNumber(links)});
+}
+
+function renderComparisonInsights(left, right) {
+  const cards = [
+    ["compare_analysis_delivery", "compare_analysis_delivery_takeaway", comparisonInstructionProfile(left), comparisonInstructionProfile(right)],
+    ["compare_analysis_tools", "compare_analysis_tools_takeaway", comparisonToolProfile(left), comparisonToolProfile(right)],
+    ["compare_analysis_workflow", "compare_analysis_workflow_takeaway", comparisonWorkflowProfile(left), comparisonWorkflowProfile(right)],
+    ["compare_analysis_answer", "compare_analysis_answer_takeaway", comparisonAnswerProfile(left), comparisonAnswerProfile(right)],
+  ];
+  return `
+    <div class="compare-insights-head">
+      <div class="compare-insights-title">${esc(t("compare_analysis_heading"))}</div>
+      <div class="compare-insights-note">${esc(t("compare_analysis_note"))}</div>
+    </div>
+    <div class="compare-insight-grid">${cards.map(([label, takeaway, leftValue, rightValue]) => `
+      <article class="compare-insight-card">
+        <div class="compare-insight-label">${esc(t(label))}</div>
+        <div class="compare-insight-takeaway">${esc(t(takeaway))}</div>
+        <div class="compare-insight-values">
+          <div class="compare-insight-value">${esc(left.session.agent || left.session.model || t("unknown"))}<br>${esc(leftValue)}</div>
+          <div class="compare-insight-value">${esc(right.session.agent || right.session.model || t("unknown"))}<br>${esc(rightValue)}</div>
+        </div>
+      </article>
+    `).join("")}</div>`;
 }
 
 function renderComparison(payloads) {
@@ -4294,18 +4506,22 @@ function renderComparison(payloads) {
     [right.session.total_tokens, comparisonUsage(right.record), right.system.length, right.tools.length],
   );
   state.comparePayloads = payloads;
+  const insights = $("#compare-insights");
+  insights.classList.toggle("hidden", state.compareMode !== "analysis");
+  insights.innerHTML = state.compareMode === "analysis" ? renderComparisonInsights(left, right) : "";
   $("#compare-content").innerHTML = `
     <div class="compare-identities">
       <div class="compare-axis-label">${esc(t("compare_metric"))}</div>
       ${renderComparisonIdentity(left.session, "left", t("compare_baseline"))}
       ${renderComparisonIdentity(right.session, "right", t("compare_target"))}
     </div>
-    ${renderComparisonSection(t("compare_summary"), summaryChanged, renderComparisonMetrics(left, right), {id: "diff-summary"})}
+    ${state.compareMode === "analysis" ? `<div class="compare-evidence-label">${esc(t("compare_analysis_evidence"))}</div>` : ""}
+    ${renderComparisonSection(t("compare_summary"), summaryChanged, renderComparisonMetrics(left, right), {open: state.compareMode !== "analysis", id: "diff-summary"})}
     ${renderComparisonSection(t("compare_request_parameters"), paramsChanged, renderComparisonParams(left.params, right.params), {open: false, id: "diff-params"})}
-    ${renderComparisonSection(`${t("compare_system_prompt")} · ${t("compare_chars", {count: `${fmtNumber(left.system.length)} ↔ ${fmtNumber(right.system.length)}`})}`, systemChanged, renderComparisonDiff(left.system, right.system), {id: "diff-system"})}
-    ${renderComparisonSection(`${t("compare_tools")} · ${t("compare_shared_tools", {count: sharedTools})}`, toolsChanged, renderComparisonTools(left.tools, right.tools), {id: "diff-tools"})}
-    ${renderComparisonSection(t("compare_messages"), messagesChanged, renderComparisonDiff(left.messages, right.messages), {id: "diff-messages"})}
-    ${renderComparisonSection(t("compare_response"), responseChanged, renderComparisonDiff(left.response, right.response), {id: "diff-response"})}
+    ${renderComparisonSection(`${t("compare_system_prompt")} · ${t("compare_chars", {count: `${fmtNumber(left.system.length)} ↔ ${fmtNumber(right.system.length)}`})}`, systemChanged, renderComparisonDiff(left.system, right.system), {open: state.compareMode !== "analysis", id: "diff-system"})}
+    ${renderComparisonSection(`${t("compare_tools")} · ${t("compare_shared_tools", {count: sharedTools})}`, toolsChanged, renderComparisonTools(left.tools, right.tools), {open: state.compareMode !== "analysis", id: "diff-tools"})}
+    ${renderComparisonSection(t("compare_messages"), messagesChanged, renderComparisonDiff(left.messages, right.messages), {open: state.compareMode !== "analysis", id: "diff-messages"})}
+    ${renderComparisonSection(t("compare_response"), responseChanged, renderComparisonDiff(left.response, right.response), {open: state.compareMode !== "analysis", id: "diff-response"})}
     ${renderComparisonSection(t("compare_raw_json"), comparisonChanged(left.body, right.body), `
       <div class="compare-raw-grid">
         <div class="compare-raw-label">JSON</div>
@@ -4319,7 +4535,7 @@ function renderComparison(payloads) {
 
 function scrollToComparisonHash() {
   const id = decodeURIComponent(window.location.hash.replace(/^#/, ""));
-  if (!id.startsWith("diff-")) return;
+  if (id !== "compare-insights" && !id.startsWith("diff-")) return;
   document.getElementById(id)?.scrollIntoView({block: "start"});
 }
 
@@ -4336,6 +4552,8 @@ function renderComparisonIdentity(session, side, label) {
 async function loadComparison(sessionIds) {
   const requestId = state.compareRequestId + 1;
   state.compareRequestId = requestId;
+  $("#compare-insights").classList.add("hidden");
+  $("#compare-insights").innerHTML = "";
   $("#compare-content").innerHTML = `<div class="compare-empty">${loadingMarkup(t("compare_loading"))}</div>`;
   try {
     const payloads = await Promise.all(sessionIds.map(sessionId => fetchJSON(
@@ -4358,6 +4576,7 @@ function showListView() {
   state.detailFingerprint = "";
   state.detailSession = null;
   state.compareSessionIds = [];
+  state.compareMode = "diff";
   state.comparePayloads = null;
   state.costSessionId = null;
   state.compactionSessionIds = [];
@@ -4396,6 +4615,8 @@ function showCompareView() {
   $("#compare-view").classList.remove("hidden");
   $("#cost-view").classList.add("hidden");
   $("#compaction-view").classList.add("hidden");
+  $("#compare-title").textContent = t(state.compareMode === "analysis" ? "compare_analysis_title" : "compare_title");
+  $("#compare-subtitle").textContent = t(state.compareMode === "analysis" ? "compare_analysis_subtitle" : "compare_subtitle");
   updateTracePathBar();
 }
 
@@ -4892,6 +5113,7 @@ $("#status-filter").addEventListener("change", event => {
 	$("#compare-selected-sessions").addEventListener("click", openComparison);
 	$("#compare-lab-open").addEventListener("click", openCompareLab);
 	$("#hi-model-lab-open").addEventListener("click", openHiModelLab);
+	$("#node-model-lab-open").addEventListener("click", openNodeModelLab);
 	$("#cost-lab-open").addEventListener("click", openCostLab);
 	$("#cost-lab-pin").addEventListener("click", toggleCostLabPin);
 	$("#compaction-lab-open").addEventListener("click", openCompactionLab);

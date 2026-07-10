@@ -2812,6 +2812,10 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 assert await page.locator("#session-list .session-row").count() == 4
                 lab = page.locator("#compare-lab")
                 await lab.wait_for(state="visible", timeout=5000)
+                assert await lab.evaluate("element => element.getBoundingClientRect().width") < 500
+                assert await page.locator(".lab-strip").evaluate(
+                    "element => element.scrollWidth <= element.clientWidth"
+                )
                 assert await page.locator("#compare-lab-pair").inner_text() == ("claude-fable-5 ↔ claude-opus-4-8")
                 assert " ".join((await lab.locator(".diff-legend-item.removed").inner_text()).split()) == (
                     "− Only in baseline"
@@ -2935,18 +2939,131 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 await page.locator("[data-compare-back]").click()
                 await page.wait_for_selector("#list-view:not(.hidden)", timeout=5000)
                 await page.locator("#hi-model-lab-open").click()
-                await page.wait_for_selector("#compare-view:not(.hidden) #diff-system", timeout=5000)
+                await page.wait_for_selector("#compare-view:not(.hidden) #compare-insights:not(.hidden)", timeout=5000)
                 assert await page.locator(".compare-model").all_text_contents() == [
                     "claude-fable-5",
                     "gpt-5.6-sol",
                 ]
+                insights = await page.locator("#compare-insights").inner_text()
+                assert "different API structures" in insights
+                assert "capabilities and orchestration" in insights
+                assert "discovery, generation, and transport" in insights
+                assert "output size and source-link behavior" in insights
+                assert await page.locator("#diff-system").get_attribute("open") is None
+                await page.locator("#diff-system summary").click()
                 system_diff = await page.locator("#diff-system").inner_text()
                 assert "You are Codex." in system_diff
                 assert "Use the shell tool when needed." in system_diff
                 assert "Handshake setup only." not in system_diff
                 assert f"left={model_lab_fable_id}" in page.url
                 assert f"right={sol_session_id}" in page.url
-                assert page.url.endswith("#diff-system")
+                assert "mode=analysis" in page.url
+                assert page.url.endswith("#compare-insights")
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_node_model_lab_compares_matching_answers(trace_db) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    store = get_trace_store()
+    prompt = "查一下 Node.js 当前最新的版本是多少？包括最新的 Current 版本和最新的 LTS 版本，并注明你的信息来源。"
+
+    fable_record = _anthropic_record(turn=1)
+    fable_record["request_id"] = "req_node_fable"
+    fable_record["request"]["body"].update(
+        {
+            "model": "claude-fable-5",
+            "system": [{"type": "text", "text": "You are a Claude agent."}],
+            "messages": [{"role": "user", "content": prompt}],
+        }
+    )
+    fable_record["response"]["body"].update(
+        {
+            "model": "claude-fable-5",
+            "content": [{"type": "text", "text": "Fable: Current is v26 and LTS is v24."}],
+        }
+    )
+    fable_session_id = store.create_session(
+        client="claude",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 7, 10, 10, 0, 0, tzinfo=timezone.utc),
+    )
+    store.append_record(fable_session_id, fable_record)
+    store.finalize_session(fable_session_id, {"api_calls": 1})
+
+    sol_record = {
+        "timestamp": "2026-05-20T09:00:00+00:00",
+        "request_id": "req_node_sol",
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/v1/responses",
+            "body": {
+                "model": "gpt-5.6-sol",
+                "input": [
+                    {"role": "developer", "content": [{"type": "input_text", "text": "You are Codex."}]},
+                    {"role": "user", "content": [{"type": "input_text", "text": prompt}]},
+                ],
+            },
+        },
+        "response": {
+            "status": 200,
+            "body": {
+                "model": "gpt-5.6-sol",
+                "output": [
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Sol: Current is v26 and LTS is v24."}],
+                    }
+                ],
+                "usage": {"input_tokens": 3000, "output_tokens": 80},
+            },
+        },
+    }
+    sol_session_id = store.create_session(
+        client="codex",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 7, 10, 11, 0, 0, tzinfo=timezone.utc),
+    )
+    store.append_record(sol_session_id, sol_record)
+    store.finalize_session(sol_session_id, {"api_calls": 1})
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 1440, "height": 1000})
+                await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
+                lab = page.locator("#node-model-lab")
+                await lab.wait_for(state="visible", timeout=5000)
+                assert await page.locator("#node-model-lab-pair").inner_text() == ("claude-fable-5 ↔ gpt-5.6-sol")
+                button = page.locator("#node-model-lab-open")
+                assert not await button.is_disabled()
+                assert await button.get_attribute("data-left") == fable_session_id
+                assert await button.get_attribute("data-right") == sol_session_id
+
+                await button.click()
+                await page.wait_for_selector("#compare-view:not(.hidden) #compare-insights:not(.hidden)", timeout=5000)
+                assert await page.locator(".compare-model").all_text_contents() == [
+                    "claude-fable-5",
+                    "gpt-5.6-sol",
+                ]
+                insights = await page.locator("#compare-insights").inner_text()
+                assert "output size and source-link behavior" in insights
+                assert "44 chars; 0 source links" in insights
+                assert "35 chars; 0 source links" in insights
+                assert await page.locator("#diff-response").get_attribute("open") is None
+                await page.locator("#diff-response summary").click()
+                response_diff = await page.locator("#diff-response").inner_text()
+                assert "Fable: Current is v26 and LTS is v24." in response_diff
+                assert "Sol: Current is v26 and LTS is v24." in response_diff
+                assert "mode=analysis" in page.url
+                assert page.url.endswith("#compare-insights")
             finally:
                 await browser.close()
     finally:
