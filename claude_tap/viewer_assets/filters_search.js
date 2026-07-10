@@ -333,7 +333,7 @@ function matchSearch(e, q) {
     if (sys.toLowerCase().includes(q)) return true;
     const turn = String(displayTurnLabel(e));
     if (turn.includes(q)) return true;
-    const tools = e.request?.body?.tools || [];
+    const tools = getRequestTools(e.request?.body);
     for (const td of tools) {
       if (toolDisplayName(td).toLowerCase().includes(q)) return true;
     }

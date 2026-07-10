@@ -178,6 +178,33 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           { role: 'user', content: [{ type: 'input_text', text: 'Hi' }] },
         ]);
 
+        assert.deepEqual(
+          plain(context.getRequestTools({
+            model: 'gpt-5.6-sol',
+            input: [{
+              type: 'additional_tools',
+              role: 'developer',
+              tools: [
+                { name: 'exec', description: 'Run a command' },
+                { name: 'wait' },
+                { name: 'request_user_input' },
+              ],
+            }],
+          }).map(tool => context.toolDisplayName(tool))),
+          ['exec', 'wait', 'request_user_input'],
+        );
+
+        assert.deepEqual(
+          plain(context.getRequestTools({
+            tools: [{ name: 'exec' }],
+            input: [{
+              type: 'additional_tools',
+              tools: [{ name: 'exec' }, { name: 'collaboration' }],
+            }],
+          }).map(tool => context.toolDisplayName(tool))),
+          ['exec', 'collaboration'],
+        );
+
         const compactBundle = {
           __claude_tap_compact_trace__: { version: 1 },
           blobs: {
