@@ -1007,7 +1007,25 @@ pre {
   font-weight: 800;
 }
 .compare-lab-copy { min-width: 0; }
-.compare-lab-title { color: var(--text); font-size: 12px; font-weight: 750; }
+.compare-lab-title {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+}
+.compare-lab-title > span:first-child { flex-shrink: 0; }
+.compare-lab-hint {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .compare-lab-pair {
   margin-top: 4px;
   overflow: hidden;
@@ -1320,6 +1338,7 @@ pre {
 	  .bulk-edit-bar { flex-wrap: wrap; }
   .compare-lab { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; }
   .compare-lab-legend { display: none; }
+  .compare-lab-hint { display: none; }
   .overview-card { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .table-scroll { max-height: none; }
   .detail-page-head { align-items: flex-start; }
@@ -1461,7 +1480,10 @@ pre {
         <section id="compare-lab" class="compare-lab" aria-label="Diff lab">
           <div class="compare-lab-mark" aria-hidden="true">±</div>
           <div class="compare-lab-copy">
-            <div class="compare-lab-title" data-i18n="compare_lab_title">Diff lab</div>
+            <div class="compare-lab-title">
+              <span data-i18n="compare_lab_title">Diff lab</span>
+              <span class="compare-lab-hint" data-i18n="compare_lab_hint">e.g. send both models a "Hi", then diff their system prompts</span>
+            </div>
             <div id="compare-lab-pair" class="compare-lab-pair"></div>
           </div>
           <div class="compare-lab-legend" aria-label="Diff color legend">
@@ -1654,6 +1676,7 @@ const DASHBOARD_I18N = {
 	    compare_selected: "Compare",
 	    compare_requires_two: "Select exactly two sessions to compare",
 	    compare_lab_title: "Diff lab",
+	    compare_lab_hint: "e.g. send both models a \"Hi\", then diff their system prompts",
 	    compare_lab_open: "Open Diff",
 	    compare_lab_empty: "At least two sessions are required",
 	    compare_deleted: "Only in baseline",
@@ -1797,6 +1820,7 @@ const DASHBOARD_I18N = {
 	    compare_selected: "对比",
 	    compare_requires_two: "请选择恰好两个会话进行对比",
 	    compare_lab_title: "Diff 实验台",
+	    compare_lab_hint: "例：给两个模型各发一句 “Hi”，对比它们 system prompt 的差异",
 	    compare_lab_open: "打开 Diff",
 	    compare_lab_empty: "至少需要两个会话",
 	    compare_deleted: "仅基线有",
