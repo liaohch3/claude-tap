@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.130] - 2026-07-10
+
+### Changed
+- Simplify viewer export menus (#373)
 ## [0.1.129] - 2026-07-10
 
 ### Changed
