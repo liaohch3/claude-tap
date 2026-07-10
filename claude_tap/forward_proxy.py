@@ -53,7 +53,7 @@ async def _ws_send_frame(writer: WebSocketWriter, message: bytes, opcode: int) -
     if hasattr(writer, "send_frame"):
         await writer.send_frame(message, opcode)
     else:
-        writer._send_frame(message, opcode)
+        await writer._send_frame(message, opcode)
 
 
 from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
