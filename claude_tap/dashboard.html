@@ -2473,6 +2473,14 @@ function renderOverview() {
 	  return Boolean(session) && Number(session.record_count || 0) > 0;
 	}
 
+	function defaultCompareLabPair(candidates) {
+	  if (candidates.length < 2) return candidates.slice(0, 2);
+	  const [latest] = candidates;
+	  const labModel = session => session.model || session.agent || "";
+	  const partner = candidates.find(session => session !== latest && labModel(session) !== labModel(latest));
+	  return partner ? [latest, partner] : candidates.slice(0, 2);
+	}
+
 	function compareLabSessions(sessions) {
 	  const byId = new Map(state.sessions.map(session => [session.id, session]));
 	  const selected = Array.from(state.selectedSessionIds)
@@ -2480,7 +2488,7 @@ function renderOverview() {
 	    .filter(canCompareSession);
 	  const pair = state.selectedSessionIds.size > 0
 	    ? selected
-	    : sessions.filter(canCompareSession).slice(0, 2);
+	    : defaultCompareLabPair(sessions.filter(canCompareSession));
 	  if (pair.length !== 2) return pair;
 	  const startTime = session => new Date(session.started_at || session.updated_at || 0).getTime() || 0;
 	  return [...pair].sort((a, b) => startTime(a) - startTime(b));

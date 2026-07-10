@@ -1935,6 +1935,18 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
     store.append_record(codex_app_session_id, codex_app_record)
     store.finalize_session(codex_app_session_id, {"api_calls": 1})
 
+    duplicate_model_record = _anthropic_record(turn=4)
+    duplicate_model_record["request_id"] = "req_compare_dup_model"
+    duplicate_model_record["request"]["body"]["model"] = "claude-fable-5"
+    duplicate_model_record["response"]["body"]["model"] = "claude-fable-5"
+    duplicate_model_session_id = store.create_session(
+        client="claude",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 7, 10, 12, 2, 0, tzinfo=timezone.utc),
+    )
+    store.append_record(duplicate_model_session_id, duplicate_model_record)
+    store.finalize_session(duplicate_model_session_id, {"api_calls": 1})
+
     server = LiveViewerServer(port=0, dashboard_mode=True)
     port = await server.start()
     try:
@@ -1945,10 +1957,10 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
                 await page.wait_for_selector('[data-agent="cli"].active', timeout=5000)
                 assert await page.locator(f'[data-session="{codex_app_session_id}"]').count() == 0
-                assert await page.locator("#session-list .session-row").count() == 2
+                assert await page.locator("#session-list .session-row").count() == 3
                 lab = page.locator("#compare-lab")
                 await lab.wait_for(state="visible", timeout=5000)
-                assert await page.locator("#compare-lab-pair").inner_text() == ("claude-fable-5 ↔ claude-opus-4-8")
+                assert await page.locator("#compare-lab-pair").inner_text() == ("claude-opus-4-8 ↔ claude-fable-5")
                 assert " ".join((await lab.locator(".diff-legend-item.removed").inner_text()).split()) == (
                     "− Only in baseline"
                 )
@@ -2038,9 +2050,11 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 await page.wait_for_selector("#compare-view:not(.hidden) #diff-system", timeout=5000)
                 assert page.url.endswith("#diff-system")
                 assert await page.evaluate("window.location.hash") == "#diff-system"
-                assert f"left={session_ids[0]}" in page.url
-                await page.locator("#compare-swap").click()
                 assert f"left={session_ids[1]}" in page.url
+                assert f"right={duplicate_model_session_id}" in page.url
+                await page.locator("#compare-swap").click()
+                assert f"left={duplicate_model_session_id}" in page.url
+                assert f"right={session_ids[1]}" in page.url
                 assert page.url.endswith("#diff-system")
             finally:
                 await browser.close()
