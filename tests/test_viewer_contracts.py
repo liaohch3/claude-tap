@@ -2886,12 +2886,19 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
     }
 
     page = chromium_browser.new_page()
-    page.add_init_script("window.__TRACE_SESSION_EXPORTS__ = {jsonl: 'coverage.jsonl', log: 'coverage.log'};")
+    page.add_init_script(
+        "window.__TRACE_SESSION_EXPORTS__ = {compact: 'coverage.json', log: 'coverage.log', html: 'coverage.html'};"
+    )
     try:
         session = page.context.new_cdp_session(page)
         session.send("Profiler.enable")
         session.send("Profiler.startPreciseCoverage", {"callCount": True, "detailed": True})
         errors = _open_viewer_with_error_capture(page, html_path)
+
+        export_items = page.locator("#viewer-actions .export-menu-item")
+        assert export_items.count() == 2
+        assert export_items.all_text_contents() == ["Export JSON", "Export HTML"]
+        assert page.locator('#viewer-actions a[href="coverage.log"]').count() == 0
 
         entry_count = page.evaluate("entries.length")
         for index in range(entry_count):

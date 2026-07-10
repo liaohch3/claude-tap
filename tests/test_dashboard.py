@@ -664,6 +664,8 @@ def test_dashboard_rejects_missing_session_ids(trace_db) -> None:
     assert "DASHBOARD_I18N" in template
     assert 'data-i18n="table_first_message"' in template
     assert "export_jsonl" in template
+    assert 'export_compact: "Export JSON"' in template
+    assert "export_log" not in template
     assert "export_html" in template
     assert "export_menu" in template
     assert load_trace_session("not-a-valid-session-id") is None
@@ -1080,6 +1082,8 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 html = await resp.text()
                 assert "session-list" in html
                 assert "export_jsonl" in html
+                assert 'export_compact: "Export JSON"' in html
+                assert "export_log" not in html
                 assert "export_html" in html
                 assert "export_menu" in html
 
@@ -1131,6 +1135,7 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 assert f"session-{session_id[:8]}.jsonl" not in html
                 assert f"session-{session_id[:8]}.html" not in html
                 assert f"/api/sessions/{session_id}/export/html" in html
+                assert f"/api/sessions/{session_id}/export/log" not in html
 
             async with session.get(
                 f"http://127.0.0.1:{port}/api/sessions/{second_session_id}/records?offset=1&limit=1"
@@ -1699,13 +1704,13 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 export_button = page.locator(".detail-inspector-bar .export-menu > summary")
                 assert await export_button.count() == 1
                 assert await export_button.inner_text() == "Export"
-                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 3
-                hrefs = await page.locator(".detail-inspector-bar .export-menu-item").evaluate_all(
-                    "(links) => links.map((link) => link.getAttribute('href'))"
-                )
+                export_items = page.locator(".detail-inspector-bar .export-menu-item")
+                assert await export_items.count() == 2
+                assert await export_items.all_text_contents() == ["Export JSON", "Export HTML"]
+                hrefs = await export_items.evaluate_all("(links) => links.map((link) => link.getAttribute('href'))")
                 assert f"/api/sessions/{session_id}/export/compact" in hrefs
-                assert f"/api/sessions/{session_id}/export/log" in hrefs
                 assert f"/api/sessions/{session_id}/export/html" in hrefs
+                assert f"/api/sessions/{session_id}/export/log" not in hrefs
 
                 async with page.expect_download() as download_info:
                     await export_button.click()
@@ -1748,7 +1753,9 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                 await page.locator(".detail-inspector-bar .export-menu > summary").click()
                 menu = page.locator(".detail-inspector-bar .export-menu-list")
                 assert await menu.is_visible()
-                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 3
+                export_items = page.locator(".detail-inspector-bar .export-menu-item")
+                assert await export_items.count() == 2
+                assert await export_items.all_text_contents() == ["Export JSON", "Export HTML"]
 
                 layout = await page.evaluate(
                     """() => {
@@ -1770,7 +1777,7 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                     }"""
                 )
                 assert layout["overflowX"] == "visible"
-                assert layout["menuHeight"] > 80
+                assert layout["menuHeight"] > 50
                 assert layout["menuRight"] <= layout["viewportWidth"]
                 assert layout["menuBottom"] > layout["actionsBottom"]
             finally:

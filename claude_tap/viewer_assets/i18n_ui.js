@@ -78,9 +78,6 @@ function renderViewerActions() {
   if (typeof exports.compact === 'string' && exports.compact) {
     links.push(`<a class="export-menu-item" href="${esc(exports.compact)}" download>${esc(t('export_compact'))}</a>`);
   }
-  if (typeof exports.log === 'string' && exports.log) {
-    links.push(`<a class="export-menu-item" href="${esc(exports.log)}" download>${esc(t('export_log'))}</a>`);
-  }
   if (typeof exports.html === 'string' && exports.html) {
     links.push(`<a class="export-menu-item" href="${esc(exports.html)}" download>${esc(t('export_html'))}</a>`);
   }

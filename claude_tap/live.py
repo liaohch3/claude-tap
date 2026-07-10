@@ -559,7 +559,6 @@ class LiveViewerServer:
             export_urls = {
                 "jsonl": f"/api/sessions/{quote(session_id)}/export/jsonl",
                 "compact": f"/api/sessions/{quote(session_id)}/export/compact",
-                "log": f"/api/sessions/{quote(session_id)}/export/log",
                 "html": f"/api/sessions/{quote(session_id)}/export/html",
             }
             metadata = [
