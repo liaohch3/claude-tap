@@ -50,6 +50,28 @@ git config core.hooksPath .githooks
 7. 不要留下仅本地存在的工作；你必须执行 `git add`、`git commit` 和 `git push`。
 8. 你必须使用 `gh pr create` 打开 GitHub PR。
 
+## Browser And Dashboard Safety
+
+These rules apply to every local dashboard restart, UI check, trace validation, and browser-based test:
+
+1. Start the dashboard without opening the user's browser:
+
+   ```bash
+   BROWSER=/usr/bin/false uv run python -m claude_tap dashboard --tap-no-open
+   ```
+
+2. Never use the user's default browser, Chrome profile, Chrome extension, or browser history for routine automated verification. Only use those surfaces when the user explicitly asks for them.
+3. Run every local pytest command with the external browser disabled:
+
+   ```bash
+   BROWSER=/usr/bin/false uv run pytest tests/ -x --timeout=60
+   ```
+
+4. Run browser checks in an isolated headless browser. Prefer the repository's pytest Playwright tests or an explicit `chromium.launch(headless=True)` context. Do not use `playwright-cli open` for routine local verification.
+5. Verify dashboard restarts with `curl` against `/dashboard/health`, process inspection, and automated tests before considering a visible browser.
+6. Close every browser context created by verification. Do not leave tabs, windows, browser processes, or generated Playwright state behind.
+7. After a dashboard restart, confirm that no new user Chrome tab was created. If an automated check opens a visible page unexpectedly, stop that workflow and disclose it immediately.
+
 ## 标准目录
 
 - 硬性规则与仓库策略：`.agents/docs/standards/hard-rules.md`
