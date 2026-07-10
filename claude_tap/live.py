@@ -209,6 +209,7 @@ class LiveViewerServer:
             app.router.add_get("/", self._handle_index)
         app.router.add_get("/viewer", self._handle_index)
         app.router.add_get("/dashboard", self._handle_dashboard_index)
+        app.router.add_get("/dashboard/compare", self._handle_dashboard_compare)
         app.router.add_get("/dashboard/session/{session_id}", self._handle_dashboard_session_detail)
         app.router.add_get("/dashboard/health", self._handle_dashboard_health)
         app.router.add_get("/dashboard/events", self._handle_dashboard_sse)
@@ -343,6 +344,16 @@ class LiveViewerServer:
     async def _handle_dashboard_session_detail(self, request: web.Request) -> web.Response:
         """Serve the dashboard shell for a session detail route."""
         if ensure_trace_store().load_session_row(request.match_info["session_id"]) is None:
+            return web.Response(status=404, text="Session not found")
+        return await self._handle_dashboard_index(request)
+
+    async def _handle_dashboard_compare(self, request: web.Request) -> web.Response:
+        """Serve the dashboard shell for a two-session comparison route."""
+        session_ids = [request.query.get("left", ""), request.query.get("right", "")]
+        if any(not session_id for session_id in session_ids) or session_ids[0] == session_ids[1]:
+            return web.Response(status=400, text="Two distinct session ids are required")
+        store = ensure_trace_store()
+        if any(store.load_session_row(session_id) is None for session_id in session_ids):
             return web.Response(status=404, text="Session not found")
         return await self._handle_dashboard_index(request)
 

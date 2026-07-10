@@ -966,6 +966,193 @@ pre {
   opacity: .65;
 }
 
+.compare-view {
+  width: 100%;
+  max-width: 1680px;
+  margin: 0 auto;
+}
+.compare-page-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.compare-heading { min-width: 0; }
+.compare-title { font-size: 18px; font-weight: 700; letter-spacing: -.02em; }
+.compare-subtitle { margin-top: 3px; color: var(--text-tertiary); font-family: var(--mono); font-size: 11px; }
+.compare-shell {
+  overflow: hidden;
+  border: 1px solid #cfd8e7;
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+[data-theme="dark"] .compare-shell { border-color: var(--border); }
+.compare-identities,
+.compare-metric-row,
+.compare-param-row,
+.compare-diff-row,
+.compare-tool-row,
+.compare-raw-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, .7fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+.compare-identities {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.compare-axis-label {
+  display: flex;
+  align-items: flex-end;
+  padding: 18px;
+  color: var(--text-tertiary);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.compare-identity {
+  min-width: 0;
+  padding: 16px 18px;
+  border-left: 1px solid var(--border);
+}
+.compare-side-label {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.compare-side-label.left { color: var(--blue); }
+.compare-side-label.right { color: var(--purple); }
+.compare-model {
+  margin-top: 6px;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compare-session-meta {
+  margin-top: 7px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compare-section {
+  border-bottom: 1px solid var(--border);
+}
+.compare-section:last-child { border-bottom: 0; }
+.compare-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 45px;
+  padding: 10px 18px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  transition: background .12s;
+}
+.compare-section > summary::-webkit-details-marker { display: none; }
+.compare-section > summary:hover { background: var(--bg-hover); }
+.compare-section > summary::before {
+  content: "›";
+  color: var(--text-tertiary);
+  font-size: 17px;
+  transform: rotate(0deg);
+  transition: transform .15s ease;
+}
+.compare-section[open] > summary::before { transform: rotate(90deg); }
+.compare-change-badge {
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.compare-change-badge.same { background: var(--green-bg); color: var(--green); }
+.compare-section-body { border-top: 1px solid var(--border-light); }
+.compare-metric-row,
+.compare-param-row,
+.compare-tool-row { border-bottom: 1px solid var(--border-light); }
+.compare-metric-row:last-child,
+.compare-param-row:last-child,
+.compare-tool-row:last-child { border-bottom: 0; }
+.compare-row-label,
+.compare-value,
+.compare-tool-cell {
+  min-width: 0;
+  padding: 10px 18px;
+}
+.compare-row-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+}
+.compare-value,
+.compare-tool-cell {
+  border-left: 1px solid var(--border-light);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.compare-value.changed { background: var(--amber-bg); }
+.compare-delta { margin-left: 7px; color: var(--text-tertiary); font-size: 9px; }
+.compare-diff { overflow: auto; max-height: 620px; }
+.compare-diff-row { min-width: 760px; }
+.compare-diff-gutter {
+  padding: 7px 12px;
+  color: var(--text-tertiary);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border-light);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-align: right;
+}
+.compare-diff-cell {
+  min-height: 31px;
+  padding: 7px 12px;
+  border-left: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.compare-diff-cell.removed { background: var(--red-bg); color: var(--red); }
+.compare-diff-cell.added { background: var(--green-bg); color: var(--green); }
+.compare-diff-cell.empty { background: var(--bg); }
+.compare-tool-cell.removed { background: var(--red-bg); color: var(--red); }
+.compare-tool-cell.added { background: var(--green-bg); color: var(--green); }
+.compare-tool-cell.changed { background: var(--amber-bg); color: var(--amber); }
+.compare-raw-grid { min-width: 760px; }
+.compare-raw-label { padding: 14px 18px; color: var(--text-tertiary); font-size: 11px; font-weight: 650; }
+.compare-raw {
+  max-height: 620px;
+  overflow: auto;
+  padding: 14px 18px;
+  border-left: 1px solid var(--border-light);
+  background: var(--bg-code);
+}
+.compare-empty { padding: 34px 18px; color: var(--text-tertiary); text-align: center; }
+
 @media (max-width: 900px) {
   body { overflow: auto; height: auto; min-height: 100vh; }
   .header { flex-wrap: wrap; padding: 10px 12px; }
@@ -985,6 +1172,20 @@ pre {
     left: 0;
     right: auto;
   }
+  .compare-identities,
+  .compare-metric-row,
+  .compare-param-row,
+  .compare-tool-row,
+  .compare-raw-grid {
+    grid-template-columns: 105px minmax(180px, 1fr) minmax(180px, 1fr);
+    min-width: 620px;
+  }
+  .compare-shell { overflow-x: auto; }
+  .compare-axis-label,
+  .compare-identity,
+  .compare-row-label,
+  .compare-value,
+  .compare-tool-cell { padding-left: 12px; padding-right: 12px; }
 }
 </style>
 </head>
@@ -1074,6 +1275,7 @@ pre {
 	        </label>
 	        <span id="bulk-selected-count" class="bulk-selected-count">0 selected</span>
 	        <span class="bulk-spacer"></span>
+	        <button id="compare-selected-sessions" class="bulk-action" type="button" data-i18n="compare_selected" disabled>Compare</button>
 	        <button id="delete-selected-sessions" class="bulk-action danger" type="button" data-i18n="delete_selected">Delete selected</button>
 	        <button id="done-edit-sessions" class="bulk-action" type="button" data-i18n="done">Done</button>
 	      </div>
@@ -1111,6 +1313,19 @@ pre {
       <div class="empty" data-i18n="select_session">Select a session to view details.</div>
     </section>
   </section>
+
+  <section id="compare-view" class="compare-view hidden">
+    <div class="compare-page-head">
+      <button class="back-btn" type="button" data-compare-back title="Back to session list" aria-label="Back to session list">←</button>
+      <div class="compare-heading">
+        <div class="compare-title" data-i18n="compare_title">Session comparison</div>
+        <div class="compare-subtitle" data-i18n="compare_subtitle">Primary generation request</div>
+      </div>
+    </div>
+    <div id="compare-content" class="compare-shell">
+      <div class="compare-empty" data-i18n="compare_loading">Loading comparison...</div>
+    </div>
+  </section>
 </div>
 
 <div id="delete-session-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="delete-session-title" aria-describedby="delete-session-message">
@@ -1134,6 +1349,7 @@ pre {
 
 <script>
 const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
+const SESSION_COMPARE_ROUTE = /^\/dashboard\/compare\/?$/;
 const CLAUDE_TAP_VERSION = "";
 const DASHBOARD_QUIT_TOKEN = "";
 const DASHBOARD_CAN_STOP = false;
@@ -1141,10 +1357,14 @@ const DASHBOARD_CAN_STOP = false;
 const state = {
   sessions: [],
   agents: [],
-  selectedAgent: "all",
+  selectedAgent: "cli",
   selectedSessionId: null,
   pendingSessionId: initialSessionId(),
-  view: "list",
+  pendingComparisonIds: initialComparisonIds(),
+  compareSessionIds: [],
+  comparePayloads: null,
+  compareRequestId: 0,
+  view: initialComparisonIds().length === 2 ? "compare" : "list",
 	  activeTab: "raw",
   search: "",
   date: "all",
@@ -1199,8 +1419,20 @@ function initialSessionId() {
   return new URLSearchParams(window.location.search).get("session_id") || null;
 }
 
+function initialComparisonIds() {
+  if (!window.location.pathname.match(SESSION_COMPARE_ROUTE)) return [];
+  const params = new URLSearchParams(window.location.search);
+  const sessionIds = [params.get("left"), params.get("right")].filter(Boolean);
+  return sessionIds.length === 2 && sessionIds[0] !== sessionIds[1] ? sessionIds : [];
+}
+
 function sessionDetailUrl(sessionId) {
   return `/dashboard/session/${encodeURIComponent(sessionId)}`;
+}
+
+function sessionCompareUrl(sessionIds) {
+  const params = new URLSearchParams({left: sessionIds[0], right: sessionIds[1]});
+  return `/dashboard/compare?${params.toString()}`;
 }
 
 const DASHBOARD_I18N = {
@@ -1235,6 +1467,8 @@ const DASHBOARD_I18N = {
 	    done: "Done",
 	    select_all_sessions: "Select all",
 	    selected_sessions: "{count} selected",
+	    compare_selected: "Compare",
+	    compare_requires_two: "Select exactly two sessions to compare",
 	    delete_selected: "Delete selected",
 	    load_more_sessions: "Load more sessions",
 	    loading_more_sessions: "Loading more sessions...",
@@ -1254,6 +1488,7 @@ const DASHBOARD_I18N = {
     table_actions: "Actions",
     all_dates: "All dates",
     all_agents: "All agents",
+    cli_only: "CLI only",
     no_matching_sessions: "No matching trace sessions.",
     loading_sessions: "Loading sessions...",
     loading_session: "Loading session detail...",
@@ -1279,6 +1514,25 @@ const DASHBOARD_I18N = {
 	    unable_delete_session: "Unable to delete session: {error}",
     session_detail: "Session detail",
     session_details: "{agent} details",
+    compare_title: "Session comparison",
+    compare_subtitle: "Primary generation request",
+    compare_loading: "Loading comparison...",
+    compare_unable: "Unable to compare sessions: {error}",
+    compare_baseline: "Baseline",
+    compare_target: "Compared",
+    compare_metric: "Metric",
+    compare_summary: "Summary",
+    compare_request_parameters: "Request parameters",
+    compare_system_prompt: "System prompt",
+    compare_tools: "Tools",
+    compare_messages: "Messages",
+    compare_response: "Response",
+    compare_raw_json: "Raw request JSON",
+    compare_changed: "Changed",
+    compare_same: "Same",
+    compare_no_content: "No captured content",
+    compare_shared_tools: "{count} shared tools",
+    compare_chars: "{count} characters",
     no_session_selected: "No session selected.",
     select_session: "Select a session to view details.",
     jsonl: "JSONL",
@@ -1350,6 +1604,8 @@ const DASHBOARD_I18N = {
 	    done: "完成",
 	    select_all_sessions: "全选",
 	    selected_sessions: "已选择 {count} 个",
+	    compare_selected: "对比",
+	    compare_requires_two: "请选择恰好两个会话进行对比",
 	    delete_selected: "删除所选",
 	    load_more_sessions: "加载更多会话",
 	    loading_more_sessions: "正在加载更多会话...",
@@ -1369,6 +1625,7 @@ const DASHBOARD_I18N = {
     table_actions: "操作",
     all_dates: "全部日期",
     all_agents: "全部 Agent",
+    cli_only: "仅 CLI",
     no_matching_sessions: "没有匹配的 trace 会话。",
     loading_sessions: "正在加载会话...",
     loading_session: "正在加载会话详情...",
@@ -1394,6 +1651,25 @@ const DASHBOARD_I18N = {
 	    unable_delete_session: "无法删除会话：{error}",
     session_detail: "会话详情",
     session_details: "{agent} 详情",
+    compare_title: "会话对比",
+    compare_subtitle: "主生成请求",
+    compare_loading: "正在加载对比...",
+    compare_unable: "无法对比会话：{error}",
+    compare_baseline: "基线",
+    compare_target: "对比项",
+    compare_metric: "指标",
+    compare_summary: "摘要",
+    compare_request_parameters: "请求参数",
+    compare_system_prompt: "System Prompt",
+    compare_tools: "工具",
+    compare_messages: "消息",
+    compare_response: "响应",
+    compare_raw_json: "原始请求 JSON",
+    compare_changed: "有差异",
+    compare_same: "相同",
+    compare_no_content: "没有捕获到内容",
+    compare_shared_tools: "{count} 个相同工具",
+    compare_chars: "{count} 个字符",
     no_session_selected: "未选择会话。",
     select_session: "选择一个会话查看详情。",
     jsonl: "JSONL",
@@ -1479,6 +1755,9 @@ function setLang(lang) {
   if (state.view === "detail" && state.detailSession) {
     updateDetailI18n(state.detailSession);
   }
+	  if (state.view === "compare" && state.comparePayloads) {
+	    renderComparison(state.comparePayloads);
+	  }
 	  if (state.pendingDeleteSessionIds.length) {
 	    renderDeleteSessionDialog();
 	  }
@@ -1609,7 +1888,7 @@ async function fetchJSON(url, options = {}) {
 
 	function applyAgentsPayload(payload) {
 	  state.agents = Array.isArray(payload.agents) ? payload.agents : [];
-	  if (state.selectedAgent !== "all" && !state.agents.some(agent => agent.key === state.selectedAgent)) {
+	  if (state.selectedAgent !== "all" && state.selectedAgent !== "cli" && !state.agents.some(agent => agent.key === state.selectedAgent)) {
 	    state.selectedAgent = "all";
 	  }
 	}
@@ -1678,6 +1957,13 @@ function renderStatusOptions() {
 }
 
 function updateTracePathBar(session = null) {
+  if (state.view === "compare" && state.compareSessionIds.length === 2) {
+    $("#trace-path-bar").innerHTML = `
+      <span class="tp-label">${esc(t("compare_title"))}</span>
+      <span class="tp-val">${esc(state.compareSessionIds.join(" ↔ "))}</span>
+    `;
+    return;
+  }
   if (state.view === "detail" && session) {
     $("#trace-path-bar").innerHTML = `
       <span class="tp-label">${esc(t("session_id"))}</span>
@@ -1713,10 +1999,17 @@ function updateTracePathBar(session = null) {
 
 	    const visible = filteredSessions();
 	    const pendingSessionId = state.pendingSessionId;
-	    if (pendingSessionId) {
+	    const pendingComparisonIds = state.pendingComparisonIds;
+	    if (pendingComparisonIds.length === 2) {
+	      state.pendingComparisonIds = [];
+	      state.compareSessionIds = pendingComparisonIds;
+	      state.view = "compare";
+	    } else if (pendingSessionId) {
 	      state.pendingSessionId = null;
 	      state.selectedSessionId = pendingSessionId;
 	      state.view = "detail";
+	    } else if (state.view === "compare" && state.compareSessionIds.length === 2) {
+	      state.view = "compare";
 	    } else if (state.view === "detail" && state.selectedSessionId) {
 	      state.view = "detail";
 	    } else {
@@ -1726,12 +2019,15 @@ function updateTracePathBar(session = null) {
         state.view = "list";
       }
     }
-    if (state.view !== "detail") {
+    if (state.view !== "detail" && state.view !== "compare") {
       state.selectedSessionId = null;
       state.view = "list";
     }
     renderSessions();
-    if (state.view === "detail" && state.selectedSessionId) {
+    if (state.view === "compare" && state.compareSessionIds.length === 2) {
+      showCompareView();
+      await loadComparison(state.compareSessionIds);
+    } else if (state.view === "detail" && state.selectedSessionId) {
       showDetailView();
       const selected = state.sessions.find(session => session.id === state.selectedSessionId);
       const detailLoaded = state.detailSessionId === state.selectedSessionId;
@@ -1790,7 +2086,14 @@ function renderFilters() {
 	}
 
 function renderAgents() {
-  const agents = [{key: "all", label: t("all_agents"), sessions: state.sessionTotal || state.sessions.length}]
+  const allSessions = state.agents.reduce((sum, agent) => sum + Number(agent.sessions || 0), 0);
+  const cliSessions = state.agents
+    .filter(agent => agent.key === "claude-code" || agent.key === "codex")
+    .reduce((sum, agent) => sum + Number(agent.sessions || 0), 0);
+  const agents = [
+    {key: "all", label: t("all_agents"), sessions: allSessions},
+    {key: "cli", label: t("cli_only"), sessions: cliSessions},
+  ]
     .concat(state.agents.map(agent => ({...agent})));
   $("#agent-list").innerHTML = agents.map(agent => `
     <button class="filter-chip ${state.selectedAgent === agent.key ? "active" : ""}" data-agent="${esc(agent.key)}">
@@ -1972,6 +2275,9 @@ function renderOverview() {
 	  selectAll.indeterminate = anySelected && !allSelected;
 	  selectAll.disabled = visibleDeletable.length === 0;
 	  $("#bulk-selected-count").textContent = t("selected_sessions", {count: selected.length});
+	  const compareButton = $("#compare-selected-sessions");
+	  compareButton.disabled = selected.length !== 2;
+	  compareButton.title = selected.length === 2 ? t("compare_selected") : t("compare_requires_two");
 	  const deleteButton = $("#delete-selected-sessions");
 	  deleteButton.disabled = selected.length === 0 || state.deletingSessionIds.size > 0;
 	  deleteButton.textContent = state.deletingSessionIds.size > 0 ? t("deleting_sessions") : t("delete_selected");
@@ -2103,6 +2409,279 @@ function openSession(sessionId) {
   window.location.assign(sessionDetailUrl(sessionId));
 }
 
+function openComparison() {
+  const sessionIds = selectedDeletableSessions().map(session => session.id);
+  if (sessionIds.length !== 2) return;
+  window.location.assign(sessionCompareUrl(sessionIds));
+}
+
+function comparisonRequestBody(record) {
+  const body = record?.request?.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+  if (body.request && typeof body.request === "object" && !Array.isArray(body.request)) return body.request;
+  return body;
+}
+
+function primaryComparisonRecord(records) {
+  const items = Array.isArray(records) ? records : [];
+  return items.find(record => recordKind(record) === "generation") || items[0] || {};
+}
+
+function comparisonSystemText(body) {
+  const value = body.system ?? body.instructions ?? body.systemInstruction ?? "";
+  const text = contentText(value);
+  return text || (value && typeof value === "object" ? JSON.stringify(value, null, 2) : String(value || ""));
+}
+
+function comparisonMessagesText(body) {
+  const value = body.messages ?? body.input ?? body.contents ?? [];
+  return value && (Array.isArray(value) ? value.length : true) ? JSON.stringify(value, null, 2) : "";
+}
+
+function comparisonResponseText(record) {
+  const content = record?.response?.body?.content;
+  if (Array.isArray(content)) {
+    const sections = content.map(item => {
+      const text = contentText(item);
+      if (!text) return "";
+      return `[${item?.type || "content"}]\n${text}`;
+    }).filter(Boolean);
+    if (sections.length) return sections.join("\n\n");
+  }
+  return responseTextFromRecord(record);
+}
+
+function comparisonTools(body) {
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  return tools.map((tool, index) => ({
+    name: tool?.name || tool?.function?.name || tool?.type || `tool_${index + 1}`,
+    value: tool,
+  }));
+}
+
+function comparisonToolSummary(tool) {
+  if (!tool) return "—";
+  const description = tool.value?.description || tool.value?.function?.description || "";
+  return description ? String(description).split("\n")[0] : tool.name;
+}
+
+function comparisonParams(body) {
+  const excluded = new Set([
+    "messages", "input", "contents", "system", "instructions", "systemInstruction", "tools", "metadata",
+  ]);
+  return Object.fromEntries(Object.entries(body).filter(([key]) => !excluded.has(key)));
+}
+
+function comparisonUsage(record) {
+  return record?.response?.body?.usage || record?.response?.usage || {};
+}
+
+function comparisonNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function comparisonValueText(value) {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "—";
+  return JSON.stringify(value, null, 2);
+}
+
+function comparisonChanged(left, right) {
+  return comparisonValueText(left) !== comparisonValueText(right);
+}
+
+function lineDiffRows(leftText, rightText) {
+  const maxLines = 800;
+  const normalizedLeft = String(leftText || "");
+  const normalizedRight = String(rightText || "");
+  const left = normalizedLeft ? normalizedLeft.split("\n").slice(0, maxLines) : [];
+  const right = normalizedRight ? normalizedRight.split("\n").slice(0, maxLines) : [];
+  const matrix = Array.from({length: left.length + 1}, () => new Uint16Array(right.length + 1));
+  for (let i = 1; i <= left.length; i += 1) {
+    for (let j = 1; j <= right.length; j += 1) {
+      matrix[i][j] = left[i - 1] === right[j - 1]
+        ? matrix[i - 1][j - 1] + 1
+        : Math.max(matrix[i - 1][j], matrix[i][j - 1]);
+    }
+  }
+  const rows = [];
+  let i = left.length;
+  let j = right.length;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && left[i - 1] === right[j - 1]) {
+      rows.push({left: left[i - 1], right: right[j - 1], leftLine: i, rightLine: j, kind: "same"});
+      i -= 1;
+      j -= 1;
+    } else if (j > 0 && (i === 0 || matrix[i][j - 1] > matrix[i - 1][j])) {
+      rows.push({left: "", right: right[j - 1], leftLine: null, rightLine: j, kind: "added"});
+      j -= 1;
+    } else {
+      rows.push({left: left[i - 1], right: "", leftLine: i, rightLine: null, kind: "removed"});
+      i -= 1;
+    }
+  }
+  return rows.reverse();
+}
+
+function renderComparisonDiff(leftText, rightText) {
+  if (!leftText && !rightText) return `<div class="compare-empty">${esc(t("compare_no_content"))}</div>`;
+  return `<div class="compare-diff">${lineDiffRows(leftText, rightText).map(row => `
+    <div class="compare-diff-row">
+      <div class="compare-diff-gutter">${esc(`${row.leftLine || ""}${row.leftLine || row.rightLine ? " · " : ""}${row.rightLine || ""}`)}</div>
+      <div class="compare-diff-cell ${row.kind === "removed" ? "removed" : row.kind === "added" ? "empty" : ""}">${esc(row.left)}</div>
+      <div class="compare-diff-cell ${row.kind === "added" ? "added" : row.kind === "removed" ? "empty" : ""}">${esc(row.right)}</div>
+    </div>
+  `).join("")}</div>`;
+}
+
+function renderComparisonSection(title, changed, body, {open = true} = {}) {
+  return `
+    <details class="compare-section" ${open ? "open" : ""}>
+      <summary>${esc(title)}<span class="compare-change-badge ${changed ? "" : "same"}">${esc(t(changed ? "compare_changed" : "compare_same"))}</span></summary>
+      <div class="compare-section-body">${body}</div>
+    </details>
+  `;
+}
+
+function renderComparisonMetrics(left, right) {
+  const leftUsage = comparisonUsage(left.record);
+  const rightUsage = comparisonUsage(right.record);
+  const rows = [
+    [t("total"), left.session.total_tokens, right.session.total_tokens],
+    [t("input"), leftUsage.input_tokens, rightUsage.input_tokens],
+    [t("output"), leftUsage.output_tokens, rightUsage.output_tokens],
+    [t("cache_read"), leftUsage.cache_read_input_tokens, rightUsage.cache_read_input_tokens],
+    [t("cache_write"), leftUsage.cache_creation_input_tokens, rightUsage.cache_creation_input_tokens],
+    [t("compare_system_prompt"), left.system.length, right.system.length],
+    [t("compare_tools"), left.tools.length, right.tools.length],
+  ];
+  return rows.map(([label, leftValue, rightValue]) => {
+    const leftNumber = comparisonNumber(leftValue);
+    const rightNumber = comparisonNumber(rightValue);
+    const delta = rightNumber - leftNumber;
+    const changed = leftNumber !== rightNumber;
+    return `
+      <div class="compare-metric-row">
+        <div class="compare-row-label">${esc(label)}</div>
+        <div class="compare-value ${changed ? "changed" : ""}">${esc(fmtNumber(leftNumber))}</div>
+        <div class="compare-value ${changed ? "changed" : ""}">${esc(fmtNumber(rightNumber))}<span class="compare-delta">${delta > 0 ? "+" : ""}${esc(fmtNumber(delta))}</span></div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderComparisonParams(leftParams, rightParams) {
+  const keys = Array.from(new Set([...Object.keys(leftParams), ...Object.keys(rightParams)])).sort();
+  if (!keys.length) return `<div class="compare-empty">${esc(t("compare_no_content"))}</div>`;
+  return keys.map(key => {
+    const changed = comparisonChanged(leftParams[key], rightParams[key]);
+    return `
+      <div class="compare-param-row">
+        <div class="compare-row-label">${esc(key)}</div>
+        <pre class="compare-value ${changed ? "changed" : ""}">${esc(comparisonValueText(leftParams[key]))}</pre>
+        <pre class="compare-value ${changed ? "changed" : ""}">${esc(comparisonValueText(rightParams[key]))}</pre>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderComparisonTools(leftTools, rightTools) {
+  const leftByName = new Map(leftTools.map(tool => [tool.name, tool]));
+  const rightByName = new Map(rightTools.map(tool => [tool.name, tool]));
+  const names = Array.from(new Set([...leftByName.keys(), ...rightByName.keys()])).sort();
+  if (!names.length) return `<div class="compare-empty">${esc(t("compare_no_content"))}</div>`;
+  return names.map(name => {
+    const left = leftByName.get(name);
+    const right = rightByName.get(name);
+    const changed = left && right && comparisonChanged(left.value, right.value);
+    return `
+      <div class="compare-tool-row">
+        <div class="compare-row-label">${esc(name)}</div>
+        <div class="compare-tool-cell ${!right ? "removed" : changed ? "changed" : ""}">${esc(comparisonToolSummary(left))}</div>
+        <div class="compare-tool-cell ${!left ? "added" : changed ? "changed" : ""}">${esc(comparisonToolSummary(right))}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function buildComparisonSide(payload) {
+  const record = primaryComparisonRecord(payload.records);
+  const body = comparisonRequestBody(record);
+  return {
+    session: payload.session,
+    record,
+    body,
+    system: comparisonSystemText(body),
+    tools: comparisonTools(body),
+    messages: comparisonMessagesText(body),
+    response: comparisonResponseText(record),
+    params: comparisonParams(body),
+  };
+}
+
+function renderComparison(payloads) {
+  const left = buildComparisonSide(payloads[0]);
+  const right = buildComparisonSide(payloads[1]);
+  const sharedTools = left.tools.filter(tool => right.tools.some(candidate => candidate.name === tool.name)).length;
+  const systemChanged = left.system !== right.system;
+  const toolsChanged = comparisonChanged(left.tools.map(tool => tool.value), right.tools.map(tool => tool.value));
+  const messagesChanged = left.messages !== right.messages;
+  const responseChanged = left.response !== right.response;
+  const paramsChanged = comparisonChanged(left.params, right.params);
+  const summaryChanged = comparisonChanged(
+    [left.session.total_tokens, comparisonUsage(left.record), left.system.length, left.tools.length],
+    [right.session.total_tokens, comparisonUsage(right.record), right.system.length, right.tools.length],
+  );
+  state.comparePayloads = payloads;
+  $("#compare-content").innerHTML = `
+    <div class="compare-identities">
+      <div class="compare-axis-label">${esc(t("compare_metric"))}</div>
+      ${renderComparisonIdentity(left.session, "left", t("compare_baseline"))}
+      ${renderComparisonIdentity(right.session, "right", t("compare_target"))}
+    </div>
+    ${renderComparisonSection(t("compare_summary"), summaryChanged, renderComparisonMetrics(left, right))}
+    ${renderComparisonSection(t("compare_request_parameters"), paramsChanged, renderComparisonParams(left.params, right.params), {open: false})}
+    ${renderComparisonSection(`${t("compare_system_prompt")} · ${t("compare_chars", {count: `${fmtNumber(left.system.length)} ↔ ${fmtNumber(right.system.length)}`})}`, systemChanged, renderComparisonDiff(left.system, right.system))}
+    ${renderComparisonSection(`${t("compare_tools")} · ${t("compare_shared_tools", {count: sharedTools})}`, toolsChanged, renderComparisonTools(left.tools, right.tools))}
+    ${renderComparisonSection(t("compare_messages"), messagesChanged, renderComparisonDiff(left.messages, right.messages))}
+    ${renderComparisonSection(t("compare_response"), responseChanged, renderComparisonDiff(left.response, right.response))}
+    ${renderComparisonSection(t("compare_raw_json"), comparisonChanged(left.body, right.body), `
+      <div class="compare-raw-grid">
+        <div class="compare-raw-label">JSON</div>
+        <pre class="compare-raw">${esc(JSON.stringify(left.body, null, 2))}</pre>
+        <pre class="compare-raw">${esc(JSON.stringify(right.body, null, 2))}</pre>
+      </div>
+    `, {open: false})}
+  `;
+}
+
+function renderComparisonIdentity(session, side, label) {
+  return `
+    <div class="compare-identity">
+      <div class="compare-side-label ${side}">${esc(label)}</div>
+      <div class="compare-model">${esc(session.model || t("unknown"))}</div>
+      <div class="compare-session-meta">${esc(session.agent || t("unknown"))} · ${esc(fmtTableTime(session.started_at || session.updated_at))}<br>${esc(session.id || "")}</div>
+    </div>
+  `;
+}
+
+async function loadComparison(sessionIds) {
+  const requestId = state.compareRequestId + 1;
+  state.compareRequestId = requestId;
+  $("#compare-content").innerHTML = `<div class="compare-empty">${loadingMarkup(t("compare_loading"))}</div>`;
+  try {
+    const payloads = await Promise.all(sessionIds.map(sessionId => fetchJSON(
+      `/api/sessions/${encodeURIComponent(sessionId)}/records?offset=0&limit=2000`
+    )));
+    if (requestId !== state.compareRequestId || state.view !== "compare") return;
+    renderComparison(payloads);
+  } catch (error) {
+    if (requestId !== state.compareRequestId) return;
+    $("#compare-content").innerHTML = `<div class="compare-empty">${esc(t("compare_unable", {error: error.message}))}</div>`;
+  }
+}
+
 function showListView() {
   state.view = "list";
   state.selectedSessionId = null;
@@ -2111,19 +2690,33 @@ function showListView() {
   state.detailRecordTotal = 0;
   state.detailFingerprint = "";
   state.detailSession = null;
-  document.body.classList.remove("detail-route");
+  state.compareSessionIds = [];
+  state.comparePayloads = null;
+  document.body.classList.remove("detail-route", "compare-route");
   $("#list-view").classList.remove("hidden");
   $("#detail-view").classList.add("hidden");
+  $("#compare-view").classList.add("hidden");
   updateTracePathBar();
-  if (window.location.pathname.match(SESSION_DETAIL_ROUTE)) {
+  if (window.location.pathname.match(SESSION_DETAIL_ROUTE) || window.location.pathname.match(SESSION_COMPARE_ROUTE)) {
     history.replaceState(null, "", "/dashboard");
   }
 }
 
 function showDetailView() {
   document.body.classList.add("detail-route");
+  document.body.classList.remove("compare-route");
   $("#list-view").classList.add("hidden");
   $("#detail-view").classList.remove("hidden");
+  $("#compare-view").classList.add("hidden");
+}
+
+function showCompareView() {
+  document.body.classList.add("compare-route");
+  document.body.classList.remove("detail-route");
+  $("#list-view").classList.add("hidden");
+  $("#detail-view").classList.add("hidden");
+  $("#compare-view").classList.remove("hidden");
+  updateTracePathBar();
 }
 
 function showDetailLoading(sessionId) {
@@ -2585,6 +3178,7 @@ $("#status-filter").addEventListener("change", event => {
 	$("#edit-sessions").addEventListener("click", () => setEditMode(!state.editMode));
 	$("#done-edit-sessions").addEventListener("click", () => setEditMode(false));
 	$("#select-all-sessions").addEventListener("change", event => toggleSelectAllVisible(event.target.checked));
+	$("#compare-selected-sessions").addEventListener("click", openComparison);
 	$("#delete-selected-sessions").addEventListener("click", () => {
 	  showDeleteSessionDialog(selectedDeletableSessions().map(session => session.id));
 	});
@@ -2605,6 +3199,7 @@ if (dashboardQuitButton) {
   dashboardQuitButton.addEventListener("click", () => quitDashboard().catch(console.error));
 }
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));
+document.querySelector("[data-compare-back]")?.addEventListener("click", showListView);
 
 	applyI18n();
 	applyVersionBadge();

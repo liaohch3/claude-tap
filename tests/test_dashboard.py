@@ -26,6 +26,7 @@ from claude_tap.dashboard import (
     _request_user_text,
     _response_events,
     _response_text,
+    build_session_query,
     dashboard_trace_snapshot,
     list_trace_agents,
     list_trace_sessions,
@@ -214,6 +215,18 @@ def test_dashboard_lists_sessions_across_agents(trace_db, tmp_path: Path) -> Non
 
     agents = list_trace_agents()
     assert [(agent["label"], agent["sessions"]) for agent in agents] == [("Antigravity", 1), ("Claude Code", 1)]
+
+
+def test_dashboard_cli_filter_excludes_codex_app_sessions(trace_db) -> None:
+    store = get_trace_store()
+    for client in ("claude", "codex", "codexapp"):
+        session_id = store.create_session(client=client, proxy_mode="reverse")
+        store.finalize_session(session_id, {"api_calls": 0})
+
+    sessions = list_trace_sessions(query=build_session_query(agent="cli"))
+
+    assert {session["agent"] for session in sessions} == {"Claude Code", "Codex"}
+    assert all(session["agent"] != "Codex App" for session in sessions)
 
 
 def test_dashboard_indexes_sessions_in_sqlite(trace_db, tmp_path: Path) -> None:
@@ -797,6 +810,8 @@ def test_dashboard_detail_navigation_uses_lazy_shell_route() -> None:
     assert "function updateDetailI18n(session)" in template
     assert 'params.set("search", search)' in template
     assert 'params.set("agent", state.selectedAgent)' in template
+    assert 'selectedAgent: "cli"' in template
+    assert 'cli_only: "CLI only"' in template
     assert "function refreshForFilters()" in template
     assert 'state.view === "detail" && state.selectedSessionId' in template
     assert "const detailLoaded = state.detailSessionId === state.selectedSessionId" in template
@@ -1220,6 +1235,22 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 assert "EMBEDDED_TRACE_COMPACT_DATA" not in html
                 assert "req_claude" not in html
                 assert "/api/sessions/${encodeURIComponent(session.id)}/html" in html
+
+            async with session.get(
+                f"http://127.0.0.1:{port}/dashboard/compare?left={session_id}&right={second_session_id}"
+            ) as resp:
+                assert resp.status == 200
+                html = await resp.text()
+                assert "compare-selected-sessions" in html
+                assert "compare-content" in html
+
+            async with session.get(f"http://127.0.0.1:{port}/dashboard/compare?left={session_id}") as resp:
+                assert resp.status == 400
+
+            async with session.get(
+                f"http://127.0.0.1:{port}/dashboard/compare?left={session_id}&right=missing"
+            ) as resp:
+                assert resp.status == 404
 
             async with session.get(f"http://127.0.0.1:{port}/api/agents") as resp:
                 assert resp.status == 200
@@ -1841,6 +1872,118 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert "EMBEDDED_TRACE_COMPACT_DATA" in exported_html
                 assert "const EMBEDDED_TRACE_DATA =" not in exported_html
                 assert "req_claude" in exported_html
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    store = get_trace_store()
+    session_ids = []
+    fixtures = [
+        (
+            "claude-fable-5",
+            "You are a Fable agent.\nUse the research tool.",
+            [
+                {"name": "Read", "description": "Read a file"},
+                {"name": "Research", "description": "Research a topic"},
+            ],
+            71,
+        ),
+        (
+            "claude-opus-4-8",
+            "You are a Claude agent.\nUse the terminal tool.",
+            [
+                {"name": "Read", "description": "Read a file"},
+                {"name": "Bash", "description": "Run a command"},
+            ],
+            182,
+        ),
+    ]
+    for index, (model, system, tools, output_tokens) in enumerate(fixtures):
+        record = _anthropic_record(turn=index + 1)
+        record["request_id"] = f"req_compare_{index}"
+        record["request"]["body"].update(
+            {
+                "model": model,
+                "system": [{"type": "text", "text": system}],
+                "tools": tools,
+                "max_tokens": 4096 if index == 0 else 8192,
+            }
+        )
+        record["response"]["body"].update(
+            {
+                "model": model,
+                "content": [{"type": "text", "text": f"Hello from {model}."}],
+                "usage": {
+                    "input_tokens": 2600 + index * 1800,
+                    "output_tokens": output_tokens,
+                    "cache_read_input_tokens": index * 31000,
+                    "cache_creation_input_tokens": 36000 - index * 33500,
+                },
+            }
+        )
+        session_id = store.create_session(client="claude", proxy_mode="reverse")
+        store.append_record(session_id, record)
+        store.finalize_session(session_id, {"api_calls": 1})
+        session_ids.append(session_id)
+
+    codex_app_record = _anthropic_record(turn=3)
+    codex_app_record["request_id"] = "req_codex_app_history"
+    codex_app_session_id = store.create_session(client="codexapp", proxy_mode="transcript")
+    store.append_record(codex_app_session_id, codex_app_record)
+    store.finalize_session(codex_app_session_id, {"api_calls": 1})
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 1440, "height": 1000})
+                await page.goto(f"http://127.0.0.1:{port}/dashboard", wait_until="domcontentloaded")
+                await page.wait_for_selector('[data-agent="cli"].active', timeout=5000)
+                assert await page.locator(f'[data-session="{codex_app_session_id}"]').count() == 0
+                assert await page.locator("#session-list .session-row").count() == 2
+                await page.locator("#edit-sessions").click()
+                compare_button = page.locator("#compare-selected-sessions")
+                assert await compare_button.is_disabled()
+                for session_id in session_ids:
+                    await page.locator(f'[data-select-session="{session_id}"]').check()
+                assert not await compare_button.is_disabled()
+
+                await compare_button.click()
+                await page.wait_for_selector("#compare-view:not(.hidden) .compare-identities", timeout=5000)
+                assert "/dashboard/compare?" in page.url
+                assert await page.locator(".compare-model").all_text_contents() == [
+                    "claude-fable-5",
+                    "claude-opus-4-8",
+                ]
+                assert await page.locator(".compare-section").count() == 7
+                assert await page.locator(".compare-tool-cell.added").count() == 1
+                assert await page.locator(".compare-tool-cell.removed").count() == 1
+                assert await page.locator(".compare-diff-cell.added").count() > 0
+                assert await page.locator(".compare-diff-cell.removed").count() > 0
+                assert "36,000" in await page.locator(".compare-metric-row").nth(4).inner_text()
+                assert "2,500" in await page.locator(".compare-metric-row").nth(4).inner_text()
+
+                system_section = page.locator(".compare-section").nth(2)
+                assert await system_section.get_attribute("open") is not None
+                await system_section.locator("summary").click()
+                assert await system_section.get_attribute("open") is None
+
+                raw_section = page.locator(".compare-section").last
+                assert await raw_section.get_attribute("open") is None
+                await raw_section.locator("summary").click()
+                assert await raw_section.get_attribute("open") is not None
+                assert await raw_section.locator(".compare-raw").count() == 2
+
+                await page.locator("[data-compare-back]").click()
+                await page.wait_for_selector("#list-view:not(.hidden)", timeout=5000)
+                assert page.url == f"http://127.0.0.1:{port}/dashboard"
             finally:
                 await browser.close()
     finally:

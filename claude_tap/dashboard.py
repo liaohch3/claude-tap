@@ -822,6 +822,8 @@ def _agent_filter_values(agent_key: str) -> tuple[tuple[str, ...], tuple[str, ..
     key = (agent_key or "").strip().lower()
     if not key or key == "all":
         return (), ()
+    if key == "cli":
+        return ("claude", "codex"), ("Claude Code", "Codex")
 
     clients: set[str] = set()
     labels: set[str] = set()
