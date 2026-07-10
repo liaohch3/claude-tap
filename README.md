@@ -279,6 +279,10 @@ Codex CLI supports two authentication modes with different upstream targets:
 | **API Key** | Set `OPENAI_API_KEY` | `https://api.openai.com` (default) | Pay-per-use via OpenAI Platform |
 
 `claude-tap` auto-detects the Codex target from your auth state when possible.
+In the default reverse-proxy mode, it launches Codex with a temporary sibling
+provider whose `supports_websockets` setting is disabled. This produces one
+HTTP/SSE trace record per request with the complete request context and does
+not modify `~/.codex/config.toml`.
 
 ```bash
 # OAuth users (ChatGPT Plus/Pro/Team) — auto-detected after `codex login`

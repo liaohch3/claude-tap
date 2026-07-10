@@ -274,6 +274,9 @@ Codex CLI 支持两种认证方式，对应不同的上游目标：
 | **API Key** | 设置 `OPENAI_API_KEY` | `https://api.openai.com`（默认） | 通过 OpenAI Platform 按量付费 |
 
 `claude-tap` 会尽量根据 Codex 的认证状态自动识别 target。
+在默认 reverse proxy 模式下，它会使用一个临时同级 provider 启动 Codex，
+并禁用该 provider 的 `supports_websockets`。这样每个请求都会生成一条包含
+完整请求上下文的 HTTP/SSE trace，同时不会修改 `~/.codex/config.toml`。
 
 ```bash
 # OAuth 用户（ChatGPT Plus/Pro/Team）— `codex login` 后通常会自动识别
