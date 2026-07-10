@@ -1883,21 +1883,18 @@ def test_viewer_semantic_contracts_across_supported_trace_shapes(
         assert text in result["detailText"]
 
 
-def test_viewer_detail_tabs_expose_only_default_view(tmp_path: Path, chromium_browser) -> None:
+def test_viewer_detail_renders_without_view_tabs(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "detail_tabs", (_responses_record(),))
 
     page = chromium_browser.new_page()
     try:
         errors = _open_viewer_with_error_capture(page, html_path, "?detail=trace")
         page.locator(".sidebar-item").first.click()
-        page.wait_for_selector('#detail .detail-tab[data-tab="default"].active', timeout=5000)
+        page.wait_for_selector("#detail .section", timeout=5000)
         state = page.evaluate(
             """() => ({
-              tabs: Array.from(document.querySelectorAll('#detail .detail-tab')).map(el => ({
-                mode: el.dataset.tab,
-                label: el.querySelector('span:not(.tab-count)')?.textContent || '',
-                active: el.classList.contains('active'),
-              })),
+              tabCount: document.querySelectorAll('#detail .detail-tab').length,
+              inspectorBarCount: document.querySelectorAll('#detail .detail-inspector-bar').length,
               sectionTitles: Array.from(document.querySelectorAll('#detail .section .title')).map(el => el.textContent),
               traceBlockCount: document.querySelectorAll('#detail .trace-block').length,
               traceFormatCount: document.querySelectorAll('#detail .trace-format-btn').length,
@@ -1908,9 +1905,8 @@ def test_viewer_detail_tabs_expose_only_default_view(tmp_path: Path, chromium_br
         page.close()
 
     assert errors == []
-    assert state["tabs"] == [
-        {"mode": "default", "label": "Default", "active": True},
-    ]
+    assert state["tabCount"] == 0
+    assert state["inspectorBarCount"] == 0
     assert state["sectionTitles"] == ["Tools", "System Prompt", "Messages", "Response", "Full JSON"]
     assert state["traceBlockCount"] == 0
     assert state["traceFormatCount"] == 0
@@ -2730,7 +2726,7 @@ def test_viewer_iframe_embed_query_hides_chrome_and_keeps_trace_loaded(tmp_path:
               langSelectDisplay: getComputedStyle(document.querySelector('#lang-select')).display,
               searchBarDisplay: getComputedStyle(document.querySelector('#search-bar')).display,
               sidebarSortDisplay: getComputedStyle(document.querySelector('#sidebar-sort')).display,
-              detailTabsDisplay: getComputedStyle(document.querySelector('.detail-inspector-bar')).display,
+              detailTabsCount: document.querySelectorAll('.detail-inspector-bar').length,
               actionBarDisplay: getComputedStyle(document.querySelector('.action-bar')).display,
               sidebarWidth: Math.round(document.querySelector('#sidebar-wrap').getBoundingClientRect().width),
               theme: document.documentElement.dataset.theme || 'light',
@@ -2750,7 +2746,7 @@ def test_viewer_iframe_embed_query_hides_chrome_and_keeps_trace_loaded(tmp_path:
     assert state["langSelectDisplay"] == "none"
     assert state["searchBarDisplay"] == "none"
     assert state["sidebarSortDisplay"] == "none"
-    assert state["detailTabsDisplay"] == "none"
+    assert state["detailTabsCount"] == 0
     assert state["actionBarDisplay"] == "none"
     assert state["sidebarWidth"] <= 280
     assert state["theme"] == "light"

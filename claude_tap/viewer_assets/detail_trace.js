@@ -48,17 +48,6 @@ function setDetailViewMode(mode) {
   renderDetailForEntry(entry);
 }
 
-function detailTabButton(mode, label) {
-  const active = detailViewMode === mode;
-  return `<button type="button" role="tab" aria-selected="${active ? 'true' : 'false'}" data-tab="${mode}" class="detail-tab ${active ? 'active' : ''}" onclick="setDetailViewMode('${mode}')"><span>${esc(label)}</span></button>`;
-}
-
-function renderDetailViewTabs() {
-  return `<div class="detail-inspector-bar" role="tablist" aria-label="Detail view mode"><div class="detail-tabs">
-    ${detailTabButton('default', t('tab_default'))}
-  </div></div>`;
-}
-
 function setTraceFormatMode(mode) {
   if (!['json', 'yaml', 'pretty'].includes(mode)) return;
   traceFormatMode = mode;
@@ -125,7 +114,6 @@ function renderDetail(e) {
   const msgs = getMessages(reqBody);
   const contextOnly = shouldRenderRequestContext(e, reqBody, msgs, respOutput);
   const streamEvents = getResponseEvents(e);
-  html += renderDetailViewTabs();
 
   if (detailViewMode === 'default') {
     const actionBarHtml = `<div class="action-bar">

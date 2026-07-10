@@ -1825,11 +1825,9 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
 
                 frame = page.frame_locator(".viewer-frame")
                 await frame.locator(".sidebar-item").first.wait_for(timeout=5000)
-                default_tab = frame.locator('#detail .detail-tab[data-tab="default"].active')
-                await default_tab.wait_for(timeout=5000)
                 await frame.locator("#detail .section").first.wait_for(timeout=5000)
-                assert await frame.locator('#detail .detail-tab[data-tab="trace"]').count() == 0
-                assert await frame.locator("#detail .detail-tab").count() == 1
+                assert await frame.locator("#detail .detail-tab").count() == 0
+                assert await frame.locator("#detail .detail-inspector-bar").count() == 0
                 assert not await frame.locator("#drop-zone").is_visible()
                 await page.locator(".viewer-frame").evaluate("(frame) => { frame.dataset.reuseMarker = 'kept'; }")
                 assert await tab_toggle.inner_text() == "Trace"
