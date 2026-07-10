@@ -41,8 +41,11 @@ except ImportError:
         # aiohttp 3.10-3.12 internal path
         from aiohttp._websocket.reader import WebSocketDataQueue
     except ImportError:
-        # aiohttp 3.9.x: DataQueue is WebSocketDataQueue
-        from aiohttp.http_websocket import DataQueue as WebSocketDataQueue
+        # aiohttp 3.9.x: DataQueue(loop=) only — wrap to accept the 3.10+ signature
+        from aiohttp.http_websocket import DataQueue as _DataQueue39
+
+        def WebSocketDataQueue(protocol: object, limit: int, *, loop: object) -> _DataQueue39:  # type: ignore[misc]
+            return _DataQueue39(loop=loop)
 
 from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
 from claude_tap.certs import CertificateAuthority
