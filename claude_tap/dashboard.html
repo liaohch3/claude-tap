@@ -480,8 +480,13 @@ body.detail-route .main {
   font-family: var(--mono);
   white-space: nowrap;
 }
+/* The prompt column absorbs all leftover table width (width:100% + max-width:0
+   lets the cell shrink below its content so the inner div can ellipsize). */
+.session-table td.first-message-cell {
+  width: 100%;
+  max-width: 0;
+}
 .first-message {
-  max-width: 460px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2775,7 +2780,7 @@ function isSessionRowActionTarget(target) {
 	        <input class="session-checkbox" type="checkbox" data-select-session="${esc(session.id)}" aria-label="${esc(selectTitle)}" ${isSelected ? "checked" : ""} ${!canSelect || isDeleting ? "disabled" : ""}>
 	      </td>
 	      ${pinned ? "" : `<td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>`}
-	      <td><div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></td>
+	      <td class="first-message-cell"><div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></td>
 	      <td><span class="trace-count">${fmtNumber(session.record_count)}</span></td>
       <td><span class="token-pill">${fmtNumber(session.total_tokens)}</span></td>
       <td><span class="model-pill" title="${esc(session.model || t("unknown"))}">${esc(session.model || t("unknown"))}</span></td>
