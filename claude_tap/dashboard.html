@@ -1117,6 +1117,22 @@ pre {
   transition: background .12s, color .12s;
 }
 .compare-jump-link:hover { color: var(--blue); background: var(--blue-bg); }
+.compare-swap-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 9px;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.compare-swap-btn:hover { color: var(--blue); border-color: var(--blue); background: var(--blue-bg); }
+.compare-swap-icon { font-size: 12px; line-height: 1; }
 .compare-shell {
   overflow: hidden;
   border: 1px solid #cfd8e7;
@@ -1521,6 +1537,9 @@ pre {
         <span class="diff-legend-item removed"><span class="diff-legend-sign">−</span><span data-i18n="compare_deleted">Deleted from baseline</span></span>
         <span class="diff-legend-item added"><span class="diff-legend-sign">+</span><span data-i18n="compare_added">Added in compared</span></span>
       </div>
+      <button id="compare-swap" class="compare-swap-btn" type="button" data-i18n-title="compare_swap_title" title="Swap baseline and compared sessions">
+        <span class="compare-swap-icon" aria-hidden="true">⇄</span><span data-i18n="compare_swap">Swap sides</span>
+      </button>
       <nav class="compare-jump-nav" aria-label="Diff sections">
         <a class="compare-jump-link" href="#diff-system" data-i18n="compare_system_prompt">System prompt</a>
         <a class="compare-jump-link" href="#diff-tools" data-i18n="compare_tools">Tools</a>
@@ -1746,6 +1765,8 @@ const DASHBOARD_I18N = {
     compare_tool_absent: "Not in this session",
     compare_shared_tools: "{count} shared tools",
     compare_chars: "{count} characters",
+    compare_swap: "Swap sides",
+    compare_swap_title: "Swap baseline and compared sessions",
     no_session_selected: "No session selected.",
     select_session: "Select a session to view details.",
     jsonl: "JSONL",
@@ -1889,6 +1910,8 @@ const DASHBOARD_I18N = {
     compare_tool_absent: "此会话无该工具",
     compare_shared_tools: "{count} 个相同工具",
     compare_chars: "{count} 个字符",
+    compare_swap: "交换左右",
+    compare_swap_title: "交换基线与对比项",
     no_session_selected: "未选择会话。",
     select_session: "选择一个会话查看详情。",
     jsonl: "JSONL",
@@ -2455,8 +2478,12 @@ function renderOverview() {
 	  const selected = Array.from(state.selectedSessionIds)
 	    .map(id => byId.get(id))
 	    .filter(canCompareSession);
-	  if (state.selectedSessionIds.size > 0) return selected;
-	  return sessions.filter(canCompareSession).slice(0, 2);
+	  const pair = state.selectedSessionIds.size > 0
+	    ? selected
+	    : sessions.filter(canCompareSession).slice(0, 2);
+	  if (pair.length !== 2) return pair;
+	  const startTime = session => new Date(session.started_at || session.updated_at || 0).getTime() || 0;
+	  return [...pair].sort((a, b) => startTime(a) - startTime(b));
 	}
 
 	function renderCompareLab(sessions) {
@@ -2667,6 +2694,18 @@ function openCompareLab() {
   const sessionIds = [button?.dataset.left, button?.dataset.right].filter(Boolean);
   if (sessionIds.length !== 2) return;
   window.location.assign(`${sessionCompareUrl(sessionIds)}#diff-system`);
+}
+
+function swapComparisonSides() {
+  if (state.view !== "compare" || state.compareSessionIds.length !== 2) return;
+  state.compareSessionIds = [state.compareSessionIds[1], state.compareSessionIds[0]];
+  history.replaceState(null, "", `${sessionCompareUrl(state.compareSessionIds)}${window.location.hash}`);
+  updateTracePathBar();
+  if (Array.isArray(state.comparePayloads) && state.comparePayloads.length === 2) {
+    renderComparison([state.comparePayloads[1], state.comparePayloads[0]]);
+  } else {
+    loadComparison(state.compareSessionIds);
+  }
 }
 
 function comparisonRequestBody(record) {
@@ -3500,6 +3539,7 @@ if (dashboardQuitButton) {
 }
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));
 document.querySelector("[data-compare-back]")?.addEventListener("click", showListView);
+$("#compare-swap")?.addEventListener("click", swapComparisonSides);
 
 	applyI18n();
 	applyVersionBadge();

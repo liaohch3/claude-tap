@@ -1244,6 +1244,7 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 html = await resp.text()
                 assert "compare-selected-sessions" in html
                 assert "compare-content" in html
+                assert "compare-swap" in html
 
             async with session.get(f"http://127.0.0.1:{port}/dashboard/compare?left={session_id}") as resp:
                 assert resp.status == 400
@@ -1919,7 +1920,11 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 },
             }
         )
-        session_id = store.create_session(client="claude", proxy_mode="reverse")
+        session_id = store.create_session(
+            client="claude",
+            proxy_mode="reverse",
+            started_at=datetime(2026, 7, 10, 12, index, 0, tzinfo=timezone.utc),
+        )
         store.append_record(session_id, record)
         store.finalize_session(session_id, {"api_calls": 1})
         session_ids.append(session_id)
@@ -1943,8 +1948,7 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 assert await page.locator("#session-list .session-row").count() == 2
                 lab = page.locator("#compare-lab")
                 await lab.wait_for(state="visible", timeout=5000)
-                assert "claude-fable-5" in await page.locator("#compare-lab-pair").inner_text()
-                assert "claude-opus-4-8" in await page.locator("#compare-lab-pair").inner_text()
+                assert await page.locator("#compare-lab-pair").inner_text() == ("claude-fable-5 ↔ claude-opus-4-8")
                 assert " ".join((await lab.locator(".diff-legend-item.removed").inner_text()).split()) == (
                     "− Only in baseline"
                 )
@@ -1966,6 +1970,29 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                     "claude-fable-5",
                     "claude-opus-4-8",
                 ]
+
+                swap_button = page.locator("#compare-swap")
+                assert await swap_button.is_visible()
+                assert await swap_button.get_attribute("title") == "Swap baseline and compared sessions"
+                await swap_button.click()
+                assert await page.locator(".compare-model").all_text_contents() == [
+                    "claude-opus-4-8",
+                    "claude-fable-5",
+                ]
+                assert f"left={session_ids[1]}" in page.url
+                assert f"right={session_ids[0]}" in page.url
+                assert await page.locator("#diff-system .compare-diff-head-side").all_text_contents() == [
+                    "− Baseline",
+                    "+ Compared",
+                ]
+                await swap_button.click()
+                assert await page.locator(".compare-model").all_text_contents() == [
+                    "claude-fable-5",
+                    "claude-opus-4-8",
+                ]
+                assert f"left={session_ids[0]}" in page.url
+                assert f"right={session_ids[1]}" in page.url
+
                 assert await page.locator(".compare-section").count() == 7
                 assert await page.locator(".compare-tool-cell.added").count() == 1
                 assert await page.locator(".compare-tool-cell.removed").count() == 1
@@ -2011,6 +2038,10 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 await page.wait_for_selector("#compare-view:not(.hidden) #diff-system", timeout=5000)
                 assert page.url.endswith("#diff-system")
                 assert await page.evaluate("window.location.hash") == "#diff-system"
+                assert f"left={session_ids[0]}" in page.url
+                await page.locator("#compare-swap").click()
+                assert f"left={session_ids[1]}" in page.url
+                assert page.url.endswith("#diff-system")
             finally:
                 await browser.close()
     finally:
