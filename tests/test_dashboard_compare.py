@@ -32,7 +32,30 @@ def _line_diff_rows(left_text: str, right_text: str) -> list[tuple[str, str, str
         else:
             rows.append((left[left_index - 1], "", "removed"))
             left_index -= 1
-    return list(reversed(rows))
+    return _align_modified_rows(list(reversed(rows)))
+
+
+def _align_modified_rows(rows: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+    aligned: list[tuple[str, str, str]] = []
+    index = 0
+    while index < len(rows):
+        if rows[index][2] == "same":
+            aligned.append(rows[index])
+            index += 1
+            continue
+
+        run: list[tuple[str, str, str]] = []
+        while index < len(rows) and rows[index][2] != "same":
+            run.append(rows[index])
+            index += 1
+        removed = [row for row in run if row[2] == "removed"]
+        added = [row for row in run if row[2] == "added"]
+        for offset in range(max(len(removed), len(added))):
+            left = removed[offset][0] if offset < len(removed) else ""
+            right = added[offset][1] if offset < len(added) else ""
+            kind = "modified" if left and right else "removed" if left else "added"
+            aligned.append((left, right, kind))
+    return aligned
 
 
 def test_line_diff_rows_keeps_shared_prompt_lines_aligned() -> None:
@@ -42,8 +65,7 @@ def test_line_diff_rows_keeps_shared_prompt_lines_aligned() -> None:
     )
 
     assert rows[0] == ("You are an agent.", "You are an agent.", "same")
-    assert ("Use Read.", "", "removed") in rows
-    assert ("", "Use Bash.", "added") in rows
+    assert ("Use Read.", "Use Bash.", "modified") in rows
     assert rows[-1] == ("Answer briefly.", "Answer briefly.", "same")
 
 

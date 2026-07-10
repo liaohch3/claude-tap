@@ -187,6 +187,7 @@ button { cursor: pointer; }
   flex-direction: column;
   min-height: 0;
 }
+.list-view { flex: 1; }
 body.detail-route .path-filter,
 body.detail-route .header > .divider,
 body.detail-route .trace-path-bar,
@@ -966,6 +967,97 @@ pre {
   opacity: .65;
 }
 
+.compare-lab-wrap {
+  position: sticky;
+  bottom: -1px;
+  z-index: 6;
+  margin-top: auto;
+  padding-top: 16px;
+  background: linear-gradient(to bottom, transparent, var(--bg) 14px);
+}
+.compare-lab {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 66px;
+  padding: 11px 14px;
+  border: 1px solid #cfd8e7;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--blue-bg));
+  box-shadow: 0 -8px 24px rgba(15, 23, 42, .06);
+  animation: compare-lab-enter .2s ease-out both;
+}
+[data-theme="dark"] .compare-lab { border-color: var(--border); }
+@keyframes compare-lab-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.compare-lab-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--border));
+  border-radius: 7px;
+  background: var(--blue-bg);
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 800;
+}
+.compare-lab-copy { min-width: 0; }
+.compare-lab-title { color: var(--text); font-size: 12px; font-weight: 750; }
+.compare-lab-pair {
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compare-lab-legend,
+.compare-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.diff-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-tertiary);
+  font-family: var(--mono);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.diff-legend-sign {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.diff-legend-item.removed .diff-legend-sign { color: var(--red); background: var(--red-bg); }
+.diff-legend-item.added .diff-legend-sign { color: var(--green); background: var(--green-bg); }
+.compare-lab-open {
+  min-height: 34px;
+  padding: 7px 13px;
+  border: 1px solid var(--blue);
+  border-radius: 6px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  transition: transform .12s, box-shadow .12s, opacity .12s;
+}
+.compare-lab-open:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 5px 14px rgba(59, 130, 246, .22); }
+.compare-lab-open:disabled { cursor: not-allowed; opacity: .42; }
+
 .compare-view {
   width: 100%;
   max-width: 1680px;
@@ -980,6 +1072,33 @@ pre {
 .compare-heading { min-width: 0; }
 .compare-title { font-size: 18px; font-weight: 700; letter-spacing: -.02em; }
 .compare-subtitle { margin-top: 3px; color: var(--text-tertiary); font-family: var(--mono); font-size: 11px; }
+.compare-workbench-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-card);
+}
+.compare-jump-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.compare-jump-link {
+  padding: 5px 8px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-decoration: none;
+  transition: background .12s, color .12s;
+}
+.compare-jump-link:hover { color: var(--blue); background: var(--blue-bg); }
 .compare-shell {
   overflow: hidden;
   border: 1px solid #cfd8e7;
@@ -991,7 +1110,6 @@ pre {
 .compare-identities,
 .compare-metric-row,
 .compare-param-row,
-.compare-diff-row,
 .compare-tool-row,
 .compare-raw-grid {
   display: grid;
@@ -1115,19 +1233,45 @@ pre {
 .compare-value.changed { background: var(--amber-bg); }
 .compare-delta { margin-left: 7px; color: var(--text-tertiary); font-size: 9px; }
 .compare-diff { overflow: auto; max-height: 620px; }
-.compare-diff-row { min-width: 760px; }
-.compare-diff-gutter {
+.compare-diff-head,
+.compare-diff-row {
+  display: grid;
+  grid-template-columns: 46px minmax(320px, 1fr) 46px minmax(320px, 1fr);
+  min-width: 760px;
+}
+.compare-diff-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.compare-diff-head-side {
+  grid-column: span 2;
   padding: 7px 12px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.compare-diff-head-side + .compare-diff-head-side { border-left: 1px solid var(--border); }
+.compare-line-number {
+  padding: 7px 8px;
   color: var(--text-tertiary);
   background: var(--bg);
   border-bottom: 1px solid var(--border-light);
   font-family: var(--mono);
   font-size: 9px;
   text-align: right;
+  user-select: none;
 }
 .compare-diff-cell {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
   min-height: 31px;
-  padding: 7px 12px;
+  padding: 7px 10px 7px 6px;
   border-left: 1px solid var(--border-light);
   border-bottom: 1px solid var(--border-light);
   font-family: var(--mono);
@@ -1136,9 +1280,14 @@ pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.compare-diff-sign { color: var(--text-tertiary); font-weight: 800; user-select: none; }
 .compare-diff-cell.removed { background: var(--red-bg); color: var(--red); }
 .compare-diff-cell.added { background: var(--green-bg); color: var(--green); }
 .compare-diff-cell.empty { background: var(--bg); }
+.compare-diff-row.removed .compare-line-number.left,
+.compare-diff-row.modified .compare-line-number.left { background: var(--red-bg); color: var(--red); }
+.compare-diff-row.added .compare-line-number.right,
+.compare-diff-row.modified .compare-line-number.right { background: var(--green-bg); color: var(--green); }
 .compare-tool-cell.removed { background: var(--red-bg); color: var(--red); }
 .compare-tool-cell.added { background: var(--green-bg); color: var(--green); }
 .compare-tool-cell.changed { background: var(--amber-bg); color: var(--amber); }
@@ -1162,8 +1311,10 @@ pre {
   .dashboard-title-row { flex-wrap: wrap; }
   .dashboard-clock { width: 100%; margin-left: 0; }
 	  .control-panel { grid-template-columns: 1fr; }
-	  .history-actions { justify-content: flex-start; }
+  .history-actions { justify-content: flex-start; }
 	  .bulk-edit-bar { flex-wrap: wrap; }
+  .compare-lab { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; }
+  .compare-lab-legend { display: none; }
   .overview-card { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .table-scroll { max-height: none; }
   .detail-page-head { align-items: flex-start; }
@@ -1181,6 +1332,8 @@ pre {
     min-width: 620px;
   }
   .compare-shell { overflow-x: auto; }
+  .compare-workbench-bar { align-items: flex-start; flex-direction: column; }
+  .compare-jump-nav { margin-left: 0; }
   .compare-axis-label,
   .compare-identity,
   .compare-row-label,
@@ -1299,6 +1452,20 @@ pre {
 	      </div>
 	      <div id="session-pagination" class="session-pagination hidden"></div>
 	    </section>
+      <div class="compare-lab-wrap">
+        <section id="compare-lab" class="compare-lab" aria-label="Diff lab">
+          <div class="compare-lab-mark" aria-hidden="true">±</div>
+          <div class="compare-lab-copy">
+            <div class="compare-lab-title" data-i18n="compare_lab_title">Diff lab</div>
+            <div id="compare-lab-pair" class="compare-lab-pair"></div>
+          </div>
+          <div class="compare-lab-legend" aria-label="Diff color legend">
+            <span class="diff-legend-item removed"><span class="diff-legend-sign">−</span><span data-i18n="compare_deleted">Deleted from baseline</span></span>
+            <span class="diff-legend-item added"><span class="diff-legend-sign">+</span><span data-i18n="compare_added">Added in compared</span></span>
+          </div>
+          <button id="compare-lab-open" class="compare-lab-open" type="button" data-i18n="compare_lab_open" disabled>Open Diff</button>
+        </section>
+      </div>
   </section>
 
   <section id="detail-view" class="detail-view hidden">
@@ -1321,6 +1488,18 @@ pre {
         <div class="compare-title" data-i18n="compare_title">Session comparison</div>
         <div class="compare-subtitle" data-i18n="compare_subtitle">Primary generation request</div>
       </div>
+    </div>
+    <div class="compare-workbench-bar">
+      <div class="compare-legend" aria-label="Diff color legend">
+        <span class="diff-legend-item removed"><span class="diff-legend-sign">−</span><span data-i18n="compare_deleted">Deleted from baseline</span></span>
+        <span class="diff-legend-item added"><span class="diff-legend-sign">+</span><span data-i18n="compare_added">Added in compared</span></span>
+      </div>
+      <nav class="compare-jump-nav" aria-label="Diff sections">
+        <a class="compare-jump-link" href="#diff-system" data-i18n="compare_system_prompt">System prompt</a>
+        <a class="compare-jump-link" href="#diff-tools" data-i18n="compare_tools">Tools</a>
+        <a class="compare-jump-link" href="#diff-messages" data-i18n="compare_messages">Messages</a>
+        <a class="compare-jump-link" href="#diff-response" data-i18n="compare_response">Response</a>
+      </nav>
     </div>
     <div id="compare-content" class="compare-shell">
       <div class="compare-empty" data-i18n="compare_loading">Loading comparison...</div>
@@ -1469,6 +1648,11 @@ const DASHBOARD_I18N = {
 	    selected_sessions: "{count} selected",
 	    compare_selected: "Compare",
 	    compare_requires_two: "Select exactly two sessions to compare",
+	    compare_lab_title: "Diff lab",
+	    compare_lab_open: "Open Diff",
+	    compare_lab_empty: "At least two sessions are required",
+	    compare_deleted: "Deleted from baseline",
+	    compare_added: "Added in compared",
 	    delete_selected: "Delete selected",
 	    load_more_sessions: "Load more sessions",
 	    loading_more_sessions: "Loading more sessions...",
@@ -1606,6 +1790,11 @@ const DASHBOARD_I18N = {
 	    selected_sessions: "已选择 {count} 个",
 	    compare_selected: "对比",
 	    compare_requires_two: "请选择恰好两个会话进行对比",
+	    compare_lab_title: "Diff 实验台",
+	    compare_lab_open: "打开 Diff",
+	    compare_lab_empty: "至少需要两个会话",
+	    compare_deleted: "基线中删除",
+	    compare_added: "对比项新增",
 	    delete_selected: "删除所选",
 	    load_more_sessions: "加载更多会话",
 	    loading_more_sessions: "正在加载更多会话...",
@@ -2113,6 +2302,7 @@ function renderAgents() {
 	  const sessions = filteredSessions();
 	  renderOverview();
 	  renderBulkEditControls(sessions);
+	  renderCompareLab(sessions);
 	  renderSessionPagination();
 	  if (state.loadingSessions && !state.sessions.length) {
 	    $("#session-list").innerHTML = `<tr><td class="loading-cell" colspan="9">${loadingMarkup(t("loading_sessions"))}</td></tr>`;
@@ -2225,6 +2415,34 @@ function renderOverview() {
 	  return Array.from(state.selectedSessionIds)
 	    .map(id => byId.get(id))
 	    .filter(canDeleteSession);
+	}
+
+	function canCompareSession(session) {
+	  return Boolean(session) && Number(session.record_count || 0) > 0;
+	}
+
+	function compareLabSessions(sessions) {
+	  const byId = new Map(state.sessions.map(session => [session.id, session]));
+	  const selected = Array.from(state.selectedSessionIds)
+	    .map(id => byId.get(id))
+	    .filter(canCompareSession);
+	  if (state.selectedSessionIds.size > 0) return selected;
+	  return sessions.filter(canCompareSession).slice(0, 2);
+	}
+
+	function renderCompareLab(sessions) {
+	  const pair = compareLabSessions(sessions);
+	  const pairLabel = $("#compare-lab-pair");
+	  const button = $("#compare-lab-open");
+	  if (!pairLabel || !button) return;
+	  const ready = pair.length === 2;
+	  pairLabel.textContent = ready
+	    ? `${pair[0].model || pair[0].agent || t("unknown")} ↔ ${pair[1].model || pair[1].agent || t("unknown")}`
+	    : t("compare_lab_empty");
+	  button.disabled = !ready;
+	  button.dataset.left = ready ? pair[0].id : "";
+	  button.dataset.right = ready ? pair[1].id : "";
+	  button.title = ready ? t("compare_lab_open") : t("compare_lab_empty");
 	}
 
 	function pruneSelectedSessions() {
@@ -2415,6 +2633,13 @@ function openComparison() {
   window.location.assign(sessionCompareUrl(sessionIds));
 }
 
+function openCompareLab() {
+  const button = $("#compare-lab-open");
+  const sessionIds = [button?.dataset.left, button?.dataset.right].filter(Boolean);
+  if (sessionIds.length !== 2) return;
+  window.location.assign(`${sessionCompareUrl(sessionIds)}#diff-system`);
+}
+
 function comparisonRequestBody(record) {
   const body = record?.request?.body;
   if (!body || typeof body !== "object" || Array.isArray(body)) return {};
@@ -2521,23 +2746,61 @@ function lineDiffRows(leftText, rightText) {
       i -= 1;
     }
   }
-  return rows.reverse();
+  return alignModifiedDiffRows(rows.reverse());
+}
+
+function alignModifiedDiffRows(rows) {
+  const aligned = [];
+  let index = 0;
+  while (index < rows.length) {
+    if (rows[index].kind === "same") {
+      aligned.push(rows[index]);
+      index += 1;
+      continue;
+    }
+    const run = [];
+    while (index < rows.length && rows[index].kind !== "same") {
+      run.push(rows[index]);
+      index += 1;
+    }
+    const removed = run.filter(row => row.kind === "removed");
+    const added = run.filter(row => row.kind === "added");
+    const length = Math.max(removed.length, added.length);
+    for (let offset = 0; offset < length; offset += 1) {
+      const left = removed[offset];
+      const right = added[offset];
+      aligned.push({
+        left: left?.left || "",
+        right: right?.right || "",
+        leftLine: left?.leftLine ?? null,
+        rightLine: right?.rightLine ?? null,
+        kind: left && right ? "modified" : left ? "removed" : "added",
+      });
+    }
+  }
+  return aligned;
 }
 
 function renderComparisonDiff(leftText, rightText) {
   if (!leftText && !rightText) return `<div class="compare-empty">${esc(t("compare_no_content"))}</div>`;
-  return `<div class="compare-diff">${lineDiffRows(leftText, rightText).map(row => `
-    <div class="compare-diff-row">
-      <div class="compare-diff-gutter">${esc(`${row.leftLine || ""}${row.leftLine || row.rightLine ? " · " : ""}${row.rightLine || ""}`)}</div>
-      <div class="compare-diff-cell ${row.kind === "removed" ? "removed" : row.kind === "added" ? "empty" : ""}">${esc(row.left)}</div>
-      <div class="compare-diff-cell ${row.kind === "added" ? "added" : row.kind === "removed" ? "empty" : ""}">${esc(row.right)}</div>
+  return `<div class="compare-diff">
+    <div class="compare-diff-head">
+      <div class="compare-diff-head-side">− ${esc(t("compare_baseline"))}</div>
+      <div class="compare-diff-head-side">+ ${esc(t("compare_target"))}</div>
+    </div>
+    ${lineDiffRows(leftText, rightText).map(row => `
+    <div class="compare-diff-row ${row.kind}">
+      <div class="compare-line-number left">${esc(row.leftLine || "")}</div>
+      <div class="compare-diff-cell ${row.kind === "removed" || row.kind === "modified" ? "removed" : row.leftLine === null ? "empty" : ""}"><span class="compare-diff-sign">${row.kind === "removed" || row.kind === "modified" ? "−" : " "}</span><span>${esc(row.left)}</span></div>
+      <div class="compare-line-number right">${esc(row.rightLine || "")}</div>
+      <div class="compare-diff-cell ${row.kind === "added" || row.kind === "modified" ? "added" : row.rightLine === null ? "empty" : ""}"><span class="compare-diff-sign">${row.kind === "added" || row.kind === "modified" ? "+" : " "}</span><span>${esc(row.right)}</span></div>
     </div>
   `).join("")}</div>`;
 }
 
-function renderComparisonSection(title, changed, body, {open = true} = {}) {
+function renderComparisonSection(title, changed, body, {open = true, id = ""} = {}) {
   return `
-    <details class="compare-section" ${open ? "open" : ""}>
+    <details class="compare-section" ${id ? `id="${esc(id)}"` : ""} ${open ? "open" : ""}>
       <summary>${esc(title)}<span class="compare-change-badge ${changed ? "" : "same"}">${esc(t(changed ? "compare_changed" : "compare_same"))}</span></summary>
       <div class="compare-section-body">${body}</div>
     </details>
@@ -2598,8 +2861,8 @@ function renderComparisonTools(leftTools, rightTools) {
     return `
       <div class="compare-tool-row">
         <div class="compare-row-label">${esc(name)}</div>
-        <div class="compare-tool-cell ${!right ? "removed" : changed ? "changed" : ""}">${esc(comparisonToolSummary(left))}</div>
-        <div class="compare-tool-cell ${!left ? "added" : changed ? "changed" : ""}">${esc(comparisonToolSummary(right))}</div>
+        <div class="compare-tool-cell ${!right || changed ? "removed" : ""}">${left && (!right || changed) ? "− " : ""}${esc(comparisonToolSummary(left))}</div>
+        <div class="compare-tool-cell ${!left || changed ? "added" : ""}">${right && (!left || changed) ? "+ " : ""}${esc(comparisonToolSummary(right))}</div>
       </div>
     `;
   }).join("");
@@ -2640,20 +2903,27 @@ function renderComparison(payloads) {
       ${renderComparisonIdentity(left.session, "left", t("compare_baseline"))}
       ${renderComparisonIdentity(right.session, "right", t("compare_target"))}
     </div>
-    ${renderComparisonSection(t("compare_summary"), summaryChanged, renderComparisonMetrics(left, right))}
-    ${renderComparisonSection(t("compare_request_parameters"), paramsChanged, renderComparisonParams(left.params, right.params), {open: false})}
-    ${renderComparisonSection(`${t("compare_system_prompt")} · ${t("compare_chars", {count: `${fmtNumber(left.system.length)} ↔ ${fmtNumber(right.system.length)}`})}`, systemChanged, renderComparisonDiff(left.system, right.system))}
-    ${renderComparisonSection(`${t("compare_tools")} · ${t("compare_shared_tools", {count: sharedTools})}`, toolsChanged, renderComparisonTools(left.tools, right.tools))}
-    ${renderComparisonSection(t("compare_messages"), messagesChanged, renderComparisonDiff(left.messages, right.messages))}
-    ${renderComparisonSection(t("compare_response"), responseChanged, renderComparisonDiff(left.response, right.response))}
+    ${renderComparisonSection(t("compare_summary"), summaryChanged, renderComparisonMetrics(left, right), {id: "diff-summary"})}
+    ${renderComparisonSection(t("compare_request_parameters"), paramsChanged, renderComparisonParams(left.params, right.params), {open: false, id: "diff-params"})}
+    ${renderComparisonSection(`${t("compare_system_prompt")} · ${t("compare_chars", {count: `${fmtNumber(left.system.length)} ↔ ${fmtNumber(right.system.length)}`})}`, systemChanged, renderComparisonDiff(left.system, right.system), {id: "diff-system"})}
+    ${renderComparisonSection(`${t("compare_tools")} · ${t("compare_shared_tools", {count: sharedTools})}`, toolsChanged, renderComparisonTools(left.tools, right.tools), {id: "diff-tools"})}
+    ${renderComparisonSection(t("compare_messages"), messagesChanged, renderComparisonDiff(left.messages, right.messages), {id: "diff-messages"})}
+    ${renderComparisonSection(t("compare_response"), responseChanged, renderComparisonDiff(left.response, right.response), {id: "diff-response"})}
     ${renderComparisonSection(t("compare_raw_json"), comparisonChanged(left.body, right.body), `
       <div class="compare-raw-grid">
         <div class="compare-raw-label">JSON</div>
         <pre class="compare-raw">${esc(JSON.stringify(left.body, null, 2))}</pre>
         <pre class="compare-raw">${esc(JSON.stringify(right.body, null, 2))}</pre>
       </div>
-    `, {open: false})}
+    `, {open: false, id: "diff-raw"})}
   `;
+  requestAnimationFrame(scrollToComparisonHash);
+}
+
+function scrollToComparisonHash() {
+  const id = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+  if (!id.startsWith("diff-")) return;
+  document.getElementById(id)?.scrollIntoView({block: "start"});
 }
 
 function renderComparisonIdentity(session, side, label) {
@@ -3179,6 +3449,7 @@ $("#status-filter").addEventListener("change", event => {
 	$("#done-edit-sessions").addEventListener("click", () => setEditMode(false));
 	$("#select-all-sessions").addEventListener("change", event => toggleSelectAllVisible(event.target.checked));
 	$("#compare-selected-sessions").addEventListener("click", openComparison);
+	$("#compare-lab-open").addEventListener("click", openCompareLab);
 	$("#delete-selected-sessions").addEventListener("click", () => {
 	  showDeleteSessionDialog(selectedDeletableSessions().map(session => session.id));
 	});

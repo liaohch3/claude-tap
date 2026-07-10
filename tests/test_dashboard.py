@@ -1943,6 +1943,17 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 await page.wait_for_selector('[data-agent="cli"].active', timeout=5000)
                 assert await page.locator(f'[data-session="{codex_app_session_id}"]').count() == 0
                 assert await page.locator("#session-list .session-row").count() == 2
+                lab = page.locator("#compare-lab")
+                await lab.wait_for(state="visible", timeout=5000)
+                assert "claude-fable-5" in await page.locator("#compare-lab-pair").inner_text()
+                assert "claude-opus-4-8" in await page.locator("#compare-lab-pair").inner_text()
+                assert " ".join((await lab.locator(".diff-legend-item.removed").inner_text()).split()) == (
+                    "− Deleted from baseline"
+                )
+                assert " ".join((await lab.locator(".diff-legend-item.added").inner_text()).split()) == (
+                    "+ Added in compared"
+                )
+                assert not await page.locator("#compare-lab-open").is_disabled()
                 await page.locator("#edit-sessions").click()
                 compare_button = page.locator("#compare-selected-sessions")
                 assert await compare_button.is_disabled()
@@ -1962,6 +1973,22 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 assert await page.locator(".compare-tool-cell.removed").count() == 1
                 assert await page.locator(".compare-diff-cell.added").count() > 0
                 assert await page.locator(".compare-diff-cell.removed").count() > 0
+                assert await page.locator(".compare-diff-row.modified").count() > 0
+                assert await page.locator("#diff-system .compare-diff-head-side").all_text_contents() == [
+                    "− Baseline",
+                    "+ Compared",
+                ]
+                assert " ".join(
+                    (await page.locator(".compare-workbench-bar .diff-legend-item.removed").inner_text()).split()
+                ) == ("− Deleted from baseline")
+                assert (
+                    await page.locator("#diff-system .compare-diff-cell.removed .compare-diff-sign").first.inner_text()
+                    == "−"
+                )
+                assert (
+                    await page.locator("#diff-system .compare-diff-cell.added .compare-diff-sign").first.inner_text()
+                    == "+"
+                )
                 assert "36,000" in await page.locator(".compare-metric-row").nth(4).inner_text()
                 assert "2,500" in await page.locator(".compare-metric-row").nth(4).inner_text()
 
@@ -1979,6 +2006,11 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
                 await page.locator("[data-compare-back]").click()
                 await page.wait_for_selector("#list-view:not(.hidden)", timeout=5000)
                 assert page.url == f"http://127.0.0.1:{port}/dashboard"
+
+                await page.locator("#compare-lab-open").click()
+                await page.wait_for_selector("#compare-view:not(.hidden) #diff-system", timeout=5000)
+                assert page.url.endswith("#diff-system")
+                assert await page.evaluate("window.location.hash") == "#diff-system"
             finally:
                 await browser.close()
     finally:
