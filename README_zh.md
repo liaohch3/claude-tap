@@ -9,6 +9,8 @@
 
 [English](README.md)
 
+> 本仓库是 [liaohch3/claude-tap](https://github.com/liaohch3/claude-tap) 的个人 fork，只在原项目基础上做了一些简单的改造。
+
 `claude-tap` 是给 AI 编程 agent 用的本地代理和 trace 查看器。把 CLI 通过它启动，或监听本地 app transcript，就能看到真实 API 流量和 agent 上下文：system prompt、对话历史、工具 schema、工具调用、流式响应、token 用量和请求 diff。
 
 网站：[本地 AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · 指南：[如何本地查看 Agent traces](docs/guides/agent-trace-viewer.zh.md)

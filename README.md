@@ -9,6 +9,8 @@
 
 [中文文档](README_zh.md)
 
+> This is a personal fork of [liaohch3/claude-tap](https://github.com/liaohch3/claude-tap) with some light modifications on top of the original project.
+
 `claude-tap` is a local proxy and trace viewer for AI coding agents. Run your CLI through it, or listen to local app transcripts, then inspect the real API traffic and agent context: system prompts, conversation history, tool schemas, tool calls, streaming responses, token usage, and request diffs.
 
 Website: [Local AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · Guide: [How to view agent traces locally](docs/guides/agent-trace-viewer.md)
