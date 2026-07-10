@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.128] - 2026-07-10
+
+### Changed
+- Make compact trace the default export format (#368)
 ## [0.1.127] - 2026-07-09
 
 ### Changed
