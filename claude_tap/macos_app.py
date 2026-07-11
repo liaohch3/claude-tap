@@ -3,28 +3,68 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import ctypes
+import os
 import subprocess
 import sys
 import time
 import webbrowser
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from claude_tap import global_inject
 from claude_tap.dashboard import list_trace_sessions
-from claude_tap.shared_dashboard import _sync_dashboard_healthy_for_current_db as _dashboard_is_healthy
-from claude_tap.shared_dashboard import dashboard_url, resolve_dashboard_port
+from claude_tap.shared_dashboard import (
+    _sync_dashboard_healthy_for_current_db as _dashboard_is_healthy,
+)
+from claude_tap.shared_dashboard import dashboard_url, resolve_dashboard_port, stop_incompatible_dashboard_if_running
 
 _NS_VARIABLE_STATUS_ITEM_LENGTH = -1.0
 _NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
 _NS_IMAGE_ONLY = 1
 _NS_ALERT_FIRST_BUTTON_RETURN = 1000
+_NS_TERMINATE_NOW = 1
 # Absolute default so the app works when launched from Finder (cwd is "/").
 _DEFAULT_OUTPUT_DIR = Path.home() / ".claude-tap" / "traces"
 _CALLBACKS: list[Any] = []
 _ACTIVE_APP: MacOSMenuApp | None = None
+
+# Bump this string whenever the menu-bar logic changes so a debug log immediately
+# reveals whether a still-running (stale in-memory) app instance is being used.
+_DEBUG_BUILD_MARKER = "menubar-debug-2026-07-02a"
+_DEBUG_LOG_PATH: Path | None = None
+
+
+def _resolve_debug_log_path() -> Path | None:
+    """Resolve ``<repo>/dist/claude-tap-macos-debug.log`` for the checkout build."""
+    try:
+        dist_dir = Path(__file__).resolve().parents[1] / "dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        return dist_dir / "claude-tap-macos-debug.log"
+    except OSError:
+        return None
+
+
+def _enable_debug_logging() -> None:
+    global _DEBUG_LOG_PATH
+    _DEBUG_LOG_PATH = _resolve_debug_log_path()
+
+
+def _debug_log(message: str) -> None:
+    """Append a timestamped line to the debug log. No-op unless logging is enabled
+    (only ``main`` enables it, so unit tests never write a log)."""
+    path = _DEBUG_LOG_PATH
+    if path is None:
+        return
+    try:
+        line = f"{datetime.now().isoformat(timespec='milliseconds')} [pid={os.getpid()}] {message}\n"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+    except OSError:
+        pass
 
 
 def build_dashboard_command(
@@ -73,6 +113,10 @@ def build_proxy_command(
     )
 
 
+def _stop_incompatible_dashboard_sync(host: str, port: int, url: str) -> None:
+    asyncio.run(stop_incompatible_dashboard_if_running(host, port, url))
+
+
 def _claude_tap_command(python_executable: str, *args: str) -> list[str]:
     if getattr(sys, "frozen", False):
         return [python_executable, *args]
@@ -97,6 +141,10 @@ class DashboardMonitorController:
         enable_injection: Callable[..., None] = global_inject.enable,
         disable_injection: Callable[[], None] = global_inject.disable,
         injection_is_active: Callable[[], bool] = global_inject.is_active,
+        recorded_proxy_processes_are_running: Callable[..., bool] = global_inject.recorded_proxy_processes_are_running,
+        proxy_is_healthy: Callable[[int, str], bool] = global_inject._proxy_port_is_running,
+        terminate_proxies_on_ports: Callable[..., None] = global_inject.terminate_proxies_on_ports,
+        stop_incompatible_dashboard: Callable[[str, int, str], None] | None = None,
         startup_check_delay: float = 0.15,
         sleep: Callable[[float], object] = time.sleep,
     ) -> None:
@@ -112,6 +160,10 @@ class DashboardMonitorController:
         self._enable_injection = enable_injection
         self._disable_injection = disable_injection
         self._injection_is_active = injection_is_active
+        self._recorded_proxy_processes_are_running = recorded_proxy_processes_are_running
+        self._proxy_is_healthy = proxy_is_healthy
+        self._terminate_proxies_on_ports = terminate_proxies_on_ports
+        self._stop_incompatible_dashboard = stop_incompatible_dashboard or _stop_incompatible_dashboard_sync
         self._startup_check_delay = startup_check_delay
         self._sleep = sleep
         self._process: subprocess.Popen[bytes] | None = None
@@ -122,36 +174,85 @@ class DashboardMonitorController:
     def url(self) -> str:
         return dashboard_url(self.host, self.port)
 
+    def _debug_state(self) -> str:
+        """Snapshot every signal the running-state logic depends on, for debugging."""
+
+        def _safe(fn: Callable[[], object]) -> object:
+            try:
+                return fn()
+            except Exception as exc:  # noqa: BLE001 - debug snapshot must never raise
+                return f"error:{exc!r}"
+
+        owned_process = self._process.poll() if self._process is not None else "none"
+        owned_proxies = [getattr(p, "pid", None) for p in self._proxy_processes]
+        owned_proxy_polls = [p.poll() for p in self._proxy_processes]
+        listeners: dict[str, object] = {}
+        for label, port in (
+            ("dashboard", self.port),
+            ("claude", self.claude_proxy_port),
+            ("codex", self.codex_proxy_port),
+        ):
+
+            def _port_listeners(port: int = port) -> object:
+                return {
+                    pid: global_inject._monitor_process_command(pid)
+                    for pid in global_inject._listening_pids_for_port(port)
+                }
+
+            listeners[f"{label}:{port}"] = _safe(_port_listeners)
+        recorded_proxy = _safe(
+            lambda: self._recorded_proxy_processes_are_running(
+                claude_port=self.claude_proxy_port,
+                codex_port=self.codex_proxy_port,
+            )
+        )
+        return (
+            f"injection_active={_safe(self._injection_is_active)} "
+            f"owned_process_poll={owned_process} owned_proxy_pids={owned_proxies} owned_proxy_polls={owned_proxy_polls} "
+            f"recorded_proxy={recorded_proxy} "
+            f"proxies_running={_safe(self._proxy_processes_are_running)} "
+            f"dashboard_healthy={_safe(lambda: self._is_healthy(self.host, self.port))} "
+            f"monitor_is_running={_safe(self._monitor_is_running)} listeners={listeners}"
+        )
+
     def start(self) -> str:
+        _debug_log(f"controller.start: entry | {self._debug_state()}")
         if self._monitor_is_running():
+            if not self._is_healthy(self.host, self.port):
+                _debug_log("controller.start: monitor running but dashboard unhealthy -> repairing dashboard")
+                self._start_dashboard()
+                self._verify_dashboard_process()
+            _debug_log("controller.start: monitor already running -> returning url, no proxy spawn/inject")
             return self.url
 
         try:
             if self._injection_is_active():
+                _debug_log("controller.start: stale injection active -> disabling before restart")
                 self._disable_injection()
-            if not self._is_healthy(self.host, self.port):
-                cmd = build_dashboard_command(
-                    python_executable=self.python_executable,
-                    host=self.host,
-                    port=self.port,
-                    output_dir=self.output_dir,
-                )
-                self._process = self._popen(cmd, **self._subprocess_kwargs())
+            self._start_dashboard()
             self._start_proxy("claude", self.claude_proxy_port)
             self._start_proxy("codex", self.codex_proxy_port)
+            _debug_log(
+                "controller.start: spawned proxies "
+                f"pids={[getattr(p, 'pid', None) for p in self._proxy_processes]} on "
+                f"claude={self.claude_proxy_port} codex={self.codex_proxy_port}"
+            )
             self._verify_started_processes()
             self._enable_injection(
                 claude_port=self.claude_proxy_port,
                 codex_port=self.codex_proxy_port,
                 processes=self._monitor_process_records(),
             )
-        except Exception:
+            _debug_log("controller.start: injection enabled -> monitor started ok")
+        except Exception as exc:
+            _debug_log(f"controller.start: FAILED {exc!r} -> terminating owned processes + disabling injection")
             self._terminate_owned_processes()
             self._disable_injection()
             raise
         return self.url
 
     def stop(self) -> bool:
+        _debug_log(f"controller.stop: entry | {self._debug_state()}")
         was_running = self._process_is_running() or self._proxy_processes_are_running() or self._injection_is_active()
         if not was_running:
             self._process = None
@@ -161,6 +262,10 @@ class DashboardMonitorController:
 
         self._disable_injection()
         self._terminate_owned_processes()
+        # Owned proxies are gone; also reap any proxy we reused this session
+        # (adopted from a prior session) that we hold no Popen handle for.
+        self._terminate_proxies_on_ports(claude_port=self.claude_proxy_port, codex_port=self.codex_proxy_port)
+        _debug_log("controller.stop: reaped reused proxies on owned ports")
         return True
 
     def _terminate_process(self, process: subprocess.Popen[bytes]) -> None:
@@ -172,11 +277,15 @@ class DashboardMonitorController:
             process.wait(timeout=5.0)
 
     def open_dashboard(self) -> None:
+        _debug_log("controller.open_dashboard: begin (will call start())")
         self.start()
+        _debug_log(f"controller.open_dashboard: opening browser at {self.url}")
         self._open_browser(self.url)
 
     def is_running(self) -> bool:
-        return self._monitor_is_running()
+        result = self._monitor_is_running()
+        _debug_log(f"controller.is_running -> {result} | {self._debug_state()}")
+        return result
 
     def can_stop(self) -> bool:
         return self._process_is_running() or self._proxy_processes_are_running() or self._injection_is_active()
@@ -185,15 +294,53 @@ class DashboardMonitorController:
         return self._process is not None and self._process.poll() is None
 
     def _monitor_is_running(self) -> bool:
-        return self._dashboard_is_running() and self._proxy_processes_are_running() and self._injection_is_active()
-
-    def _dashboard_is_running(self) -> bool:
-        return self._process_is_running() or self._is_healthy(self.host, self.port)
+        # A started monitor is defined by active injection plus live reverse
+        # proxies. The dashboard's version/db-matched HTTP health check is
+        # intentionally excluded here: a reused or version-mismatched dashboard
+        # fails that check, which would make a genuinely-running monitor read as
+        # stopped -- spuriously re-prompting "Start Monitor?" on Open Dashboard,
+        # flipping the menu label to Stopped, and triggering a proxy restart that
+        # collides on the ports already held by the live proxies. Whether a fresh
+        # dashboard needs spawning is decided separately in ``start`` via
+        # ``self._is_healthy``.
+        return self._injection_is_active() and self._proxy_processes_are_running()
 
     def _proxy_processes_are_running(self) -> bool:
-        return bool(self._proxy_processes) and all(process.poll() is None for process in self._proxy_processes)
+        if bool(self._proxy_processes) and all(process.poll() is None for process in self._proxy_processes):
+            return True
+        return not self._proxy_processes and self._recorded_proxy_processes_are_running(
+            claude_port=self.claude_proxy_port,
+            codex_port=self.codex_proxy_port,
+        )
+
+    def _start_dashboard(self) -> None:
+        if self._process is not None and self._process.poll() is not None:
+            self._process = None
+        if self._is_healthy(self.host, self.port):
+            _debug_log("controller.start: dashboard already healthy -> reusing existing dashboard")
+            return
+        self._stop_incompatible_dashboard(self.host, self.port, self.url)
+        if self._is_healthy(self.host, self.port):
+            _debug_log("controller.start: dashboard became healthy after stale dashboard stop")
+            return
+        _debug_log("controller.start: dashboard not healthy -> spawning dashboard subprocess")
+        cmd = build_dashboard_command(
+            python_executable=self.python_executable,
+            host=self.host,
+            port=self.port,
+            output_dir=self.output_dir,
+        )
+        self._process = self._popen(cmd, **self._subprocess_kwargs())
 
     def _start_proxy(self, client: str, port: int) -> None:
+        # Mirror the dashboard-reuse path above: if a matching proxy is already
+        # serving this port (e.g. one this app spawned in a prior session and
+        # left behind), reuse it instead of spawning a duplicate. A duplicate
+        # cannot bind the port, exits with code 1, and makes the whole monitor
+        # start fail -- the crash-loop seen in the debug log.
+        if self._proxy_is_healthy(port, client):
+            _debug_log(f"controller.start: {client} proxy already healthy on {port} -> reusing existing proxy")
+            return
         cmd = build_proxy_command(
             python_executable=self.python_executable,
             client=client,
@@ -231,6 +378,12 @@ class DashboardMonitorController:
         if exited:
             raise RuntimeError("Monitor failed to start: " + "; ".join(exited))
 
+    def _verify_dashboard_process(self) -> None:
+        if self._startup_check_delay > 0:
+            self._sleep(self._startup_check_delay)
+        if self._process is not None and self._process.poll() is not None:
+            raise RuntimeError(f"Monitor failed to start: dashboard exited with code {self._process.returncode}")
+
     def _terminate_owned_processes(self) -> None:
         processes = [process for process in [self._process, *self._proxy_processes] if process is not None]
         for process in processes:
@@ -264,6 +417,7 @@ class MacOSMenuApp:
         self.auto_start = auto_start
         self._objc = _ObjC()
         self._app = 0
+        self._delegate = 0
         self._status_item = 0
         self._target = 0
         self._status_item_view = 0
@@ -276,6 +430,7 @@ class MacOSMenuApp:
         global _ACTIVE_APP
 
         _ACTIVE_APP = self
+        _debug_log(f"app.run: build_marker={_DEBUG_BUILD_MARKER} auto_start={self.auto_start}")
         objc = self._objc
         pool = objc.alloc_init("NSAutoreleasePool")
         self._app = objc.msg(objc.cls("NSApplication"), "sharedApplication")
@@ -286,6 +441,8 @@ class MacOSMenuApp:
             [ctypes.c_long],
             _NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY,
         )
+        self._delegate = _new_app_delegate(objc)
+        objc.msg(self._app, "setDelegate:", None, [ctypes.c_void_p], self._delegate)
         self._build_menu()
         if self.auto_start:
             self.start_monitor()
@@ -297,34 +454,50 @@ class MacOSMenuApp:
         return 0
 
     def start_monitor(self) -> None:
+        _debug_log("app.start_monitor: begin")
         if not self._confirm_start_monitor():
+            _debug_log("app.start_monitor: user cancelled confirmation")
             self.refresh_menu()
             return
         try:
             self.controller.start()
         except Exception as exc:
+            _debug_log(f"app.start_monitor: controller.start raised {exc!r}")
             self.refresh_menu()
             self._show_error("Unable to start Claude Tap monitor", _exception_text(exc))
             return
+        _debug_log("app.start_monitor: controller.start returned ok")
         self.refresh_menu()
 
     def stop_monitor(self) -> None:
+        _debug_log("app.stop_monitor: begin")
         self.controller.stop()
         self.refresh_menu()
 
     def open_dashboard(self) -> None:
-        if not self.controller.is_running() and not self._confirm_start_monitor():
-            self.refresh_menu()
-            return
+        running = self.controller.is_running()
+        _debug_log(f"app.open_dashboard: begin is_running={running}")
+        if not running:
+            confirmed = self._confirm_start_monitor()
+            _debug_log(f"app.open_dashboard: monitor not running -> confirm_dialog_result={confirmed}")
+            if not confirmed:
+                self.refresh_menu()
+                return
         self.controller.open_dashboard()
+        _debug_log("app.open_dashboard: controller.open_dashboard returned")
         self.refresh_menu()
 
     def quit(self) -> None:
-        self.controller.stop()
+        self.prepare_to_quit()
         self._objc.msg(self._app, "terminate:", None, [ctypes.c_void_p], None)
+
+    def prepare_to_quit(self) -> None:
+        _debug_log("app.prepare_to_quit: stopping monitor before app termination")
+        self.controller.stop()
 
     def refresh_menu(self) -> None:
         running = self.controller.is_running()
+        _debug_log(f"app.refresh_menu: label will show Monitor: {'Running' if running else 'Stopped'}")
         sessions = _menu_sessions()
         latest = sessions[0] if sessions else None
         latest_text = _latest_session_text(latest)
@@ -520,11 +693,41 @@ def _new_menu_target(objc: _ObjC) -> int:
     return objc.msg(target, "init")
 
 
+def _new_app_delegate(objc: _ObjC) -> int:
+    class_name = "ClaudeTapAppDelegate"
+    delegate_class = objc.objc.objc_getClass(class_name.encode("utf-8"))
+    if not delegate_class:
+        delegate_class = objc.objc.objc_allocateClassPair(objc.cls("NSObject"), class_name.encode("utf-8"), 0)
+        objc.objc.class_addMethod(
+            delegate_class,
+            objc.sel("applicationShouldTerminate:"),
+            ctypes.cast(_application_should_terminate_callback, ctypes.c_void_p),
+            b"q@:@",
+        )
+        objc.objc.objc_registerClassPair(delegate_class)
+    delegate = objc.msg(delegate_class, "alloc")
+    return objc.msg(delegate, "init")
+
+
 def _callback(fn: Callable[[int, int, int], None]) -> Any:
     callback_type = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
     wrapped = callback_type(fn)
     _CALLBACKS.append(wrapped)
     return wrapped
+
+
+def _terminate_callback(fn: Callable[[int, int, int], int]) -> Any:
+    callback_type = ctypes.CFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+    wrapped = callback_type(fn)
+    _CALLBACKS.append(wrapped)
+    return wrapped
+
+
+@_terminate_callback
+def _application_should_terminate_callback(_self: int, _cmd: int, _sender: int) -> int:
+    if _ACTIVE_APP is not None:
+        _ACTIVE_APP.prepare_to_quit()
+    return _NS_TERMINATE_NOW
 
 
 @_callback
@@ -600,17 +803,27 @@ def main(argv: list[str] | None = None) -> int:
         print("claude-tap macos-app is only supported on macOS.", file=sys.stderr)
         return 1
 
+    _enable_debug_logging()
     try:
         args = parse_macos_app_args(argv)
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        port = resolve_dashboard_port(args.live_port)
         controller = DashboardMonitorController(
             host=args.host,
-            port=resolve_dashboard_port(args.live_port),
+            port=port,
             output_dir=output_dir,
+        )
+        _debug_log(
+            "======== app launch ======== "
+            f"build_marker={_DEBUG_BUILD_MARKER} python={sys.executable} argv={argv} "
+            f"host={args.host} dashboard_port={port} "
+            f"claude_proxy_port={controller.claude_proxy_port} codex_proxy_port={controller.codex_proxy_port} "
+            f"output_dir={output_dir} auto_start={args.auto_start}"
         )
         return MacOSMenuApp(controller, auto_start=args.auto_start).run()
     except Exception:
+        _debug_log("main: unhandled exception -> writing crash log")
         _write_crash_log()
         raise
 
