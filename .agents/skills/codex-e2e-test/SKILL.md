@@ -52,7 +52,7 @@ are only smoke tests for checking local setup.
 claude-tap --tap-client codex \
   --tap-target https://chatgpt.com/backend-api/codex \
   --tap-output-dir /tmp/codex-e2e \
-  --tap-no-open --tap-no-update-check \
+  --tap-no-open \
   -- exec "say hello" \
   --dangerously-bypass-approvals-and-sandbox
 ```
@@ -66,7 +66,7 @@ Responses API calls (models lookup + actual responses):
 claude-tap --tap-client codex \
   --tap-target https://chatgpt.com/backend-api/codex \
   --tap-output-dir /tmp/codex-e2e \
-  --tap-no-open --tap-no-update-check \
+  --tap-no-open \
   -- exec "Read pyproject.toml and tell me the project name and version" \
   --dangerously-bypass-approvals-and-sandbox
 ```
@@ -123,7 +123,7 @@ enough messages, tool calls, and response blocks to inspect.
 uv run claude-tap --tap-client codex \
   --tap-target https://chatgpt.com/backend-api/codex \
   --tap-output-dir /tmp/claude-tap-real-codex-traces \
-  --tap-no-open --tap-no-update-check \
+  --tap-no-open \
   -- exec -C /tmp/claude-tap-real-codex-workspace \
   --image /tmp/claude-tap-real-codex-workspace/input.png \
   --dangerously-bypass-approvals-and-sandbox \
@@ -140,7 +140,7 @@ recent Codex session.
 uv run claude-tap --tap-client codex \
   --tap-target https://chatgpt.com/backend-api/codex \
   --tap-output-dir /tmp/claude-tap-real-codex-traces \
-  --tap-no-open --tap-no-update-check \
+  --tap-no-open \
   -- exec resume <SESSION_ID_FROM_FIRST_RUN> \
   --image /tmp/claude-tap-real-codex-workspace/input.png \
   --dangerously-bypass-approvals-and-sandbox \

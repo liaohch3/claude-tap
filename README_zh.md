@@ -569,8 +569,6 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 --tap-no-launch          仅启动代理，不启动客户端
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-store-stream-events 捕获时把原始 SSE/WebSocket event 数组写入 trace 存储，以便查看器/导出结果展示（默认关闭）
---tap-no-update-check    禁用启动时的 PyPI 更新检查
---tap-no-auto-update     仅检查更新，不自动下载
 --tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/kimi/kimi-code/openclaw/codebuddy 用 reverse，agy/gemini/mimo/opencode/pi/hermes/cursor/qoder 用 forward；codexapp 是 transcript-only）
 --tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy 会自动执行）
 ```

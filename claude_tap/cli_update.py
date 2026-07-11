@@ -3,41 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
-import json
 import os
 import shutil
 import subprocess
 import sys
-import urllib.request
 
 from claude_tap.process_utils import windows_no_console_subprocess_kwargs
-
-# ---------------------------------------------------------------------------
-# Smart update check
-# ---------------------------------------------------------------------------
-
-
-def _version_tuple(v: str) -> tuple[int, ...]:
-    """Parse '0.1.4' into (0, 1, 4) for comparison."""
-    return tuple(int(x) for x in v.strip().split(".") if x.isdigit())
-
-
-async def _check_pypi_version(timeout: float = 3.0) -> str | None:
-    """Check PyPI for the latest version. Returns version string or None."""
-    url = os.environ.get("CLAUDE_TAP_PYPI_URL", "https://pypi.org/pypi/claude-tap/json")
-
-    def _fetch() -> str | None:
-        try:
-            req = urllib.request.Request(url, headers={"Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read())
-                return data.get("info", {}).get("version")
-        except Exception:
-            return None
-
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _fetch)
 
 
 def _detect_installer() -> str:
@@ -53,45 +24,8 @@ def _detect_installer() -> str:
     return "pip"
 
 
-def _maybe_start_background_update(
-    *,
-    no_auto_update: bool,
-    dashboard_stop_command: str = "claude-tap dashboard stop",
-) -> None:
-    """Start a safe automatic update, or explain why it was skipped."""
-    if no_auto_update:
-        return
-
-    installer = _detect_installer()
-    if sys.platform == "win32" and installer == "pip":
-        print("   Automatic updates are disabled for pip installs on Windows.")
-        print("   Exit all claude-tap sessions, then run:")
-        print(f"     {dashboard_stop_command}")
-        print(f'     "{sys.executable}" -m pip install --upgrade claude-tap')
-        return
-
-    if _start_background_update(installer) is not None:
-        print(f"   Downloading update in background ({installer})...")
-
-
-def _start_background_update(installer: str) -> subprocess.Popen | None:
-    """Start a background process to upgrade claude-tap."""
-    try:
-        cmd = _build_update_command(installer)
-        if cmd is None:
-            return None
-        return subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            **windows_no_console_subprocess_kwargs(),
-        )
-    except Exception:
-        return None
-
-
 def _build_update_command(installer: str) -> list[str] | None:
-    """Build the foreground/background self-upgrade command."""
+    """Build the manual self-upgrade command."""
     if installer == "uv":
         uv_path = shutil.which("uv")
         if uv_path is None:

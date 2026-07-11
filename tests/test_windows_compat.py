@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import signal
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from claude_tap.cli import _start_background_update, run_client
+from claude_tap.cli import run_client
 from claude_tap.history import _rel_posix
 
 
@@ -150,61 +149,3 @@ def test_rel_posix_uses_forward_slashes(tmp_path: Path) -> None:
     nested.parent.mkdir(parents=True)
     nested.write_text("{}\n", encoding="utf-8")
     assert _rel_posix(nested, tmp_path) == "2026-04-29/trace_001234.jsonl"
-
-
-def test_start_background_update_resolves_uv_shim(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_popen(cmd, **kwargs):
-        captured["cmd"] = cmd
-        return object()
-
-    shim = r"C:\Users\x\AppData\Local\Programs\uv\uv.cmd"
-    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda name: shim if name == "uv" else None)
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
-
-    _start_background_update("uv")
-    assert captured["cmd"] == [shim, "tool", "upgrade", "claude-tap"]
-
-
-def test_start_background_update_hides_windows_console(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    class FakeStartupInfo:
-        def __init__(self) -> None:
-            self.dwFlags = 0
-            self.wShowWindow: int | None = None
-
-    def fake_popen(cmd, **kwargs):
-        captured["cmd"] = cmd
-        captured["kwargs"] = kwargs
-        return object()
-
-    shim = r"C:\Users\x\AppData\Local\Programs\uv\uv.cmd"
-    monkeypatch.setattr("claude_tap.cli_update.sys.platform", "win32")
-    monkeypatch.setattr("claude_tap.cli_update.shutil.which", lambda name: shim if name == "uv" else None)
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x1000, raising=False)
-    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x2000, raising=False)
-    monkeypatch.setattr(subprocess, "STARTF_USESHOWWINDOW", 0x4000, raising=False)
-    monkeypatch.setattr(subprocess, "SW_HIDE", 0, raising=False)
-    monkeypatch.setattr(subprocess, "STARTUPINFO", FakeStartupInfo, raising=False)
-
-    _start_background_update("uv")
-
-    assert captured["cmd"] == [shim, "tool", "upgrade", "claude-tap"]
-    kwargs = captured["kwargs"]
-    assert isinstance(kwargs, dict)
-    assert kwargs["stdin"] == subprocess.DEVNULL
-    assert kwargs["stdout"] == subprocess.DEVNULL
-    assert kwargs["stderr"] == subprocess.DEVNULL
-    assert kwargs["creationflags"] == 0x1000 | 0x2000
-    startupinfo = kwargs["startupinfo"]
-    assert isinstance(startupinfo, FakeStartupInfo)
-    assert startupinfo.dwFlags == 0x4000
-    assert startupinfo.wShowWindow == 0
-
-
-def test_start_background_update_returns_none_when_uv_missing(monkeypatch) -> None:
-    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: None)
-    assert _start_background_update("uv") is None

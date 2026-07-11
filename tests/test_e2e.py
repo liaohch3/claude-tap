@@ -1568,7 +1568,7 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
     monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", fake_ensure_shared_dashboard)
     monkeypatch.setattr("claude_tap.cli.migrate_legacy_traces", migration_calls.append)
 
-    args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-update-check"])
+    args = parse_args(["--tap-output-dir", str(tmp_path)])
     try:
         code = await async_main(args)
     finally:
@@ -1606,7 +1606,6 @@ async def test_async_main_stop_hint_includes_custom_dashboard_address(monkeypatc
             "3000",
             "--tap-host",
             "0.0.0.0",
-            "--tap-no-update-check",
         ]
     )
 
@@ -1646,7 +1645,7 @@ async def test_async_main_reuses_existing_dashboard_without_reopening_browser(mo
     monkeypatch.setattr("claude_tap.cli._open_browser", opened_urls.append)
     monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", fake_ensure_shared_dashboard)
 
-    args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-update-check"])
+    args = parse_args(["--tap-output-dir", str(tmp_path)])
     try:
         assert await async_main(args) == 0
         assert await async_main(args) == 0
@@ -1682,7 +1681,6 @@ async def test_async_main_live_viewer_respects_tap_host(monkeypatch, tmp_path):
             "--tap-host",
             "0.0.0.0",
             "--tap-no-open",
-            "--tap-no-update-check",
         ]
     )
 
@@ -1706,7 +1704,6 @@ async def test_async_main_finalizes_session_when_proxy_startup_fails(monkeypatch
             "--tap-output-dir",
             str(tmp_path),
             "--tap-no-live",
-            "--tap-no-update-check",
             "--tap-no-launch",
         ]
     )
@@ -1741,7 +1738,7 @@ async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypat
         AsyncMock(side_effect=AssertionError("dashboard should stay disabled")),
     )
 
-    args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-update-check", "--tap-no-live", "--tap-no-open"])
+    args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-live", "--tap-no-open"])
     code = await async_main(args)
 
     assert code == 0
@@ -1765,7 +1762,6 @@ async def test_async_main_export_prompt_preserves_client_failure(monkeypatch, tm
         [
             "--tap-output-dir",
             str(tmp_path),
-            "--tap-no-update-check",
             "--tap-no-live",
             "--tap-no-open",
             "--tap-export-prompt",
@@ -2800,23 +2796,6 @@ async def test_reverse_proxy_ssl_error_returns_ca_diagnostics():
             writer.close()
 
 
-## ---------------------------------------------------------------------------
-## Test: version check helpers
-## ---------------------------------------------------------------------------
-
-
-def test_version_tuple():
-    """Test _version_tuple parsing."""
-    from claude_tap import _version_tuple
-
-    assert _version_tuple("0.1.4") == (0, 1, 4)
-    assert _version_tuple("1.0.0") == (1, 0, 0)
-    assert _version_tuple("10.20.30") == (10, 20, 30)
-    assert _version_tuple("0.1.4") < _version_tuple("0.2.0")
-    assert _version_tuple("1.0.0") > _version_tuple("0.99.99")
-    print("  test_version_tuple PASSED")
-
-
 def test_detect_installer():
     """Test _detect_installer returns 'uv' or 'pip'."""
     from claude_tap import _detect_installer
@@ -2827,12 +2806,9 @@ def test_detect_installer():
 
 
 ## ---------------------------------------------------------------------------
-## Test: version check with fake PyPI
+## Test: startup does not check for updates
 ## ---------------------------------------------------------------------------
 
-# Minimal fake claude that exits immediately without making any upstream
-# requests.  Used by version-check tests which only care about the update
-# banner printed by claude-tap itself, not about proxied API traffic.
 FAKE_CLAUDE_NOOP_SCRIPT = r'''#!/usr/bin/env python3
 """Fake claude CLI -- exits immediately (no network calls)."""
 print("[fake-claude] noop exit")
@@ -2840,12 +2816,15 @@ print("[fake-claude] noop exit")
 
 
 @pytest.mark.slow
-def test_version_check_with_fake_pypi():
-    """Test that update check detects a newer version from a fake PyPI server."""
+def test_startup_does_not_contact_pypi():
+    """Starting a traced client must not perform update-related network I/O."""
     from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    requests: list[str] = []
 
     class FakePyPI(BaseHTTPRequestHandler):
         def do_GET(self):
+            requests.append(self.path)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -2877,68 +2856,7 @@ def test_version_check_with_fake_pypi():
                 "--tap-output-dir",
                 trace_dir,
                 "--tap-no-open",
-                "--tap-target",
-                "http://127.0.0.1:1",  # dummy target; noop client never connects
-                "--tap-no-auto-update",
-            ],
-            cwd=str(project_dir),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-        assert "Update available" in proc.stdout, f"Expected 'Update available' in stdout:\n{proc.stdout}"
-        assert "99.0.0" in proc.stdout
-        print("  OK: update available detected")
-        print("  test_version_check_with_fake_pypi PASSED")
-    except subprocess.TimeoutExpired as exc:
-        raise AssertionError("claude_tap subprocess timed out (30s) — possible port conflict or hang") from exc
-    finally:
-        server.shutdown()
-        server.server_close()
-        _cleanup(trace_dir, fake_bin_dir, "update_check")
-
-
-def test_version_check_no_update():
-    """Test that no update message when current version matches PyPI."""
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-
-    from claude_tap import __version__
-
-    class FakePyPICurrent(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"info": {"version": __version__}}).encode())
-
-        def log_message(self, format, *args):
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), FakePyPICurrent)
-    pypi_port = server.server_port
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-
-    project_dir = PROJECT_ROOT
-    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_noupdate_")
-    fake_bin_dir = _create_fake_claude(FAKE_CLAUDE_NOOP_SCRIPT)
-
-    try:
-        env = os.environ.copy()
-        env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
-        env = e2e_env(env, trace_dir)
-        env["CLAUDE_TAP_PYPI_URL"] = f"http://127.0.0.1:{pypi_port}/pypi/claude-tap/json"
-
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "claude_tap",
-                "--tap-output-dir",
-                trace_dir,
-                "--tap-no-open",
+                "--tap-no-live",
                 "--tap-target",
                 "http://127.0.0.1:1",  # dummy target; noop client never connects
             ],
@@ -2949,15 +2867,17 @@ def test_version_check_no_update():
             timeout=30,
         )
 
-        assert "Update available" not in proc.stdout, f"Unexpected 'Update available' in stdout:\n{proc.stdout}"
-        print("  OK: no update message when version matches")
-        print("  test_version_check_no_update PASSED")
+        assert proc.returncode == 0, proc.stderr
+        assert "[fake-claude] noop exit" in proc.stdout
+        assert "Update available" not in proc.stdout
+        assert requests == []
+        print("  test_startup_does_not_contact_pypi PASSED")
     except subprocess.TimeoutExpired as exc:
         raise AssertionError("claude_tap subprocess timed out (30s) — possible port conflict or hang") from exc
     finally:
         server.shutdown()
         server.server_close()
-        _cleanup(trace_dir, fake_bin_dir, "no_update")
+        _cleanup(trace_dir, fake_bin_dir, "no_update_check")
 
 
 ## ---------------------------------------------------------------------------
@@ -3057,7 +2977,6 @@ def test_e2e_with_cleanup():
 
         env = os.environ.copy()
         env["PATH"] = fake_bin_dir + ":" + env.get("PATH", "")
-        env["CLAUDE_TAP_PYPI_URL"] = "http://127.0.0.1:1/invalid"
         env = e2e_env(env, trace_dir)
 
         proc = subprocess.run(
@@ -3072,7 +2991,6 @@ def test_e2e_with_cleanup():
                 f"http://127.0.0.1:{upstream_port}",
                 "--tap-max-traces",
                 "3",
-                "--tap-no-update-check",
             ],
             cwd=str(project_dir),
             env=env,
@@ -3184,14 +3102,12 @@ async def test_live_viewer_sse_incremental():
 
 
 def test_parse_args_new_flags():
-    """Test --tap-max-traces, --tap-no-update-check, --tap-no-auto-update flags."""
+    """Test storage flags and legacy update flag compatibility."""
     from claude_tap import parse_args
 
     # Defaults
     a = parse_args([])
     assert a.max_traces == 50
-    assert a.no_update_check is False
-    assert a.no_auto_update is False
     print("  OK: new flag defaults")
 
     # Set max traces
@@ -3204,22 +3120,12 @@ def test_parse_args_new_flags():
     assert a.max_traces == 0
     print("  OK: --tap-max-traces 0")
 
-    # Disable update check
-    a = parse_args(["--tap-no-update-check"])
-    assert a.no_update_check is True
-    print("  OK: --tap-no-update-check")
-
-    # Only check, no auto-update
-    a = parse_args(["--tap-no-auto-update"])
-    assert a.no_auto_update is True
-    print("  OK: --tap-no-auto-update")
-
-    # Mix with claude args
-    a = parse_args(["--tap-max-traces", "20", "--tap-no-update-check", "-c", "--model", "opus"])
+    # Removed update flags remain accepted as hidden no-ops so existing scripts
+    # do not accidentally forward them to the wrapped client.
+    a = parse_args(["--tap-max-traces", "20", "--tap-no-update-check", "--tap-no-auto-update", "-c", "--model", "opus"])
     assert a.max_traces == 20
-    assert a.no_update_check is True
     assert a.claude_args == ["-c", "--model", "opus"]
-    print("  OK: mixed new + claude flags")
+    print("  OK: legacy update flags are hidden no-ops")
 
     print("  test_parse_args_new_flags PASSED")
 
@@ -4439,7 +4345,6 @@ if __name__ == "__main__":
     test_cert_generation()
     test_filter_headers()
     test_sse_reassembler()
-    test_version_tuple()
     test_detect_installer()
     test_trace_cleanup()
     test_trace_tagging_safety()
@@ -4454,8 +4359,7 @@ if __name__ == "__main__":
     test_large_payload()
     test_concurrent_requests()
     test_upstream_unreachable()
-    test_version_check_with_fake_pypi()
-    test_version_check_no_update()
+    test_startup_does_not_contact_pypi()
     test_e2e_with_cleanup()
     print("\n" + "=" * 60)
     print("  ALL TESTS PASSED")

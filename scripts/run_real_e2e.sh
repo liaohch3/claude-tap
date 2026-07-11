@@ -43,7 +43,6 @@ run_turn() {
   local cmd=(
     uv run python -m claude_tap
     --tap-output-dir "$TRACE_DIR"
-    --tap-no-update-check
     --tap-proxy-mode forward
     --
   )

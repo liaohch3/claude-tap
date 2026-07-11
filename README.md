@@ -578,8 +578,6 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-no-launch          Only start the proxy, don't launch client
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
---tap-no-update-check    Disable PyPI update check on startup
---tap-no-auto-update     Check for updates but don't auto-download
 --tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/kimi/kimi-code/openclaw/codebuddy, forward for agy/gemini/mimo/opencode/pi/hermes/cursor/qoder; codexapp is transcript-only)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
