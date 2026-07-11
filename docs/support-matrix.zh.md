@@ -19,10 +19,9 @@ English version: [Support Matrix](support-matrix.md).
 | Claude Code | Claude 兼容网关（`ANTHROPIC_BASE_URL` 环境变量或 Claude settings） | 自定义 Anthropic 兼容上游 | 无 | HTTP/SSE | 单测覆盖；DeepSeek 真实 E2E 已验证 |
 | Claude Code | Anthropic 兼容 Bedrock 网关（`ANTHROPIC_BASE_URL` + `bedrock/...` 模型） | New API 或同类网关代理到 AWS Bedrock | 无 | HTTP/SSE | 单测覆盖；New API AWS Bedrock 真实 E2E 已验证 |
 | Claude Code | Google Vertex AI 透传网关（`CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_BASE_URL`） | Vertex rawPredict 兼容上游 | 无 | HTTP/SSE | 单测覆盖；本地 E2E 已验证 |
-| Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | HTTP/SSE | 已验证 |
-| Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | WebSocket | 已验证 |
-| Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | 已验证 |
-| Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | 已验证 |
+| Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | 默认 reverse 模式使用 HTTP/SSE | 已验证 |
+| Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | 默认 reverse 模式使用 HTTP/SSE | 已使用 Codex 0.144.1 完成真实 E2E 验证 |
+| Codex CLI | 显式指定 `--tap-proxy-mode forward` | 自动识别上游 | n/a | HTTP/SSE + WebSocket | 单测覆盖 |
 | Codex App | Codex App 中的 ChatGPT 账号 | `codex-app://sessions` | n/a | 本地 session JSONL transcript import；当 Codex App debug endpoint 可用时自动尽力补充 CDP WebSocket 证据 | 单测覆盖 |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy（Google 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | Gemini CLI | API key / Vertex 兼容配置（`--tap-proxy-mode reverse`） | `https://generativelanguage.googleapis.com` | 无 | HTTP/SSE | 单测覆盖 |
@@ -52,7 +51,7 @@ English version: [Support Matrix](support-matrix.md).
 | 客户端 | 默认模式 | 原因 |
 |--------|----------|------|
 | `claude` | `reverse` | 单 provider，原生支持 Claude provider base URL 环境变量（`ANTHROPIC_BASE_URL`、`ANTHROPIC_BEDROCK_BASE_URL`、`ANTHROPIC_VERTEX_BASE_URL`） |
-| `codex` | `reverse` | 单 provider，原生支持 `OPENAI_BASE_URL` 环境变量 |
+| `codex` | `reverse` | 启动时临时注入使用代理 base URL 且设置 `supports_websockets=false` 的同级 provider，使每个请求生成一条自包含的 HTTP/SSE trace，同时不修改 `~/.codex/config.toml` |
 | `codexapp` | `transcript` | 监听 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 的 transcript 客户端；不会创建代理。Codex App 暴露 debug endpoint 时会自动追加 CDP WebSocket 证据 |
 | `gemini` | `forward` | Google OAuth / Code Assist 会访问多个 Google 端点；forward proxy 不依赖单一 base URL，更适合作为默认 |
 | `kimi` | `reverse` | 旧版 kimi-cli；原生 `KIMI_BASE_URL` 环境变量 |
