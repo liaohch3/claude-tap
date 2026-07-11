@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Detect continued conversations (`claude -c` replays and post-compact relaunches) across trace sessions, badge chained sessions in the dashboard list, and open a whole chain as one merged compaction timeline (capture cap raised from three to eight).
+
 ### Fixed
 
 - Skip Codex-injected recommended plugin catalogs when selecting the dashboard's first user prompt.

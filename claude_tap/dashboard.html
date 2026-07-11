@@ -492,6 +492,37 @@ body.detail-route .main {
   white-space: nowrap;
   font-weight: 600;
 }
+.first-message-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.first-message-row .first-message {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chain-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 20px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chain-badge:hover {
+  color: var(--blue);
+  border-color: var(--blue);
+}
 .trace-count {
   color: var(--text-secondary);
   font-family: var(--mono);
@@ -1745,7 +1776,7 @@ pre {
             <div class="lab-card-copy">
               <div class="lab-card-title">
                 <span data-i18n="compaction_lab_title">Compaction lab</span>
-                <span class="lab-card-hint" data-i18n="compaction_lab_hint">pick 1–3 captures, watch the context cliff of /compact</span>
+                <span class="lab-card-hint" data-i18n="compaction_lab_hint">pick 1–8 captures, watch the context cliff of /compact</span>
               </div>
               <div id="compaction-lab-target" class="lab-card-pair"></div>
             </div>
@@ -1851,6 +1882,7 @@ const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
 const SESSION_COMPARE_ROUTE = /^\/dashboard\/compare\/?$/;
 const SESSION_COST_ROUTE = /^\/dashboard\/cost\/?$/;
 const SESSION_COMPACTION_ROUTE = /^\/dashboard\/compaction\/?$/;
+const MAX_COMPACTION_SESSIONS = 8;
 const CLAUDE_TAP_VERSION = "";
 const DASHBOARD_QUIT_TOKEN = "";
 const DASHBOARD_CAN_STOP = false;
@@ -1934,6 +1966,8 @@ const state = {
   pendingCompactionIds: initialCompactionIds(),
   compactionSessionIds: [],
   compactionRequestId: 0,
+  chainInfoBySession: {},
+  chainsRequestId: 0,
   view: initialComparisonIds().length === 2
     ? "compare"
     : initialCostSessionId()
@@ -2030,7 +2064,9 @@ function initialCompactionIds() {
   if (!window.location.pathname.match(SESSION_COMPACTION_ROUTE)) return [];
   const raw = new URLSearchParams(window.location.search).get("sessions") || "";
   const sessionIds = raw.split(",").filter(Boolean);
-  const distinct = sessionIds.length >= 1 && sessionIds.length <= 3 && new Set(sessionIds).size === sessionIds.length;
+  const distinct = sessionIds.length >= 1
+    && sessionIds.length <= MAX_COMPACTION_SESSIONS
+    && new Set(sessionIds).size === sessionIds.length;
   return distinct ? sessionIds : [];
 }
 
@@ -2129,11 +2165,12 @@ const DASHBOARD_I18N = {
 	    cost_amortize_actual: "With cache (input ×1, read ×0.1, write ×1.25)",
 	    cost_amortize_note: "Weighted input cost is {percent}% of the no-cache equivalent",
 	    compaction_lab_title: "Compaction lab",
-	    compaction_lab_hint: "pick 1–3 captures, watch the context cliff of /compact",
+	    compaction_lab_hint: "pick 1–8 captures, watch the context cliff of /compact",
 	    compaction_lab_open: "Open Timeline",
 	    compaction_lab_pin: "Pin these captures",
 	    compaction_lab_unpin: "Unpin captures",
-	    compaction_lab_empty: "Select one to three sessions with records",
+	    compaction_lab_empty: "Select one to eight sessions with records",
+	    chain_badge_title: "Continued conversation · part {index} of {count} · click to open the merged timeline",
 	    compaction_title: "Context compaction timeline",
 	    compaction_loading: "Loading compaction timeline...",
 	    compaction_unable: "Unable to load compaction timeline: {error}",
@@ -2364,11 +2401,12 @@ const DASHBOARD_I18N = {
 	    cost_amortize_actual: "有缓存（输入 ×1，读 ×0.1，写 ×1.25）",
 	    cost_amortize_note: "加权后的输入成本是无缓存情况的 {percent}%",
 	    compaction_lab_title: "压缩实验台",
-	    compaction_lab_hint: "选 1–3 条抓包，看 /compact 的上下文断崖",
+	    compaction_lab_hint: "选 1–8 条抓包，看 /compact 的上下文断崖",
 	    compaction_lab_open: "打开时间线",
 	    compaction_lab_pin: "钉住这组抓包",
 	    compaction_lab_unpin: "取消钉住",
-	    compaction_lab_empty: "需要选择一到三条有记录的会话",
+	    compaction_lab_empty: "需要选择一到八条有记录的会话",
+	    chain_badge_title: "续接会话 · 第 {index}/{count} 段 · 点击打开合并时间线",
 	    compaction_title: "上下文压缩时间线",
 	    compaction_loading: "正在加载压缩时间线...",
 	    compaction_unable: "无法加载压缩时间线：{error}",
@@ -2813,6 +2851,7 @@ function updateTracePathBar(session = null) {
 	    pruneSelectedSessions();
 	    renderFilters();
 	    renderAgents();
+	    loadContinuationChains();
 
 	    const visible = filteredSessions();
 	    const pendingSessionId = state.pendingSessionId;
@@ -2946,6 +2985,42 @@ function renderAgents() {
   });
 }
 
+	async function loadContinuationChains() {
+	  const requestId = state.chainsRequestId + 1;
+	  state.chainsRequestId = requestId;
+	  try {
+	    const payload = await fetchJSON("/api/dashboard/continuation-chains");
+	    if (requestId !== state.chainsRequestId) return;
+	    applyContinuationChains(payload);
+	    renderSessions();
+	  } catch (error) {
+	    if (requestId !== state.chainsRequestId) return;
+	    state.chainInfoBySession = {};
+	  }
+	}
+
+	function applyContinuationChains(payload) {
+	  const chains = Array.isArray(payload?.chains) ? payload.chains : [];
+	  const info = {};
+	  chains.forEach(chain => {
+	    const ids = Array.isArray(chain?.session_ids)
+	      ? chain.session_ids.filter(id => typeof id === "string" && id)
+	      : [];
+	    if (ids.length < 2) return;
+	    ids.forEach((id, index) => {
+	      info[id] = {ids, index: index + 1, count: ids.length};
+	    });
+	  });
+	  state.chainInfoBySession = info;
+	}
+
+	function openMergedTimeline(sessionIds) {
+	  const ids = sessionIds.slice(0, MAX_COMPACTION_SESSIONS);
+	  if (!ids.length) return;
+	  setPinnedCompactionIds(ids);
+	  window.location.assign(sessionCompactionUrl(ids));
+	}
+
 	function renderSessions() {
 	  const sessions = filteredSessions();
 	  renderOverview();
@@ -3015,6 +3090,13 @@ function renderAgents() {
 	      toggleSessionPinned(button.dataset.pinSession);
 	    });
 	  });
+	  document.querySelectorAll("[data-chain-open]").forEach(button => {
+	    button.addEventListener("click", event => {
+	      event.preventDefault();
+	      event.stopPropagation();
+	      openMergedTimeline(button.dataset.chainOpen.split(",").filter(Boolean));
+	    });
+	  });
 	}
 
 function isSessionRowActionTarget(target) {
@@ -3024,6 +3106,12 @@ function isSessionRowActionTarget(target) {
 	function sessionRow(session, {pinned = false} = {}) {
 	  const preview = session.first_user || "";
 	  const firstMessage = preview || t("no_user_prompt");
+	  const chain = state.chainInfoBySession[session.id];
+	  const chainTitle = chain ? t("chain_badge_title", {index: chain.index, count: chain.count}) : "";
+	  const chainBadge = chain
+	    ? `<button class="chain-badge" type="button" data-chain-open="${esc(chain.ids.join(","))}"`
+	      + ` title="${esc(chainTitle)}" aria-label="${esc(chainTitle)}">&#9939; ${chain.index}/${chain.count}</button>`
+	    : "";
 	  const status = statusInfo(session);
 	  const isLoading = state.loadingSessionId === session.id;
 	  const isDeleting = state.deletingSessionIds.has(session.id);
@@ -3039,7 +3127,7 @@ function isSessionRowActionTarget(target) {
 	        <input class="session-checkbox" type="checkbox" data-select-session="${esc(session.id)}" aria-label="${esc(selectTitle)}" ${isSelected ? "checked" : ""} ${!canSelect || isDeleting ? "disabled" : ""}>
 	      </td>
 	      ${pinned ? "" : `<td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>`}
-	      <td class="first-message-cell"><div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></td>
+	      <td class="first-message-cell"><div class="first-message-row">${chainBadge}<div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></div></td>
 	      <td><span class="trace-count">${fmtNumber(session.record_count)}</span></td>
       <td><span class="token-pill">${fmtNumber(session.total_tokens)}</span></td>
       <td><span class="model-pill" title="${esc(session.model || t("unknown"))}">${esc(session.model || t("unknown"))}</span></td>
@@ -3926,7 +4014,7 @@ const COMPACT_RESUME_MARKER = "This session is being continued from a previous c
 function pinnedCompactionIds() {
   try {
     const ids = JSON.parse(localStorage.getItem(COMPACTION_PIN_KEY) || "null");
-    return Array.isArray(ids) && ids.length >= 1 && ids.length <= 3 ? ids : null;
+    return Array.isArray(ids) && ids.length >= 1 && ids.length <= MAX_COMPACTION_SESSIONS ? ids : null;
   } catch (err) {
     return null;
   }
@@ -3942,7 +4030,7 @@ function compactionLabSessions(sessions) {
   const selected = Array.from(state.selectedSessionIds)
     .map(id => byId.get(id))
     .filter(canCompareSession);
-  if (selected.length >= 1 && selected.length <= 3) return {targets: selected, source: "selected"};
+  if (selected.length >= 1 && selected.length <= MAX_COMPACTION_SESSIONS) return {targets: selected, source: "selected"};
   const pinned = (pinnedCompactionIds() || []).map(id => byId.get(id)).filter(canCompareSession);
   if (pinned.length) return {targets: pinned, source: "pinned"};
   return {targets: sessions.filter(canCompareSession).slice(0, 1), source: "default"};
@@ -3960,7 +4048,7 @@ function renderCompactionLab(sessions) {
   if (!target || !button) return;
   const {targets, source} = compactionLabSessions(sessions);
   const ordered = sortSessionsByStart(targets);
-  const ready = ordered.length >= 1 && ordered.length <= 3;
+  const ready = ordered.length >= 1 && ordered.length <= MAX_COMPACTION_SESSIONS;
   const pinMark = source === "pinned" ? "📌 " : "";
   target.textContent = ready
     ? `${pinMark}${ordered.map(session => session.model || session.agent || t("unknown")).join(" → ")}`

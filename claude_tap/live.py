@@ -16,6 +16,7 @@ from urllib.parse import quote, urlsplit
 from aiohttp import web
 
 from claude_tap.compact_trace import build_compact_trace_bundle
+from claude_tap.continuation import find_continuation_chains
 from claude_tap.dashboard import (
     build_session_query,
     dashboard_trace_snapshot,
@@ -47,6 +48,12 @@ _DASHBOARD_QUIT_TOKEN_HEADER = "X-Claude-Tap-Dashboard-Token"
 
 _PINNED_SESSIONS_PREF_KEY = "pinned_sessions"
 _MAX_PINNED_SESSIONS = 500
+
+# Continuation chains from `claude -c` relaunches can run past the old
+# three-capture compaction ceiling; eight keeps merged timelines readable.
+MAX_COMPACTION_SESSIONS = 8
+_DEFAULT_CONTINUATION_SCAN = 100
+_MAX_CONTINUATION_SCAN = 300
 
 ANALYZE_LAB_INDEX = "index.html"
 
@@ -249,6 +256,7 @@ class LiveViewerServer:
         app.router.add_get("/api/agents", self._handle_agents)
         app.router.add_get("/api/dashboard/prefs/pinned-sessions", self._handle_get_pinned_sessions)
         app.router.add_put("/api/dashboard/prefs/pinned-sessions", self._handle_put_pinned_sessions)
+        app.router.add_get("/api/dashboard/continuation-chains", self._handle_continuation_chains)
         app.router.add_get("/api/sessions", self._handle_sessions)
         app.router.add_delete("/api/sessions", self._handle_delete_sessions)
         app.router.add_delete("/api/sessions/{session_id}", self._handle_delete_session)
@@ -399,12 +407,32 @@ class LiveViewerServer:
         """Serve the dashboard shell for a compaction timeline route."""
         raw = request.query.get("sessions", "")
         session_ids = [session_id for session_id in raw.split(",") if session_id]
-        if not 1 <= len(session_ids) <= 3 or len(set(session_ids)) != len(session_ids):
-            return web.Response(status=400, text="Between one and three distinct session ids are required")
+        if not 1 <= len(session_ids) <= MAX_COMPACTION_SESSIONS or len(set(session_ids)) != len(session_ids):
+            return web.Response(
+                status=400,
+                text=f"Between one and {MAX_COMPACTION_SESSIONS} distinct session ids are required",
+            )
         store = ensure_trace_store()
         if any(store.load_session_row(session_id) is None for session_id in session_ids):
             return web.Response(status=404, text="Session not found")
         return await self._handle_dashboard_index(request)
+
+    async def _handle_continuation_chains(self, request: web.Request) -> web.Response:
+        """Group recent stored sessions into continued-conversation chains."""
+        raw_limit = request.query.get("limit", "")
+        limit = _DEFAULT_CONTINUATION_SCAN
+        if raw_limit.isdigit() and int(raw_limit) > 0:
+            limit = min(int(raw_limit), _MAX_CONTINUATION_SCAN)
+        store = ensure_trace_store()
+        rows = store.list_session_rows(limit=limit)
+        chains = await asyncio.to_thread(find_continuation_chains, store, rows)
+        return web.json_response(
+            {
+                "chains": chains,
+                "scanned_sessions": len(rows),
+                "max_timeline_sessions": MAX_COMPACTION_SESSIONS,
+            }
+        )
 
     async def _handle_get_pinned_sessions(self, request: web.Request) -> web.Response:
         store = ensure_trace_store()
