@@ -734,6 +734,12 @@ def _selected_codex_provider_base_url(args: list[str] | None = None) -> tuple[st
         provider = data.get("model_provider")
     if not isinstance(provider, str) or not provider.strip():
         return None
+    provider = provider.strip()
+
+    provider_base_url_key = f"model_providers.{_toml_dotted_key_segment(provider)}.base_url"
+    base_url_override = _codex_config_override_value(args, provider_base_url_key)
+    if isinstance(base_url_override, str) and base_url_override.strip():
+        return provider, base_url_override.strip()
 
     base_url: object | None = None
     for config in (profile_data, data):
@@ -896,11 +902,18 @@ def _reverse_proxy_trace_options(client: str, target: str) -> dict[str, object]:
 def _detect_codex_target(args: list[str] | None = None) -> str:
     """Auto-detect the correct upstream target for Codex CLI.
 
-    Reads ``~/.codex/auth.json`` (or ``$CODEX_HOME/auth.json``) to determine
-    the auth mode.  ChatGPT OAuth users (``codex login``) need the chatgpt.com
-    backend; API-key users use api.openai.com unless their Codex config selects
-    a custom provider with its own base URL.
+    Explicit provider and CLI target configuration takes precedence over the
+    auth-mode defaults, matching Codex's own layered config resolution.
     """
+    custom_provider = _selected_codex_provider_base_url(args)
+    if custom_provider is not None:
+        _provider, base_url = custom_provider
+        return base_url
+
+    openai_base_url_override = _codex_config_override_value(args, "openai_base_url")
+    if isinstance(openai_base_url_override, str) and openai_base_url_override.strip():
+        return openai_base_url_override.strip()
+
     codex_home = _codex_home()
     auth_file = codex_home / "auth.json"
     try:
@@ -909,11 +922,6 @@ def _detect_codex_target(args: list[str] | None = None) -> str:
             return _CODEX_CHATGPT_TARGET
     except (OSError, json.JSONDecodeError, ValueError):
         pass
-
-    custom_provider = _selected_codex_provider_base_url(args)
-    if custom_provider is not None:
-        _provider, base_url = custom_provider
-        return base_url
 
     env_target = os.environ.get(CLIENT_CONFIGS["codex"].base_url_env, "").strip()
     if env_target:
