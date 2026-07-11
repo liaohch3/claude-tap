@@ -299,6 +299,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .sidebar-item .si-row1 { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .sidebar-item .si-turn-wrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .sidebar-item .si-turn { font-size: 13px; font-weight: 600; color: var(--text); }
+.sidebar-item .si-turn.si-turn-aux { font-weight: 500; font-style: italic; color: var(--text-secondary); }
 .sidebar-item .si-error-dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--red); box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);

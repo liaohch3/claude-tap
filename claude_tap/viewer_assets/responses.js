@@ -592,6 +592,18 @@ function displayTurnLabel(entry) {
   return value === undefined || value === null || value === '' ? '?' : value;
 }
 
+/* Auxiliary entries (count_tokens, model listings, ...) never receive a
+   display_turn, so their label falls back to the raw capture turn and must
+   not be presented as part of the conversation numbering. */
+function isAuxiliaryTraceEntry(entry) {
+  return !isDisplayTurnCandidate(entry);
+}
+
+function captureTurnLabel(entry) {
+  const value = captureTurnValue(entry);
+  return value === undefined || value === null || value === '' ? '?' : value;
+}
+
 function isNavigableTraceEntry(entry) {
   if (isResponsesPath(displayTurnPath(entry)) && !isDisplayableResponsesEntry(entry)) return false;
   return true;

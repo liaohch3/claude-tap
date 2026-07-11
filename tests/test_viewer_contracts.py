@@ -1762,6 +1762,59 @@ def _codex_lazy_event_generate_false_records() -> tuple[dict[str, Any], ...]:
     return tuple(records)
 
 
+def _anthropic_aux_capture_records() -> tuple[dict[str, Any], ...]:
+    def _messages_record(turn: int, request_id: str, text: str) -> dict[str, Any]:
+        return {
+            "timestamp": f"2026-06-02T10:0{turn}:00.000000+00:00",
+            "request_id": request_id,
+            "turn": turn,
+            "duration_ms": 1200,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "headers": {},
+                "body": {
+                    "model": "claude-opus-4-6",
+                    "messages": [{"role": "user", "content": [{"type": "text", "text": text}]}],
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "content": [{"type": "text", "text": f"Response for {text}"}],
+                    "usage": {"input_tokens": 100, "output_tokens": 10},
+                },
+            },
+        }
+
+    def _count_tokens_record(turn: int, request_id: str) -> dict[str, Any]:
+        return {
+            "timestamp": f"2026-06-02T10:0{turn}:30.000000+00:00",
+            "request_id": request_id,
+            "turn": turn,
+            "duration_ms": 90,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages/count_tokens",
+                "headers": {},
+                "body": {
+                    "model": "claude-opus-4-6",
+                    "messages": [{"role": "user", "content": [{"type": "text", "text": "count me"}]}],
+                },
+            },
+            "response": {"status": 200, "headers": {}, "body": {"input_tokens": 42}},
+        }
+
+    return (
+        _messages_record(1, "req_primary_1", "First question."),
+        _messages_record(2, "req_primary_2", "Second question."),
+        _count_tokens_record(3, "req_count_tokens_3"),
+        _count_tokens_record(4, "req_count_tokens_4"),
+        _messages_record(5, "req_primary_5", "Third question."),
+    )
+
+
 def _write_trace(trace_path: Path, records: tuple[dict[str, Any], ...]) -> None:
     trace_path.write_text(
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
@@ -2273,6 +2326,55 @@ def test_viewer_codex_display_turns_skip_capture_control_records(tmp_path: Path,
         },
     ]
     assert state["resetTurns"] == [1, 2, 3, 4]
+
+
+def test_viewer_sidebar_labels_auxiliary_captures_distinct_from_conversation_turns(
+    tmp_path: Path, chromium_browser
+) -> None:
+    html_path = _generate_case_html(tmp_path, "aux_capture_labels", _anthropic_aux_capture_records())
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """() => {
+              const readSidebar = () => Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => ({
+                text: el.textContent,
+                aux: el.classList.contains('si-turn-aux'),
+                fontStyle: getComputedStyle(el).fontStyle,
+              }));
+              const english = readSidebar();
+              setLang('zh-CN');
+              const chinese = readSidebar().map(item => item.text);
+              setLang('en');
+              return {
+                english,
+                chinese,
+                displayTurns: Object.fromEntries(entries.map(entry => [entry.request_id, entry.display_turn ?? null])),
+              };
+            }"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert [item["text"] for item in state["english"]] == [
+        "Turn 1",
+        "Turn 2",
+        "Capture #3",
+        "Capture #4",
+        "Turn 3",
+    ]
+    assert [item["aux"] for item in state["english"]] == [False, False, True, True, False]
+    assert [item["fontStyle"] for item in state["english"]] == ["normal", "normal", "italic", "italic", "normal"]
+    assert state["chinese"] == ["轮次 1", "轮次 2", "抓包 #3", "抓包 #4", "轮次 3"]
+    assert state["displayTurns"] == {
+        "req_primary_1": 1,
+        "req_primary_2": 2,
+        "req_count_tokens_3": None,
+        "req_count_tokens_4": None,
+        "req_primary_5": 3,
+    }
 
 
 def test_viewer_direct_responses_generate_false_is_not_navigable(tmp_path: Path, chromium_browser) -> None:

@@ -577,9 +577,13 @@ function createSidebarItem(e, i) {
   item.style.borderLeftColor = failed ? 'var(--red)' : taskColor.color;
   const taskBadgeHtml = taskInfo && taskInfo.label ? `<span class="si-task" style="background:${taskColor.bg};color:${taskColor.color}" title="${esc(taskInfo.label)}">${esc(taskInfo.label)}</span>` : '';
   const errorDot = failed ? `<span class="si-error-dot" title="HTTP ${statusCode}"></span>` : '';
+  const aux = isAuxiliaryTraceEntry(e);
+  const turnLabel = aux
+    ? formatText('aux_capture', { n: captureTurnLabel(e) })
+    : `${t('turn')} ${displayTurnLabel(e)}`;
   item.innerHTML = `
     <div class="si-row1">
-      <span class="si-turn-wrap"><span class="si-turn">${t('turn')} ${displayTurnLabel(e)}</span>${errorDot}</span>
+      <span class="si-turn-wrap"><span class="si-turn${aux ? ' si-turn-aux' : ''}">${esc(String(turnLabel))}</span>${errorDot}</span>
       ${taskBadgeHtml}
       <span class="si-model" style="background:${badge.bg};color:${badge.fg}">${esc(shortModel)}</span>
     </div>
