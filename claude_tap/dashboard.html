@@ -3828,14 +3828,28 @@ function costAmortizeBlock(totals) {
     </div>`;
 }
 
+function labTruncationNotice(payloads) {
+  return payloads
+    .map(payload => {
+      const shown = Array.isArray(payload?.records) ? payload.records.length : 0;
+      const total = Number(payload?.session?.record_count || 0);
+      if (total <= shown) return "";
+      const sessionId = payload?.session?.id || "";
+      const note = t("limited_records", {shown, total});
+      return `<div class="detail-fallback-note">${esc(sessionId ? `${sessionId} · ${note}` : note)}</div>`;
+    })
+    .join("");
+}
+
 function renderCostAnalysis(payload) {
   const session = payload?.session || {};
   const rows = costUsageRows(payload);
+  const truncationNote = labTruncationNotice([payload]);
   $("#cost-subtitle").textContent = [session.model || session.agent || "", session.id || state.costSessionId || ""]
     .filter(Boolean)
     .join(" · ");
   if (!rows.length) {
-    $("#cost-content").innerHTML = `<div class="cost-empty">${esc(t("cost_no_usage"))}</div>`;
+    $("#cost-content").innerHTML = `${truncationNote}<div class="cost-empty">${esc(t("cost_no_usage"))}</div>`;
     return;
   }
   const totals = rows.reduce(
@@ -3864,6 +3878,7 @@ function renderCostAnalysis(payload) {
     .map(([color, label]) => `<span class="cost-legend-item"><span class="cost-legend-dot" style="background:${color}"></span>${esc(label)}</span>`)
     .join("");
   $("#cost-content").innerHTML = `
+    ${truncationNote}
     <div class="cost-tiles">${tiles
       .map(tile => `<div class="cost-tile"><div class="cost-tile-label">${esc(tile.label)}</div><div class="cost-tile-value">${tile.value}</div></div>`)
       .join("")}</div>
@@ -4061,9 +4076,10 @@ function compactionChart(rows) {
 
 function renderCompaction(payloads) {
   const rows = compactionRows(payloads);
+  const truncationNote = labTruncationNotice(payloads);
   $("#compaction-subtitle").textContent = state.compactionSessionIds.join(" → ");
   if (!rows.length) {
-    $("#compaction-content").innerHTML = `<div class="cost-empty">${esc(t("cost_no_usage"))}</div>`;
+    $("#compaction-content").innerHTML = `${truncationNote}<div class="cost-empty">${esc(t("cost_no_usage"))}</div>`;
     return;
   }
   const compactIndex = rows.findIndex(row => row.isCompact);
@@ -4086,6 +4102,7 @@ function renderCompaction(payloads) {
     ? ""
     : `<div class="cost-empty">${esc(t("compaction_none"))}</div>`;
   $("#compaction-content").innerHTML = `
+    ${truncationNote}
     <div class="cost-tiles">${tiles
       .map(tile => `<div class="cost-tile"><div class="cost-tile-label">${esc(tile.label)}</div><div class="cost-tile-value">${tile.value}</div></div>`)
       .join("")}</div>
@@ -4515,6 +4532,7 @@ function renderComparison(payloads) {
   insights.classList.toggle("hidden", state.compareMode !== "analysis");
   insights.innerHTML = state.compareMode === "analysis" ? renderComparisonInsights(left, right) : "";
   $("#compare-content").innerHTML = `
+    ${labTruncationNotice(payloads)}
     <div class="compare-identities">
       <div class="compare-axis-label">${esc(t("compare_metric"))}</div>
       ${renderComparisonIdentity(left.session, "left", t("compare_baseline"))}

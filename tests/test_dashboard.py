@@ -2966,6 +2966,89 @@ async def test_dashboard_compares_two_selected_sessions(trace_db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_dashboard_lab_views_flag_truncated_record_windows(trace_db) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    store = get_trace_store()
+
+    truncated_id = store.create_session(
+        client="claude",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    for index in range(3):
+        record = _anthropic_record(turn=index + 1)
+        record["request_id"] = f"req_truncated_{index}"
+        store.append_record(truncated_id, record)
+    store.finalize_session(truncated_id, {"api_calls": 3})
+
+    complete_id = store.create_session(
+        client="claude",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 7, 10, 12, 10, 0, tzinfo=timezone.utc),
+    )
+    complete_record = _anthropic_record(turn=1)
+    complete_record["request_id"] = "req_complete_0"
+    store.append_record(complete_id, complete_record)
+    store.finalize_session(complete_id, {"api_calls": 1})
+
+    # simulate a capture larger than the lab fetch window (offset=0&limit=2000)
+    conn = store._connect()
+    conn.execute("UPDATE sessions SET record_count = 2500 WHERE id = ?", (truncated_id,))
+    conn.commit()
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 1440, "height": 1000})
+
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard/cost?session={truncated_id}",
+                    wait_until="domcontentloaded",
+                )
+                await page.wait_for_selector("#cost-content .cost-tile", timeout=5000)
+                cost_notes = page.locator("#cost-content .detail-fallback-note")
+                assert await cost_notes.count() == 1
+                cost_note_text = await cost_notes.inner_text()
+                assert "Showing 3 of 2500 records." in cost_note_text
+                assert truncated_id in cost_note_text
+
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard/compaction?sessions={truncated_id},{complete_id}",
+                    wait_until="domcontentloaded",
+                )
+                await page.wait_for_selector("#compaction-content .cost-tile", timeout=5000)
+                compaction_notes = page.locator("#compaction-content .detail-fallback-note")
+                assert await compaction_notes.count() == 1
+                compaction_note_text = await compaction_notes.inner_text()
+                assert "Showing 3 of 2500 records." in compaction_note_text
+                assert truncated_id in compaction_note_text
+
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard/compare?left={truncated_id}&right={complete_id}",
+                    wait_until="domcontentloaded",
+                )
+                await page.wait_for_selector("#compare-view:not(.hidden) .compare-identities", timeout=5000)
+                compare_notes = page.locator("#compare-content .detail-fallback-note")
+                assert await compare_notes.count() == 1
+                assert truncated_id in await compare_notes.inner_text()
+
+                # a fully fetched capture renders without the truncation notice
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard/cost?session={complete_id}",
+                    wait_until="domcontentloaded",
+                )
+                await page.wait_for_selector("#cost-content .cost-tile", timeout=5000)
+                assert await page.locator("#cost-content .detail-fallback-note").count() == 0
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_node_model_lab_compares_matching_answers(trace_db) -> None:
     playwright = pytest.importorskip("playwright.async_api")
     store = get_trace_store()
