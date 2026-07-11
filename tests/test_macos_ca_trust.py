@@ -291,8 +291,6 @@ async def test_async_main_returns_before_starting_proxy_when_trust_ca_fails(
             client="agy",
             target="https://antigravity.goog",
             extra_allowed_paths=[],
-            no_update_check=True,
-            no_auto_update=True,
             no_launch=True,
             claude_args=[],
             max_traces=0,

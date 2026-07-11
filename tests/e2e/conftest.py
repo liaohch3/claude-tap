@@ -73,9 +73,6 @@ def claude_env(installed_claude_tap, monkeypatch):
     # Remove nesting detection vars
     env.pop("CLAUDECODE", None)
     env.pop("CLAUDE_CODE_SSE_PORT", None)
-    # Disable update check in tests
-    env["CLAUDE_TAP_PYPI_URL"] = "http://127.0.0.1:1/invalid"
-
     selected_mode = env.get("CLAUDE_TAP_REAL_E2E_PROXY_MODE", "auto").lower()
     if selected_mode not in {"auto", "reverse", "forward"}:
         pytest.fail(f"CLAUDE_TAP_REAL_E2E_PROXY_MODE must be one of: auto, reverse, forward (got: {selected_mode})")

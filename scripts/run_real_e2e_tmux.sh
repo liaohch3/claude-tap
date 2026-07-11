@@ -97,7 +97,7 @@ cleanup() {
 trap cleanup EXIT
 
 tmux new-session -d -s "$SESSION" -x 160 -y 46
-tmux send-keys -t "$SESSION" -l "cd $REPO_ROOT && uv run python -m claude_tap --tap-output-dir $TRACE_DIR --tap-no-update-check --tap-proxy-mode forward -- --permission-mode $PERMISSION_MODE"
+tmux send-keys -t "$SESSION" -l "cd $REPO_ROOT && uv run python -m claude_tap --tap-output-dir $TRACE_DIR --tap-proxy-mode forward -- --permission-mode $PERMISSION_MODE"
 tmux send-keys -t "$SESSION" Enter
 
 wait_for_prompt 90 || true

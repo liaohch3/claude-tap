@@ -50,11 +50,7 @@ from claude_tap.cli_clients import (
 )
 from claude_tap.cli_update import (
     _build_update_command,
-    _check_pypi_version,
     _detect_installer,
-    _maybe_start_background_update,
-    _start_background_update,
-    _version_tuple,
     parse_update_args,
     update_main,
 )
@@ -165,7 +161,6 @@ _CLI_COMPAT_EXPORTS = (
     _read_settings_env_base_url,
     _selected_codex_provider_base_url,
     _settings_arg,
-    _start_background_update,
     _toml_dotted_key_segment,
     parse_update_args,
 )
@@ -452,19 +447,6 @@ async def async_main(args: argparse.Namespace):
         if not transcript_only:
             print(f"📁 Trace session: {session_id}")
             print(f"🗄️  Trace database: {resolve_db_path()}")
-
-            # Background update check
-            if not args.no_update_check:
-                try:
-                    latest = await _check_pypi_version()
-                    if latest and _version_tuple(latest) > _version_tuple(__version__):
-                        print(f"⬆️  Update available: {__version__} → {latest}")
-                        _maybe_start_background_update(
-                            no_auto_update=args.no_auto_update,
-                            dashboard_stop_command=_dashboard_stop_command(dashboard_host, dashboard_port),
-                        )
-                except Exception:
-                    pass
 
             if not args.no_launch:
                 client_started_at = time.time()
@@ -851,8 +833,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"Port for the shared dashboard (default: {DEFAULT_DASHBOARD_PORT})",
     )
 
-    # -- Storage & update options --
-    storage_group = tap_parser.add_argument_group("storage and update options")
+    # -- Storage options --
+    storage_group = tap_parser.add_argument_group("storage options")
     storage_group.add_argument(
         "--tap-output-dir",
         default="./.traces",
@@ -885,14 +867,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     storage_group.add_argument(
         "--tap-no-update-check",
         action="store_true",
-        dest="no_update_check",
-        help="Disable PyPI update check on startup",
+        dest="_deprecated_no_update_check",
+        help=argparse.SUPPRESS,
     )
     storage_group.add_argument(
         "--tap-no-auto-update",
         action="store_true",
-        dest="no_auto_update",
-        help="Check for updates but don't auto-download",
+        dest="_deprecated_no_auto_update",
+        help=argparse.SUPPRESS,
     )
     args, claude_args = tap_parser.parse_known_args(argv)
     # Strip leading "--" separator if present (argparse leaves it in remainder)

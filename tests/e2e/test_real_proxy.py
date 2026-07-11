@@ -33,7 +33,6 @@ def _run_claude_tap(
         "claude_tap",
         "--tap-output-dir",
         trace_dir,
-        "--tap-no-update-check",
         "--tap-proxy-mode",
         proxy_mode,
         "--",  # separator: everything after goes to claude
