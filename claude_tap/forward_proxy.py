@@ -30,8 +30,23 @@ from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import WSMessage, WSMsgType
-from aiohttp._websocket.reader import WebSocketDataQueue, WebSocketReader
-from aiohttp.http_websocket import WS_KEY, WebSocketWriter
+from aiohttp.http_websocket import WS_KEY, WebSocketReader, WebSocketWriter
+
+try:
+    # aiohttp 3.11+
+    from aiohttp._websocket.reader import WebSocketDataQueue
+except ImportError:  # pragma: no cover - exercised by the aiohttp 3.9/3.10 CI matrix
+    # aiohttp 3.9-3.10 only exposes the legacy DataQueue(loop=) constructor.
+    from aiohttp.http_websocket import DataQueue as _LegacyWebSocketDataQueue
+
+    def WebSocketDataQueue(  # type: ignore[misc]
+        protocol: object,
+        limit: int,
+        *,
+        loop: object,
+    ) -> _LegacyWebSocketDataQueue:
+        return _LegacyWebSocketDataQueue(loop=loop)
+
 
 from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
 from claude_tap.certs import CertificateAuthority
@@ -59,6 +74,14 @@ from claude_tap.ws_proxy import (
 )
 
 log = logging.getLogger("claude-tap")
+
+
+async def _ws_send_frame(writer: WebSocketWriter, message: bytes, opcode: int) -> None:
+    if hasattr(writer, "send_frame"):
+        await writer.send_frame(message, opcode)
+    else:
+        await writer._send_frame(message, opcode)
+
 
 DEFAULT_TRACE_IGNORED_HOSTS = frozenset(
     {
@@ -954,18 +977,18 @@ class ForwardProxyServer:
             async for msg in upstream_ws:
                 if msg.type == WSMsgType.TEXT:
                     server_messages.append(msg.data)
-                    await ws_writer.send_frame(msg.data.encode("utf-8"), WSMsgType.TEXT)
+                    await _ws_send_frame(ws_writer, msg.data.encode("utf-8"), WSMsgType.TEXT)
                     await writer.drain()
                 elif msg.type == WSMsgType.BINARY:
-                    await ws_writer.send_frame(msg.data, WSMsgType.BINARY)
+                    await _ws_send_frame(ws_writer, msg.data, WSMsgType.BINARY)
                     await writer.drain()
                 elif msg.type == WSMsgType.PING:
                     payload = msg.data if isinstance(msg.data, (bytes, bytearray)) else b""
-                    await ws_writer.send_frame(bytes(payload), WSMsgType.PING)
+                    await _ws_send_frame(ws_writer, bytes(payload), WSMsgType.PING)
                     await writer.drain()
                 elif msg.type == WSMsgType.PONG:
                     payload = msg.data if isinstance(msg.data, (bytes, bytearray)) else b""
-                    await ws_writer.send_frame(bytes(payload), WSMsgType.PONG)
+                    await _ws_send_frame(ws_writer, bytes(payload), WSMsgType.PONG)
                     await writer.drain()
                 elif msg.type == WSMsgType.CLOSE:
                     await ws_writer.close(code=msg.data or 1000, message=msg.extra)
@@ -1117,7 +1140,7 @@ class ForwardProxyServer:
         ]
         completed_response_body = response_events[-1]["response"]
         for event in response_events:
-            await ws_writer.send_frame(json.dumps(event, separators=(",", ":")).encode("utf-8"), WSMsgType.TEXT)
+            await _ws_send_frame(ws_writer, json.dumps(event, separators=(",", ":")).encode("utf-8"), WSMsgType.TEXT)
             await writer.drain()
         try:
             await ws_writer.close()

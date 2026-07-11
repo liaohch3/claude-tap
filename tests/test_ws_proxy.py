@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import tracemalloc
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
@@ -14,6 +15,7 @@ from aiohttp import web
 from yarl import URL
 
 from claude_tap.cli_clients import _extend_no_proxy
+from claude_tap.forward_proxy import _ws_send_frame
 from claude_tap.proxy import proxy_handler
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_store import get_trace_store, reset_trace_store
@@ -1342,3 +1344,21 @@ class TestGetWsProxySettings:
     def test_non_ws_scheme_returns_none(self):
         result = _get_ws_proxy_settings("https://api.openai.com/v1/responses")
         assert result is None
+
+
+class TestWsSendFrameShim:
+    """Unit tests for the _ws_send_frame version-compat shim."""
+
+    @pytest.mark.asyncio
+    async def test_uses_send_frame_when_available(self):
+        writer = MagicMock()
+        writer.send_frame = AsyncMock()
+        await _ws_send_frame(writer, b"hello", 1)
+        writer.send_frame.assert_awaited_once_with(b"hello", 1)
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_private_send_frame(self):
+        writer = MagicMock(spec=[])  # no send_frame attribute
+        writer._send_frame = AsyncMock()
+        await _ws_send_frame(writer, b"world", 2)
+        writer._send_frame.assert_awaited_once_with(b"world", 2)
