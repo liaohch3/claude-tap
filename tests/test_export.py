@@ -41,7 +41,8 @@ def test_export_html_inferred_from_output_suffix(tmp_path, capsys) -> None:
 
     html = html_path.read_text(encoding="utf-8")
     assert "<!DOCTYPE html>" in html
-    assert "EMBEDDED_TRACE_DATA" in html
+    assert "EMBEDDED_TRACE_COMPACT_DATA" in html
+    assert "const EMBEDDED_TRACE_DATA =" not in html
     assert "hello from trace" in html
     assert f"Exported 1 turns to {html_path}" in capsys.readouterr().out
 
@@ -111,7 +112,33 @@ def test_export_help_mentions_html(capsys) -> None:
     assert exc_info.value.code == 0
     help_text = capsys.readouterr().out
     assert "{markdown,json,html,compact,prompt-md}" in help_text
-    assert "for HTML" in help_text
+    assert "default: compact" in help_text
+
+
+def test_export_defaults_to_compact_trace(tmp_path, capsys) -> None:
+    from claude_tap.compact_trace import load_compact_trace
+
+    trace_path = _write_trace(tmp_path)
+    compact_path = tmp_path / "trace.json"
+
+    assert export_main([str(trace_path), "-o", str(compact_path)]) == 0
+
+    compact_text = compact_path.read_text(encoding="utf-8")
+    assert "__claude_tap_compact_trace__" in compact_text
+    assert load_compact_trace(compact_text)[0]["request"]["body"]["messages"][0]["content"] == "hello from trace"
+    assert f"Exported 1 turns to {compact_path}" in capsys.readouterr().out
+
+
+def test_export_stdout_defaults_to_compact_trace(tmp_path, capsys) -> None:
+    from claude_tap.compact_trace import load_compact_trace
+
+    trace_path = _write_trace(tmp_path)
+
+    assert export_main([str(trace_path)]) == 0
+
+    output = capsys.readouterr().out
+    assert "__claude_tap_compact_trace__" in output
+    assert load_compact_trace(output)[0]["request"]["body"]["messages"][0]["content"] == "hello from trace"
 
 
 def test_export_compact_trace_is_standalone_and_html_renderable(tmp_path, capsys) -> None:

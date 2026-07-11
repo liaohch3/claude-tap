@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -116,6 +117,48 @@ def _antigravity_record() -> dict:
                 "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 5},
             },
         },
+    }
+
+
+def _bedrock_frame(payload: dict) -> str:
+    encoded = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+    return "\x00\x00binary-prefix" + json.dumps({"bytes": encoded, "p": "abcdefghijk"}) + "\ufffd"
+
+
+def _bedrock_stream_record() -> dict:
+    body = "".join(
+        [
+            _bedrock_frame(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_dashboard_bedrock",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-opus-4-6",
+                        "content": [],
+                        "usage": {"input_tokens": 3, "output_tokens": 0},
+                    },
+                }
+            ),
+            _bedrock_frame({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            _bedrock_frame({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "OK"}}),
+            _bedrock_frame({"type": "content_block_stop", "index": 0}),
+            _bedrock_frame({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+            _bedrock_frame({"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3}}),
+        ]
+    )
+    return {
+        "timestamp": "2026-05-20T08:30:00+00:00",
+        "request_id": "req_bedrock_dashboard",
+        "turn": 1,
+        "request": {
+            "method": "POST",
+            "path": "/model/global.anthropic.claude-opus-4-6-v1/invoke-with-response-stream",
+            "headers": {"Host": "bedrock-runtime.us-east-1.amazonaws.com"},
+            "body": {"messages": [{"role": "user", "content": [{"type": "text", "text": "ping"}]}]},
+        },
+        "response": {"status": 200, "headers": {"Content-Type": "application/vnd.amazon.eventstream"}, "body": body},
     }
 
 
@@ -621,6 +664,8 @@ def test_dashboard_rejects_missing_session_ids(trace_db) -> None:
     assert "DASHBOARD_I18N" in template
     assert 'data-i18n="table_first_message"' in template
     assert "export_jsonl" in template
+    assert 'export_compact: "Export JSON"' in template
+    assert "export_log" not in template
     assert "export_html" in template
     assert "export_menu" in template
     assert load_trace_session("not-a-valid-session-id") is None
@@ -1037,6 +1082,8 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 html = await resp.text()
                 assert "session-list" in html
                 assert "export_jsonl" in html
+                assert 'export_compact: "Export JSON"' in html
+                assert "export_log" not in html
                 assert "export_html" in html
                 assert "export_menu" in html
 
@@ -1088,6 +1135,7 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 assert f"session-{session_id[:8]}.jsonl" not in html
                 assert f"session-{session_id[:8]}.html" not in html
                 assert f"/api/sessions/{session_id}/export/html" in html
+                assert f"/api/sessions/{session_id}/export/log" not in html
 
             async with session.get(
                 f"http://127.0.0.1:{port}/api/sessions/{second_session_id}/records?offset=1&limit=1"
@@ -1122,9 +1170,10 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 assert resp.charset == "utf-8"
                 assert f'filename="trace_{session_id[:8]}.html"' in resp.headers["Content-Disposition"]
                 html = await resp.text()
-                assert "EMBEDDED_TRACE_DATA" in html
+                assert "EMBEDDED_TRACE_COMPACT_DATA" in html
+                assert "const EMBEDDED_TRACE_DATA =" not in html
                 assert "req_claude" in html
-                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/jsonl";' in html
+                assert f'const __TRACE_JSONL_PATH__ = "/api/sessions/{session_id}/export/compact";' in html
                 assert f'const __TRACE_HTML_PATH__ = "/api/sessions/{session_id}/export/html";' in html
                 assert f"session-{session_id[:8]}.jsonl" not in html
 
@@ -1146,6 +1195,28 @@ async def test_dashboard_server_serves_session_api_and_exports(trace_db, tmp_pat
                 assert resp.status == 404
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_export_html_normalizes_bedrock_eventstream(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(session_id, _bedrock_stream_record())
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions/{session_id}/export/html") as resp:
+                assert resp.status == 200
+                html = await resp.text()
+    finally:
+        await server.stop()
+
+    assert "EMBEDDED_TRACE_COMPACT_DATA" in html
+    assert '"sse_events":' in html
+    assert '"content":[{"type":"text","text":"OK"}]' in html
+    assert "binary-prefix" not in html
 
 
 @pytest.mark.asyncio
@@ -1633,14 +1704,13 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 export_button = page.locator(".detail-inspector-bar .export-menu > summary")
                 assert await export_button.count() == 1
                 assert await export_button.inner_text() == "Export"
-                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 4
-                hrefs = await page.locator(".detail-inspector-bar .export-menu-item").evaluate_all(
-                    "(links) => links.map((link) => link.getAttribute('href'))"
-                )
-                assert f"/api/sessions/{session_id}/export/jsonl" in hrefs
+                export_items = page.locator(".detail-inspector-bar .export-menu-item")
+                assert await export_items.count() == 2
+                assert await export_items.all_text_contents() == ["Export JSON", "Export HTML"]
+                hrefs = await export_items.evaluate_all("(links) => links.map((link) => link.getAttribute('href'))")
                 assert f"/api/sessions/{session_id}/export/compact" in hrefs
-                assert f"/api/sessions/{session_id}/export/log" in hrefs
                 assert f"/api/sessions/{session_id}/export/html" in hrefs
+                assert f"/api/sessions/{session_id}/export/log" not in hrefs
 
                 async with page.expect_download() as download_info:
                     await export_button.click()
@@ -1650,7 +1720,8 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 download_path = await download.path()
                 assert download_path is not None
                 exported_html = Path(download_path).read_text(encoding="utf-8")
-                assert "EMBEDDED_TRACE_DATA" in exported_html
+                assert "EMBEDDED_TRACE_COMPACT_DATA" in exported_html
+                assert "const EMBEDDED_TRACE_DATA =" not in exported_html
                 assert "req_claude" in exported_html
             finally:
                 await browser.close()
@@ -1682,7 +1753,9 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                 await page.locator(".detail-inspector-bar .export-menu > summary").click()
                 menu = page.locator(".detail-inspector-bar .export-menu-list")
                 assert await menu.is_visible()
-                assert await page.locator(".detail-inspector-bar .export-menu-item").count() == 4
+                export_items = page.locator(".detail-inspector-bar .export-menu-item")
+                assert await export_items.count() == 2
+                assert await export_items.all_text_contents() == ["Export JSON", "Export HTML"]
 
                 layout = await page.evaluate(
                     """() => {
@@ -1704,7 +1777,7 @@ async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, 
                     }"""
                 )
                 assert layout["overflowX"] == "visible"
-                assert layout["menuHeight"] > 80
+                assert layout["menuHeight"] > 50
                 assert layout["menuRight"] <= layout["viewportWidth"]
                 assert layout["menuBottom"] > layout["actionsBottom"]
             finally:
@@ -2121,6 +2194,42 @@ async def test_search_uncached_records_fallback(trace_db) -> None:
     sessions = store.list_session_rows(query=search_query)
     assert len(sessions) == 1
     assert sessions[0]["id"] == session_id
+
+
+def test_search_matches_compacted_record_blobs(trace_db) -> None:
+    from claude_tap.trace_store import SessionQuery
+
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    hidden_term = "dashboard-needle-inside-compacted-user-message"
+    long_prompt = "intro " * 120 + hidden_term
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-07-08T10:15:00+00:00",
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "messages": [{"role": "user", "content": long_prompt}],
+                },
+            },
+            "response": {"status": 200, "body": {"content": [{"type": "text", "text": "ok"}]}},
+        },
+    )
+
+    conn = store._connect()
+    payload_json = conn.execute(
+        "SELECT payload_json FROM records WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()["payload_json"]
+    assert hidden_term not in payload_json
+    assert conn.execute("SELECT COUNT(*) FROM record_blobs WHERE session_id = ?", (session_id,)).fetchone()[0] > 0
+
+    sessions = store.list_session_rows(query=SessionQuery(search=hidden_term))
+
+    assert [row["id"] for row in sessions] == [session_id]
 
 
 @pytest.mark.asyncio

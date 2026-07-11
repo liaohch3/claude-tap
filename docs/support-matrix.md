@@ -19,10 +19,9 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Claude Code | Claude-compatible gateway (`ANTHROPIC_BASE_URL` env or Claude settings) | Custom Anthropic-compatible upstream | none | HTTP/SSE | Unit-tested; DeepSeek real E2E verified |
 | Claude Code | Anthropic-compatible Bedrock gateway (`ANTHROPIC_BASE_URL` + `bedrock/...` model) | New API or equivalent gateway routed to AWS Bedrock | none | HTTP/SSE | Unit-tested; New API AWS Bedrock real E2E verified |
 | Claude Code | Google Vertex AI pass-through gateway (`CLAUDE_CODE_USE_VERTEX=1` + `ANTHROPIC_VERTEX_BASE_URL`) | Vertex rawPredict-compatible upstream | none | HTTP/SSE | Unit-tested; local E2E verified |
-| Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | HTTP/SSE | Verified |
-| Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | WebSocket | Verified |
-| Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE | Verified |
-| Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | WebSocket | Verified |
+| Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | HTTP/SSE in default reverse mode | Verified |
+| Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE in default reverse mode | Real E2E verified with Codex 0.144.1 |
+| Codex CLI | Explicit `--tap-proxy-mode forward` | Auto-detected upstream | n/a | HTTP/SSE + WebSocket | Unit-tested |
 | Codex App | ChatGPT account in Codex App | `codex-app://sessions` | n/a | Local session JSONL transcript import plus automatic best-effort CDP WebSocket enrichment when a Codex App debug endpoint is available | Unit-tested |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy (Google endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Gemini CLI | API key / Vertex-compatible config (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE | Unit-tested |
@@ -53,7 +52,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | Client | Default mode | Reason |
 |--------|--------------|--------|
 | `claude` | `reverse` | Single provider, native Claude provider base URL env vars (`ANTHROPIC_BASE_URL`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL`) |
-| `codex` | `reverse` | Single provider, native `OPENAI_BASE_URL` env var |
+| `codex` | `reverse` | Launches a temporary sibling provider with the proxy base URL and `supports_websockets=false`, producing one self-contained HTTP/SSE trace record per request without changing `~/.codex/config.toml` |
 | `codexapp` | `transcript` | Transcript listener for `CODEX_HOME/sessions` or `~/.codex/sessions`; no proxy is created. CDP WebSocket evidence is added automatically when Codex App exposes a debug endpoint |
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |
 | `kimi` | `reverse` | Legacy kimi-cli; native `KIMI_BASE_URL` env var |

@@ -14,6 +14,7 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
+from claude_tap.compact_trace import build_compact_trace_bundle
 from claude_tap.dashboard import (
     build_session_query,
     dashboard_trace_snapshot,
@@ -31,8 +32,9 @@ from claude_tap.viewer import (
     VIEWER_SCRIPT_ANCHOR,
     VIEWER_TEMPLATE_PATH,
     _extract_metadata_from_record,
-    _generate_html_viewer,
+    _generate_html_viewer_from_compact_bundle,
     _generate_html_viewer_from_metadata,
+    _normalize_record_for_viewer,
     _read_viewer_template,
 )
 
@@ -557,7 +559,6 @@ class LiveViewerServer:
             export_urls = {
                 "jsonl": f"/api/sessions/{quote(session_id)}/export/jsonl",
                 "compact": f"/api/sessions/{quote(session_id)}/export/compact",
-                "log": f"/api/sessions/{quote(session_id)}/export/log",
                 "html": f"/api/sessions/{quote(session_id)}/export/html",
             }
             metadata = [
@@ -701,13 +702,19 @@ class LiveViewerServer:
             return web.Response(status=404, text="Session not found")
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
-            trace_path = tmp_path / f"session-{session_id[:8]}.jsonl"
             html_path = tmp_path / f"trace_{session_id[:8]}.html"
-            trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
-            _generate_html_viewer(
-                trace_path,
+            records = []
+            for record in store.load_records(session_id):
+                try:
+                    normalized = json.loads(_normalize_record_for_viewer(json.dumps(record, ensure_ascii=False)))
+                except (TypeError, json.JSONDecodeError):
+                    normalized = record
+                if isinstance(normalized, dict):
+                    records.append(normalized)
+            _generate_html_viewer_from_compact_bundle(
+                build_compact_trace_bundle(records),
                 html_path,
-                display_trace_path=f"/api/sessions/{quote(session_id)}/export/jsonl",
+                display_trace_path=f"/api/sessions/{quote(session_id)}/export/compact",
                 display_html_path=f"/api/sessions/{quote(session_id)}/export/html",
             )
             if not html_path.exists():

@@ -2399,16 +2399,21 @@ def test_viewer_codex_lazy_display_turns_skip_capture_control_records(tmp_path: 
         errors = _open_viewer_with_error_capture(page, html_path)
         state = page.evaluate(
             """() => ({
-              usesLazyMode: typeof EMBEDDED_TRACE_META !== 'undefined',
+              usesCompactBundle: typeof EMBEDDED_TRACE_COMPACT_DATA !== 'undefined',
+              usesMetadataMode: typeof EMBEDDED_TRACE_META !== 'undefined',
               sidebarTurns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
               sidebarPaths: Array.from(document.querySelectorAll('.sidebar-item .si-path')).map(el => el.textContent),
+              filteredRequestIds: filtered.map(entry => entry.request_id),
               codexEntries: entries
                 .filter(entry => entry.request?.path === '/v1/responses')
                 .map(entry => ({
+                  requestId: entry.request_id,
                   turn: entry.turn,
                   displayTurn: entry.display_turn ?? null,
                   captureTurn: entry.capture_turn ?? null,
-                  generate: entry.request?.body?.generate ?? null,
+                  responseOutputCount: entry.response?.body?.output?.length ?? 0,
+                  outputTokens: entry.response?.body?.usage?.output_tokens ?? 0,
+                  navigable: isNavigableTraceEntry(entry),
                 })),
             })"""
         )
@@ -2416,18 +2421,40 @@ def test_viewer_codex_lazy_display_turns_skip_capture_control_records(tmp_path: 
         page.close()
 
     assert errors == []
-    assert state["usesLazyMode"] is True
+    assert state["usesCompactBundle"] is True
+    assert state["usesMetadataMode"] is False
     assert state["sidebarTurns"] == ["Turn 1", "Turn 2", "Turn 3"]
     assert state["sidebarPaths"] == ["WEBSOCKET /v1/responses", "WEBSOCKET /v1/responses", "WEBSOCKET /v1/responses"]
-    assert state["codexEntries"][0] == {
-        "turn": 2,
-        "displayTurn": None,
-        "captureTurn": 2,
-        "generate": False,
-    }
-    assert state["codexEntries"][1]["displayTurn"] == 1
-    assert state["codexEntries"][2]["displayTurn"] == 2
-    assert state["codexEntries"][3]["displayTurn"] == 3
+    assert state["filteredRequestIds"] == ["req_first_visible", "req_second_visible", "req_zero_output_visible"]
+    assert state["codexEntries"] == [
+        {
+            "requestId": "req_first_visible",
+            "turn": "2.2",
+            "displayTurn": 1,
+            "captureTurn": "2.2",
+            "responseOutputCount": 1,
+            "outputTokens": 407,
+            "navigable": True,
+        },
+        {
+            "requestId": "req_second_visible",
+            "turn": "2.3",
+            "displayTurn": 2,
+            "captureTurn": "2.3",
+            "responseOutputCount": 1,
+            "outputTokens": 303,
+            "navigable": True,
+        },
+        {
+            "requestId": "req_zero_output_visible",
+            "turn": "2.4",
+            "displayTurn": 3,
+            "captureTurn": "2.4",
+            "responseOutputCount": 0,
+            "outputTokens": 0,
+            "navigable": True,
+        },
+    ]
 
 
 def test_viewer_codex_lazy_stubs_read_generate_from_websocket_events(tmp_path: Path, chromium_browser) -> None:
@@ -2442,7 +2469,8 @@ def test_viewer_codex_lazy_stubs_read_generate_from_websocket_events(tmp_path: P
         errors = _open_viewer_with_error_capture(page, html_path)
         state = page.evaluate(
             """() => ({
-              usesLazyMode: typeof EMBEDDED_TRACE_META !== 'undefined',
+              usesCompactBundle: typeof EMBEDDED_TRACE_COMPACT_DATA !== 'undefined',
+              usesMetadataMode: typeof EMBEDDED_TRACE_META !== 'undefined',
               sidebarTurns: Array.from(document.querySelectorAll('.sidebar-item .si-turn')).map(el => el.textContent),
               filteredRequestIds: filtered.map(entry => entry.request_id),
               eventEntries: entries
@@ -2463,20 +2491,11 @@ def test_viewer_codex_lazy_stubs_read_generate_from_websocket_events(tmp_path: P
         page.close()
 
     assert errors == []
-    assert state["usesLazyMode"] is True
+    assert state["usesCompactBundle"] is True
+    assert state["usesMetadataMode"] is False
     assert state["sidebarTurns"] == ["Turn 1"]
     assert state["filteredRequestIds"] == ["req_event_visible"]
     assert state["eventEntries"] == [
-        {
-            "requestId": "req_event_prefetch",
-            "displayTurn": None,
-            "captureTurn": 1,
-            "requestGenerate": False,
-            "responseGenerate": False,
-            "responseOutputCount": 0,
-            "outputTokens": 0,
-            "navigable": False,
-        },
         {
             "requestId": "req_event_visible",
             "displayTurn": 1,
@@ -2867,12 +2886,19 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
     }
 
     page = chromium_browser.new_page()
-    page.add_init_script("window.__TRACE_SESSION_EXPORTS__ = {jsonl: 'coverage.jsonl', log: 'coverage.log'};")
+    page.add_init_script(
+        "window.__TRACE_SESSION_EXPORTS__ = {compact: 'coverage.json', log: 'coverage.log', html: 'coverage.html'};"
+    )
     try:
         session = page.context.new_cdp_session(page)
         session.send("Profiler.enable")
         session.send("Profiler.startPreciseCoverage", {"callCount": True, "detailed": True})
         errors = _open_viewer_with_error_capture(page, html_path)
+
+        export_items = page.locator("#viewer-actions .export-menu-item")
+        assert export_items.count() == 2
+        assert export_items.all_text_contents() == ["Export JSON", "Export HTML"]
+        assert page.locator('#viewer-actions a[href="coverage.log"]').count() == 0
 
         entry_count = page.evaluate("entries.length")
         for index in range(entry_count):

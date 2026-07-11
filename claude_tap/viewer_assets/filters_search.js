@@ -333,7 +333,8 @@ function matchSearch(e, q) {
     if (sys.toLowerCase().includes(q)) return true;
     const turn = String(displayTurnLabel(e));
     if (turn.includes(q)) return true;
-    const tools = e.request?.body?.tools || [];
+    const stubRequestTools = getRequestTools(e.request?.body);
+    const tools = stubRequestTools.length ? stubRequestTools : getRequestTools(getResponsePayload(e));
     for (const td of tools) {
       if (toolDisplayName(td).toLowerCase().includes(q)) return true;
     }
@@ -354,7 +355,8 @@ function matchSearch(e, q) {
     const mc = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
     if (mc.toLowerCase().includes(q)) return true;
   }
-  const tools = getRequestTools(body);
+  const requestTools = getRequestTools(body);
+  const tools = requestTools.length ? requestTools : getRequestTools(getResponsePayload(e));
   for (const td of tools) {
     if (toolDisplayName(td).toLowerCase().includes(q)) return true;
     if (toolDescription(td).toLowerCase().includes(q)) return true;
@@ -490,7 +492,9 @@ function getEntrySearchText(entry) {
   parts.push(body?.model || '');
   parts.push(extractSystem(body) || '');
   getMessages(body).forEach(m => parts.push(msgToText(m)));
-  getRequestTools(body).forEach(td => parts.push(JSON.stringify(td)));
+  const requestTools = getRequestTools(body);
+  const tools = requestTools.length ? requestTools : getRequestTools(getResponsePayload(resolved));
+  tools.forEach(td => parts.push(JSON.stringify(td)));
   const output = getResponseOutput(resolved);
   if (output?.content) parts.push(msgToText({ role: 'assistant', content: output.content }));
   getResponseEvents(resolved).forEach(ev => parts.push(JSON.stringify(ev)));

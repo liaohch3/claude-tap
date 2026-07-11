@@ -649,7 +649,12 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   const liveStatus = document.querySelector('#live-status') || document.createElement('div');
                   liveStatus.id = 'live-status';
                   if (!liveStatus.isConnected) document.body.appendChild(liveStatus);
-                  const wsRecord = EMBEDDED_TRACE_DATA.find(record => record.transport === 'websocket');
+                  const embeddedRecords = typeof EMBEDDED_TRACE_DATA !== 'undefined'
+                    ? EMBEDDED_TRACE_DATA
+                    : (typeof EMBEDDED_TRACE_COMPACT_DATA !== 'undefined'
+                      ? (materializeCompactTraceBundle(EMBEDDED_TRACE_COMPACT_DATA) || [])
+                      : []);
+                  const wsRecord = embeddedRecords.find(record => record.transport === 'websocket');
                   if (wsRecord) {
                     expandLiveWebSocketResponseEntries([wsRecord], true);
                     liveRecords = [wsRecord];

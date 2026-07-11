@@ -178,6 +178,96 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           { role: 'user', content: [{ type: 'input_text', text: 'Hi' }] },
         ]);
 
+        assert.deepEqual(
+          plain(context.getRequestTools({
+            model: 'gpt-5.6-sol',
+            input: [{
+              type: 'additional_tools',
+              role: 'developer',
+              tools: [
+                { name: 'exec', description: 'Run a command' },
+                { name: 'wait' },
+                { name: 'request_user_input' },
+              ],
+            }],
+          }).map(tool => context.toolDisplayName(tool))),
+          ['exec', 'wait', 'request_user_input'],
+        );
+
+        assert.deepEqual(
+          plain(context.getRequestTools({
+            tools: [{ name: 'exec' }],
+            input: [{
+              type: 'additional_tools',
+              tools: [{ name: 'exec' }, { name: 'collaboration' }],
+            }],
+          }).map(tool => context.toolDisplayName(tool))),
+          ['exec', 'collaboration'],
+        );
+
+        const codexPrefetchId = 'resp_prefetch_tools';
+        const codexVisibleId = 'resp_visible';
+        const codexExpanded = context.expandWebSocketResponseEntries([
+          {
+            transport: 'websocket',
+            request: {
+              method: 'WEBSOCKET',
+              path: '/v1/responses',
+              body: {
+                model: 'gpt-5.6-sol',
+                generate: false,
+                input: [{
+                  type: 'additional_tools',
+                  role: 'developer',
+                  tools: [
+                    { name: 'exec' },
+                    { name: 'wait' },
+                    { name: 'request_user_input' },
+                    { name: 'collaboration' },
+                  ],
+                }],
+              },
+            },
+            response: {
+              body: {
+                id: codexPrefetchId,
+                generate: false,
+                output: [],
+                usage: { input_tokens: 10, output_tokens: 0 },
+              },
+            },
+          },
+          {
+            transport: 'websocket',
+            request: {
+              method: 'WEBSOCKET',
+              path: '/v1/responses',
+              body: {
+                model: 'gpt-5.6-sol',
+                previous_response_id: codexPrefetchId,
+                input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Run pwd' }] }],
+              },
+            },
+            response: {
+              body: {
+                id: codexVisibleId,
+                previous_response_id: codexPrefetchId,
+                output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] }],
+                usage: { input_tokens: 20, output_tokens: 2 },
+              },
+            },
+          },
+        ]);
+        assert.equal(codexExpanded.length, 1);
+        assert.deepEqual(
+          plain(context.getRequestTools(codexExpanded[0].request.body).map(tool => context.toolDisplayName(tool))),
+          ['exec', 'wait', 'request_user_input', 'collaboration'],
+        );
+        assert.deepEqual(
+          plain(context.getMessages(codexExpanded[0].request.body).map(message => message.role)),
+          ['user'],
+        );
+
         const compactBundle = {
           __claude_tap_compact_trace__: { version: 1 },
           blobs: {

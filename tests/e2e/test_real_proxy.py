@@ -195,9 +195,9 @@ class TestRealProxy:
             f"Expected HTML viewer file in {trace_dir}, found: {list(Path(trace_dir).iterdir())}"
         )
 
-        # Verify HTML contains embedded trace data
+        # Verify HTML contains embedded compact trace data
         html_content = html_files[0].read_text()
-        assert "EMBEDDED_TRACE_DATA" in html_content, "HTML viewer should contain EMBEDDED_TRACE_DATA"
+        assert "EMBEDDED_TRACE_COMPACT_DATA" in html_content, "HTML viewer should contain EMBEDDED_TRACE_COMPACT_DATA"
 
         # Verify Dashboard: line in stdout
         assert "Dashboard:" in result.stdout, "Expected 'Dashboard:' URL in stdout"

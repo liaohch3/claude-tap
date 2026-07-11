@@ -274,6 +274,9 @@ Codex CLI 支持两种认证方式，对应不同的上游目标：
 | **API Key** | 设置 `OPENAI_API_KEY` | `https://api.openai.com`（默认） | 通过 OpenAI Platform 按量付费 |
 
 `claude-tap` 会尽量根据 Codex 的认证状态自动识别 target。
+在默认 reverse proxy 模式下，它会使用一个临时同级 provider 启动 Codex，
+并禁用该 provider 的 `supports_websockets`。这样每个请求都会生成一条包含
+完整请求上下文的 HTTP/SSE trace，同时不会修改 `~/.codex/config.toml`。
 
 ```bash
 # OAuth 用户（ChatGPT Plus/Pro/Team）— `codex login` 后通常会自动识别
@@ -520,11 +523,11 @@ claude-tap build-macos-app --self-contained
 # 如果菜单栏 App 在监控中被强制退出，用它恢复 Claude/Codex 配置
 claude-tap monitor-restore
 
-# 从已有 JSONL trace 重新生成自包含 HTML 查看器
+# 从已有 JSONL 或紧凑 trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
-# 导出可独立搬运的压缩 trace，再按需渲染
-claude-tap export <session-id> --format compact -o trace.ctap.json
+# 导出可独立搬运的压缩 trace，再按需渲染；压缩格式是默认导出格式
+claude-tap export <session-id> -o trace.ctap.json
 claude-tap export trace.ctap.json -o trace.html
 
 # 在 iframe 中嵌入导出的查看器，并减少外层 chrome

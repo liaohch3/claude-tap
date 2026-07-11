@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+
+
+
+
+## [0.1.131] - 2026-07-11
+
+### Changed
+- fix(codex): capture complete context over HTTP (#376)
+## [0.1.130] - 2026-07-10
+
+### Changed
+- Simplify viewer export menus (#373)
+## [0.1.129] - 2026-07-10
+
+### Changed
+- fix(viewer): read Responses additional tools
+- test: add additional tools viewer evidence
+- fix(viewer): preserve Codex websocket tools
+## [0.1.128] - 2026-07-10
+
+### Changed
+- Make compact trace the default export format (#368)
+## [0.1.127] - 2026-07-09
+
+### Changed
+- fix(dashboard): search compacted trace blobs
 ## [0.1.126] - 2026-07-01
 
 ### Changed

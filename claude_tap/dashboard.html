@@ -1264,8 +1264,7 @@ const DASHBOARD_I18N = {
     log: "Log",
     session_id: "Session",
     export_jsonl: "Export JSONL",
-    export_compact: "Export Compact",
-    export_log: "Export Log",
+    export_compact: "Export JSON",
     export_html: "Export HTML",
     export_menu: "Export",
     copy_session_id: "Copy session id",
@@ -1372,8 +1371,7 @@ const DASHBOARD_I18N = {
     log: "日志",
     session_id: "会话",
     export_jsonl: "导出 JSONL",
-    export_compact: "导出压缩文件",
-    export_log: "导出日志",
+    export_compact: "导出 JSON",
     export_html: "导出 HTML",
     export_menu: "导出",
     copy_session_id: "复制会话 ID",
@@ -2201,9 +2199,7 @@ async function loadMoreSessionRecords(session, records, button) {
         <details class="export-menu">
           <summary class="act-btn" data-detail-i18n="export_menu">${esc(t("export_menu"))}</summary>
           <div class="export-menu-list">
-            <a class="export-menu-item" data-detail-i18n="export_jsonl" href="/api/sessions/${encodeURIComponent(session.id)}/export/jsonl" download>${esc(t("export_jsonl"))}</a>
             <a class="export-menu-item" data-detail-i18n="export_compact" href="/api/sessions/${encodeURIComponent(session.id)}/export/compact" download>${esc(t("export_compact"))}</a>
-            <a class="export-menu-item" data-detail-i18n="export_log" href="/api/sessions/${encodeURIComponent(session.id)}/export/log" download>${esc(t("export_log"))}</a>
             <a class="export-menu-item" data-detail-i18n="export_html" href="/api/sessions/${encodeURIComponent(session.id)}/export/html" download>${esc(t("export_html"))}</a>
           </div>
         </details>

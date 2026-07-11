@@ -279,6 +279,10 @@ Codex CLI supports two authentication modes with different upstream targets:
 | **API Key** | Set `OPENAI_API_KEY` | `https://api.openai.com` (default) | Pay-per-use via OpenAI Platform |
 
 `claude-tap` auto-detects the Codex target from your auth state when possible.
+In the default reverse-proxy mode, it launches Codex with a temporary sibling
+provider whose `supports_websockets` setting is disabled. This produces one
+HTTP/SSE trace record per request with the complete request context and does
+not modify `~/.codex/config.toml`.
 
 ```bash
 # OAuth users (ChatGPT Plus/Pro/Team) — auto-detected after `codex login`
@@ -527,11 +531,12 @@ claude-tap build-macos-app --self-contained
 # Restore Claude/Codex configs if the menu app is force-killed while monitoring
 claude-tap monitor-restore
 
-# Regenerate a self-contained HTML viewer from JSONL
+# Regenerate a self-contained HTML viewer from JSONL or compact trace input
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
-# Export a portable compact trace bundle, then render it later
-claude-tap export <session-id> --format compact -o trace.ctap.json
+# Export a portable compact trace bundle, then render it later.
+# Compact is the default export format.
+claude-tap export <session-id> -o trace.ctap.json
 claude-tap export trace.ctap.json -o trace.html
 
 # Embed the exported viewer in an iframe with reduced chrome

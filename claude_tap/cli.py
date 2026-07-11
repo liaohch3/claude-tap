@@ -37,7 +37,6 @@ from claude_tap.cli_clients import (
     _detect_codebuddy_target,
     _detect_codex_target,
     _extend_no_proxy,
-    _has_config_override,
     _has_settings_arg,
     _maybe_rewrite_hermes_gateway_start,
     _read_codebuddy_endpoint_cache,
@@ -159,7 +158,6 @@ _CLI_COMPAT_EXPORTS = (
     _detect_codebuddy_target,
     _detect_installer,
     _extend_no_proxy,
-    _has_config_override,
     _has_settings_arg,
     _maybe_rewrite_hermes_gateway_start,
     _read_codebuddy_endpoint_cache,
@@ -734,10 +732,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # then: ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude\n"
             "\n"
             "export traces:\n"
-            "  claude-tap export trace.jsonl              Export to markdown\n"
-            "  claude-tap export trace.jsonl -o out.md    Export to file\n"
+            "  claude-tap export <session-id> -o trace.ctap.json Export compact trace bundle\n"
+            "  claude-tap export trace.jsonl              Export compact trace bundle to stdout\n"
+            "  claude-tap export trace.jsonl --format markdown -o out.md Export to markdown\n"
             "  claude-tap export trace.jsonl --format prompt-md -o prompt.md Export prompt snapshot\n"
-            "  claude-tap export trace.jsonl --format json Export as JSON\n"
+            "  claude-tap export trace.jsonl --format json Export as full JSON\n"
             "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
             "\n"
             "update:\n"

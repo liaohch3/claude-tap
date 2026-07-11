@@ -72,14 +72,11 @@ function renderViewerActions() {
   const exports = TRACE_SESSION_EXPORTS && typeof TRACE_SESSION_EXPORTS === 'object' ? TRACE_SESSION_EXPORTS : {};
   const downloadIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>`;
   const links = [];
-  if (typeof exports.jsonl === 'string' && exports.jsonl) {
+  if (exports.showJsonl === true && typeof exports.jsonl === 'string' && exports.jsonl) {
     links.push(`<a class="export-menu-item" href="${esc(exports.jsonl)}" download>${esc(t('export_jsonl'))}</a>`);
   }
   if (typeof exports.compact === 'string' && exports.compact) {
     links.push(`<a class="export-menu-item" href="${esc(exports.compact)}" download>${esc(t('export_compact'))}</a>`);
-  }
-  if (typeof exports.log === 'string' && exports.log) {
-    links.push(`<a class="export-menu-item" href="${esc(exports.log)}" download>${esc(t('export_log'))}</a>`);
   }
   if (typeof exports.html === 'string' && exports.html) {
     links.push(`<a class="export-menu-item" href="${esc(exports.html)}" download>${esc(t('export_html'))}</a>`);

@@ -1217,6 +1217,7 @@ class TraceStore:
                 "LOWER(COALESCE(legacy_rel_path, '')) LIKE ? ESCAPE '\\'",
                 "LOWER(COALESCE(summary_json, '')) LIKE ? ESCAPE '\\'",
                 "id IN (SELECT session_id FROM records WHERE LOWER(payload_json) LIKE ? ESCAPE '\\')",
+                "id IN (SELECT session_id FROM record_blobs WHERE LOWER(payload_json) LIKE ? ESCAPE '\\')",
             ]
             clauses.append(f"({' OR '.join(search_clauses)})")
             params.extend([pattern] * len(search_clauses))

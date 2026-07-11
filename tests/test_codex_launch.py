@@ -5,13 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_tap.cli import (
-    _has_config_override,
-    _reverse_proxy_trace_options,
-    _toml_dotted_key_segment,
-    parse_args,
-    run_client,
-)
+from claude_tap.cli import _reverse_proxy_trace_options, _toml_dotted_key_segment, parse_args, run_client
 
 
 class _DummyProc:
@@ -30,8 +24,43 @@ class _DummyProc:
         self.returncode = -9
 
 
+_CODEX_PROXY_BASE_URL = "http://127.0.0.1:43123/v1"
+
+
+def _builtin_codex_http_args(*tail: str) -> tuple[str, ...]:
+    provider = "model_providers.claude-tap-openai"
+    return (
+        "/tmp/codex",
+        "-c",
+        'model_provider="claude-tap-openai"',
+        "-c",
+        f'{provider}.name="claude-tap"',
+        "-c",
+        f'{provider}.base_url="{_CODEX_PROXY_BASE_URL}"',
+        "-c",
+        f'{provider}.wire_api="responses"',
+        "-c",
+        f"{provider}.requires_openai_auth=true",
+        "-c",
+        f"{provider}.supports_websockets=false",
+        *tail,
+    )
+
+
+def _custom_codex_http_args(provider: str, *tail: str) -> tuple[str, ...]:
+    provider_key = f"model_providers.{provider}"
+    return (
+        "/tmp/codex",
+        "-c",
+        f'{provider_key}.base_url="{_CODEX_PROXY_BASE_URL}"',
+        "-c",
+        f"{provider_key}.supports_websockets=false",
+        *tail,
+    )
+
+
 @pytest.mark.asyncio
-async def test_run_client_codex_reverse_injects_openai_base_url(monkeypatch) -> None:
+async def test_run_client_codex_reverse_forces_builtin_provider_to_http(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -47,18 +76,12 @@ async def test_run_client_codex_reverse_injects_openai_base_url(monkeypatch) -> 
     code = await run_client(43123, ["exec", "hello"], client="codex", proxy_mode="reverse")
 
     assert code == 0
-    assert captured["cmd"] == (
-        "/tmp/codex",
-        "-c",
-        'openai_base_url="http://127.0.0.1:43123/v1"',
-        "exec",
-        "hello",
-    )
+    assert captured["cmd"] == _builtin_codex_http_args("exec", "hello")
     assert captured["env"]["OPENAI_BASE_URL"] == "http://127.0.0.1:43123/v1"
 
 
 @pytest.mark.asyncio
-async def test_run_client_codex_reverse_respects_existing_openai_base_override(monkeypatch) -> None:
+async def test_run_client_codex_reverse_isolates_legacy_openai_base_override(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -78,13 +101,36 @@ async def test_run_client_codex_reverse_respects_existing_openai_base_override(m
     )
 
     assert code == 0
-    assert captured["cmd"] == (
-        "/tmp/codex",
+    assert captured["cmd"] == _builtin_codex_http_args(
         "-c",
         'openai_base_url="http://example.invalid/v1"',
         "exec",
         "hello",
     )
+
+
+@pytest.mark.asyncio
+async def test_run_client_codex_reverse_replaces_builtin_provider_override(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/codex")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("claude_tap.cli_clients._codex_selected_provider_base_url_key", lambda _: None)
+
+    code = await run_client(
+        43123,
+        ["--config", 'model_provider="openai"', "exec", "hello"],
+        client="codex",
+        proxy_mode="reverse",
+    )
+
+    assert code == 0
+    assert captured["cmd"] == _builtin_codex_http_args("exec", "hello")
 
 
 @pytest.mark.asyncio
@@ -106,20 +152,6 @@ async def test_run_client_codex_forward_sets_rust_tls_ca_env(monkeypatch) -> Non
     assert captured["env"]["HTTPS_PROXY"] == "http://127.0.0.1:43123"
     assert captured["env"]["SSL_CERT_FILE"] == str(ca_path)
     assert captured["env"]["CODEX_CA_CERTIFICATE"] == str(ca_path)
-
-
-def test_has_config_override_detects_cli_forms() -> None:
-    assert _has_config_override(["-c", 'openai_base_url="http://127.0.0.1:1/v1"'], "openai_base_url") is True
-    assert _has_config_override(["--config", 'openai_base_url="http://127.0.0.1:1/v1"'], "openai_base_url") is True
-    assert _has_config_override(['--config=openai_base_url="http://127.0.0.1:1/v1"'], "openai_base_url") is True
-    assert _has_config_override(["exec", "hello"], "openai_base_url") is False
-    assert (
-        _has_config_override(
-            ["-c", 'model_providers.newapi.base_url="http://127.0.0.1:1/v1"'],
-            "model_providers.newapi.base_url",
-        )
-        is True
-    )
 
 
 def test_toml_dotted_key_segment_quotes_non_ascii_provider_ids() -> None:
@@ -222,6 +254,84 @@ def test_parse_args_codex_auto_detects_custom_provider_from_profile(monkeypatch,
     assert args.target == "https://new-api.example.test/v1"
 
 
+def test_parse_args_codex_auto_detects_custom_provider_from_profile_file(monkeypatch, tmp_path) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text('{"auth_mode":"chatgpt"}\n', encoding="utf-8")
+    (codex_home / "config.toml").write_text(
+        "\n".join(
+            [
+                'model_provider = "openai"',
+                "",
+                "[model_providers.openai]",
+                'base_url = "https://api.openai.com/v1"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (codex_home / "staging.config.toml").write_text(
+        "\n".join(
+            [
+                'model_provider = "newapi"',
+                "",
+                "[model_providers.newapi]",
+                'base_url = "https://new-api.example.test/v1"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    args = parse_args(["--tap-client", "codex", "--", "--profile", "staging"])
+
+    assert args.target == "https://new-api.example.test/v1"
+
+
+def test_parse_args_codex_provider_base_url_override_precedes_config(monkeypatch, tmp_path) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        "\n".join(
+            [
+                'model_provider = "newapi"',
+                "",
+                "[model_providers.newapi]",
+                'base_url = "https://production.example.test/v1"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    args = parse_args(
+        [
+            "--tap-client",
+            "codex",
+            "--",
+            "-c",
+            'model_providers.newapi.base_url="https://staging.example.test/v1"',
+        ]
+    )
+
+    assert args.target == "https://staging.example.test/v1"
+
+
+def test_parse_args_codex_openai_base_url_override_precedes_default(monkeypatch, tmp_path) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    args = parse_args(["--tap-client", "codex", "--", "-c", 'openai_base_url="https://gateway.example.test/v1"'])
+
+    assert args.target == "https://gateway.example.test/v1"
+
+
 def test_parse_args_codex_auto_detects_custom_provider_from_model_provider_override(monkeypatch, tmp_path) -> None:
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
@@ -280,15 +390,7 @@ async def test_run_client_codex_reverse_injects_selected_provider_base_url(monke
     code = await run_client(43123, ["exec", "hello"], client="codex", proxy_mode="reverse")
 
     assert code == 0
-    assert captured["cmd"] == (
-        "/tmp/codex",
-        "-c",
-        'openai_base_url="http://127.0.0.1:43123/v1"',
-        "-c",
-        'model_providers.newapi.base_url="http://127.0.0.1:43123/v1"',
-        "exec",
-        "hello",
-    )
+    assert captured["cmd"] == _custom_codex_http_args("newapi", "exec", "hello")
     assert captured["env"]["OPENAI_BASE_URL"] == "http://127.0.0.1:43123/v1"
 
 
@@ -328,17 +430,44 @@ async def test_run_client_codex_reverse_injects_profile_provider_base_url(monkey
     code = await run_client(43123, ["--profile", "staging", "exec", "hello"], client="codex", proxy_mode="reverse")
 
     assert code == 0
-    assert captured["cmd"] == (
-        "/tmp/codex",
-        "-c",
-        'openai_base_url="http://127.0.0.1:43123/v1"',
-        "-c",
-        'model_providers.newapi.base_url="http://127.0.0.1:43123/v1"',
-        "--profile",
-        "staging",
-        "exec",
-        "hello",
+    assert captured["cmd"] == _custom_codex_http_args("newapi", "--profile", "staging", "exec", "hello")
+
+
+@pytest.mark.asyncio
+async def test_run_client_codex_reverse_injects_profile_file_provider_base_url(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        "\n".join(
+            [
+                'model_provider = "openai"',
+                "",
+                "[model_providers.openai]",
+                'base_url = "https://api.openai.com/v1"',
+                "",
+                "[model_providers.newapi]",
+                'base_url = "https://new-api.example.test/v1"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
     )
+    (codex_home / "staging.config.toml").write_text('model_provider = "newapi"\n', encoding="utf-8")
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/codex")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["--profile", "staging", "exec", "hello"], client="codex", proxy_mode="reverse")
+
+    assert code == 0
+    assert captured["cmd"] == _custom_codex_http_args("newapi", "--profile", "staging", "exec", "hello")
 
 
 @pytest.mark.asyncio
@@ -379,12 +508,8 @@ async def test_run_client_codex_reverse_injects_provider_from_model_provider_ove
     )
 
     assert code == 0
-    assert captured["cmd"] == (
-        "/tmp/codex",
-        "-c",
-        'openai_base_url="http://127.0.0.1:43123/v1"',
-        "-c",
-        'model_providers.newapi.base_url="http://127.0.0.1:43123/v1"',
+    assert captured["cmd"] == _custom_codex_http_args(
+        "newapi",
         "-c",
         'model_provider="newapi"',
         "exec",
@@ -422,19 +547,11 @@ async def test_run_client_codex_reverse_quotes_non_ascii_provider_base_url_key(m
     code = await run_client(43123, ["exec", "hello"], client="codex", proxy_mode="reverse")
 
     assert code == 0
-    assert captured["cmd"] == (
-        "/tmp/codex",
-        "-c",
-        'openai_base_url="http://127.0.0.1:43123/v1"',
-        "-c",
-        'model_providers."\\u6a21\\u578b".base_url="http://127.0.0.1:43123/v1"',
-        "exec",
-        "hello",
-    )
+    assert captured["cmd"] == _custom_codex_http_args('"\\u6a21\\u578b"', "exec", "hello")
 
 
 @pytest.mark.asyncio
-async def test_run_client_codex_reverse_respects_existing_selected_provider_override(monkeypatch, tmp_path) -> None:
+async def test_run_client_codex_reverse_replaces_conflicting_provider_overrides(monkeypatch, tmp_path) -> None:
     captured: dict[str, object] = {}
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
@@ -462,21 +579,19 @@ async def test_run_client_codex_reverse_respects_existing_selected_provider_over
 
     code = await run_client(
         43123,
-        ["-c", 'model_providers.newapi.base_url="http://example.invalid/v1"', "exec", "hello"],
+        [
+            "-c",
+            'model_providers.newapi.base_url="http://example.invalid/v1"',
+            "--config=model_providers.newapi.supports_websockets=true",
+            "exec",
+            "hello",
+        ],
         client="codex",
         proxy_mode="reverse",
     )
 
     assert code == 0
-    assert captured["cmd"] == (
-        "/tmp/codex",
-        "-c",
-        'openai_base_url="http://127.0.0.1:43123/v1"',
-        "-c",
-        'model_providers.newapi.base_url="http://example.invalid/v1"',
-        "exec",
-        "hello",
-    )
+    assert captured["cmd"] == _custom_codex_http_args("newapi", "exec", "hello")
 
 
 def test_parse_args_claude_uses_env_base_url(monkeypatch) -> None:

@@ -177,10 +177,40 @@ function flattenGeminiTools(tools) {
   return flattened;
 }
 
+function responsesInputAdditionalTools(input) {
+  if (!Array.isArray(input)) return [];
+  const tools = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type !== 'additional_tools') continue;
+    if (!Array.isArray(item.tools)) continue;
+    for (const tool of item.tools) {
+      if (!tool || typeof tool !== 'object') continue;
+      tools.push(tool);
+    }
+  }
+  return tools;
+}
+
+function uniqueToolsByDisplayName(tools) {
+  const seen = new Set();
+  const unique = [];
+  for (const tool of tools) {
+    const name = toolDisplayName(tool);
+    const key = name || JSON.stringify(tool);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(tool);
+  }
+  return unique;
+}
+
 function getRequestTools(body) {
   const direct = Array.isArray(body?.tools) ? body.tools : [];
+  const responsesAdditional = responsesInputAdditionalTools(body?.input);
   const geminiTools = flattenGeminiTools(geminiRequest(body).tools);
-  return geminiTools.length ? geminiTools : direct;
+  if (geminiTools.length) return geminiTools;
+  return uniqueToolsByDisplayName([...direct, ...responsesAdditional]);
 }
 
 function hasDisplayContent(content) {

@@ -101,4 +101,4 @@ def test_generate_html_viewer_remains_self_contained_after_i18n_split(tmp_path: 
     assert "const __CLAUDE_TAP_I18N__ =" in html
     assert "viewer_i18n.json" not in html
     assert "No API calls captured" in html
-    assert "EMBEDDED_TRACE_DATA" in html
+    assert "EMBEDDED_TRACE_COMPACT_DATA" in html
