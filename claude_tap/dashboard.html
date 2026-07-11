@@ -2192,6 +2192,7 @@ const DASHBOARD_I18N = {
     loading_viewer: "Loading viewer...",
     loading_more_records: "Loading more records...",
     load_more_records: "Load more records",
+    load_all_records: "Load all records",
     limited_records: "Showing {shown} of {total} records.",
     no_user_prompt: "No captured user prompt.",
     unknown: "unknown",
@@ -2424,6 +2425,7 @@ const DASHBOARD_I18N = {
     loading_viewer: "正在加载 viewer...",
     loading_more_records: "正在加载更多记录...",
     load_more_records: "加载更多记录",
+    load_all_records: "加载全部记录",
     limited_records: "正在展示 {shown} / {total} 条记录。",
     no_user_prompt: "未捕获到用户 prompt。",
     unknown: "未知",
@@ -4689,6 +4691,24 @@ async function loadMoreSessionRecords(session, records, button) {
   }
 }
 
+async function loadAllSessionRecords(session, records, button) {
+  const sessionId = session.id;
+  const offset = records.length;
+  button.disabled = true;
+  button.textContent = t("loading_more_records");
+  try {
+    const payload = await fetchJSON(
+      `/api/sessions/${encodeURIComponent(sessionId)}/records?offset=${offset}&limit=2000`
+    );
+    if (state.selectedSessionId !== sessionId) return;
+    renderDetail(payload.session, records.concat(payload.records || []));
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = t("load_all_records");
+    console.error(error);
+  }
+}
+
 	function renderDetail(session, records) {
 	  const totalRecords = Number(session.record_count || records.length);
 	  const hasHiddenRecords = totalRecords > records.length;
@@ -4723,7 +4743,7 @@ async function loadMoreSessionRecords(session, records, button) {
     <div id="raw-tab" class="${state.activeTab === "raw" ? "" : "hidden"}">
       ${hasHiddenRecords ? `<div class="detail-fallback-note">${esc(t("limited_records", {shown: records.length, total: totalRecords}))}</div>` : ""}
       <div class="records">${records.map((record, index) => renderRecord(session.id, record, index)).join("") || emptyRecord()}</div>
-      ${hasHiddenRecords ? `<div class="detail-load-more"><button class="load-more-btn" type="button" data-load-more>${esc(t("load_more_records"))}</button></div>` : ""}
+      ${hasHiddenRecords ? `<div class="detail-load-more"><button class="load-more-btn" type="button" data-load-more>${esc(t("load_more_records"))}</button><button class="load-more-btn" type="button" data-load-all>${esc(t("load_all_records"))}</button></div>` : ""}
     </div>
   `;
 
@@ -4754,6 +4774,9 @@ async function loadMoreSessionRecords(session, records, button) {
   });
   document.querySelectorAll("[data-load-more]").forEach(button => {
     button.addEventListener("click", () => loadMoreSessionRecords(session, records, button));
+  });
+  document.querySelectorAll("[data-load-all]").forEach(button => {
+    button.addEventListener("click", () => loadAllSessionRecords(session, records, button));
   });
   document.querySelectorAll("[data-copy-path]").forEach(button => {
     button.addEventListener("click", () => navigator.clipboard?.writeText(button.dataset.copyPath || ""));

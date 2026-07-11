@@ -2370,6 +2370,18 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert "EMBEDDED_TRACE_COMPACT_DATA" in exported_html
                 assert "const EMBEDDED_TRACE_DATA =" not in exported_html
                 assert "req_claude" in exported_html
+
+                # load-all fetches every remaining record in one click
+                await tab_toggle.click()
+                await page.wait_for_selector("#raw-tab:not(.hidden) .section", timeout=5000)
+                load_all = page.locator("[data-load-all]")
+                assert await load_all.count() == 1
+                assert await load_all.inner_text() == "Load all records"
+                await load_all.click()
+                await page.wait_for_selector("[data-load-more]", state="detached", timeout=5000)
+                await page.wait_for_selector("#raw-tab:not(.hidden) .section", timeout=5000)
+                assert await page.locator("#raw-tab .section").count() == 12
+                assert await page.locator("[data-load-all]").count() == 0
             finally:
                 await browser.close()
     finally:
