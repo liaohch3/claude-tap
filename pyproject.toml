@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Software Development :: Testing",
 ]
 dependencies = [
-    "aiohttp==3.13.3",
+    "aiohttp==3.13.5",
     "backports-zstd>=1.0; python_version < '3.14'",
     "cryptography>=42.0",
 ]
