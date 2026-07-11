@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.134] - 2026-07-11
+
+### Changed
+- refactor(update): remove automatic startup upgrades (#383)
 ## [0.1.133] - 2026-07-11
 
 ### Changed
