@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.133] - 2026-07-11
+
+### Changed
+- chore(deps): pin aiohttp to 3.14.1 (#381)
 ## [0.1.132] - 2026-07-11
 
 ### Changed
