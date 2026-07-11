@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.131] - 2026-07-11
+
+### Changed
+- fix(codex): capture complete context over HTTP (#376)
 ## [0.1.130] - 2026-07-10
 
 ### Changed
