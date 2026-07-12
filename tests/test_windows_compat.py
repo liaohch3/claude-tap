@@ -84,12 +84,44 @@ async def test_run_client_passes_resolved_path_for_cmd_shim(monkeypatch) -> None
     assert cmd[3:] == ("--version",), "original args must follow --settings payload"
 
 
+@pytest.mark.asyncio
+async def test_run_client_prefers_windows_cmd_sibling(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _DummyProc()
+
+    posix_shim_path = tmp_path / "claude"
+    posix_shim_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    cmd_shim_path = tmp_path / "claude.cmd"
+    cmd_shim_path.write_text("@echo off\r\n", encoding="utf-8")
+    _strip_sigtstp(monkeypatch)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(
+        43123,
+        ["--version"],
+        client="claude",
+        proxy_mode="reverse",
+        client_cmd=str(posix_shim_path),
+    )
+
+    assert code == 0
+    assert captured["cmd"][0] == str(cmd_shim_path)
+    assert captured["cmd"][-1] == "--version"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="requires real Windows CreateProcess behavior")
 @pytest.mark.asyncio
 async def test_run_client_executes_real_cmd_shim_on_windows(monkeypatch, tmp_path: Path) -> None:
     """Prefer an npm .cmd sibling when given its extensionless POSIX shim."""
-    capture_path = tmp_path / "captured.json"
-    client_script = tmp_path / "fake_client.py"
+    shim_dir = tmp_path / "npm shims with spaces"
+    shim_dir.mkdir()
+    capture_path = shim_dir / "captured.json"
+    client_script = shim_dir / "fake client.py"
     client_script.write_text(
         "import json, os, pathlib, sys\n"
         "pathlib.Path(os.environ['CLAUDE_TAP_TEST_CAPTURE']).write_text(\n"
@@ -98,9 +130,9 @@ async def test_run_client_executes_real_cmd_shim_on_windows(monkeypatch, tmp_pat
         ")\n",
         encoding="utf-8",
     )
-    posix_shim_path = tmp_path / "claude"
+    posix_shim_path = shim_dir / "claude"
     posix_shim_path.write_text('#!/bin/sh\necho "POSIX shim must not run on Windows"\n', encoding="utf-8")
-    cmd_shim_path = tmp_path / "claude.cmd"
+    cmd_shim_path = shim_dir / "claude.cmd"
     cmd_shim_path.write_text(f'@echo off\r\n"{sys.executable}" "{client_script}" %*\r\n', encoding="utf-8")
 
     _strip_sigtstp(monkeypatch)
@@ -117,7 +149,7 @@ async def test_run_client_executes_real_cmd_shim_on_windows(monkeypatch, tmp_pat
 
     assert code == 0
     captured = json.loads(capture_path.read_text(encoding="utf-8"))
-    assert captured["argv"][-1] == "--version"
+    assert captured["argv"][2:] == ["--version"]
     assert json.loads(captured["argv"][1]) == {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:43123"}}
     assert captured["base_url"] == "http://127.0.0.1:43123"
 
