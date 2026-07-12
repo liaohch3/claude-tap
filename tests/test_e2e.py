@@ -13,6 +13,7 @@ import ipaddress
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -1689,6 +1690,32 @@ async def test_async_main_live_viewer_respects_tap_host(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_async_main_continues_when_dashboard_migration_is_locked(monkeypatch, tmp_path, capsys):
+    """Dashboard storage failures must not prevent the configured client from running."""
+    from claude_tap import async_main, parse_args
+
+    client_calls = []
+
+    async def fake_run_client(*args, **kwargs):
+        client_calls.append((args, kwargs))
+        return 0
+
+    async def fail_dashboard(**_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-dashboard-lock.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", fail_dashboard)
+
+    args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-open"])
+    code = await async_main(args)
+
+    assert code == 0
+    assert len(client_calls) == 1
+    assert "database is locked" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
 async def test_async_main_finalizes_session_when_proxy_startup_fails(monkeypatch, tmp_path):
     """Startup bind failures should not leave active SQLite sessions behind."""
     from claude_tap import async_main, get_trace_store, parse_args
@@ -1744,6 +1771,32 @@ async def test_async_main_no_live_and_no_open_restore_non_browser_mode(monkeypat
     assert code == 0
     assert opened_urls == []
     assert migration_calls == [tmp_path]
+
+
+@pytest.mark.asyncio
+async def test_async_main_no_live_continues_when_legacy_migration_is_locked(monkeypatch, tmp_path, capsys):
+    """A locked migration must not prevent the configured client from running."""
+    from claude_tap import async_main, parse_args
+
+    client_calls = []
+
+    async def fake_run_client(*args, **kwargs):
+        client_calls.append((args, kwargs))
+        return 0
+
+    def fail_migration(_output_dir):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "async-main-locked-migration.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli.migrate_legacy_traces", fail_migration)
+
+    args = parse_args(["--tap-output-dir", str(tmp_path), "--tap-no-live", "--tap-no-open"])
+    code = await async_main(args)
+
+    assert code == 0
+    assert len(client_calls) == 1
+    assert "legacy trace migration skipped" in capsys.readouterr().err
 
 
 @pytest.mark.asyncio
