@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from claude_tap.trace import TraceWriter
+from claude_tap.trace import TraceWriter, create_trace_writer
 from claude_tap.trace_store import TraceStore, get_trace_store
 
 CODEX_APP_TRANSPORT = "codex-app-transcript"
@@ -223,6 +223,8 @@ class CodexAppTranscriptSessionRegistry:
             "cache_create_tokens": 0,
             "models_used": {},
             "has_error": False,
+            "trace_storage_errors": 0,
+            "dropped_trace_records": 0,
         }
         models: dict[str, int] = {}
         for writer in self._writers.values():
@@ -233,6 +235,8 @@ class CodexAppTranscriptSessionRegistry:
             summary["cache_read_tokens"] += int(item["cache_read_tokens"])
             summary["cache_create_tokens"] += int(item["cache_create_tokens"])
             summary["has_error"] = bool(summary["has_error"] or item["has_error"])
+            summary["trace_storage_errors"] += int(item["trace_storage_errors"])
+            summary["dropped_trace_records"] += int(item["dropped_trace_records"])
             for model, count in item["models_used"].items():
                 models[model] = models.get(model, 0) + count
         summary["models_used"] = models
@@ -253,14 +257,17 @@ class CodexAppTranscriptSessionRegistry:
         if existing_row is not None:
             session_id = existing_row["id"]
             skip_record_count = self._store.count_non_partial_records(session_id)
+            writer = TraceWriter(session_id, metadata=metadata, store=self._store)
         else:
-            session_id = self._store.create_session(
+            writer = create_trace_writer(
+                store=self._store,
                 client=metadata.get("client", "codexapp"),
                 proxy_mode=metadata.get("proxy_mode", "transcript"),
+                metadata=metadata,
                 started_at=_record_datetime(record),
             )
+            session_id = writer.session_id
             skip_record_count = 0
-        writer = TraceWriter(session_id, metadata=metadata, store=self._store)
         if existing_row is not None:
             writer.count = int(existing_row["record_count"] or 0)
         self._writers[transcript_path] = writer

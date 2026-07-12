@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import datetime, timezone
 
 from claude_tap.trace_store import TraceStore, get_trace_store
@@ -30,5 +31,7 @@ class SQLiteLogHandler(logging.Handler):
                 level=record.levelname,
                 logged_at=datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%H:%M:%S"),
             )
+        except sqlite3.Error:
+            return
         except Exception:
             self.handleError(record)

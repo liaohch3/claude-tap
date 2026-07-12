@@ -7,12 +7,14 @@ import os
 import re
 import sqlite3
 import threading
+import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from claude_tap.compact_trace import (
     BLOB_KIND_JSON,
@@ -28,6 +30,10 @@ from claude_tap.compact_trace import (
 
 DB_FILENAME = "traces.sqlite3"
 SCHEMA_VERSION = 4
+SQLITE_BUSY_TIMEOUT_MS = 1000
+WRITE_LOCK_TIMEOUT_SECONDS = 1.0
+WRITE_LOCK_RETRY_SECONDS = 0.01
+WRITE_LOCK_SUFFIX = ".write.lock"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 STALE_ACTIVE_SESSION_AFTER = timedelta(hours=24)
 
@@ -84,6 +90,7 @@ class TraceStore:
     def __init__(self, db_path: Path):
         self.db_path = db_path.resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_lock_path = self.db_path.with_name(f"{self.db_path.name}{WRITE_LOCK_SUFFIX}")
         self._schema_ready = False
         self._schema_lock = threading.Lock()
         self._write_lock = threading.Lock()
@@ -101,8 +108,7 @@ class TraceStore:
         now = started_at or datetime.now(timezone.utc)
         started_at_iso = now.isoformat()
         date_key = now.astimezone().date().isoformat()
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             conn.execute(
                 """
                 INSERT INTO sessions (
@@ -117,8 +123,7 @@ class TraceStore:
 
     def append_record(self, session_id: str, record: dict[str, Any]) -> None:
         """Append one API trace record to a session."""
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             next_index = self._next_record_index(conn, session_id)
             updated_at = _str_or_none(record.get("timestamp")) or datetime.now(timezone.utc).isoformat()
             payload_json = self._encode_record(conn, session_id, record)
@@ -160,8 +165,7 @@ class TraceStore:
         logged_at: str | None = None,
     ) -> None:
         """Append one proxy log line to a session."""
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             row = conn.execute(
                 "SELECT COALESCE(MAX(line_no), 0) + 1 AS next_line FROM proxy_logs WHERE session_id = ?",
                 (session_id,),
@@ -186,8 +190,7 @@ class TraceStore:
 
     def finalize_session(self, session_id: str, summary: dict[str, Any] | None = None) -> None:
         """Mark a session complete and persist its summary."""
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             row = conn.execute(
                 "SELECT status, summary_json FROM sessions WHERE id = ?",
                 (session_id,),
@@ -211,10 +214,14 @@ class TraceStore:
 
             updated_at = datetime.now(timezone.utc).isoformat()
             if isinstance(existing_summary, dict):
-                existing_summary["status"] = status
-                existing_summary["id"] = session_id
-                existing_summary["updated_at"] = updated_at
-                summary_json_str = json.dumps(existing_summary, ensure_ascii=False, separators=(",", ":"))
+                final_summary = {
+                    **existing_summary,
+                    **(summary or {}),
+                    "status": status,
+                    "id": session_id,
+                    "updated_at": updated_at,
+                }
+                summary_json_str = json.dumps(final_summary, ensure_ascii=False, separators=(",", ":"))
             else:
                 summary_json_str = json.dumps(summary, ensure_ascii=False, separators=(",", ":")) if summary else None
 
@@ -234,54 +241,54 @@ class TraceStore:
             conn.commit()
 
     def load_session_row(self, session_id: str) -> sqlite3.Row | None:
-        conn = self._connect()
-        return conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        with self._read_connect() as conn:
+            return conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
 
     def find_codex_app_session_row(self, codex_app_session_id: str) -> sqlite3.Row | None:
         codex_app_session_id = codex_app_session_id.strip()
         if not codex_app_session_id:
             return None
-        conn = self._connect()
-        rows = conn.execute(
-            """
-            SELECT s.*
-            FROM sessions s
-            WHERE LOWER(COALESCE(s.client, '')) = 'codexapp'
-            ORDER BY s.record_count DESC,
-                     COALESCE(julianday(s.updated_at), 0) DESC,
-                     COALESCE(julianday(s.started_at), 0) DESC,
-                     s.id DESC
-            """
-        ).fetchall()
-        for row in rows:
-            first_record = conn.execute(
+        with self._read_connect() as conn:
+            rows = conn.execute(
                 """
-                SELECT payload_json
-                FROM records
-                WHERE session_id = ?
-                ORDER BY record_index
-                LIMIT 1
-                """,
-                (row["id"],),
-            ).fetchone()
-            if first_record is None:
-                continue
-            payload_json = first_record["payload_json"]
-            if isinstance(payload_json, str) and codex_app_session_id in payload_json:
-                return row
+                SELECT s.*
+                FROM sessions s
+                WHERE LOWER(COALESCE(s.client, '')) = 'codexapp'
+                ORDER BY s.record_count DESC,
+                         COALESCE(julianday(s.updated_at), 0) DESC,
+                         COALESCE(julianday(s.started_at), 0) DESC,
+                         s.id DESC
+                """
+            ).fetchall()
+            for row in rows:
+                first_record = conn.execute(
+                    """
+                    SELECT payload_json
+                    FROM records
+                    WHERE session_id = ?
+                    ORDER BY record_index
+                    LIMIT 1
+                    """,
+                    (row["id"],),
+                ).fetchone()
+                if first_record is None:
+                    continue
+                payload_json = first_record["payload_json"]
+                if isinstance(payload_json, str) and codex_app_session_id in payload_json:
+                    return row
         return None
 
     def count_non_partial_records(self, session_id: str) -> int:
-        conn = self._connect()
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM records
-            WHERE session_id = ?
-              AND payload_json NOT LIKE '%codex_app_partial%'
-            """,
-            (session_id,),
-        ).fetchone()
+        with self._read_connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM records
+                WHERE session_id = ?
+                  AND payload_json NOT LIKE '%codex_app_partial%'
+                """,
+                (session_id,),
+            ).fetchone()
         return int(row["count"] or 0) if row is not None else 0
 
     def list_session_rows(
@@ -291,54 +298,54 @@ class TraceStore:
         offset: int = 0,
         query: SessionQuery | None = None,
     ) -> list[sqlite3.Row]:
-        conn = self._connect()
         offset = max(0, offset)
         limit_sql = ""
         where_sql, params = self._session_where(query)
         if limit is not None:
             limit_sql = " LIMIT ? OFFSET ?"
             params.extend([max(0, limit), offset])
-        return conn.execute(
-            f"""
-            SELECT * FROM sessions
-            {where_sql}
-            ORDER BY COALESCE(julianday(updated_at), 0) DESC,
-                     COALESCE(julianday(started_at), 0) DESC,
-                     id DESC
-            {limit_sql}
-            """,
-            params,
-        ).fetchall()
+        with self._read_connect() as conn:
+            return conn.execute(
+                f"""
+                SELECT * FROM sessions
+                {where_sql}
+                ORDER BY COALESCE(julianday(updated_at), 0) DESC,
+                         COALESCE(julianday(started_at), 0) DESC,
+                         id DESC
+                {limit_sql}
+                """,
+                params,
+            ).fetchall()
 
     def count_session_rows(self, query: SessionQuery | None = None) -> int:
-        conn = self._connect()
         where_sql, params = self._session_where(query)
-        row = conn.execute(f"SELECT COUNT(*) AS count FROM sessions {where_sql}", params).fetchone()
+        with self._read_connect() as conn:
+            row = conn.execute(f"SELECT COUNT(*) AS count FROM sessions {where_sql}", params).fetchone()
         return int(row["count"] or 0) if row is not None else 0
 
     def sum_session_records(self, query: SessionQuery | None = None) -> int:
-        conn = self._connect()
         where_sql, params = self._session_where(query)
-        row = conn.execute(
-            f"SELECT COALESCE(SUM(record_count), 0) AS total FROM sessions {where_sql}", params
-        ).fetchone()
+        with self._read_connect() as conn:
+            row = conn.execute(
+                f"SELECT COALESCE(SUM(record_count), 0) AS total FROM sessions {where_sql}", params
+            ).fetchone()
         return int(row["total"] or 0) if row is not None else 0
 
     def get_session_aggregates(self, query: SessionQuery | None = None) -> dict[str, Any]:
-        conn = self._connect()
         where_sql, params = self._session_where(query)
-        row = conn.execute(
-            f"""
-            SELECT
-                COUNT(*) AS total_sessions,
-                COALESCE(SUM(record_count), 0) AS total_records,
-                COALESCE(SUM(CAST(json_extract(summary_json, '$.total_tokens') AS INTEGER)), 0) AS total_tokens,
-                COALESCE(SUM(CASE WHEN status = 'error' OR (status = 'active' AND json_valid(summary_json) AND json_extract(summary_json, '$.status') = 'error') THEN 1 ELSE 0 END), 0) AS total_errors
-            FROM sessions
-            {where_sql}
-            """,
-            params,
-        ).fetchone()
+        with self._read_connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS total_sessions,
+                    COALESCE(SUM(record_count), 0) AS total_records,
+                    COALESCE(SUM(CAST(json_extract(summary_json, '$.total_tokens') AS INTEGER)), 0) AS total_tokens,
+                    COALESCE(SUM(CASE WHEN status = 'error' OR (status = 'active' AND json_valid(summary_json) AND json_extract(summary_json, '$.status') = 'error') THEN 1 ELSE 0 END), 0) AS total_errors
+                FROM sessions
+                {where_sql}
+                """,
+                params,
+            ).fetchone()
         return {
             "total_sessions": int(row["total_sessions"] or 0) if row else 0,
             "total_records": int(row["total_records"] or 0) if row else 0,
@@ -348,19 +355,19 @@ class TraceStore:
 
     def list_agent_buckets(self) -> list[sqlite3.Row]:
         """Return session counts grouped by stored agent signal without loading records."""
-        conn = self._connect()
         agent_expr = self._agent_label_expr()
-        return conn.execute(
-            f"""
-            SELECT
-                {agent_expr} AS agent,
-                COUNT(*) AS sessions,
-                COALESCE(SUM(record_count), 0) AS records
-            FROM sessions
-            GROUP BY agent
-            ORDER BY LOWER(agent), agent
-            """
-        ).fetchall()
+        with self._read_connect() as conn:
+            return conn.execute(
+                f"""
+                SELECT
+                    {agent_expr} AS agent,
+                    COUNT(*) AS sessions,
+                    COALESCE(SUM(record_count), 0) AS records
+                FROM sessions
+                GROUP BY agent
+                ORDER BY LOWER(agent), agent
+                """
+            ).fetchall()
 
     def delete_sessions(self, session_ids: list[str]) -> dict[str, int | list[str]]:
         """Delete multiple trace sessions and their dependent records/logs."""
@@ -373,8 +380,7 @@ class TraceStore:
                 "missing_sessions": [],
             }
         placeholders = ",".join("?" * len(unique_ids))
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             rows = conn.execute(
                 f"SELECT id FROM sessions WHERE id IN ({placeholders})",
                 unique_ids,
@@ -417,8 +423,7 @@ class TraceStore:
         """Mark stale active sessions complete so abandoned traces can be managed."""
         protected = protected_session_ids or set()
         cutoff = (now or datetime.now(timezone.utc)) - STALE_ACTIVE_SESSION_AFTER
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             rows = conn.execute(
                 """
                 SELECT id, record_count, summary_json
@@ -454,17 +459,31 @@ class TraceStore:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        with self._read_connect() as conn:
+            return self._load_records_with_connection(
+                conn,
+                session_id,
+                limit=limit,
+                offset=offset,
+            )
+
+    def _load_records_with_connection(
+        self,
+        conn: sqlite3.Connection,
+        session_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         offset = max(0, offset)
         params: list[object] = [session_id]
         limit_sql = ""
         if limit is not None:
             limit_sql = " LIMIT ? OFFSET ?"
-            params.append(max(0, limit))
-            params.append(offset)
+            params.extend([max(0, limit), offset])
         elif offset:
             limit_sql = " LIMIT -1 OFFSET ?"
             params.append(offset)
-        conn = self._connect()
         rows = conn.execute(
             f"""
             SELECT session_id, payload_json
@@ -475,76 +494,76 @@ class TraceStore:
             """,
             params,
         ).fetchall()
-        return self._rows_to_records(rows)
+        return self._rows_to_records(conn, rows)
 
     def load_boundary_records(self, session_id: str) -> list[dict[str, Any]]:
         """Load the first and last records for a session without reading everything."""
-        conn = self._connect()
-        first = conn.execute(
-            """
-            SELECT session_id, payload_json
-            FROM records
-            WHERE session_id = ?
-            ORDER BY record_index
-            LIMIT 1
-            """,
-            (session_id,),
-        ).fetchone()
-        last = conn.execute(
-            """
-            SELECT session_id, payload_json
-            FROM records
-            WHERE session_id = ?
-            ORDER BY record_index DESC
-            LIMIT 1
-            """,
-            (session_id,),
-        ).fetchone()
-        if first is None:
-            return []
-        if last is None or first["payload_json"] == last["payload_json"]:
-            return self._rows_to_records([first])
-        return self._rows_to_records([first, last])
+        with self._read_connect() as conn:
+            first = conn.execute(
+                """
+                SELECT session_id, payload_json
+                FROM records
+                WHERE session_id = ?
+                ORDER BY record_index
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            last = conn.execute(
+                """
+                SELECT session_id, payload_json
+                FROM records
+                WHERE session_id = ?
+                ORDER BY record_index DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if first is None:
+                return []
+            if last is None or first["payload_json"] == last["payload_json"]:
+                return self._rows_to_records(conn, [first])
+            return self._rows_to_records(conn, [first, last])
 
     def load_records_for_date(self, date_key: str) -> list[dict[str, Any]]:
         """Load all records for sessions on a given date in one query."""
-        conn = self._connect()
-        if date_key == "legacy":
-            rows = conn.execute(
-                """
-                SELECT r.session_id, r.payload_json
-                FROM records r
-                INNER JOIN sessions s ON s.id = r.session_id
-                WHERE s.date_key = 'legacy' OR s.legacy_rel_path NOT LIKE '%/%'
-                ORDER BY s.started_at ASC, r.record_index ASC
-                """
-            ).fetchall()
-        elif _DATE_RE.match(date_key):
-            rows = conn.execute(
-                """
-                SELECT r.session_id, r.payload_json
-                FROM records r
-                INNER JOIN sessions s ON s.id = r.session_id
-                WHERE s.date_key = ?
-                ORDER BY s.started_at ASC, r.record_index ASC
-                """,
-                (date_key,),
-            ).fetchall()
-        else:
-            raise ValueError("Invalid date format")
-        return self._rows_to_records(rows)
+        with self._read_connect() as conn:
+            if date_key == "legacy":
+                rows = conn.execute(
+                    """
+                    SELECT r.session_id, r.payload_json
+                    FROM records r
+                    INNER JOIN sessions s ON s.id = r.session_id
+                    WHERE s.date_key = 'legacy' OR s.legacy_rel_path NOT LIKE '%/%'
+                    ORDER BY s.started_at ASC, r.record_index ASC
+                    """
+                ).fetchall()
+            elif _DATE_RE.match(date_key):
+                rows = conn.execute(
+                    """
+                    SELECT r.session_id, r.payload_json
+                    FROM records r
+                    INNER JOIN sessions s ON s.id = r.session_id
+                    WHERE s.date_key = ?
+                    ORDER BY s.started_at ASC, r.record_index ASC
+                    """,
+                    (date_key,),
+                ).fetchall()
+            else:
+                raise ValueError("Invalid date format")
+            return self._rows_to_records(conn, rows)
 
     def load_logs(self, session_id: str) -> list[dict[str, str]]:
-        conn = self._connect()
-        rows = conn.execute(
-            """
-                SELECT logged_at, level, message
-                FROM proxy_logs
-                WHERE session_id = ?
-                ORDER BY line_no
-                """,
-            (session_id,),
-        ).fetchall()
+        with self._read_connect() as conn:
+            rows = conn.execute(
+                """
+                    SELECT logged_at, level, message
+                    FROM proxy_logs
+                    WHERE session_id = ?
+                    ORDER BY line_no
+                    """,
+                (session_id,),
+            ).fetchall()
         return [
             {
                 "logged_at": row["logged_at"] or "",
@@ -576,8 +595,7 @@ class TraceStore:
         return "\n".join(lines) + ("\n" if lines else "")
 
     def store_summary(self, session_id: str, summary: dict[str, Any]) -> None:
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             conn.execute(
                 """
                 UPDATE sessions
@@ -596,13 +614,13 @@ class TraceStore:
     def dashboard_snapshot(self) -> dict[str, tuple[str, int, str]]:
         """Return session_id -> (updated_at, record_count, status) for change detection."""
         snapshot: dict[str, tuple[str, int, str]] = {}
-        conn = self._connect()
-        rows = conn.execute(
-            """
-            SELECT id, updated_at, record_count, status
-            FROM sessions
-            """
-        ).fetchall()
+        with self._read_connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, updated_at, record_count, status
+                FROM sessions
+                """
+            ).fetchall()
         for row in rows:
             snapshot[row["id"]] = (
                 row["updated_at"] or "",
@@ -614,13 +632,13 @@ class TraceStore:
     def list_dates(self) -> tuple[list[str], bool]:
         dates: set[str] = set()
         has_legacy = False
-        conn = self._connect()
-        for row in conn.execute("SELECT DISTINCT date_key FROM sessions").fetchall():
-            date_key = row["date_key"] or ""
-            if _DATE_RE.match(date_key):
-                dates.add(date_key)
-            elif date_key == "legacy":
-                has_legacy = True
+        with self._read_connect() as conn:
+            for row in conn.execute("SELECT DISTINCT date_key FROM sessions").fetchall():
+                date_key = row["date_key"] or ""
+                if _DATE_RE.match(date_key):
+                    dates.add(date_key)
+                elif date_key == "legacy":
+                    has_legacy = True
         dates.add(datetime.now().date().isoformat())
         return sorted(dates, reverse=True), has_legacy
 
@@ -628,8 +646,7 @@ class TraceStore:
         self, date_key: str, *, protected_session_ids: set[str] | None = None
     ) -> dict[str, int | str]:
         protected = protected_session_ids or set()
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             if date_key == "legacy":
                 rows = conn.execute(
                     "SELECT id FROM sessions WHERE date_key = 'legacy' OR legacy_rel_path NOT LIKE '%/%'"
@@ -655,8 +672,7 @@ class TraceStore:
 
     def delete_session(self, session_id: str) -> dict[str, int | str]:
         """Delete one trace session and its dependent records/logs."""
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             row = conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone()
             if row is None:
                 return {
@@ -696,8 +712,7 @@ class TraceStore:
         protected = set(protected_session_ids or set())
         if protected_session_id:
             protected.add(protected_session_id)
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             rows = conn.execute(
                 """
                 SELECT id, status, updated_at, started_at
@@ -783,8 +798,7 @@ class TraceStore:
                 client = str(capture.get("client") or "")
                 proxy_mode = str(capture.get("proxy_mode") or "")
 
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             try:
                 conn.execute(
                     """
@@ -862,24 +876,23 @@ class TraceStore:
         return session_id
 
     def _legacy_session_exists(self, legacy_source_key: str, rel_path: str) -> bool:
-        conn = self._connect()
-        row = conn.execute(
-            "SELECT 1 FROM sessions WHERE legacy_source_key = ? AND legacy_rel_path = ? LIMIT 1",
-            (legacy_source_key, rel_path),
-        ).fetchone()
+        with self._read_connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM sessions WHERE legacy_source_key = ? AND legacy_rel_path = ? LIMIT 1",
+                (legacy_source_key, rel_path),
+            ).fetchone()
         return row is not None
 
     def _migration_done(self, marker: str) -> bool:
-        conn = self._connect()
-        row = conn.execute(
-            "SELECT value FROM migration_state WHERE key = ?",
-            (marker,),
-        ).fetchone()
+        with self._read_connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM migration_state WHERE key = ?",
+                (marker,),
+            ).fetchone()
         return row is not None
 
     def _mark_migration_done(self, marker: str) -> None:
-        with self._write_lock:
-            conn = self._connect()
+        with self._write_access() as conn:
             conn.execute(
                 """
                 INSERT INTO migration_state (key, value)
@@ -913,7 +926,7 @@ class TraceStore:
             except json.JSONDecodeError:
                 existing = None
         if existing is not None and not is_dashboard_summary_current(existing, session_id):
-            summary = build_stored_session_summary(row, self.load_records(session_id))
+            summary = build_stored_session_summary(row, self._load_records_with_connection(conn, session_id))
         else:
             summary = merge_record_into_summary(
                 existing,
@@ -933,21 +946,88 @@ class TraceStore:
             ),
         )
 
-    def _open_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+    def _open_connection(self, *, enable_wal: bool = True) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
+        if enable_wal:
+            conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
     def _connect(self) -> sqlite3.Connection:
         conn = getattr(self._tls, "conn", None)
         if conn is None:
             conn = self._open_connection()
-            self._ensure_schema_once(conn)
+            try:
+                self._ensure_schema_once(conn)
+            except Exception:
+                conn.close()
+                raise
             self._tls.conn = conn
         return conn
+
+    @contextmanager
+    def _write_access(self) -> Iterator[sqlite3.Connection]:
+        with self._write_lock:
+            with self._process_write_lock():
+                conn = self._connect()
+                try:
+                    yield conn
+                except sqlite3.Error:
+                    _rollback_if_needed(conn)
+                    raise
+
+    @contextmanager
+    def _process_write_lock(self) -> Iterator[None]:
+        try:
+            lock_file = self._write_lock_path.open("a+b")
+        except OSError as exc:
+            raise sqlite3.OperationalError(f"trace write lock unavailable: {exc}") from exc
+
+        with lock_file:
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            deadline = time.monotonic() + WRITE_LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    _try_lock_file_exclusive(lock_file)
+                    break
+                except OSError as exc:
+                    if time.monotonic() >= deadline:
+                        raise sqlite3.OperationalError(f"trace write lock unavailable: {exc}") from exc
+                    time.sleep(WRITE_LOCK_RETRY_SECONDS)
+            try:
+                yield
+            finally:
+                try:
+                    _unlock_file(lock_file)
+                except OSError:
+                    pass
+
+    @contextmanager
+    def _read_connect(self) -> Iterator[sqlite3.Connection]:
+        self._ensure_schema_for_read()
+        conn = self._open_connection(enable_wal=False)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _ensure_schema_for_read(self) -> None:
+        if self._schema_ready:
+            return
+        with self._write_lock:
+            with self._process_write_lock():
+                if self._schema_ready:
+                    return
+                conn = self._open_connection()
+                try:
+                    self._ensure_schema_once(conn)
+                finally:
+                    conn.close()
 
     def close(self) -> None:
         """Close the thread-local SQLite connection."""
@@ -961,6 +1041,7 @@ class TraceStore:
             if self._schema_ready:
                 return
             self._ensure_schema(conn)
+            conn.commit()
             self._schema_ready = True
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
@@ -1255,10 +1336,9 @@ class TraceStore:
         )
         return make_blob_ref(hash_value, size_bytes)
 
-    def _rows_to_records(self, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    def _rows_to_records(self, conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         blob_cache: dict[tuple[str, str], Any] = {}
-        conn = self._connect()
         for row in rows:
             try:
                 record = self._decode_record_payload(conn, row["session_id"], row["payload_json"], blob_cache)
@@ -1299,6 +1379,40 @@ class TraceStore:
                 raise KeyError(hash_value)
             blob_cache[cache_key] = json.loads(row["payload_json"])
         return blob_cache[cache_key]
+
+
+def _try_lock_file_exclusive(lock_file: Any) -> None:
+    lock_file.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(lock_file: Any) -> None:
+    lock_file.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _rollback_if_needed(conn: sqlite3.Connection) -> None:
+    try:
+        if conn.in_transaction:
+            conn.rollback()
+    except sqlite3.Error:
+        pass
 
 
 def _legacy_source_key(output_dir: Path) -> str:

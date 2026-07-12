@@ -12,6 +12,7 @@ import shlex
 # Keep the stdlib module object available as claude_tap.cli.shutil for
 # existing tests and private integrations that monkeypatch shutil.which there.
 import shutil
+import sqlite3
 import sys
 import threading
 import time
@@ -74,9 +75,9 @@ from claude_tap.shared_dashboard import (
     stop_dashboard_service,
     stop_incompatible_dashboard_if_running,
 )
-from claude_tap.trace import TraceWriter
+from claude_tap.trace import TraceWriter, create_trace_writer
 from claude_tap.trace_log_handler import SQLiteLogHandler
-from claude_tap.trace_store import get_trace_store, resolve_db_path
+from claude_tap.trace_store import TraceStore, get_trace_store, resolve_db_path
 
 # Force UTF-8 + line-buffered stdout/stderr so emoji output works on Windows
 # consoles (GBK/cp936) and `uv tool` doesn't fully buffer our progress prints.
@@ -86,6 +87,16 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 log = logging.getLogger("claude-tap")
+
+
+def _create_trace_writer(
+    *,
+    store: TraceStore,
+    client: str,
+    proxy_mode: str,
+    metadata: dict[str, str],
+) -> TraceWriter:
+    return create_trace_writer(store=store, client=client, proxy_mode=proxy_mode, metadata=metadata)
 
 
 class _LazyTraceWriter:
@@ -128,8 +139,13 @@ class _LazyTraceWriter:
 
     def _ensure_writer(self) -> TraceWriter:
         if self._writer is None:
-            self.session_id = self._store.create_session(client=self._client, proxy_mode=self._proxy_mode)
-            self._writer = TraceWriter(self.session_id, metadata=self._metadata, store=self._store)
+            self._writer = _create_trace_writer(
+                store=self._store,
+                client=self._client,
+                proxy_mode=self._proxy_mode,
+                metadata=self._metadata,
+            )
+            self.session_id = self._writer.session_id
         return self._writer
 
 
@@ -285,7 +301,13 @@ async def async_main(args: argparse.Namespace):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     if not args.live_viewer:
-        migrate_legacy_traces(output_dir)
+        try:
+            migrate_legacy_traces(output_dir)
+        except sqlite3.Error as exc:
+            print(
+                f"claude-tap: legacy trace migration skipped because storage is unavailable ({exc})",
+                file=sys.stderr,
+            )
 
     store = get_trace_store()
     trace_metadata = {"client": args.client, "proxy_mode": args.proxy_mode}
@@ -308,8 +330,13 @@ async def async_main(args: argparse.Namespace):
         transcript_registry = CodexAppTranscriptSessionRegistry(store=store, metadata=trace_metadata)
         cdp_writer = _LazyTraceWriter(client=args.client, proxy_mode=args.proxy_mode, metadata=trace_metadata)
     else:
-        session_id = store.create_session(client=args.client, proxy_mode=args.proxy_mode)
-        writer = TraceWriter(session_id, live_server=None, metadata=trace_metadata, store=store)
+        writer = _create_trace_writer(
+            store=store,
+            client=args.client,
+            proxy_mode=args.proxy_mode,
+            metadata=trace_metadata,
+        )
+        session_id = writer.session_id
 
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
@@ -328,7 +355,7 @@ async def async_main(args: argparse.Namespace):
                 print(f"🌐 Dashboard: {dashboard_url_value}")
             else:
                 print(f"🌐 Dashboard: {dashboard_url_value} (shared)")
-        except RuntimeError as exc:
+        except (RuntimeError, sqlite3.Error) as exc:
             print(f"⚠️  {exc}", file=sys.stderr)
 
     # Proxy logs go to SQLite, not terminal (avoids polluting Claude TUI)
@@ -519,13 +546,17 @@ async def async_main(args: argparse.Namespace):
             protected_session_ids = set(transcript_registry.session_ids) if transcript_registry is not None else set()
             if cdp_writer is not None and cdp_writer.session_id:
                 protected_session_ids.add(cdp_writer.session_id)
-            cleaned = cleanup_trace_sessions(
-                args.max_traces,
-                protected_session_id=session_id,
-                protected_session_ids=protected_session_ids or None,
-            )
-            if cleaned:
-                print(f"\n🧹 Cleaned up {cleaned} old trace session(s)")
+            try:
+                cleaned = cleanup_trace_sessions(
+                    args.max_traces,
+                    protected_session_id=session_id,
+                    protected_session_ids=protected_session_ids or None,
+                )
+            except sqlite3.Error as exc:
+                print(f"\nclaude-tap: trace cleanup skipped because storage is unavailable ({exc})", file=sys.stderr)
+            else:
+                if cleaned:
+                    print(f"\n🧹 Cleaned up {cleaned} old trace session(s)")
 
         # Print summary with cost estimation
         if transcript_registry is not None:
@@ -554,6 +585,9 @@ async def async_main(args: argparse.Namespace):
             }
         print("\n📊 Trace summary:")
         print(f"   API calls: {stats['api_calls']}")
+        if stats.get("trace_storage_errors"):
+            print(f"   Trace storage errors: {stats['trace_storage_errors']}")
+            print(f"   Dropped trace records: {stats.get('dropped_trace_records', 0)}")
         if transcript_registry is not None:
             print(f"   Query sessions: {len(transcript_registry.session_ids)}")
 
