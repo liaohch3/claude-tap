@@ -599,20 +599,21 @@ class _FakeStreamContent:
 class _FakeStreamResponse:
     status = 200
     reason = "OK"
-    headers = {"Content-Type": "application/vnd.amazon.eventstream"}
 
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
         self.content = _FakeStreamContent(body)
+        self.headers = headers if headers is not None else {"Content-Type": "application/vnd.amazon.eventstream"}
 
 
 class _FakeSession:
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, response_headers: dict[str, str] | None = None) -> None:
         self._body = body
+        self._response_headers = response_headers
         self.calls: list[dict[str, Any]] = []
 
     async def request(self, **kwargs):
         self.calls.append(kwargs)
-        return _FakeStreamResponse(self._body)
+        return _FakeStreamResponse(self._body, self._response_headers)
 
 
 class _MemoryWriter:
@@ -683,6 +684,46 @@ async def test_forward_proxy_records_bedrock_eventstream_without_stream_flag(
         assert record["response"]["body"]["usage"]["cache_creation_input_tokens"] == 1
     assert record["response"]["body"]["usage"]["output_tokens"] == 2
     assert [event["event"] for event in record["response"]["sse_events"]][0] == "message_start"
+    reset_trace_store()
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_streaming_response_omits_upstream_content_length(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bedrock_path = "/model/global.anthropic.claude-sonnet-4-6-v1/invoke-with-response-stream"
+    bedrock_bytes = _bedrock_body()
+    store, _session_id, writer = _make_writer(tmp_path, monkeypatch)
+    fake_session = _FakeSession(
+        bedrock_bytes,
+        {
+            "Content-Type": "application/vnd.amazon.eventstream",
+            "Content-Length": str(len(bedrock_bytes)),
+        },
+    )
+    client_writer = _MemoryWriter()
+    server = ForwardProxyServer(
+        host="127.0.0.1",
+        port=0,
+        ca=object(),
+        writer=writer,
+        session=fake_session,
+    )
+
+    await server._forward_and_record(
+        "POST",
+        bedrock_path,
+        {"Host": "bedrock-runtime.us-east-1.amazonaws.com"},
+        b"{}",
+        f"https://bedrock-runtime.us-east-1.amazonaws.com{bedrock_path}",
+        client_writer,
+    )
+
+    writer.close()
+    response_headers = bytes(client_writer.data).split(b"\r\n\r\n", 1)[0].lower()
+    assert b"transfer-encoding: chunked" in response_headers
+    assert b"content-length:" not in response_headers
     reset_trace_store()
 
 

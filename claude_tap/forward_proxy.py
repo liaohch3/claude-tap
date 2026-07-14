@@ -615,8 +615,9 @@ class ForwardProxyServer:
         client_writer.write(status_line.encode())
 
         # Send response headers (filter hop-by-hop, use chunked transfer)
+        skip_headers = HOP_BY_HOP | {"content-length"}
         for key, value in upstream_resp.headers.items():
-            if key.lower() not in HOP_BY_HOP:
+            if key.lower() not in skip_headers:
                 client_writer.write(f"{key}: {value}\r\n".encode())
         client_writer.write(b"Transfer-Encoding: chunked\r\n")
         client_writer.write(b"\r\n")
