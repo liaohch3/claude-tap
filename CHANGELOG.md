@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Rank captured tool schemas by MCP server and individual tool, with token estimates calibrated to captured input/cache usage or exact `count_tokens` results.
 
 
 

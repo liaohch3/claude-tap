@@ -934,11 +934,138 @@ function renderToolInput(input) {
     + `</div>`;
 }
 
-function renderTools(tools) {
-  return tools.map(td => {
+function utf8ByteLength(value) {
+  const serialized = typeof value === 'string' ? value : (JSON.stringify(value) || '');
+  if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(serialized).length;
+  return unescape(encodeURIComponent(serialized)).length;
+}
+
+function mcpServerForTool(name) {
+  if (typeof name !== 'string' || !name.startsWith('mcp__')) return '';
+  const separator = name.lastIndexOf('__');
+  if (separator <= 'mcp__'.length) return name;
+  return name.slice(0, separator);
+}
+
+function requestInputTokenCalibration(entry, requestBody, usage) {
+  const responsePayload = getResponsePayload(entry) || {};
+  const path = entry?.request?.path || '';
+  let inputTokens = 0;
+  let mode = 'heuristic';
+  if (path.includes('/count_tokens') && Number(responsePayload.input_tokens) > 0) {
+    inputTokens = Number(responsePayload.input_tokens);
+    mode = 'counted';
+  } else if (usage && Number(usage.input_tokens) > 0) {
+    inputTokens = Number(usage.input_tokens);
+    if (!usage._cache_read_in_input) {
+      inputTokens += Number(usage.cache_read_input_tokens) || 0;
+      inputTokens += Number(usage.cache_creation_input_tokens) || 0;
+    }
+    mode = 'calibrated';
+  }
+  const requestBytes = utf8ByteLength(requestBody || {});
+  if (!inputTokens || !requestBytes) {
+    return { tokensPerByte: 0.25, inputTokens: 0, mode: 'heuristic' };
+  }
+  return { tokensPerByte: inputTokens / requestBytes, inputTokens, mode };
+}
+
+function analyzeToolFootprint(tools, calibration = null) {
+  const tokensPerByte = calibration?.tokensPerByte > 0 ? calibration.tokensPerByte : 0.25;
+  const rankedTools = tools.map((tool, originalIndex) => {
+    const name = toolDisplayName(tool) || 'unknown';
+    const bytes = utf8ByteLength(tool);
+    const server = mcpServerForTool(name);
+    return {
+      tool,
+      name,
+      bytes,
+      estimatedTokens: Math.max(1, Math.round(bytes * tokensPerByte)),
+      server,
+      isMcp: !!server,
+      originalIndex,
+    };
+  }).sort((left, right) => right.bytes - left.bytes || left.name.localeCompare(right.name));
+
+  const serverMap = new Map();
+  for (const item of rankedTools) {
+    const key = item.server || '__direct__';
+    const current = serverMap.get(key) || { key, bytes: 0, toolCount: 0, isMcp: item.isMcp };
+    current.bytes += item.bytes;
+    current.toolCount += 1;
+    serverMap.set(key, current);
+  }
+  const servers = Array.from(serverMap.values()).map(server => ({
+    ...server,
+    estimatedTokens: Math.max(1, Math.round(server.bytes * tokensPerByte)),
+  })).sort((left, right) => right.bytes - left.bytes || left.key.localeCompare(right.key));
+  const totalBytes = rankedTools.reduce((sum, item) => sum + item.bytes, 0);
+  const mcpBytes = rankedTools.filter(item => item.isMcp).reduce((sum, item) => sum + item.bytes, 0);
+  return {
+    tools: rankedTools,
+    servers,
+    totalBytes,
+    mcpBytes,
+    estimatedTokens: Math.round(totalBytes * tokensPerByte),
+    estimatedMcpTokens: Math.round(mcpBytes * tokensPerByte),
+    calibration: calibration || { tokensPerByte: 0.25, inputTokens: 0, mode: 'heuristic' },
+  };
+}
+
+function formatFootprintBytes(bytes) {
+  if (bytes < 1024) return `${bytes.toLocaleString()} B`;
+  return `${(bytes / 1024).toFixed(1)} KiB`;
+}
+
+function renderFootprintRows(items, totalBytes, kind) {
+  return items.map((item, index) => {
+    const name = kind === 'server'
+      ? (item.key === '__direct__' ? t('tool_footprint_direct') : item.key)
+      : item.name;
+    const count = kind === 'server'
+      ? `<span class="tool-rank-count">${formatText('tool_footprint_tool_count', { count: item.toolCount })}</span>`
+      : (item.isMcp ? `<span class="tool-rank-kind">MCP</span>` : '');
+    const width = totalBytes ? Math.max(1, (item.bytes / totalBytes) * 100) : 0;
+    return `<div class="tool-rank-row" data-tool-rank-name="${esc(name)}">`
+      + `<span class="tool-rank-index">${index + 1}</span>`
+      + `<span class="tool-rank-main"><span class="tool-rank-name">${esc(name)}</span>${count}`
+      + `<span class="tool-rank-bar"><span style="width:${width.toFixed(2)}%"></span></span></span>`
+      + `<span class="tool-rank-tokens">~${item.estimatedTokens.toLocaleString()} ${t('tok')}</span>`
+      + `<span class="tool-rank-bytes">${formatFootprintBytes(item.bytes)}</span>`
+      + `</div>`;
+  }).join('');
+}
+
+function renderToolFootprint(tools, calibration = null) {
+  const footprint = analyzeToolFootprint(tools, calibration);
+  const hintKey = footprint.calibration.mode === 'counted'
+    ? 'tool_footprint_hint_counted'
+    : footprint.calibration.mode === 'calibrated'
+      ? 'tool_footprint_hint_calibrated'
+      : 'tool_footprint_hint_heuristic';
+  const hint = formatText(hintKey, { tokens: footprint.calibration.inputTokens.toLocaleString() });
+  return `<div class="tool-footprint">`
+    + `<div class="tool-footprint-heading"><div><div class="tool-footprint-title">${t('tool_footprint_title')}</div>`
+    + `<div class="tool-footprint-hint">${esc(hint)}</div></div>`
+    + `<div class="tool-footprint-metrics">`
+    + `<span><strong>~${footprint.estimatedTokens.toLocaleString()}</strong>${t('tool_footprint_schema_total')}</span>`
+    + `<span><strong>~${footprint.estimatedMcpTokens.toLocaleString()}</strong>${t('tool_footprint_mcp_total')}</span>`
+    + `</div></div>`
+    + `<div class="tool-footprint-columns">`
+    + `<div class="tool-rank-panel"><div class="tool-rank-title">${t('tool_footprint_servers')}</div>`
+    + `<div class="tool-rank-list">${renderFootprintRows(footprint.servers, footprint.totalBytes, 'server')}</div></div>`
+    + `<div class="tool-rank-panel"><div class="tool-rank-title">${t('tool_footprint_tools')}</div>`
+    + `<div class="tool-rank-list">${renderFootprintRows(footprint.tools, footprint.totalBytes, 'tool')}</div></div>`
+    + `</div></div>`;
+}
+
+function renderTools(tools, calibration = null) {
+  const ranking = renderToolFootprint(tools, calibration);
+  const definitions = tools.map(td => {
     const name = toolDisplayName(td) || 'unknown', desc = toolDescription(td);
     const shortDesc = desc.split('\n')[0].substring(0, 120);
     const schema = toolSchema(td);
+    const footprint = analyzeToolFootprint([td], calibration).tools[0];
     const props = schema.properties || {};
     const required = new Set(schema.required || []);
     let paramsHtml = '';
@@ -952,8 +1079,9 @@ function renderTools(tools) {
         return `<div class="tb-param"><div class="tb-param-row1"><span class="tb-pname">${esc(k)}</span>${typeTag}${req}</div>${descLine}</div>`;
       }).join('');
     }
-    return `<div class="tool-block"><div class="tool-block-header"><span class="tb-arrow">&#9654;</span><span class="tb-name">${esc(name)}</span><span class="tb-desc">${esc(shortDesc)}</span></div><div class="tool-block-body">${desc ? `<div class="tb-full-desc">${esc(desc)}</div>` : ''}${paramsHtml}</div></div>`;
+    return `<div class="tool-block"><div class="tool-block-header"><span class="tb-arrow">&#9654;</span><span class="tb-name">${esc(name)}</span><span class="tb-size">~${footprint.estimatedTokens.toLocaleString()} ${t('tok')}</span><span class="tb-desc">${esc(shortDesc)}</span></div><div class="tool-block-body">${desc ? `<div class="tb-full-desc">${esc(desc)}</div>` : ''}${paramsHtml}</div></div>`;
   }).join('');
+  return ranking + definitions;
 }
 
 function renderResponseContent(body, contextOnly = false) {

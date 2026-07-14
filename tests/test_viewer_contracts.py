@@ -1991,6 +1991,78 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert remaining_tabs == ["default", "trace"]
 
 
+def test_tool_schema_footprint_ranks_mcp_servers_and_tools(tmp_path: Path, chromium_browser) -> None:
+    record = _anthropic_messages_record()
+    record["request_id"] = "req_tool_footprint_contract"
+    record["request"]["body"]["tools"] = [
+        {
+            "name": "Read",
+            "description": "Read a file.",
+            "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        },
+        {
+            "name": "mcp__claude_ai_Gmail__search",
+            "description": "Search Gmail. " * 40,
+            "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+        },
+        {
+            "name": "mcp__claude_ai_Canva__create_design",
+            "description": "Create a Canva design. " * 100,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Design prompt. " * 20},
+                    "width": {"type": "integer"},
+                    "height": {"type": "integer"},
+                },
+            },
+        },
+    ]
+    html_path = _generate_case_html(tmp_path, "tool_footprint", (record,))
+
+    page = chromium_browser.new_page(viewport={"width": 1440, "height": 1000})
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").first.click()
+        tools_section = page.locator("#detail .section").filter(has=page.locator(".title", has_text="Tools"))
+        tools_section.locator(".section-header").click()
+        page.wait_for_selector(".tool-footprint", state="visible", timeout=5000)
+        result = page.evaluate(
+            """() => {
+              const panels = document.querySelectorAll('.tool-rank-panel');
+              const names = panel => Array.from(panel.querySelectorAll('.tool-rank-name')).map(el => el.textContent);
+              return {
+                title: document.querySelector('.tool-footprint-title')?.textContent,
+                hint: document.querySelector('.tool-footprint-hint')?.textContent,
+                metrics: Array.from(document.querySelectorAll('.tool-footprint-metrics strong')).map(el => el.textContent),
+                servers: names(panels[0]),
+                tools: names(panels[1]),
+                sizeBadges: Array.from(document.querySelectorAll('.tb-size')).map(el => el.textContent),
+                overflowX: document.documentElement.scrollWidth - window.innerWidth,
+                serverListScrollable: panels[0].querySelector('.tool-rank-list').scrollHeight
+                  <= panels[0].querySelector('.tool-rank-list').clientHeight,
+              };
+            }"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert result["title"] == "Schema footprint ranking"
+    assert "160 captured input/cache tokens" in result["hint"]
+    assert result["servers"] == ["mcp__claude_ai_Canva", "mcp__claude_ai_Gmail", "Built-in / direct"]
+    assert result["tools"] == [
+        "mcp__claude_ai_Canva__create_design",
+        "mcp__claude_ai_Gmail__search",
+        "Read",
+    ]
+    assert len(result["metrics"]) == 2
+    assert len(result["sizeBadges"]) == 3
+    assert all(value.startswith("~") and value.endswith(" tok") for value in result["sizeBadges"])
+    assert result["overflowX"] <= 2
+    assert result["serverListScrollable"] is True
+
+
 def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Path, chromium_browser) -> None:
     record = json.loads(json.dumps(_responses_record()))
     decoded_command = "python - <<'PY'\nprint(\"hello\")\nPY"

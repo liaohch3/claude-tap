@@ -134,8 +134,9 @@ function renderDetail(e) {
       <button class="act-btn" onclick="copyCurl(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>${t('btn_curl')}</button>
       <button class="act-btn" onclick="showDiff(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><path d="M3 6h18M3 18h18" opacity=".4"/></svg>${t('btn_diff')}</button>
     </div>`;
+    const toolCalibration = requestInputTokenCalibration(e, reqBody, usage);
     const toolsSection = tools && tools.length
-      ? section(t('section_tools'), renderTools(tools), false, null, tools.length + ' ' + t('badge_tools'))
+      ? section(t('section_tools'), renderTools(tools, toolCalibration), false, null, tools.length + ' ' + t('badge_tools'))
       : '';
     const systemSection = sysPrompt ? section(t('section_system'), renderSystemPrompt(sysBlocks, sysPrompt), true, sysPrompt) : '';
     const messagesSection = msgs && msgs.length

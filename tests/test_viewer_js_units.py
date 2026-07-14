@@ -178,6 +178,53 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           { role: 'user', content: [{ type: 'input_text', text: 'Hi' }] },
         ]);
 
+        const footprint = context.analyzeToolFootprint([
+          { name: 'Read', description: 'direct' },
+          { name: 'mcp__claude_ai_Gmail__search', description: 'g'.repeat(200) },
+          { name: 'mcp__claude_ai_Canva__create_design', description: 'c'.repeat(500) },
+        ], { tokensPerByte: 0.5, inputTokens: 1000, mode: 'calibrated' });
+        assert.deepEqual(plain(footprint.tools.map(item => item.name)), [
+          'mcp__claude_ai_Canva__create_design',
+          'mcp__claude_ai_Gmail__search',
+          'Read',
+        ]);
+        assert.deepEqual(plain(footprint.servers.map(item => item.key)), [
+          'mcp__claude_ai_Canva',
+          'mcp__claude_ai_Gmail',
+          '__direct__',
+        ]);
+        assert.equal(footprint.tools[0].estimatedTokens, Math.round(footprint.tools[0].bytes * 0.5));
+        assert.equal(footprint.mcpBytes, footprint.tools[0].bytes + footprint.tools[1].bytes);
+        assert.equal(context.mcpServerForTool('Read'), '');
+
+        const countedCalibration = context.requestInputTokenCalibration({
+          request: { path: '/v1/messages/count_tokens?beta=true' },
+          response: { body: { input_tokens: 56093 } },
+        }, { model: 'claude-opus-4-8', tools: [{ name: 'Read' }] }, null);
+        assert.equal(countedCalibration.mode, 'counted');
+        assert.equal(countedCalibration.inputTokens, 56093);
+        assert.equal(countedCalibration.tokensPerByte > 0, true);
+
+        const cachedCalibration = context.requestInputTokenCalibration({
+          request: { path: '/v1/messages?beta=true' },
+          response: { body: {} },
+        }, { model: 'claude-opus-4-8', tools: [{ name: 'Read' }] }, {
+          input_tokens: 3754,
+          cache_creation_input_tokens: 98296,
+        });
+        assert.equal(cachedCalibration.mode, 'calibrated');
+        assert.equal(cachedCalibration.inputTokens, 102050);
+
+        const embeddedCacheCalibration = context.requestInputTokenCalibration({
+          request: { path: '/v1/responses' },
+          response: { body: {} },
+        }, { model: 'gpt-5', tools: [{ name: 'Read' }] }, {
+          input_tokens: 100,
+          cache_read_input_tokens: 90,
+          _cache_read_in_input: true,
+        });
+        assert.equal(embeddedCacheCalibration.inputTokens, 100);
+
         assert.deepEqual(
           plain(context.getRequestTools({
             model: 'gpt-5.6-sol',
