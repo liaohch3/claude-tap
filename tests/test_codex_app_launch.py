@@ -97,6 +97,74 @@ def test_quit_codex_app_uses_bundle_id_and_reports_failures(monkeypatch: pytest.
     assert cli_clients._quit_codex_app() is False
 
 
+def test_codex_app_executable_candidates_prefers_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli_clients.sys, "platform", "darwin")
+    monkeypatch.setenv(cli_clients._CODEX_APP_EXECUTABLE_ENV, "~/custom/Codex")
+
+    candidates = cli_clients._codex_app_executable_candidates()
+
+    assert candidates[0] == Path("~/custom/Codex").expanduser()
+    assert Path("/Applications/Codex.app/Contents/MacOS/Codex") in candidates
+    assert Path.home() / "Applications/Codex.app/Contents/MacOS/Codex" in candidates
+
+
+def test_codex_app_executable_candidates_empty_on_non_macos_without_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_clients.sys, "platform", "linux")
+    monkeypatch.delenv(cli_clients._CODEX_APP_EXECUTABLE_ENV, raising=False)
+
+    assert cli_clients._codex_app_executable_candidates() == ()
+
+
+def test_resolve_client_executable_uses_env_override_before_default_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    configured = tmp_path / "Codex"
+    configured.write_text("")
+    monkeypatch.setenv(cli_clients._CODEX_APP_EXECUTABLE_ENV, str(configured))
+    monkeypatch.setattr(
+        cli_clients,
+        "_codex_app_executable_candidates",
+        lambda: (configured, Path("/Applications/Codex.app/Contents/MacOS/Codex")),
+    )
+
+    cfg = cli_clients.CLIENT_CONFIGS["codexapp"]
+    resolved = cli_clients._resolve_client_executable("codexapp", cfg, None)
+
+    assert resolved == str(configured)
+
+
+def test_resolve_client_executable_returns_none_when_no_candidate_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_clients, "_codex_app_executable_candidates", lambda: (Path("/nonexistent/Codex"),))
+
+    cfg = cli_clients.CLIENT_CONFIGS["codexapp"]
+    assert cli_clients._resolve_client_executable("codexapp", cfg, None) is None
+
+
+def test_resolve_client_executable_prefers_explicit_client_cmd(tmp_path: Path) -> None:
+    wrapper_cmd = tmp_path / "codex-wrapper"
+    wrapper_cmd.write_text("")
+
+    cfg = cli_clients.CLIENT_CONFIGS["codexapp"]
+    resolved = cli_clients._resolve_client_executable("codexapp", cfg, str(wrapper_cmd))
+
+    assert resolved == str(wrapper_cmd)
+
+
+def test_resolve_client_executable_falls_back_to_path_lookup_for_other_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_clients.shutil, "which", lambda cmd: f"/usr/local/bin/{cmd}")
+
+    cfg = cli_clients.CLIENT_CONFIGS["claude"]
+    resolved = cli_clients._resolve_client_executable("claude", cfg, None)
+
+    assert resolved == "/usr/local/bin/claude"
+
+
 @pytest.mark.asyncio
 async def test_wait_for_codex_app_exit_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_clients, "_codex_app_existing_processes", lambda: ["123 Codex"])
@@ -157,7 +225,10 @@ async def test_run_client_codexapp_forward_launches_app_with_proxy_env(
         captured["stderr"] = kwargs["stderr"]
         return _DummyProc()
 
-    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/Applications/Codex.app/Contents/MacOS/Codex")
+    monkeypatch.setattr(
+        "claude_tap.cli_clients._resolve_client_executable",
+        lambda client, cfg, client_cmd: "/Applications/Codex.app/Contents/MacOS/Codex",
+    )
     monkeypatch.setattr("claude_tap.cli_clients._codex_app_existing_processes", lambda: [])
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
@@ -192,7 +263,10 @@ async def test_run_client_codexapp_forward_aborts_when_existing_app_noninteracti
     async def fail_create_subprocess_exec(*_cmd: str, **_kwargs: object) -> _DummyProc:
         raise AssertionError("Codex App should not launch while an existing app is running")
 
-    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/Applications/Codex.app/Contents/MacOS/Codex")
+    monkeypatch.setattr(
+        "claude_tap.cli_clients._resolve_client_executable",
+        lambda client, cfg, client_cmd: "/Applications/Codex.app/Contents/MacOS/Codex",
+    )
     monkeypatch.setattr(
         "claude_tap.cli_clients._codex_app_existing_processes",
         lambda: ["123 /Applications/Codex.app/Contents/MacOS/Codex"],
@@ -234,7 +308,10 @@ async def test_run_client_codexapp_forward_prompts_to_quit_existing_app(
         processes.pop(0)
         return True
 
-    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/Applications/Codex.app/Contents/MacOS/Codex")
+    monkeypatch.setattr(
+        "claude_tap.cli_clients._resolve_client_executable",
+        lambda client, cfg, client_cmd: "/Applications/Codex.app/Contents/MacOS/Codex",
+    )
     monkeypatch.setattr("claude_tap.cli_clients._codex_app_existing_processes", fake_existing_processes)
     monkeypatch.setattr("claude_tap.cli_clients._quit_codex_app", fake_quit_codex_app)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)

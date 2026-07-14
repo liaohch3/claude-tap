@@ -315,6 +315,9 @@ claude-tap --tap-client codexapp
 
 # 在 trace 中保留原始 WebSocket/SSE 事件数组
 claude-tap --tap-client codexapp --tap-store-stream-events
+
+# 使用非标准的 Codex.app 安装路径
+CODEX_APP_EXECUTABLE=/path/to/Codex.app/Contents/MacOS/Codex claude-tap --tap-client codexapp
 ```
 
 如果 Codex App 已经在运行，请先退出它，再让 claude-tap 启动新的进程，这样新进程才能继承代理和 CA 环境。这个模式捕获实时后端流量，不再导入本地 session JSONL transcript。

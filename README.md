@@ -321,6 +321,9 @@ claude-tap --tap-client codexapp
 
 # Keep raw WebSocket/SSE event arrays in the trace
 claude-tap --tap-client codexapp --tap-store-stream-events
+
+# Use a non-standard Codex.app install path
+CODEX_APP_EXECUTABLE=/path/to/Codex.app/Contents/MacOS/Codex claude-tap --tap-client codexapp
 ```
 
 If Codex App is already running, quit it first so the new process inherits the proxy and CA environment from claude-tap. This mode records live backend traffic instead of importing local session JSONL transcripts.

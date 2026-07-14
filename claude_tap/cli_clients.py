@@ -28,6 +28,7 @@ _BEDROCK_HOST_RE = re.compile(
 _CODEX_APP_FAST_EXIT_HINT_SECONDS = 5.0
 _CODEX_APP_PROCESS_RE = r"/Applications/Codex\.app/Contents/(MacOS/Codex|Resources/codex app-server)"
 _CODEX_APP_QUIT_TIMEOUT_SECONDS = 10.0
+_CODEX_APP_EXECUTABLE_ENV = "CODEX_APP_EXECUTABLE"
 
 
 def _is_aws_native_bedrock_url(url: str) -> bool:
@@ -54,6 +55,45 @@ def _is_aws_native_bedrock_url(url: str) -> bool:
 
 def _is_truthy_env_value(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _codex_app_executable_candidates() -> tuple[Path, ...]:
+    """Return candidate Codex App executable paths, most specific first.
+
+    ``CODEX_APP_EXECUTABLE`` lets users override the install location (e.g. a
+    non-standard install path or a test build); the default macOS install
+    locations are tried afterwards.
+    """
+    configured = os.environ.get(_CODEX_APP_EXECUTABLE_ENV)
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    if sys.platform == "darwin":
+        candidates.extend(
+            [
+                Path("/Applications/Codex.app/Contents/MacOS/Codex"),
+                Path.home() / "Applications/Codex.app/Contents/MacOS/Codex",
+            ]
+        )
+    return tuple(candidates)
+
+
+def _resolve_client_executable(client: str, cfg: ClientConfig, client_cmd: str | None) -> str | None:
+    """Resolve the executable path to launch for ``client``.
+
+    Codex App is a macOS ``.app`` bundle rather than a PATH-resolvable binary,
+    so it gets a dedicated multi-candidate lookup (``CODEX_APP_EXECUTABLE`` env
+    override, then the default install locations) before falling back to the
+    generic ``client_cmd``/``PATH`` resolution used by other clients.
+    """
+    if client_cmd:
+        return str(Path(client_cmd)) if Path(client_cmd).is_file() else None
+    if client == "codexapp":
+        for candidate in _codex_app_executable_candidates():
+            if candidate.is_file():
+                return str(candidate)
+        return None
+    return shutil.which(cfg.cmd)
 
 
 def _codex_app_existing_processes() -> list[str]:
@@ -464,11 +504,19 @@ async def run_client(
 
     # asyncio.create_subprocess_exec uses CreateProcess on Windows, which only
     # auto-appends `.exe`; resolve here so npm `.cmd`/`.bat` shims also work.
+    # Codex App is a macOS .app bundle rather than a PATH binary, so it gets a
+    # dedicated multi-candidate lookup (see _resolve_client_executable).
     display_cmd = client_cmd or cfg.cmd
-    resolved_cmd = str(Path(client_cmd)) if client_cmd and Path(client_cmd).is_file() else shutil.which(display_cmd)
+    resolved_cmd = _resolve_client_executable(client, cfg, client_cmd)
     if resolved_cmd is None:
         if client_cmd:
             print(f"\nError: '{client_cmd}' command not found.\nPlease check the wrapper-provided {cfg.label} path.\n")
+        elif client == "codexapp":
+            print(
+                "\nError: Codex.app executable not found.\n"
+                "Install Codex.app in /Applications, or set "
+                f"{_CODEX_APP_EXECUTABLE_ENV}=/path/to/Codex.app/Contents/MacOS/Codex.\n"
+            )
         else:
             print(cfg.missing_help)
         return 1

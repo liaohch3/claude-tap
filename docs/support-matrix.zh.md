@@ -22,7 +22,7 @@ English version: [Support Matrix](support-matrix.md).
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | 无 | 默认 reverse 模式使用 HTTP/SSE | 已验证 |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | 默认 reverse 模式使用 HTTP/SSE | 已使用 Codex 0.144.1 完成真实 E2E 验证 |
 | Codex CLI | 显式指定 `--tap-proxy-mode forward` | 自动识别上游 | n/a | HTTP/SSE + WebSocket | 单测覆盖 |
-| Codex App | Codex App 中的 ChatGPT 账号 | `codex-app://sessions` | n/a | 本地 session JSONL transcript import；当 Codex App debug endpoint 可用时自动尽力补充 CDP WebSocket 证据 | 单测覆盖 |
+| Codex App | Codex App 中的 ChatGPT 账号 | Forward proxy 到 `https://chatgpt.com/backend-api/codex` | n/a | HTTP/SSE + WebSocket（仅 `/backend-api/codex/responses`；其他产品流量照常转发但不记录 trace） | 单测覆盖 |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy（Google 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | Gemini CLI | API key / Vertex 兼容配置（`--tap-proxy-mode reverse`） | `https://generativelanguage.googleapis.com` | 无 | HTTP/SSE | 单测覆盖 |
 | Grok Build CLI | Grok 订阅 OAuth（`grok login`） | `https://cli-chat-proxy.grok.com/v1` | `/v1` | HTTP/SSE Responses，以及 storage/trace 审计记录 | 已使用 Grok 0.2.101 完成真实 E2E 验证 |
@@ -53,7 +53,7 @@ English version: [Support Matrix](support-matrix.md).
 |--------|----------|------|
 | `claude` | `reverse` | 单 provider，原生支持 Claude provider base URL 环境变量（`ANTHROPIC_BASE_URL`、`ANTHROPIC_BEDROCK_BASE_URL`、`ANTHROPIC_VERTEX_BASE_URL`） |
 | `codex` | `reverse` | 启动时临时注入使用代理 base URL 且设置 `supports_websockets=false` 的同级 provider，使每个请求生成一条自包含的 HTTP/SSE trace，同时不修改 `~/.codex/config.toml` |
-| `codexapp` | `transcript` | 监听 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 的 transcript 客户端；不会创建代理。Codex App 暴露 debug endpoint 时会自动追加 CDP WebSocket 证据 |
+| `codexapp` | `forward` | Codex App 是 macOS `.app` bundle，没有 `OPENAI_BASE_URL` 式的覆盖能力；forward proxy 捕获其真实上游 HTTP/WebSocket 流量，并过滤为仅 `/backend-api/codex/responses` |
 | `gemini` | `forward` | Google OAuth / Code Assist 会访问多个 Google 端点；forward proxy 不依赖单一 base URL，更适合作为默认 |
 | `grok` | `reverse` | 官方 CLI 原生支持 `GROK_CLI_CHAT_PROXY_BASE_URL`；reverse 模式无需安装本地 CA 即可捕获模型流量和 storage/trace 审计记录 |
 | `kimi` | `reverse` | 旧版 kimi-cli；原生 `KIMI_BASE_URL` 环境变量 |
@@ -68,7 +68,7 @@ English version: [Support Matrix](support-matrix.md).
 | `agy` | `forward` | Antigravity 会访问多个 Google / Antigravity 端点；claude-tap 用 `HTTPS_PROXY` 捕获辅助流量，并用 `CLOUD_CODE_URL` 捕获 Code Assist 模型流量 |
 | `codebuddy` | `reverse` | 单 provider，原生支持 `CODEBUDDY_BASE_URL` 环境变量；支持 `--settings` 环境变量注入；上游 endpoint 自动从 CodeBuddy 登录缓存识别 |
 
-用户可以通过 `--tap-proxy-mode {reverse,forward}` 覆盖有代理的客户端。`codexapp` 是 transcript-only，`--tap-proxy-mode` 不适用。
+用户可以通过 `--tap-proxy-mode {reverse,forward}` 覆盖有代理的客户端。
 
 ## 子命令 argv 改写
 
@@ -114,10 +114,8 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 
 - `test_codex_upstream_url_construction`：验证全部 5 个矩阵组合的 URL 构造
 - `test_codex_client_reverse_proxy`：使用 fake upstream 覆盖 OAuth 类 reverse proxy e2e
-- `test_build_codex_app_transcript_records_preserves_turn_context`：验证 Codex App session JSONL 会导入为 viewer 友好的 Responses 记录，并保留 usage、tools 和 tool results
-- `test_import_codex_app_transcripts_appends_only_new_completed_records`：验证 Codex App transcript 轮询只追加新的已完成记录
-- `test_cdp_recorder_writes_viewer_friendly_websocket_record`：验证 Codex App CDP WebSocket frame 会重建为 viewer 友好的 WebSocket 记录
-- `test_async_main_codexapp_starts_cdp_enrichment_by_default`：验证 `--tap-client codexapp` 默认启动 CDP 补充采集，并遵循全局原始 stream event 存储设置
+- `test_codex_app_*`（`tests/test_codex_app_launch.py`）：验证 Codex App 可执行文件解析（含 `CODEX_APP_EXECUTABLE` 覆盖和默认安装路径）、已运行检测/退出流程，以及 forward proxy 启动环境变量
+- `test_forward_proxy_client_filter_*`（`tests/test_e2e.py`）：验证 forward proxy 的 `forward_trace_methods`/`forward_trace_path_prefixes` 过滤会照常转发 Codex App 产品流量，但只记录 `/backend-api/codex/responses` 的 HTTP 和 WebSocket 请求
 - `test_gemini_registered_in_client_configs`：验证 Gemini CLI 注册和默认 forward 模式
 - `test_grok_*`：验证 Grok Build 注册、reverse 模式 URL 注入、目标探测、`/v1` 路由和 fake upstream Responses/storage/trace 捕获
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs`：验证 Gemini forward proxy 启动环境变量
@@ -159,8 +157,9 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Repl
 
 # Codex App
 uv run python -m claude_tap --tap-client codexapp
-# 启动或继续一个 Codex App 任务，并验证 dashboard 收到 transcript records。
-# 如果 Codex App 暴露 debug endpoint，websocket 证据会自动追加。
+# 如果 Codex App 已在运行，先退出它，让新启动的进程继承代理/CA 环境。
+# 启动或继续一个 Codex App 任务，并验证 dashboard 只收到 /backend-api/codex/responses
+# 的 HTTP/WebSocket 记录；其他 Codex App 产品流量会照常转发但不会记录 trace。
 
 # Qoder CLI
 uv run python -m claude_tap --tap-client qoder -- -p "Reply OK" --permission-mode dont_ask
