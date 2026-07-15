@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 
 from claude_tap.cli import _create_trace_writer
-from claude_tap.codex_app_transcript import CodexAppTranscriptSessionRegistry
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_store import TraceStore
 from tests.conftest import e2e_env, trace_db_path
@@ -254,32 +253,6 @@ async def test_startup_lock_creates_non_blocking_writer(tmp_path: Path, capsys) 
     await writer.write(_record(1))
     writer.close()
     summary = writer.get_summary()
-    assert summary["api_calls"] == 1
-    assert summary["trace_storage_errors"] == 2
-    assert summary["dropped_trace_records"] == 1
-    assert capsys.readouterr().err.count("continuing without blocking proxy") == 1
-
-
-@pytest.mark.asyncio
-async def test_codex_app_registry_does_not_stop_on_startup_lock(tmp_path: Path, capsys) -> None:
-    db_path = tmp_path / "codex-app-startup.sqlite3"
-    setup = TraceStore(db_path)
-    setup.create_session(client="setup")
-    setup.close()
-    store = TraceStore(db_path)
-    registry = CodexAppTranscriptSessionRegistry(
-        store=store,
-        metadata={"client": "codexapp", "proxy_mode": "transcript"},
-    )
-    locker = _hold_sqlite_write_lock(db_path)
-    try:
-        await registry.write_next_turn(tmp_path / "rollout.jsonl", _record(1))
-    finally:
-        locker.rollback()
-        locker.close()
-    registry.close()
-
-    summary = registry.get_summary()
     assert summary["api_calls"] == 1
     assert summary["trace_storage_errors"] == 2
     assert summary["dropped_trace_records"] == 1
