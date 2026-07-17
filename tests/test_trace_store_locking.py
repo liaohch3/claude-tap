@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import multiprocessing
 import os
 import sqlite3
@@ -18,6 +19,7 @@ import pytest
 from claude_tap.cli import _create_trace_writer
 from claude_tap.codex_app_transcript import CodexAppTranscriptSessionRegistry
 from claude_tap.trace import TraceWriter
+from claude_tap.trace_log_handler import SQLiteLogHandler
 from claude_tap.trace_store import TraceStore
 from tests.conftest import e2e_env, trace_db_path
 from tests.test_e2e import PROJECT_ROOT, run_fake_upstream_in_thread
@@ -165,6 +167,28 @@ def test_failed_write_rolls_back_quickly(tmp_path: Path) -> None:
     assert writer_conn.in_transaction is False
     store.append_record(session_id, _record(2))
     assert store.load_records(session_id) == [_record(2)]
+
+
+def test_sqlite_log_handler_backs_off_after_storage_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+    now = 100.0
+
+    class LockedStore:
+        def append_log(self, *_args, **_kwargs) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(time, "monotonic", lambda: now)
+    handler = SQLiteLogHandler("locked-session", store=LockedStore())
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "proxy request", (), None)
+
+    handler.emit(record)
+    handler.emit(record)
+    now += 1.0
+    handler.emit(record)
+
+    assert attempts == 2
 
 
 @pytest.mark.asyncio
