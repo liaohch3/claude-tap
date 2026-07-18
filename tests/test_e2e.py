@@ -432,7 +432,16 @@ def _start_fake_upstream(port, handler_fn):
     return stop
 
 
-def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout=30, tap_client="claude"):
+def _run_claude_tap(
+    project_dir,
+    trace_dir,
+    fake_bin_dir,
+    upstream_port,
+    timeout=30,
+    tap_client="claude",
+    target_suffix="",
+    no_live=False,
+):
     """Run claude_tap as a subprocess pointing at `upstream_port`.
     Returns the CompletedProcess."""
     env = os.environ.copy()
@@ -447,10 +456,12 @@ def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout
         "--tap-output-dir",
         trace_dir,
         "--tap-target",
-        f"http://127.0.0.1:{upstream_port}",
+        f"http://127.0.0.1:{upstream_port}{target_suffix}",
     ]
     if tap_client != "claude":
         cmd.extend(["--tap-client", tap_client])
+    if no_live:
+        cmd.append("--tap-no-live")
 
     return subprocess.run(
         cmd,
@@ -1926,6 +1937,117 @@ def test_codex_client_reverse_proxy():
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "codex")
+
+
+FAKE_GROK_SCRIPT = r"""#!/usr/bin/env python3
+# Fake Grok Build CLI that sends one Responses request via GROK_CLI_CHAT_PROXY_BASE_URL
+import json, os, sys, urllib.request
+
+base = os.environ.get("GROK_CLI_CHAT_PROXY_BASE_URL", "https://cli-chat-proxy.grok.com/v1")
+url = f"{base}/responses"
+
+try:
+    with urllib.request.urlopen(f"{base}/settings") as resp:
+        assert resp.status == 200
+except Exception as e:
+    print(f"[fake-grok] Settings error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+req_body = json.dumps({
+    "model": "grok-build",
+    "input": "Reply with exactly: HELLO_GROK",
+    "stream": True,
+}).encode()
+req = urllib.request.Request(url, data=req_body, headers={
+    "Content-Type": "application/json",
+    "Authorization": "Bearer grok-test-token-12345678",
+})
+try:
+    with urllib.request.urlopen(req) as resp:
+        chunks = resp.read().decode()
+        print(f"[fake-grok] status={resp.status} stream-bytes={len(chunks)}")
+except Exception as e:
+    print(f"[fake-grok] Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("[fake-grok] Done.")
+"""
+
+
+def test_grok_client_reverse_proxy():
+    """Test --tap-client grok against a fake Responses upstream."""
+
+    async def handler(request):
+        if request.path == "/v1/settings":
+            from aiohttp import web
+
+            return web.json_response({"features": {}})
+
+        body = await request.json()
+        assert request.path == "/v1/responses"
+        assert body["model"] == "grok-build"
+        from aiohttp import web
+
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        events = [
+            {
+                "type": "response.created",
+                "response": {"id": "resp_grok_1", "model": body["model"], "output": []},
+            },
+            {"type": "response.output_text.delta", "delta": "HELLO_GROK"},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_grok_1",
+                    "model": body["model"],
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "HELLO_GROK"}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12},
+                },
+            },
+        ]
+        for event in events:
+            await resp.write(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        await resp.write_eof()
+        return resp
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_grok_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_grok_")
+    fake_grok = Path(fake_bin_dir) / "grok"
+    fake_grok.write_text(FAKE_GROK_SCRIPT)
+    fake_grok.chmod(fake_grok.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19247, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19247,
+            tap_client="grok",
+            target_suffix="/v1",
+            no_live=True,
+        )
+
+        assert proc.returncode == 0, f"grok mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        records = read_trace_records(trace_dir)
+        assert len(records) == 1
+        record = records[0]
+        assert record["request"]["path"] == "/v1/responses"
+        assert record["upstream_base_url"] == "http://127.0.0.1:19247/v1"
+        assert record["request"]["body"]["model"] == "grok-build"
+        assert record["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_GROK"
+        assert "GROK_CLI_CHAT_PROXY_BASE_URL=http://127.0.0.1:" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "grok")
 
 
 FAKE_KIMI_SCRIPT = r"""#!/usr/bin/env python3

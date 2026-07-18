@@ -447,12 +447,20 @@ async def async_main(args: argparse.Namespace):
             assert session is not None
             assert writer is not None
             app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
+            reverse_cfg = CLIENT_CONFIGS[args.client]
             app["trace_ctx"] = {
                 "target_url": args.target,
                 "writer": writer,
                 "session": session,
                 "turn_counter": 0,
-                "extra_allowed_path_prefixes": tuple(args.extra_allowed_paths),
+                "extra_allowed_path_prefixes": (
+                    *reverse_cfg.reverse_allowed_path_prefixes,
+                    *args.extra_allowed_paths,
+                ),
+                "trace_path_prefixes": (
+                    *reverse_cfg.reverse_trace_path_prefixes,
+                    *args.extra_allowed_paths,
+                ),
                 "store_stream_events": args.store_stream_events,
                 "capture_only": capture_only,
                 **_reverse_proxy_trace_options(args.client, args.target),
@@ -695,6 +703,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # Reverse mode sets GOOGLE_GEMINI_BASE_URL and GOOGLE_VERTEX_BASE_URL\n"
             "  claude-tap --tap-client gemini --tap-proxy-mode reverse\n"
             "\n"
+            "grok build cli (reverse proxy mode):\n"
+            '  claude-tap --tap-client grok -- -p "hello"\n'
+            "  # Authenticate first with `grok login`\n"
+            "\n"
             "opencode (multi-provider; defaults to forward proxy mode):\n"
             "  # Forward proxy captures every provider opencode talks to\n"
             "  claude-tap --tap-client opencode\n"
@@ -805,7 +817,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex/kimi/kimi-code/openclaw/codebuddy, "
+            "Default depends on the client: 'reverse' for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, "
             "'forward' for agy/gemini/mimo/opencode/pi/hermes/cursor/qoder. "
             "codexapp is transcript-only and does not use this option."
         ),

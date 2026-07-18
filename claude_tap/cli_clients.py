@@ -103,6 +103,14 @@ class ClientConfig:
     # Transcript-only clients are observed from local session logs instead of a
     # spawned process and do not need a reverse or forward proxy.
     transcript_only: bool = False
+    # Extra client product endpoints accepted by the reverse proxy. Keep these
+    # client-scoped so one client's control-plane routes do not broaden every
+    # reverse proxy instance.
+    reverse_allowed_path_prefixes: tuple[str, ...] = ()
+    # When set, accepted reverse-proxy traffic outside these prefixes is
+    # relayed without persistence. This avoids storing account/control-plane
+    # responses while preserving the model traffic users launched us to trace.
+    reverse_trace_path_prefixes: tuple[str, ...] = ()
 
     @property
     def missing_help(self) -> str:
@@ -162,6 +170,31 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         default_target="https://api.openai.com",
         strip_path_prefix="/v1",
         strip_path_prefix_unless_target_contains=("api.openai.com",),
+    ),
+    "grok": ClientConfig(
+        cmd="grok",
+        label="Grok Build CLI",
+        install_url="https://docs.x.ai/build/overview",
+        base_url_env="GROK_CLI_CHAT_PROXY_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://cli-chat-proxy.grok.com/v1",
+        # Grok sends /v1/* to its configured base URL. The official upstream
+        # target already includes /v1, so remove the local prefix when relaying.
+        strip_path_prefix="/v1",
+        reverse_allowed_path_prefixes=(
+            "/v1/user",
+            "/v1/settings",
+            "/v1/bundle",
+            "/v1/subagents",
+            "/v1/feedback",
+            "/v1/storage",
+            "/v1/traces",
+            "/v1/deployment",
+            "/v1/mcp",
+            "/v1/sessions",
+            "/v1/billing",
+        ),
+        reverse_trace_path_prefixes=("/v1/responses", "/v1/chat/completions"),
     ),
     "codexapp": ClientConfig(
         cmd="codex",
@@ -969,6 +1002,14 @@ def _detect_codebuddy_target() -> str:
         return cached.rstrip("/") + "/v2"
 
     return CLIENT_CONFIGS["codebuddy"].default_target
+
+
+def _detect_grok_target() -> str:
+    """Auto-detect the Grok Build CLI chat proxy endpoint."""
+    env_target = os.environ.get(CLIENT_CONFIGS["grok"].base_url_env, "").strip()
+    if env_target:
+        return env_target
+    return CLIENT_CONFIGS["grok"].default_target
 
 
 def _read_codebuddy_endpoint_cache() -> str | None:
@@ -1896,6 +1937,7 @@ TARGET_DETECTORS = {
     "claude": _detect_claude_target,
     "codex": _detect_codex_target,
     "codebuddy": _detect_codebuddy_target,
+    "grok": _detect_grok_target,
     "kimi-code": _detect_kimi_code_target,
     "openclaw": _detect_openclaw_target,
 }
