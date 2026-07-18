@@ -91,9 +91,20 @@ DEFAULT_TRACE_IGNORED_PACKAGE_METADATA_CONTENT_TYPES = frozenset(
 PACKAGE_MANAGER_USER_AGENT_MARKERS = ("npm/", "yarn/", "pnpm/", "bun/")
 
 
-def _upstream_origin(upstream_url: str) -> str:
-    """Return a credential-free origin suitable for trace URL reconstruction."""
-    return str(URL(upstream_url).origin())
+def _upstream_base_url(upstream_url: str, request_path: str) -> str | None:
+    """Return a credential-free base URL suitable for trace reconstruction."""
+    parsed = URL(upstream_url)
+    if not parsed.is_absolute():
+        return None
+
+    base = str(parsed.origin())
+    upstream_path = parsed.raw_path.rstrip("/")
+    forwarded_path = URL(request_path).raw_path.rstrip("/")
+    if forwarded_path and upstream_path.endswith(forwarded_path):
+        prefix = upstream_path[: -len(forwarded_path)].rstrip("/")
+        if prefix:
+            return f"{base}{prefix}"
+    return base
 
 
 def _matches_path_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
@@ -498,7 +509,7 @@ class ForwardProxyServer:
         log_prefix = f"[Turn {turn}]"
 
         req_body = _parse_request_body_for_trace(body)
-        upstream_base_url = _upstream_origin(upstream_url)
+        upstream_base_url = _upstream_base_url(upstream_url, path)
 
         is_streaming = is_capture_only_streaming_request(path, req_body)
 

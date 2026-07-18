@@ -3456,11 +3456,25 @@ async def test_forward_proxy_unrecorded_response_closes_upstream_on_client_disco
     assert upstream_resp.closed is True
 
 
-def test_forward_proxy_upstream_origin_omits_default_port_and_credentials():
-    from claude_tap.forward_proxy import _upstream_origin
+def test_forward_proxy_upstream_base_url_is_safe_and_supports_path_prefixes():
+    from claude_tap.forward_proxy import _upstream_base_url
 
-    assert _upstream_origin("https://user:secret@api.example.test:443/v1/messages") == "https://api.example.test"
-    assert _upstream_origin("https://api.example.test:8443/v1/messages") == "https://api.example.test:8443"
+    assert _upstream_base_url("/health", "/health") is None
+    assert (
+        _upstream_base_url("https://user:secret@api.example.test:443/v1/messages", "/v1/messages")
+        == "https://api.example.test"
+    )
+    assert (
+        _upstream_base_url("https://api.example.test:8443/v1/messages", "/v1/messages")
+        == "https://api.example.test:8443"
+    )
+    assert (
+        _upstream_base_url(
+            "https://user:secret@gateway.example.test:443/proxy/v1/messages",
+            "/v1/messages",
+        )
+        == "https://gateway.example.test/proxy"
+    )
 
 
 @pytest.mark.asyncio
@@ -3698,7 +3712,7 @@ async def test_forward_proxy_local_reverse_bridge():
             ca=ca,
             writer=writer,
             session=session,
-            local_reverse_target=f"https://127.0.0.1:{upstream_port}",
+            local_reverse_target=f"https://127.0.0.1:{upstream_port}/proxy",
             local_reverse_allowed_path_prefixes=("/v1internal",),
             capture_only=True,
         )
@@ -3728,7 +3742,7 @@ async def test_forward_proxy_local_reverse_bridge():
             assert records[0]["request"]["path"] == "/v1internal:loadCodeAssist"
             assert records[0]["request"]["body"]["request"]["contents"][0]["role"] == "user"
             assert records[0]["response"]["status"] == 200
-            assert records[0]["upstream_base_url"] == f"https://127.0.0.1:{upstream_port}"
+            assert records[0]["upstream_base_url"] == f"https://127.0.0.1:{upstream_port}/proxy"
         finally:
             await server.stop()
             await session.close()
@@ -3777,17 +3791,24 @@ async def test_forward_proxy_records_upstream_error():
                 ) as resp:
                     assert resp.status == 502
                     assert await resp.text()
+                async with client.get(f"http://127.0.0.1:{proxy_port}/health") as resp:
+                    assert resp.status == 502
+                    assert await resp.text()
 
             await asyncio.sleep(0.1)
             writer.close()
             records = [json.loads(line) for line in store.export_jsonl(session_id).splitlines()]
-            assert len(records) == 1
+            assert len(records) == 2
             assert records[0]["turn"] == 1
             assert records[0]["request"]["path"] == "/v1internal:listExperiments"
             assert records[0]["request"]["body"]["request"]["client"] == "agy"
             assert records[0]["response"]["status"] == 502
             assert records[0]["response"]["body"]["error"]
             assert records[0]["upstream_base_url"] == f"http://127.0.0.1:{unreachable_port}"
+            assert records[1]["turn"] == 2
+            assert records[1]["request"]["path"] == "/health"
+            assert records[1]["response"]["status"] == 502
+            assert "upstream_base_url" not in records[1]
         finally:
             await server.stop()
             await session.close()

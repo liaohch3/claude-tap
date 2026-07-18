@@ -135,7 +135,10 @@ function copyCurl(btn) {
   const method = e.request?.method || 'POST', path = e.request?.path || '/v1/messages';
   const headers = e.request?.headers || {}, body = e.request?.body;
   const hostHeader = Object.entries(headers).find(([key]) => key.toLowerCase() === 'host');
-  const base = e.upstream_base_url || (hostHeader ? `https://${hostHeader[1]}` : 'https://api.anthropic.com');
+  const historicalHost = String(hostHeader?.[1] || '').trim();
+  const isLoopbackHost = /^(?:localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)(?::\d+)?$/i.test(historicalHost);
+  const base = e.upstream_base_url
+    || (historicalHost && !isLoopbackHost ? `https://${historicalHost}` : 'https://api.anthropic.com');
   let cmd = `curl -X ${method} '${base}${path}'`;
   for (const [k, v] of Object.entries(headers)) {
     const kl = k.toLowerCase();

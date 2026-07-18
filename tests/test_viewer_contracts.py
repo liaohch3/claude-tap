@@ -2009,7 +2009,13 @@ def test_viewer_curl_uses_recorded_upstream_and_historical_host_fallback(tmp_pat
         "Authorization": "Bearer sk-test...",
     }
 
-    html_path = _generate_case_html(tmp_path, "curl_upstream", (current_record, historical_record))
+    reverse_record = json.loads(json.dumps(_responses_record()))
+    reverse_record["request_id"] = "req_historical_reverse_curl"
+    reverse_record["turn"] = 3
+    reverse_record["request"]["path"] = "/v1/responses"
+    reverse_record["request"]["headers"] = {"Host": "127.0.0.1:8080"}
+
+    html_path = _generate_case_html(tmp_path, "curl_upstream", (current_record, historical_record, reverse_record))
     page = chromium_browser.new_page()
     try:
         errors = _open_viewer_with_error_capture(page, html_path)
@@ -2020,10 +2026,11 @@ def test_viewer_curl_uses_recorded_upstream_and_historical_host_fallback(tmp_pat
             }"""
         )
         curl_button = '#detail .act-btn[onclick="copyCurl(this)"]'
-        page.locator(".sidebar-item").nth(0).click()
-        page.locator(curl_button).click()
-        page.locator(".sidebar-item").nth(1).click()
-        page.locator(curl_button).click()
+        page.evaluate("filtered = entries.slice()")
+        assert page.evaluate("filtered.length") == 3
+        for index in range(3):
+            page.evaluate("index => { activeIdx = index; renderDetail(filtered[index]); }", index)
+            page.locator(curl_button).click()
         copied = page.evaluate("window.__copiedCurl")
     finally:
         page.close()
@@ -2034,6 +2041,8 @@ def test_viewer_curl_uses_recorded_upstream_and_historical_host_fallback(tmp_pat
     assert copied[1].startswith("curl -X POST 'https://legacy.example.test:9443/legacy/v1/responses'")
     assert "Authorization: Bearer sk-test..." in copied[0]
     assert "Authorization: Bearer sk-test..." in copied[1]
+    assert copied[2].startswith("curl -X POST 'https://api.anthropic.com/v1/responses'")
+    assert "127.0.0.1:8080" not in copied[2]
     assert "sk-test-secret" not in "\n".join(copied)
 
 
