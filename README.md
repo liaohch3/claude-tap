@@ -494,7 +494,7 @@ claude-tap trust-ca
 <details>
 <summary>Grok Build CLI examples</summary>
 
-Grok Build uses reverse proxy mode by default. claude-tap temporarily points the official `GROK_CLI_CHAT_PROXY_BASE_URL` at the local proxy, captures the OpenAI Responses HTTP/SSE stream, and relays it to `https://cli-chat-proxy.grok.com/v1` with the existing Grok OAuth session.
+Grok Build uses reverse proxy mode by default. claude-tap temporarily points the official `GROK_CLI_CHAT_PROXY_BASE_URL` at the local proxy, captures the OpenAI Responses HTTP/SSE stream plus Grok storage and trace audit requests, and relays them to `https://cli-chat-proxy.grok.com/v1` with the existing Grok OAuth session.
 
 ```bash
 # Authenticate once with the official Grok Build CLI.

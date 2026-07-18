@@ -486,7 +486,7 @@ claude-tap trust-ca
 <details>
 <summary>Grok Build CLI 示例</summary>
 
-Grok Build 默认使用 reverse proxy。claude-tap 会临时把官方 `GROK_CLI_CHAT_PROXY_BASE_URL` 指向本地代理，捕获 OpenAI Responses HTTP/SSE 流量，再使用现有的 Grok OAuth 会话转发到 `https://cli-chat-proxy.grok.com/v1`。
+Grok Build 默认使用 reverse proxy。claude-tap 会临时把官方 `GROK_CLI_CHAT_PROXY_BASE_URL` 指向本地代理，捕获 OpenAI Responses HTTP/SSE 流量以及 Grok storage/trace 审计请求，再使用现有的 Grok OAuth 会话转发到 `https://cli-chat-proxy.grok.com/v1`。
 
 ```bash
 # 先用官方 Grok Build CLI 完成一次认证。

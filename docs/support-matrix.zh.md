@@ -25,7 +25,7 @@ English version: [Support Matrix](support-matrix.md).
 | Codex App | Codex App 中的 ChatGPT 账号 | `codex-app://sessions` | n/a | 本地 session JSONL transcript import；当 Codex App debug endpoint 可用时自动尽力补充 CDP WebSocket 证据 | 单测覆盖 |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy（Google 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | Gemini CLI | API key / Vertex 兼容配置（`--tap-proxy-mode reverse`） | `https://generativelanguage.googleapis.com` | 无 | HTTP/SSE | 单测覆盖 |
-| Grok Build CLI | Grok 订阅 OAuth（`grok login`） | `https://cli-chat-proxy.grok.com/v1` | `/v1` | HTTP/SSE Responses | 已使用 Grok 0.2.101 完成真实 E2E 验证 |
+| Grok Build CLI | Grok 订阅 OAuth（`grok login`） | `https://cli-chat-proxy.grok.com/v1` | `/v1` | HTTP/SSE Responses，以及 storage/trace 审计记录 | 已使用 Grok 0.2.101 完成真实 E2E 验证 |
 | Kimi CLI（旧版 kimi-cli） | Kimi CLI 认证/配置 | `https://api.kimi.com/coding/v1` | 无 | HTTP/SSE Chat Completions | 单测覆盖（`KIMI_BASE_URL`） |
 | Kimi CLI（旧版 kimi-cli） | Kimi CLI 认证/配置 | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 配置支持 |
 | Kimi Code CLI | `~/.kimi-code/config.toml` + OAuth（`managed:kimi-code`） | `https://api.kimi.com/coding/v1` | 无 | HTTP/SSE Chat Completions | 单测覆盖（`KIMI_CODE_HOME` sandbox） |
@@ -55,7 +55,7 @@ English version: [Support Matrix](support-matrix.md).
 | `codex` | `reverse` | 启动时临时注入使用代理 base URL 且设置 `supports_websockets=false` 的同级 provider，使每个请求生成一条自包含的 HTTP/SSE trace，同时不修改 `~/.codex/config.toml` |
 | `codexapp` | `transcript` | 监听 `CODEX_HOME/sessions` 或 `~/.codex/sessions` 的 transcript 客户端；不会创建代理。Codex App 暴露 debug endpoint 时会自动追加 CDP WebSocket 证据 |
 | `gemini` | `forward` | Google OAuth / Code Assist 会访问多个 Google 端点；forward proxy 不依赖单一 base URL，更适合作为默认 |
-| `grok` | `reverse` | 官方 CLI 原生支持 `GROK_CLI_CHAT_PROXY_BASE_URL`；reverse 模式无需安装本地 CA 即可捕获 Responses 流量 |
+| `grok` | `reverse` | 官方 CLI 原生支持 `GROK_CLI_CHAT_PROXY_BASE_URL`；reverse 模式无需安装本地 CA 即可捕获模型流量和 storage/trace 审计记录 |
 | `kimi` | `reverse` | 旧版 kimi-cli；原生 `KIMI_BASE_URL` 环境变量 |
 | `kimi-code` | `reverse` | 通过临时 `KIMI_CODE_HOME` sandbox 补丁 `~/.kimi-code/config.toml` |
 | `mimo` | `forward` | OpenCode fork；多 provider — forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
@@ -119,7 +119,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_cdp_recorder_writes_viewer_friendly_websocket_record`：验证 Codex App CDP WebSocket frame 会重建为 viewer 友好的 WebSocket 记录
 - `test_async_main_codexapp_starts_cdp_enrichment_by_default`：验证 `--tap-client codexapp` 默认启动 CDP 补充采集，并遵循全局原始 stream event 存储设置
 - `test_gemini_registered_in_client_configs`：验证 Gemini CLI 注册和默认 forward 模式
-- `test_grok_*`：验证 Grok Build 注册、reverse 模式 URL 注入、目标探测、`/v1` 路由和 fake upstream Responses 捕获
+- `test_grok_*`：验证 Grok Build 注册、reverse 模式 URL 注入、目标探测、`/v1` 路由和 fake upstream Responses/storage/trace 捕获
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs`：验证 Gemini forward proxy 启动环境变量
 - `test_run_client_gemini_reverse_sets_both_base_url_envs`：验证 Gemini reverse proxy base URL 环境变量注入
 - `test_viewer_renders_gemini_semantic_sections`：验证 Gemini systemInstruction、contents、functionDeclarations、functionCall、functionResponse、SSE output 和 token usage 会渲染为语义化 viewer 区块

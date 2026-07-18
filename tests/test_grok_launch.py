@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from claude_tap import parse_args
-from claude_tap.cli import CLIENT_CONFIGS, _reverse_proxy_trace_options, run_client
+from claude_tap.cli import CLIENT_CONFIGS, _reverse_proxy_path_prefixes, _reverse_proxy_trace_options, run_client
 from claude_tap.cli_clients import _detect_grok_target
 from claude_tap.proxy import _is_allowed_path, _matches_path_prefixes
 
@@ -48,7 +48,12 @@ def test_grok_registered_in_client_configs() -> None:
         "/v1/sessions",
         "/v1/billing",
     )
-    assert cfg.reverse_trace_path_prefixes == ("/v1/responses", "/v1/chat/completions")
+    assert cfg.reverse_trace_path_prefixes == (
+        "/v1/responses",
+        "/v1/chat/completions",
+        "/v1/storage",
+        "/v1/traces",
+    )
 
 
 def test_parse_args_grok_defaults_to_reverse_mode() -> None:
@@ -99,8 +104,6 @@ def test_grok_control_plane_paths_are_allowed_but_not_traced() -> None:
         "/v1/bundle/archive",
         "/v1/subagents/bundle",
         "/v1/feedback/config",
-        "/v1/storage/signed-upload-url",
-        "/v1/traces",
         "/v1/deployment/config",
         "/v1/mcp/tools/list",
         "/v1/sessions/session-id/signals",
@@ -110,6 +113,22 @@ def test_grok_control_plane_paths_are_allowed_but_not_traced() -> None:
         assert not _matches_path_prefixes(path, cfg.reverse_trace_path_prefixes)
 
     assert _matches_path_prefixes("/v1/responses", cfg.reverse_trace_path_prefixes)
+    assert _matches_path_prefixes("/v1/storage/signed-upload-url", cfg.reverse_trace_path_prefixes)
+    assert _matches_path_prefixes("/v1/traces", cfg.reverse_trace_path_prefixes)
+
+
+def test_extra_allowed_path_keeps_default_reverse_clients_tracing_all_allowed_requests() -> None:
+    allowed_prefixes, trace_prefixes = _reverse_proxy_path_prefixes("claude", ("/v1/auxiliary",))
+
+    assert allowed_prefixes == ("/v1/auxiliary",)
+    assert trace_prefixes == ()
+
+
+def test_extra_allowed_path_is_traced_by_grok_path_filter() -> None:
+    allowed_prefixes, trace_prefixes = _reverse_proxy_path_prefixes("grok", ("/v1/diagnostics",))
+
+    assert "/v1/diagnostics" in allowed_prefixes
+    assert _matches_path_prefixes("/v1/diagnostics/events", trace_prefixes)
 
 
 def test_detect_grok_target_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:

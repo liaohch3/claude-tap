@@ -1940,11 +1940,24 @@ def test_codex_client_reverse_proxy():
 
 
 FAKE_GROK_SCRIPT = r"""#!/usr/bin/env python3
-# Fake Grok Build CLI that sends one Responses request via GROK_CLI_CHAT_PROXY_BASE_URL
+# Fake Grok Build CLI that sends audit-relevant upload and Responses traffic
+# via GROK_CLI_CHAT_PROXY_BASE_URL.
 import json, os, sys, urllib.request
 
 base = os.environ.get("GROK_CLI_CHAT_PROXY_BASE_URL", "https://cli-chat-proxy.grok.com/v1")
-url = f"{base}/responses"
+
+def post_json(path, payload):
+    req = urllib.request.Request(
+        f"{base}{path}",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer grok-test-token-12345678",
+        },
+    )
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+        return resp.read()
 
 try:
     with urllib.request.urlopen(f"{base}/settings") as resp:
@@ -1953,12 +1966,15 @@ except Exception as e:
     print(f"[fake-grok] Settings error: {e}", file=sys.stderr)
     sys.exit(1)
 
+post_json("/storage/signed-upload-url", {"file_name": "repository-bundle.tar.gz"})
+post_json("/traces", {"event": "repository_bundle_uploaded"})
+
 req_body = json.dumps({
     "model": "grok-build",
     "input": "Reply with exactly: HELLO_GROK",
     "stream": True,
 }).encode()
-req = urllib.request.Request(url, data=req_body, headers={
+req = urllib.request.Request(f"{base}/responses", data=req_body, headers={
     "Content-Type": "application/json",
     "Authorization": "Bearer grok-test-token-12345678",
 })
@@ -1984,9 +2000,17 @@ def test_grok_client_reverse_proxy():
             return web.json_response({"features": {}})
 
         body = await request.json()
+        from aiohttp import web
+
+        if request.path == "/v1/storage/signed-upload-url":
+            assert body == {"file_name": "repository-bundle.tar.gz"}
+            return web.json_response({"upload_url": "https://uploads.example.test/bundle"})
+        if request.path == "/v1/traces":
+            assert body == {"event": "repository_bundle_uploaded"}
+            return web.json_response({"id": "trace_grok_1"})
+
         assert request.path == "/v1/responses"
         assert body["model"] == "grok-build"
-        from aiohttp import web
 
         resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
         await resp.prepare(request)
@@ -2038,12 +2062,16 @@ def test_grok_client_reverse_proxy():
 
         assert proc.returncode == 0, f"grok mode failed: stdout={proc.stdout} stderr={proc.stderr}"
         records = read_trace_records(trace_dir)
-        assert len(records) == 1
-        record = records[0]
-        assert record["request"]["path"] == "/v1/responses"
-        assert record["upstream_base_url"] == "http://127.0.0.1:19247/v1"
-        assert record["request"]["body"]["model"] == "grok-build"
-        assert record["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_GROK"
+        assert [record["request"]["path"] for record in records] == [
+            "/v1/storage/signed-upload-url",
+            "/v1/traces",
+            "/v1/responses",
+        ]
+        assert all(record["upstream_base_url"] == "http://127.0.0.1:19247/v1" for record in records)
+        assert records[0]["request"]["body"] == {"file_name": "repository-bundle.tar.gz"}
+        assert records[1]["request"]["body"] == {"event": "repository_bundle_uploaded"}
+        assert records[2]["request"]["body"]["model"] == "grok-build"
+        assert records[2]["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_GROK"
         assert "GROK_CLI_CHAT_PROXY_BASE_URL=http://127.0.0.1:" in proc.stdout
     finally:
         stop()

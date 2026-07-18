@@ -194,7 +194,12 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
             "/v1/sessions",
             "/v1/billing",
         ),
-        reverse_trace_path_prefixes=("/v1/responses", "/v1/chat/completions"),
+        reverse_trace_path_prefixes=(
+            "/v1/responses",
+            "/v1/chat/completions",
+            "/v1/storage",
+            "/v1/traces",
+        ),
     ),
     "codexapp": ClientConfig(
         cmd="codex",
