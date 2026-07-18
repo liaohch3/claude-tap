@@ -2013,17 +2013,18 @@ def test_viewer_curl_uses_recorded_upstream_and_historical_host_fallback(tmp_pat
     page = chromium_browser.new_page()
     try:
         errors = _open_viewer_with_error_capture(page, html_path)
-        copied = page.evaluate(
+        page.evaluate(
             """() => {
-              const values = [];
-              window.copyToClipboard = (text) => { values.push(text); return Promise.resolve(); };
-              activeIdx = 0;
-              copyCurl(null);
-              activeIdx = 1;
-              copyCurl(null);
-              return values;
+              window.__copiedCurl = [];
+              window.copyToClipboard = (text) => { window.__copiedCurl.push(text); return Promise.resolve(); };
             }"""
         )
+        curl_button = '#detail .act-btn[onclick="copyCurl(this)"]'
+        page.locator(".sidebar-item").nth(0).click()
+        page.locator(curl_button).click()
+        page.locator(".sidebar-item").nth(1).click()
+        page.locator(curl_button).click()
+        copied = page.evaluate("window.__copiedCurl")
     finally:
         page.close()
 
@@ -2922,6 +2923,7 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
         "getUsage",
         "getResponseEvents",
         "getResponseOutput",
+        "copyCurl",
         "geminiMessages",
         "geminiResponseOutput",
         "renderTools",
@@ -3019,6 +3021,8 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
                 'beforeend',
                 renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
               );
+              window.copyToClipboard = () => Promise.resolve();
+              copyCurl(null);
               document.querySelector('.tool-input-toggle')?.click();
               const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
               if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
