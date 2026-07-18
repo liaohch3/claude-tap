@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.135] - 2026-07-18
+
+### Changed
+- fix: prevent SQLite locks from blocking clients (#385)
+- test: avoid PID collisions in monitor cleanup test (#390)
 ## [0.1.134] - 2026-07-11
 
 ### Changed
