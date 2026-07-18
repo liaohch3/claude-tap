@@ -1991,6 +1991,51 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert remaining_tabs == ["default", "trace"]
 
 
+def test_viewer_curl_uses_recorded_upstream_and_historical_host_fallback(tmp_path: Path, chromium_browser) -> None:
+    current_record = json.loads(json.dumps(_responses_record()))
+    current_record["upstream_base_url"] = "https://gateway.example.test:8443"
+    current_record["request"]["path"] = "/custom/v1/responses"
+    current_record["request"]["headers"] = {
+        "Host": "ignored.example.test",
+        "Authorization": "Bearer sk-test...",
+    }
+
+    historical_record = json.loads(json.dumps(_responses_record()))
+    historical_record["request_id"] = "req_historical_curl"
+    historical_record["turn"] = 2
+    historical_record["request"]["path"] = "/legacy/v1/responses"
+    historical_record["request"]["headers"] = {
+        "host": "legacy.example.test:9443",
+        "Authorization": "Bearer sk-test...",
+    }
+
+    html_path = _generate_case_html(tmp_path, "curl_upstream", (current_record, historical_record))
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        copied = page.evaluate(
+            """() => {
+              const values = [];
+              window.copyToClipboard = (text) => { values.push(text); return Promise.resolve(); };
+              activeIdx = 0;
+              copyCurl(null);
+              activeIdx = 1;
+              copyCurl(null);
+              return values;
+            }"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert copied[0].startswith("curl -X POST 'https://gateway.example.test:8443/custom/v1/responses'")
+    assert "ignored.example.test" not in copied[0]
+    assert copied[1].startswith("curl -X POST 'https://legacy.example.test:9443/legacy/v1/responses'")
+    assert "Authorization: Bearer sk-test..." in copied[0]
+    assert "Authorization: Bearer sk-test..." in copied[1]
+    assert "sk-test-secret" not in "\n".join(copied)
+
+
 def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Path, chromium_browser) -> None:
     record = json.loads(json.dumps(_responses_record()))
     decoded_command = "python - <<'PY'\nprint(\"hello\")\nPY"

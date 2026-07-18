@@ -32,6 +32,7 @@ import aiohttp
 from aiohttp import WSMessage, WSMsgType
 from aiohttp._websocket.reader import WebSocketDataQueue, WebSocketReader
 from aiohttp.http_websocket import WS_KEY, WebSocketWriter
+from yarl import URL
 
 from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
 from claude_tap.certs import CertificateAuthority
@@ -88,6 +89,11 @@ DEFAULT_TRACE_IGNORED_PACKAGE_METADATA_CONTENT_TYPES = frozenset(
     }
 )
 PACKAGE_MANAGER_USER_AGENT_MARKERS = ("npm/", "yarn/", "pnpm/", "bun/")
+
+
+def _upstream_origin(upstream_url: str) -> str:
+    """Return a credential-free origin suitable for trace URL reconstruction."""
+    return str(URL(upstream_url).origin())
 
 
 def _matches_path_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
@@ -492,6 +498,7 @@ class ForwardProxyServer:
         log_prefix = f"[Turn {turn}]"
 
         req_body = _parse_request_body_for_trace(body)
+        upstream_base_url = _upstream_origin(upstream_url)
 
         is_streaming = is_capture_only_streaming_request(path, req_body)
 
@@ -513,6 +520,7 @@ class ForwardProxyServer:
                 200,
                 response_headers,
                 resp_body,
+                upstream_base_url=upstream_base_url,
             )
             await self._writer.write(record)
             body_bytes = (
@@ -560,6 +568,7 @@ class ForwardProxyServer:
                 502,
                 {"Content-Type": "text/plain"},
                 {"error": error_text},
+                upstream_base_url=upstream_base_url,
             )
             await self._writer.write(record)
             response_line = b"HTTP/1.1 502 Bad Gateway\r\n"
@@ -580,6 +589,7 @@ class ForwardProxyServer:
                 headers,
                 req_body,
                 log_prefix,
+                upstream_base_url,
             )
         else:
             await self._handle_non_streaming(
@@ -594,6 +604,7 @@ class ForwardProxyServer:
                 req_body,
                 log_prefix,
                 upstream_url,
+                upstream_base_url,
             )
 
     async def _handle_streaming(
@@ -608,6 +619,7 @@ class ForwardProxyServer:
         req_headers: dict[str, str],
         req_body: dict | None,
         log_prefix: str,
+        upstream_base_url: str,
     ) -> None:
         """Handle a streaming response: forward chunks while recording SSE."""
         # Send response status line
@@ -682,6 +694,7 @@ class ForwardProxyServer:
             dict(upstream_resp.headers),
             reconstructed,
             sse_events=reassembler.events,
+            upstream_base_url=upstream_base_url,
         )
         await self._writer.write(record)
 
@@ -698,6 +711,7 @@ class ForwardProxyServer:
         req_body: dict | None,
         log_prefix: str,
         upstream_url: str,
+        upstream_base_url: str,
     ) -> None:
         """Handle a non-streaming response."""
         if _should_skip_trace_record(upstream_url, path, upstream_resp.headers, req_headers, method):
@@ -739,6 +753,7 @@ class ForwardProxyServer:
             upstream_resp.status,
             dict(upstream_resp.headers),
             resp_body,
+            upstream_base_url=upstream_base_url,
         )
         await self._writer.write(record)
 

@@ -3456,6 +3456,13 @@ async def test_forward_proxy_unrecorded_response_closes_upstream_on_client_disco
     assert upstream_resp.closed is True
 
 
+def test_forward_proxy_upstream_origin_omits_default_port_and_credentials():
+    from claude_tap.forward_proxy import _upstream_origin
+
+    assert _upstream_origin("https://user:secret@api.example.test:443/v1/messages") == "https://api.example.test"
+    assert _upstream_origin("https://api.example.test:8443/v1/messages") == "https://api.example.test:8443"
+
+
 @pytest.mark.asyncio
 async def test_forward_proxy_connect():
     """Test the forward proxy CONNECT/TLS flow with a fake HTTPS upstream."""
@@ -3539,6 +3546,7 @@ async def test_forward_proxy_connect():
             assert records[0]["request"]["method"] == "POST"
             assert "/v1/messages" in records[0]["request"]["path"]
             assert records[0]["response"]["status"] == 200
+            assert records[0]["upstream_base_url"] == f"https://127.0.0.1:{upstream_port}"
             print("  OK: trace recorded correctly")
 
             # Check header redaction
@@ -3720,6 +3728,7 @@ async def test_forward_proxy_local_reverse_bridge():
             assert records[0]["request"]["path"] == "/v1internal:loadCodeAssist"
             assert records[0]["request"]["body"]["request"]["contents"][0]["role"] == "user"
             assert records[0]["response"]["status"] == 200
+            assert records[0]["upstream_base_url"] == f"https://127.0.0.1:{upstream_port}"
         finally:
             await server.stop()
             await session.close()
@@ -3778,6 +3787,7 @@ async def test_forward_proxy_records_upstream_error():
             assert records[0]["request"]["body"]["request"]["client"] == "agy"
             assert records[0]["response"]["status"] == 502
             assert records[0]["response"]["body"]["error"]
+            assert records[0]["upstream_base_url"] == f"http://127.0.0.1:{unreachable_port}"
         finally:
             await server.stop()
             await session.close()
