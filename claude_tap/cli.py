@@ -40,6 +40,7 @@ from claude_tap.cli_clients import (
     _extend_no_proxy,
     _has_settings_arg,
     _maybe_rewrite_hermes_gateway_start,
+    _prepare_codex_app_forward_launch,
     _read_codebuddy_endpoint_cache,
     _read_codex_config,
     _read_settings_env_base_url,
@@ -323,6 +324,12 @@ async def async_main(args: argparse.Namespace):
     store = get_trace_store()
     trace_metadata = {"client": args.client, "proxy_mode": args.proxy_mode}
 
+    codex_app_preflighted = False
+    if args.client == "codexapp" and args.proxy_mode == "forward" and not args.no_launch:
+        if not await _prepare_codex_app_forward_launch():
+            return 1
+        codex_app_preflighted = True
+
     ca_cert_path: Path | None = None
     ca_key_path: Path | None = None
     if args.proxy_mode == "forward":
@@ -468,6 +475,7 @@ async def async_main(args: argparse.Namespace):
                     ca_cert_path=ca_cert_path,
                     client_cmd=getattr(args, "client_cmd", None),
                     capture_only=capture_only,
+                    codex_app_preflighted=codex_app_preflighted,
                 )
             except asyncio.CancelledError:
                 pass
@@ -894,6 +902,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
     if args.proxy_mode is None:
         args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
+    if args.client == "codexapp" and args.proxy_mode != "forward":
+        tap_parser.error("--tap-client codexapp only supports forward proxy mode")
     if args.trust_ca and args.proxy_mode != "forward":
         tap_parser.error("--tap-trust-ca only applies to forward proxy mode")
 

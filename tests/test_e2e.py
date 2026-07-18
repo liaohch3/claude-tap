@@ -4233,6 +4233,86 @@ async def test_forward_proxy_client_filter_traces_codexapp_websocket_but_not_noi
 
 
 @pytest.mark.asyncio
+async def test_forward_proxy_flushes_each_codexapp_websocket_response_before_close():
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+        upstream_port = await _start_fake_wss_upstream(tmpdir_path, close_after_response=False)
+        store, session_id, writer = _writer_for_dir(tmpdir_path)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=upstream_ssl_ctx),
+            auto_decompress=False,
+        )
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+            trace_methods=("WEBSOCKET",),
+            trace_path_prefixes=("/backend-api/codex/responses",),
+            store_stream_events=True,
+        )
+        proxy_port = await server.start()
+
+        async def wait_for_records(expected: int) -> list[dict]:
+            for _ in range(100):
+                records = store.load_records(session_id)
+                if len(records) >= expected:
+                    return records
+                await asyncio.sleep(0.01)
+            raise AssertionError(f"expected {expected} records before WebSocket close")
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                model_ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/backend-api/codex/responses",
+                    proxy=proxy_url,
+                    ssl=ssl_ctx,
+                )
+                for response_number in (1, 2):
+                    await model_ws.send_json(
+                        {
+                            "type": "response.create",
+                            "model": "gpt-5-test",
+                            "input": f"hello {response_number}",
+                        }
+                    )
+                    while True:
+                        msg = await asyncio.wait_for(model_ws.receive(), timeout=5)
+                        if (
+                            msg.type == aiohttp.WSMsgType.TEXT
+                            and json.loads(msg.data).get("type") == "response.completed"
+                        ):
+                            break
+                    records = await wait_for_records(response_number)
+                    assert len(records) == response_number
+                    assert model_ws.closed is False
+
+                assert [record["turn"] for record in records] == [1, "1.2"]
+                assert [record["request"]["body"]["input"] for record in records] == ["hello 1", "hello 2"]
+                assert [record["response"]["body"]["id"] for record in records] == ["resp_ws_1", "resp_ws_2"]
+                await model_ws.close()
+        finally:
+            await server.stop()
+            await session.close()
+
+
+@pytest.mark.asyncio
 async def test_forward_proxy_client_filter_records_traced_websocket_connect_failure(tmp_path: Path) -> None:
     from claude_tap.forward_proxy import ForwardProxyServer
     from claude_tap.trace import TraceWriter
@@ -4706,7 +4786,7 @@ async def _start_fake_long_payload_https_upstream(tmpdir: Path):
     return port, runner
 
 
-async def _start_fake_wss_upstream(tmpdir: Path) -> int:
+async def _start_fake_wss_upstream(tmpdir: Path, *, close_after_response: bool = True) -> int:
     """Start a fake WSS upstream server for websocket proxy tests."""
     import ssl as ssl_module
 
@@ -4761,14 +4841,17 @@ async def _start_fake_wss_upstream(tmpdir: Path) -> int:
     async def ws_handler(request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
+        response_number = 0
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.TEXT:
+                response_number += 1
                 data = json.loads(msg.data)
                 model = data.get("model", "gpt-test")
+                response_id = f"resp_ws_{response_number}"
                 await ws.send_json(
                     {
                         "type": "response.created",
-                        "response": {"id": "resp_ws_1", "model": model, "status": "in_progress"},
+                        "response": {"id": response_id, "model": model, "status": "in_progress"},
                     }
                 )
                 await ws.send_bytes(b"binary-over-wss")
@@ -4777,7 +4860,7 @@ async def _start_fake_wss_upstream(tmpdir: Path) -> int:
                     {
                         "type": "response.completed",
                         "response": {
-                            "id": "resp_ws_1",
+                            "id": response_id,
                             "model": model,
                             "status": "completed",
                             "output": [
@@ -4790,8 +4873,9 @@ async def _start_fake_wss_upstream(tmpdir: Path) -> int:
                         },
                     }
                 )
-                await ws.close()
-                break
+                if close_after_response:
+                    await ws.close()
+                    break
         return ws
 
     app = web.Application()

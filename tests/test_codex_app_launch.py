@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import os
+import re
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,8 +51,31 @@ def test_codex_app_existing_processes_filters_current_pid(monkeypatch: pytest.Mo
     assert cli_clients._codex_app_existing_processes() == [
         "123 /Applications/Codex.app/Contents/Resources/codex app-server"
     ]
-    assert captured["cmd"] == ["pgrep", "-fl", cli_clients._CODEX_APP_PROCESS_RE]
+    assert captured["cmd"] == ["pgrep", "-fl", f"({cli_clients._CODEX_APP_PROCESS_RE})"]
     assert captured["kwargs"]["timeout"] == 2
+
+
+def test_codex_app_existing_processes_matches_custom_executable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    configured = tmp_path / "Codex Dev"
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        captured["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout=f"123 {configured}\n")
+
+    monkeypatch.setattr(cli_clients.sys, "platform", "darwin")
+    monkeypatch.setenv(cli_clients._CODEX_APP_EXECUTABLE_ENV, str(configured))
+    monkeypatch.setattr(cli_clients.subprocess, "run", fake_run)
+
+    assert cli_clients._codex_app_existing_processes() == [f"123 {configured}"]
+    assert captured["cmd"] == [
+        "pgrep",
+        "-fl",
+        f"({cli_clients._CODEX_APP_PROCESS_RE}|{re.escape(str(configured))})",
+    ]
 
 
 def test_codex_app_existing_processes_handles_unsupported_platform_and_pgrep_failures(
@@ -243,7 +267,10 @@ async def test_run_client_codexapp_forward_launches_app_with_proxy_env(
 
     env = captured["env"]
     assert code == 0
-    assert captured["cmd"] == ("/Applications/Codex.app/Contents/MacOS/Codex",)
+    assert captured["cmd"] == (
+        "/Applications/Codex.app/Contents/MacOS/Codex",
+        "--proxy-server=http://127.0.0.1:43123",
+    )
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:43123"
     assert env["SSL_CERT_FILE"] == str(ca_path)
     assert env["CODEX_CA_CERTIFICATE"] == str(ca_path)
@@ -322,7 +349,10 @@ async def test_run_client_codexapp_forward_prompts_to_quit_existing_app(
 
     assert code == 0
     assert quit_called is True
-    assert captured["cmd"] == ("/Applications/Codex.app/Contents/MacOS/Codex",)
+    assert captured["cmd"] == (
+        "/Applications/Codex.app/Contents/MacOS/Codex",
+        "--proxy-server=http://127.0.0.1:43123",
+    )
     out = capsys.readouterr().out
     assert "Codex App is already running" in out
     assert "Codex App exited. Starting a proxied instance now." in out

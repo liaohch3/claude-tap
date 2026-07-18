@@ -58,7 +58,7 @@ claude-tap
 # Codex CLI
 claude-tap --tap-client codex
 
-# Codex App 本地会话监听
+# 通过 forward proxy 捕获 Codex App 后端请求
 claude-tap --tap-client codexapp
 
 # Gemini CLI
@@ -89,7 +89,7 @@ trace viewer 的设计就是围绕这些调试问题展开的。
 
 ## Codex trace viewer
 
-对于 Codex CLI，`claude-tap` 支持 OpenAI API key 模式和 ChatGPT 订阅 OAuth 模式。对于 Codex App，它会监听 `CODEX_HOME` 或 `~/.codex` 下的本地 session JSONL 文件。它可以查看 OpenAI Responses API 流量、WebSocket 记录、本地 transcript 记录、工具调用、reasoning/output 区块、token 用量和请求 diff。
+对于 Codex CLI，`claude-tap` 支持 OpenAI API key 模式和 ChatGPT 订阅 OAuth 模式。对于 Codex App，它会通过本地 forward proxy 启动桌面 App，并记录 `/backend-api/codex/responses` 上已完成的 HTTP/WebSocket 模型调用；其他产品流量只转发而不存储。请先退出已经运行的 Codex App，让新进程继承代理和 CA 配置。Viewer 可以查看请求上下文、工具调用、reasoning/output 区块、token 用量和请求 diff。
 
 ## 导出 trace 到 HTML
 

@@ -145,6 +145,11 @@ def test_parse_args_codexapp_accepts_forward_proxy_mode() -> None:
     assert args.proxy_mode == "forward"
 
 
+def test_parse_args_codexapp_rejects_reverse_proxy_mode() -> None:
+    with pytest.raises(SystemExit):
+        parse_args(["--tap-client", "codexapp", "--tap-proxy-mode", "reverse"])
+
+
 def test_parse_args_codexapp_rejects_reverse_trust_ca() -> None:
     with pytest.raises(SystemExit):
         parse_args(["--tap-client", "codexapp", "--tap-proxy-mode", "reverse", "--tap-trust-ca"])

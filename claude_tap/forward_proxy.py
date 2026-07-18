@@ -25,6 +25,7 @@ import logging
 import time
 import uuid
 import zlib
+from collections import deque
 from collections.abc import Mapping
 from urllib.parse import urlparse
 
@@ -52,10 +53,12 @@ from claude_tap.upstream import build_upstream_url, format_upstream_error
 from claude_tap.usage import normalize_usage
 from claude_tap.viewer import _decode_bedrock_eventstream_events
 from claude_tap.ws_proxy import (
+    _COMPLETED_RESPONSE_KEY_CACHE_SIZE,
+    _build_ws_record,
     _get_ws_proxy_settings,
+    _response_completed_message_key,
     is_prompt_bearing_ws_request_body,
     reconstruct_ws_request_body,
-    reconstruct_ws_response_body,
 )
 
 log = logging.getLogger("claude-tap")
@@ -948,6 +951,78 @@ class ForwardProxyServer:
 
         client_messages: list[str] = []
         server_messages: list[str] = []
+        client_message_count = 0
+        server_message_count = 0
+        completed_records_written = 0
+        completed_response_keys: set[str] = set()
+        completed_response_key_order: deque[str] = deque()
+        pending_write: asyncio.Task[None] | None = None
+
+        def _pop_buffered_snapshot() -> tuple[int, list[str], list[str]]:
+            nonlocal completed_records_written
+            completed_records_written += 1
+            record_client_messages = client_messages.copy()
+            record_server_messages = server_messages.copy()
+            client_messages.clear()
+            server_messages.clear()
+            return completed_records_written, record_client_messages, record_server_messages
+
+        def _pop_buffered_server_snapshot() -> tuple[int, list[str], list[str]]:
+            nonlocal completed_records_written
+            completed_records_written += 1
+            record_server_messages = server_messages.copy()
+            server_messages.clear()
+            return completed_records_written, [], record_server_messages
+
+        async def _write_buffered_snapshot(snapshot: tuple[int, list[str], list[str]]) -> None:
+            assert turn is not None
+            record_number, record_client_messages, record_server_messages = snapshot
+            record = _build_ws_record(
+                req_id=req_id if record_number == 1 else f"{req_id}_{record_number}",
+                turn=turn if record_number == 1 else f"{turn}.{record_number}",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                path_qs=path,
+                req_headers=headers,
+                client_messages=record_client_messages,
+                server_messages=record_server_messages,
+                upstream_base_url=upstream_base_url,
+                store_stream_events=self._store_stream_events,
+            )
+            await self._writer.write(record)
+
+        async def _write_buffered_record() -> None:
+            await _write_buffered_snapshot(_pop_buffered_snapshot())
+
+        def _schedule_buffered_snapshot(snapshot: tuple[int, list[str], list[str]]) -> None:
+            nonlocal pending_write
+            previous_write = pending_write
+
+            async def _write_after_previous() -> None:
+                if previous_write is not None:
+                    await previous_write
+                await _write_buffered_snapshot(snapshot)
+
+            pending_write = asyncio.create_task(_write_after_previous())
+
+        async def _drain_pending_write() -> None:
+            if pending_write is not None:
+                await asyncio.shield(pending_write)
+
+        def _pop_completed_snapshot(
+            response_key: str, terminal_message: str
+        ) -> tuple[int, list[str], list[str]] | None:
+            if response_key in completed_response_keys:
+                if server_messages and server_messages[-1] == terminal_message:
+                    server_messages.pop()
+                if server_messages:
+                    return _pop_buffered_server_snapshot()
+                return None
+            completed_response_keys.add(response_key)
+            completed_response_key_order.append(response_key)
+            if len(completed_response_key_order) > _COMPLETED_RESPONSE_KEY_CACHE_SIZE:
+                expired = completed_response_key_order.popleft()
+                completed_response_keys.discard(expired)
+            return _pop_buffered_snapshot()
 
         async def _pump_client_bytes() -> None:
             try:
@@ -962,6 +1037,7 @@ class ForwardProxyServer:
                 ws_reader.feed_eof()
 
         async def _relay_client_to_upstream() -> None:
+            nonlocal client_message_count
             while True:
                 try:
                     msg: WSMessage = await queue.read()
@@ -970,6 +1046,7 @@ class ForwardProxyServer:
 
                 if msg.type == WSMsgType.TEXT:
                     if should_trace:
+                        client_message_count += 1
                         client_messages.append(msg.data)
                     await upstream_ws.send_str(msg.data)
                 elif msg.type == WSMsgType.BINARY:
@@ -985,12 +1062,22 @@ class ForwardProxyServer:
                     break
 
         async def _relay_upstream_to_client() -> None:
+            nonlocal server_message_count
             async for msg in upstream_ws:
                 if msg.type == WSMsgType.TEXT:
+                    completed_snapshot = None
                     if should_trace:
+                        server_message_count += 1
                         server_messages.append(msg.data)
-                    await ws_writer.send_frame(msg.data.encode("utf-8"), WSMsgType.TEXT)
-                    await writer.drain()
+                        response_key = _response_completed_message_key(msg.data)
+                        if response_key is not None:
+                            completed_snapshot = _pop_completed_snapshot(response_key, msg.data)
+                    try:
+                        await ws_writer.send_frame(msg.data.encode("utf-8"), WSMsgType.TEXT)
+                        await writer.drain()
+                    finally:
+                        if completed_snapshot is not None:
+                            _schedule_buffered_snapshot(completed_snapshot)
                 elif msg.type == WSMsgType.BINARY:
                     await ws_writer.send_frame(msg.data, WSMsgType.BINARY)
                     await writer.drain()
@@ -1037,39 +1124,12 @@ class ForwardProxyServer:
 
         duration_ms = int((time.monotonic() - t0) * 1000)
         if should_trace:
-            assert turn is not None
-            request_record = {
-                "method": "WEBSOCKET",
-                "path": path,
-                "headers": filter_headers(headers, redact_keys=True),
-                "body": reconstruct_ws_request_body(client_messages),
-            }
-            response_events = [json.loads(msg) if msg.startswith("{") else {"raw": msg} for msg in server_messages]
-            response_record = {
-                "status": 101,
-                "headers": {},
-                "body": reconstruct_ws_response_body(response_events),
-            }
-            if self._store_stream_events:
-                request_record["ws_events"] = [
-                    json.loads(msg) if msg.startswith("{") else {"raw": msg} for msg in client_messages
-                ]
-                response_record["ws_events"] = response_events
-
-            record = {
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "request_id": req_id,
-                "turn": turn,
-                "duration_ms": duration_ms,
-                "transport": "websocket",
-                "request": request_record,
-                "response": response_record,
-                "upstream_base_url": upstream_base_url,
-            }
-            await self._writer.write(record)
+            await _drain_pending_write()
+            if client_messages or server_messages:
+                await _write_buffered_record()
             log.info(
                 f"{log_prefix} <- WS closed ({duration_ms}ms, "
-                f"{len(client_messages)} client->upstream, {len(server_messages)} upstream->client)"
+                f"{client_message_count} client->upstream, {server_message_count} upstream->client)"
             )
         else:
             log.debug(f"{log_prefix} <- WS closed ({duration_ms}ms, trace skipped)")

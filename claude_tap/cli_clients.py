@@ -26,7 +26,7 @@ _BEDROCK_HOST_RE = re.compile(
 )
 
 _CODEX_APP_FAST_EXIT_HINT_SECONDS = 5.0
-_CODEX_APP_PROCESS_RE = r"/Applications/Codex\.app/Contents/(MacOS/Codex|Resources/codex app-server)"
+_CODEX_APP_PROCESS_RE = r"Codex\.app/Contents/(MacOS/Codex|Resources/codex app-server)"
 _CODEX_APP_QUIT_TIMEOUT_SECONDS = 10.0
 _CODEX_APP_EXECUTABLE_ENV = "CODEX_APP_EXECUTABLE"
 
@@ -100,8 +100,12 @@ def _codex_app_existing_processes() -> list[str]:
     if sys.platform != "darwin":
         return []
     try:
+        configured_executable = os.environ.get(_CODEX_APP_EXECUTABLE_ENV)
+        process_patterns = [_CODEX_APP_PROCESS_RE]
+        if configured_executable:
+            process_patterns.append(re.escape(str(Path(configured_executable).expanduser())))
         result = subprocess.run(
-            ["pgrep", "-fl", _CODEX_APP_PROCESS_RE],
+            ["pgrep", "-fl", f"({'|'.join(process_patterns)})"],
             check=False,
             capture_output=True,
             text=True,
@@ -499,6 +503,7 @@ async def run_client(
     ca_cert_path: Path | None = None,
     client_cmd: str | None = None,
     capture_only: bool = False,
+    codex_app_preflighted: bool = False,
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
 
@@ -521,7 +526,12 @@ async def run_client(
             print(cfg.missing_help)
         return 1
     resolved_cmd = _prefer_windows_command_shim(resolved_cmd)
-    if client == "codexapp" and proxy_mode == "forward" and not await _prepare_codex_app_forward_launch():
+    if (
+        client == "codexapp"
+        and proxy_mode == "forward"
+        and not codex_app_preflighted
+        and not await _prepare_codex_app_forward_launch()
+    ):
         return 1
 
     env = os.environ.copy()
@@ -534,6 +544,8 @@ async def run_client(
 
     if proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
+        if client == "codexapp":
+            cmd_args.insert(0, f"--proxy-server={proxy_url}")
         # Set both upper/lower-case variants for tools that read one form only.
         env["HTTP_PROXY"] = proxy_url
         env["HTTPS_PROXY"] = proxy_url
