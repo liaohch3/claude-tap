@@ -461,6 +461,10 @@ def test_restore_files_skips_invalid_entries_and_missing_backups(_home: Path) ->
 def test_terminate_recorded_processes_filters_and_kills_stubborn_process(
     _home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    current_pid = os.getpid()
+    unrelated_pid = current_pid + 1
+    stubborn_pid = current_pid + 2
+    exiting_pid = current_pid + 3
     state_file = _home / ".claude-tap" / "monitor-state.json"
     state_file.parent.mkdir(parents=True)
     state_file.write_text(
@@ -470,20 +474,20 @@ def test_terminate_recorded_processes_filters_and_kills_stubborn_process(
                 "processes": [
                     "invalid",
                     {"pid": -1},
-                    {"pid": os.getpid()},
-                    {"pid": 1111},
-                    {"pid": 2222},
-                    {"pid": 3333},
+                    {"pid": current_pid},
+                    {"pid": unrelated_pid},
+                    {"pid": stubborn_pid},
+                    {"pid": exiting_pid},
                 ],
             }
         )
     )
     commands = {
-        1111: "python unrelated.py",
-        2222: "python -m claude_tap dashboard",
-        3333: "python -m claude_tap --tap-no-launch",
+        unrelated_pid: "python unrelated.py",
+        stubborn_pid: "python -m claude_tap dashboard",
+        exiting_pid: "python -m claude_tap --tap-no-launch",
     }
-    alive_checks = {2222: [True, True, True], 3333: [True, False]}
+    alive_checks = {stubborn_pid: [True, True, True], exiting_pid: [True, False]}
     signals: list[tuple[int, signal.Signals]] = []
 
     def fake_pid_exists(pid: int) -> bool:
@@ -494,7 +498,7 @@ def test_terminate_recorded_processes_filters_and_kills_stubborn_process(
 
     def fake_kill(pid: int, sig: int) -> None:
         signals.append((pid, signal.Signals(sig)))
-        if pid == 3333:
+        if pid == exiting_pid:
             raise OSError("gone")
 
     monkeypatch.setattr(global_inject, "_monitor_process_command", lambda pid: commands[pid])
@@ -505,7 +509,11 @@ def test_terminate_recorded_processes_filters_and_kills_stubborn_process(
 
     global_inject.disable(terminate_processes=True)
 
-    assert signals == [(2222, signal.SIGTERM), (2222, signal.SIGKILL), (3333, signal.SIGTERM)]
+    assert signals == [
+        (stubborn_pid, signal.SIGTERM),
+        (stubborn_pid, signal.SIGKILL),
+        (exiting_pid, signal.SIGTERM),
+    ]
 
 
 def test_monitor_process_helpers_handle_failures(monkeypatch: pytest.MonkeyPatch) -> None:
