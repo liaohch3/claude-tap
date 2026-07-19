@@ -311,6 +311,17 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
 }
 
 
+def _prefer_windows_command_shim(resolved_cmd: str) -> str:
+    """Replace an extensionless npm POSIX shim with its Windows batch sibling."""
+    if sys.platform != "win32" or Path(resolved_cmd).suffix:
+        return resolved_cmd
+    for suffix in (".cmd", ".bat"):
+        candidate = Path(f"{resolved_cmd}{suffix}")
+        if candidate.is_file():
+            return str(candidate)
+    return resolved_cmd
+
+
 async def run_client(
     port: int,
     extra_args: list[str],
@@ -332,6 +343,7 @@ async def run_client(
         else:
             print(cfg.missing_help)
         return 1
+    resolved_cmd = _prefer_windows_command_shim(resolved_cmd)
 
     env = os.environ.copy()
     cleanup_paths: list[Path] = []
