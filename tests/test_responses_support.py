@@ -66,6 +66,36 @@ def test_sse_reassembler_keeps_streamed_text_when_completed_done_is_missing() ->
     assert body["output"][0]["content"][0]["text"] == "partial"
 
 
+def test_sse_reassembler_keeps_streamed_function_arguments_when_done_is_missing() -> None:
+    reassembler = SSEReassembler()
+    for frame in (
+        b'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","name":"read_file","arguments":""}}\n\n',
+        b'event: response.function_call_arguments.delta\ndata: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\\"path\\":"}\n\n',
+        b'event: response.function_call_arguments.delta\ndata: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"\\"README.md\\"}"}\n\n',
+    ):
+        reassembler.feed_bytes(frame)
+
+    body = reassembler.reconstruct()
+
+    assert body is not None
+    assert body["output"][0]["arguments"] == '{"path":"README.md"}'
+
+
+def test_sse_reassembler_keeps_streamed_custom_tool_input_when_done_is_missing() -> None:
+    reassembler = SSEReassembler()
+    for frame in (
+        b'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"custom_tool_call","name":"shell","input":""}}\n\n',
+        b'event: response.custom_tool_call_input.delta\ndata: {"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"pw"}\n\n',
+        b'event: response.custom_tool_call_input.delta\ndata: {"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"d"}\n\n',
+    ):
+        reassembler.feed_bytes(frame)
+
+    body = reassembler.reconstruct()
+
+    assert body is not None
+    assert body["output"][0]["input"] == "pwd"
+
+
 def test_sse_reassembler_merges_response_incomplete_terminal_event() -> None:
     # A response truncated by max_output_tokens ends with response.incomplete,
     # not response.completed. The final status/usage/details must be captured
