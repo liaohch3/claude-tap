@@ -553,6 +553,10 @@ async def run_client(
         env["http_proxy"] = proxy_url
         env["https_proxy"] = proxy_url
         env["all_proxy"] = proxy_url
+        if client == "pi":
+            # Pi's SSE transport uses Node fetch, which only reads proxy env vars
+            # when built-in environment proxy support is enabled.
+            env["NODE_USE_ENV_PROXY"] = "1"
         _extend_no_proxy(env, ("localhost", "127.0.0.1", "::1"))
         if client == "mimo":
             # MiMo defaults to mimo-only mode and ignores provider env vars unless disabled.
