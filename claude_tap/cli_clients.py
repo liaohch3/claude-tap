@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -23,6 +24,11 @@ _BEDROCK_HOST_RE = re.compile(
     r"|bedrock-mantle\.[a-z0-9-]+\.(api\.aws|amazonaws\.com|amazonaws\.com\.cn)"
     r")$"
 )
+
+_CODEX_APP_FAST_EXIT_HINT_SECONDS = 5.0
+_CODEX_APP_PROCESS_RE = r"Codex\.app/Contents/(MacOS/Codex|Resources/codex app-server)"
+_CODEX_APP_QUIT_TIMEOUT_SECONDS = 10.0
+_CODEX_APP_EXECUTABLE_ENV = "CODEX_APP_EXECUTABLE"
 
 
 def _is_aws_native_bedrock_url(url: str) -> bool:
@@ -49,6 +55,128 @@ def _is_aws_native_bedrock_url(url: str) -> bool:
 
 def _is_truthy_env_value(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _codex_app_executable_candidates() -> tuple[Path, ...]:
+    """Return candidate Codex App executable paths, most specific first.
+
+    ``CODEX_APP_EXECUTABLE`` lets users override the install location (e.g. a
+    non-standard install path or a test build); the default macOS install
+    locations are tried afterwards.
+    """
+    configured = os.environ.get(_CODEX_APP_EXECUTABLE_ENV)
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    if sys.platform == "darwin":
+        candidates.extend(
+            [
+                Path("/Applications/Codex.app/Contents/MacOS/Codex"),
+                Path.home() / "Applications/Codex.app/Contents/MacOS/Codex",
+            ]
+        )
+    return tuple(candidates)
+
+
+def _resolve_client_executable(client: str, cfg: ClientConfig, client_cmd: str | None) -> str | None:
+    """Resolve the executable path to launch for ``client``.
+
+    Codex App is a macOS ``.app`` bundle rather than a PATH-resolvable binary,
+    so it gets a dedicated multi-candidate lookup (``CODEX_APP_EXECUTABLE`` env
+    override, then the default install locations) before falling back to the
+    generic ``client_cmd``/``PATH`` resolution used by other clients.
+    """
+    if client_cmd:
+        return str(Path(client_cmd)) if Path(client_cmd).is_file() else None
+    if client == "codexapp":
+        for candidate in _codex_app_executable_candidates():
+            if candidate.is_file():
+                return str(candidate)
+        return None
+    return shutil.which(cfg.cmd)
+
+
+def _codex_app_existing_processes() -> list[str]:
+    if sys.platform != "darwin":
+        return []
+    try:
+        configured_executable = os.environ.get(_CODEX_APP_EXECUTABLE_ENV)
+        process_patterns = [_CODEX_APP_PROCESS_RE]
+        if configured_executable:
+            process_patterns.append(re.escape(str(Path(configured_executable).expanduser())))
+        result = subprocess.run(
+            ["pgrep", "-fl", f"({'|'.join(process_patterns)})"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode not in {0, 1}:
+        return []
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    current_pid = str(os.getpid())
+    return [line for line in lines if not line.startswith(f"{current_pid} ")]
+
+
+def _quit_codex_app() -> bool:
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", 'tell application id "com.openai.codex" to quit'],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+async def _wait_for_codex_app_exit(timeout_seconds: float = _CODEX_APP_QUIT_TIMEOUT_SECONDS) -> bool:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while True:
+        if not _codex_app_existing_processes():
+            return True
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(0.25)
+
+
+async def _prepare_codex_app_forward_launch() -> bool:
+    processes = _codex_app_existing_processes()
+    if not processes:
+        return True
+
+    print("\n⚠️  Codex App is already running, so a new launch would be handed to the existing process.")
+    print("   That existing process will not inherit claude-tap's HTTPS_PROXY/CA environment.")
+    for line in processes[:3]:
+        print(f"   {line}")
+    if len(processes) > 3:
+        print(f"   ... {len(processes) - 3} more process(es)")
+
+    if not sys.stdin.isatty():
+        print("   Quit Codex App completely, then run claude-tap again.")
+        return False
+
+    try:
+        answer = input("Quit existing Codex App now so claude-tap can capture its backend traffic? [y/N] ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in {"y", "yes"}:
+        print("   Aborted. Existing Codex App would not be captured.")
+        return False
+
+    print("   Quitting Codex App...")
+    if not _quit_codex_app():
+        print('   Failed to send quit event to Codex App. Please quit app "Codex" manually and retry.')
+        return False
+    if await _wait_for_codex_app_exit():
+        print("   Codex App exited. Starting a proxied instance now.")
+        return True
+    print("   Codex App is still running. Please quit it completely and retry.")
+    return False
 
 
 def _is_claude_bedrock_enabled() -> bool:
@@ -100,6 +228,11 @@ class ClientConfig:
     # local proxy and let the forward proxy bridge selected paths to target.
     forward_base_url_envs: tuple[str, ...] = ()
     forward_base_url_allowed_path_prefixes: tuple[str, ...] = ()
+    # Empty allowlists preserve the default behavior: trace every forward-proxied
+    # request that is not skipped by generic noise filters. Clients with noisy
+    # product traffic can still relay everything while persisting only model API calls.
+    forward_trace_methods: tuple[str, ...] = ()
+    forward_trace_path_prefixes: tuple[str, ...] = ()
     # Transcript-only clients are observed from local session logs instead of a
     # spawned process and do not need a reverse or forward proxy.
     transcript_only: bool = False
@@ -202,14 +335,16 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         ),
     ),
     "codexapp": ClientConfig(
-        cmd="codex",
+        cmd="/Applications/Codex.app/Contents/MacOS/Codex",
         label="Codex App",
         install_url="https://openai.com/codex",
-        base_url_env="CODEX_HOME",
+        base_url_env="CODEX_APP_BASE_URL",
         base_url_suffix="",
-        default_target="codex-app://sessions",
-        default_proxy_mode="transcript",
-        transcript_only=True,
+        default_target="https://chatgpt.com/backend-api/codex",
+        default_proxy_mode="forward",
+        auto_trust_ca_macos=True,
+        forward_trace_methods=("POST", "WEBSOCKET"),
+        forward_trace_path_prefixes=("/backend-api/codex/responses",),
     ),
     "kimi": ClientConfig(
         cmd="kimi",
@@ -368,20 +503,36 @@ async def run_client(
     ca_cert_path: Path | None = None,
     client_cmd: str | None = None,
     capture_only: bool = False,
+    codex_app_preflighted: bool = False,
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
 
     # asyncio.create_subprocess_exec uses CreateProcess on Windows, which only
     # auto-appends `.exe`; resolve here so npm `.cmd`/`.bat` shims also work.
+    # Codex App is a macOS .app bundle rather than a PATH binary, so it gets a
+    # dedicated multi-candidate lookup (see _resolve_client_executable).
     display_cmd = client_cmd or cfg.cmd
-    resolved_cmd = str(Path(client_cmd)) if client_cmd and Path(client_cmd).is_file() else shutil.which(display_cmd)
+    resolved_cmd = _resolve_client_executable(client, cfg, client_cmd)
     if resolved_cmd is None:
         if client_cmd:
             print(f"\nError: '{client_cmd}' command not found.\nPlease check the wrapper-provided {cfg.label} path.\n")
+        elif client == "codexapp":
+            print(
+                "\nError: Codex.app executable not found.\n"
+                "Install Codex.app in /Applications, or set "
+                f"{_CODEX_APP_EXECUTABLE_ENV}=/path/to/Codex.app/Contents/MacOS/Codex.\n"
+            )
         else:
             print(cfg.missing_help)
         return 1
     resolved_cmd = _prefer_windows_command_shim(resolved_cmd)
+    if (
+        client == "codexapp"
+        and proxy_mode == "forward"
+        and not codex_app_preflighted
+        and not await _prepare_codex_app_forward_launch()
+    ):
+        return 1
 
     env = os.environ.copy()
     cleanup_paths: list[Path] = []
@@ -393,6 +544,8 @@ async def run_client(
 
     if proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
+        if client == "codexapp":
+            cmd_args.insert(0, f"--proxy-server={proxy_url}")
         # Set both upper/lower-case variants for tools that read one form only.
         env["HTTP_PROXY"] = proxy_url
         env["HTTPS_PROXY"] = proxy_url
@@ -498,17 +651,20 @@ async def run_client(
             print(f"   {env_key}={base_url}")
     print()
 
-    # Give child its own process group and make it the foreground group
-    # so the TUI app has full terminal control (e.g. Cmd+Delete, Ctrl+U).
-    use_fg = hasattr(os, "tcsetpgrp") and sys.stdin.isatty()
+    # Give TUI children their own process group and make them the foreground
+    # group so they have full terminal control (e.g. Cmd+Delete, Ctrl+U).
+    # Codex App is a GUI process with very noisy app-server logs; keep its
+    # stdio detached so claude-tap's terminal only shows capture status.
+    hide_child_output = client == "codexapp"
+    use_fg = not hide_child_output and hasattr(os, "tcsetpgrp") and sys.stdin.isatty()
 
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             env=env,
-            stdin=None,
-            stdout=None,
-            stderr=None,
+            stdin=subprocess.DEVNULL if hide_child_output else None,
+            stdout=subprocess.DEVNULL if hide_child_output else None,
+            stderr=subprocess.DEVNULL if hide_child_output else None,
             **({"process_group": 0} if use_fg else {}),
         )
     except Exception:
@@ -559,6 +715,7 @@ async def run_client(
     except (NotImplementedError, OSError):
         pass
 
+    started_at = loop.time()
     try:
         code = await proc.wait()
     finally:
@@ -602,7 +759,15 @@ async def run_client(
         except (NotImplementedError, OSError):
             pass
 
+    elapsed = loop.time() - started_at
     print(f"\n📋 {cfg.label} exited with code {code}")
+    if client == "codexapp" and proxy_mode == "forward" and code == 0 and elapsed < _CODEX_APP_FAST_EXIT_HINT_SECONDS:
+        print(
+            "   Codex App exited immediately. If macOS printed something like "
+            "'opening in an existing browser session', an already-running Codex App "
+            "handled the launch and did not inherit claude-tap's HTTPS_PROXY/CA "
+            "environment. Quit Codex App completely, then run this command again."
+        )
     return code
 
 

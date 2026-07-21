@@ -1402,12 +1402,14 @@ def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
                 "request_id": f"req_codexapp_{turn}",
                 "turn": turn,
                 "duration_ms": 0,
-                "transport": "codex-app-transcript",
+                "transport": "websocket",
+                "upstream_base_url": "https://chatgpt.com/backend-api/codex",
                 "request": {
-                    "method": "CODEX_APP_TRANSCRIPT",
-                    "path": "/v1/responses",
-                    "headers": {"x-codex-app-session-id": session_id},
+                    "method": "WEBSOCKET",
+                    "path": "/backend-api/codex/responses",
+                    "headers": {"host": "chatgpt.com", "authorization": "Bearer [REDACTED]"},
                     "body": {
+                        "type": "response.create",
                         "model": "gpt-5.5",
                         "metadata": {"codex_app_session_id": session_id},
                         "input": [
@@ -1419,7 +1421,7 @@ def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
                     },
                 },
                 "response": {
-                    "status": 200,
+                    "status": 101,
                     "headers": {},
                     "body": {
                         "id": f"resp_codexapp_{turn}",

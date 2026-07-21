@@ -301,3 +301,34 @@ async def test_async_main_returns_before_starting_proxy_when_trust_ca_fails(
     assert code == 7
     assert proxy_started is False
     assert get_trace_store().list_session_rows() == []
+
+
+@pytest.mark.asyncio
+async def test_async_main_preflights_codex_app_before_creating_or_trusting_ca(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "codex-app-preflight.sqlite3"))
+    reset_trace_store()
+
+    async def reject_launch() -> bool:
+        return False
+
+    monkeypatch.setattr("claude_tap.cli._prepare_codex_app_forward_launch", reject_launch)
+    monkeypatch.setattr(
+        "claude_tap.cli.ensure_ca",
+        lambda: (_ for _ in ()).throw(AssertionError("CA must not be created before Codex App preflight")),
+    )
+
+    args = parse_args(
+        [
+            "--tap-client",
+            "codexapp",
+            "--tap-output-dir",
+            str(tmp_path / "traces"),
+            "--tap-no-live",
+        ]
+    )
+
+    assert await async_main(args) == 1
+    assert get_trace_store().list_session_rows() == []

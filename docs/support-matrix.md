@@ -22,7 +22,7 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | HTTP/SSE in default reverse mode | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE in default reverse mode | Real E2E verified with Codex 0.144.1 |
 | Codex CLI | Explicit `--tap-proxy-mode forward` | Auto-detected upstream | n/a | HTTP/SSE + WebSocket | Unit-tested |
-| Codex App | ChatGPT account in Codex App | `codex-app://sessions` | n/a | Local session JSONL transcript import plus automatic best-effort CDP WebSocket enrichment when a Codex App debug endpoint is available | Unit-tested |
+| Codex App | ChatGPT account in Codex App | Forward proxy to `https://chatgpt.com/backend-api/codex` | n/a | HTTP/SSE + WebSocket (`/backend-api/codex/responses` only; other product traffic relayed but not traced) | Unit-tested |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy (Google endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Gemini CLI | API key / Vertex-compatible config (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE | Unit-tested |
 | Grok Build CLI | Grok subscription OAuth (`grok login`) | `https://cli-chat-proxy.grok.com/v1` | `/v1` | HTTP/SSE Responses plus storage/trace audit records | Real E2E verified with Grok 0.2.101 |
@@ -54,7 +54,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 |--------|--------------|--------|
 | `claude` | `reverse` | Single provider, native Claude provider base URL env vars (`ANTHROPIC_BASE_URL`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL`) |
 | `codex` | `reverse` | Launches a temporary sibling provider with the proxy base URL and `supports_websockets=false`, producing one self-contained HTTP/SSE trace record per request without changing `~/.codex/config.toml` |
-| `codexapp` | `transcript` | Transcript listener for `CODEX_HOME/sessions` or `~/.codex/sessions`; no proxy is created. CDP WebSocket evidence is added automatically when Codex App exposes a debug endpoint |
+| `codexapp` | `forward` | Codex App is a macOS `.app` bundle with no `OPENAI_BASE_URL`-style override; forward proxy captures its real upstream HTTP/WebSocket traffic, filtered to `/backend-api/codex/responses` |
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |
 | `grok` | `reverse` | The official CLI honors `GROK_CLI_CHAT_PROXY_BASE_URL`; reverse mode captures model traffic plus storage/trace audit records without installing a local CA |
 | `kimi` | `reverse` | Legacy kimi-cli; native `KIMI_BASE_URL` env var |
@@ -69,7 +69,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `agy` | `forward` | Antigravity uses multiple Google / Antigravity endpoints; claude-tap sets `HTTPS_PROXY` for auxiliary traffic and `CLOUD_CODE_URL` for Code Assist model traffic |
 | `codebuddy` | `reverse` | Single provider, native `CODEBUDDY_BASE_URL` env var; supports `--settings` env injection. Endpoint auto-detected from CodeBuddy's login cache |
 
-Users can override proxy-backed clients with `--tap-proxy-mode {reverse,forward}`. `codexapp` is transcript-only, so `--tap-proxy-mode` does not apply.
+Users can override proxy-backed clients with `--tap-proxy-mode {reverse,forward}`.
 
 ## Subcommand Argv Rewrites
 
@@ -120,10 +120,8 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 
 - `test_codex_upstream_url_construction` — verifies URL construction for all 5 matrix combinations
 - `test_codex_client_reverse_proxy` — e2e with fake upstream (OAuth-like, with strip)
-- `test_build_codex_app_transcript_records_preserves_turn_context` — verifies Codex App session JSONL imports as viewer-friendly Responses records with usage, tools, and tool results
-- `test_import_codex_app_transcripts_appends_only_new_completed_records` — verifies Codex App transcript polling appends only new completed records
-- `test_cdp_recorder_writes_viewer_friendly_websocket_record` — verifies Codex App CDP WebSocket frames are reconstructed into viewer-friendly WebSocket records
-- `test_async_main_codexapp_starts_cdp_enrichment_by_default` — verifies `--tap-client codexapp` starts automatic CDP enrichment while honoring the global raw stream event storage setting
+- `test_codex_app_*` (`tests/test_codex_app_launch.py`) — verifies Codex App executable resolution (including `CODEX_APP_EXECUTABLE` override and default install paths), already-running detection/quit flow, and forward-proxy launch env
+- `test_forward_proxy_client_filter_*` (`tests/test_e2e.py`) — verifies forward proxy `forward_trace_methods`/`forward_trace_path_prefixes` filtering relays Codex App product traffic while only tracing `/backend-api/codex/responses` HTTP and WebSocket calls
 - `test_gemini_registered_in_client_configs` — verifies Gemini CLI registration and default forward mode
 - `test_grok_*` — verifies Grok Build registration, reverse-mode URL injection, target detection, `/v1` routing, and fake-upstream Responses/storage/trace capture
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs` — verifies Gemini forward proxy launch env
@@ -165,8 +163,9 @@ uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Repl
 
 # Codex App
 uv run python -m claude_tap --tap-client codexapp
-# Start or continue a Codex App task and verify the dashboard receives transcript records.
-# If Codex App exposes a debug endpoint, websocket evidence is added automatically.
+# Quit any already-running Codex App first so the launched process inherits the proxy/CA env.
+# Start or continue a Codex App task and verify the dashboard receives backend HTTP/WebSocket records
+# for /backend-api/codex/responses only; other Codex App product traffic is relayed but not traced.
 
 # Qoder CLI
 uv run python -m claude_tap --tap-client qoder -- -p "Reply OK" --permission-mode dont_ask

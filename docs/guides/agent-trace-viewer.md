@@ -58,7 +58,7 @@ claude-tap
 # Codex CLI
 claude-tap --tap-client codex
 
-# Codex App local session listener
+# Codex App backend capture through the forward proxy
 claude-tap --tap-client codexapp
 
 # Gemini CLI
@@ -89,7 +89,7 @@ For Claude Code and Anthropic-compatible traffic, `claude-tap` shows Anthropic M
 
 ## Codex trace viewer
 
-For Codex CLI, `claude-tap` supports OpenAI API key mode and ChatGPT subscription OAuth mode. For Codex App, it listens to local session JSONL files under `CODEX_HOME` or `~/.codex`. It can inspect OpenAI Responses API traffic, WebSocket records, local transcript records, tool calls, reasoning/output sections, token usage, and request diffs.
+For Codex CLI, `claude-tap` supports OpenAI API key mode and ChatGPT subscription OAuth mode. For Codex App, it launches the desktop app through a local forward proxy and records completed HTTP/WebSocket model calls to `/backend-api/codex/responses`; other product traffic is relayed without being stored. Quit an already-running Codex App first so the launched process inherits the proxy and CA configuration. The viewer can inspect request context, tool calls, reasoning/output sections, token usage, and request diffs.
 
 ## Export traces to HTML
 
