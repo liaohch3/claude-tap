@@ -86,6 +86,7 @@ async def test_run_client_pi_forward_sets_proxy_ca_and_preserves_args(monkeypatc
     env = captured["env"]
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:43123"
     assert env["http_proxy"] == "http://127.0.0.1:43123"
+    assert env["NODE_USE_ENV_PROXY"] == "1"
     assert env["NODE_EXTRA_CA_CERTS"] == str(ca_path)
     assert env["SSL_CERT_FILE"] == str(ca_path)
     assert "example.com" in env["NO_PROXY"]
