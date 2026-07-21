@@ -161,6 +161,13 @@ def _is_allowed_path(path: str, extra_prefixes: tuple[str, ...] = ()) -> bool:
     )
 
 
+def _matches_path_prefixes(path: str, prefixes: tuple[str, ...]) -> bool:
+    clean = path.split("?", 1)[0].rstrip("/")
+    return any(
+        clean == prefix or clean.startswith(prefix + "/") or clean.startswith(prefix + ":") for prefix in prefixes
+    )
+
+
 _ANTHROPIC_METADATA_USER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 _BEDROCK_GATEWAY_UNSUPPORTED_BODY_FIELDS = frozenset({"context_management", "output_config"})
 
@@ -564,6 +571,9 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         log.debug(f"Blocked non-API path: {request.method} {request.path}")
         return web.Response(status=404, text="Not Found")
 
+    trace_prefixes: tuple[str, ...] = ctx.get("trace_path_prefixes", ())
+    should_trace = not trace_prefixes or _matches_path_prefixes(request.path, trace_prefixes)
+
     # Detect WebSocket upgrade and route to WS proxy.
     if request.headers.get("Upgrade", "").lower() == "websocket":
         if ctx.get("force_http"):
@@ -623,11 +633,15 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
 
     is_streaming = is_capture_only_streaming_request(request.raw_path, trace_req_body)
 
-    ctx["turn_counter"] = ctx.get("turn_counter", 0) + 1
-    turn = ctx["turn_counter"]
+    if should_trace:
+        ctx["turn_counter"] = ctx.get("turn_counter", 0) + 1
+        turn = ctx["turn_counter"]
+        log_prefix = f"[Turn {turn}]"
+    else:
+        turn = 0
+        log_prefix = "[Relay]"
 
     model = trace_req_body.get("model", "") if isinstance(trace_req_body, dict) else ""
-    log_prefix = f"[Turn {turn}]"
     log.info(
         f"{log_prefix} → {request.method} {request.path} (model={model}, stream={is_streaming}, upstream={upstream_url})"
     )
@@ -690,6 +704,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             log_prefix,
             upstream_base_url=target,
             store_stream_events=bool(ctx.get("store_stream_events", False)),
+            should_trace=should_trace,
         )
         return resp_body
 
@@ -703,6 +718,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
         writer,
         log_prefix,
         upstream_base_url=target,
+        should_trace=should_trace,
     )
 
 
@@ -717,6 +733,7 @@ async def _handle_streaming(
     log_prefix: str,
     upstream_base_url: str,
     store_stream_events: bool,
+    should_trace: bool,
 ) -> web.StreamResponse:
     resp = web.StreamResponse(
         status=upstream_resp.status,
@@ -767,21 +784,22 @@ async def _handle_streaming(
         f"in={in_tok} out={out_tok} cache_read={cache_read} cache_create={cache_create})"
     )
 
-    record = _build_record(
-        req_id,
-        turn,
-        duration_ms,
-        request.method,
-        request.raw_path,
-        request.headers,
-        req_body,
-        upstream_resp.status,
-        upstream_resp.headers,
-        reconstructed,
-        sse_events=reassembler.events,
-        upstream_base_url=upstream_base_url,
-    )
-    await writer.write(record)
+    if should_trace:
+        record = _build_record(
+            req_id,
+            turn,
+            duration_ms,
+            request.method,
+            request.raw_path,
+            request.headers,
+            req_body,
+            upstream_resp.status,
+            upstream_resp.headers,
+            reconstructed,
+            sse_events=reassembler.events,
+            upstream_base_url=upstream_base_url,
+        )
+        await writer.write(record)
 
     return resp
 
@@ -796,6 +814,7 @@ async def _handle_non_streaming(
     writer: TraceWriter,
     log_prefix: str,
     upstream_base_url: str,
+    should_trace: bool,
 ) -> web.Response:
     resp_bytes = await upstream_resp.read()
     duration_ms = int((time.monotonic() - t0) * 1000)
@@ -819,20 +838,21 @@ async def _handle_non_streaming(
 
     log.info(f"{log_prefix} ← {upstream_resp.status} ({duration_ms}ms, {len(resp_bytes)} bytes)")
 
-    record = _build_record(
-        req_id,
-        turn,
-        duration_ms,
-        request.method,
-        request.raw_path,
-        request.headers,
-        req_body,
-        upstream_resp.status,
-        upstream_resp.headers,
-        resp_body,
-        upstream_base_url=upstream_base_url,
-    )
-    await writer.write(record)
+    if should_trace:
+        record = _build_record(
+            req_id,
+            turn,
+            duration_ms,
+            request.method,
+            request.raw_path,
+            request.headers,
+            req_body,
+            upstream_resp.status,
+            upstream_resp.headers,
+            resp_body,
+            upstream_base_url=upstream_base_url,
+        )
+        await writer.write(record)
 
     return web.Response(
         status=upstream_resp.status,

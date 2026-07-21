@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-06-24
+last_reviewed: 2026-07-18
 source_of_truth: AGENTS.md
 ---
 
@@ -25,6 +25,7 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Codex App | ChatGPT account in Codex App | `codex-app://sessions` | n/a | Local session JSONL transcript import plus automatic best-effort CDP WebSocket enrichment when a Codex App debug endpoint is available | Unit-tested |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy (Google endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Gemini CLI | API key / Vertex-compatible config (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE | Unit-tested |
+| Grok Build CLI | Grok subscription OAuth (`grok login`) | `https://cli-chat-proxy.grok.com/v1` | `/v1` | HTTP/SSE Responses plus storage/trace audit records | Real E2E verified with Grok 0.2.101 |
 | Kimi CLI (legacy kimi-cli) | Kimi CLI auth/config | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested (`KIMI_BASE_URL`) |
 | Kimi CLI (legacy kimi-cli) | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
 | Kimi Code CLI | `~/.kimi-code/config.toml` + OAuth (`managed:kimi-code`) | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested (`KIMI_CODE_HOME` sandbox) |
@@ -55,6 +56,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `codex` | `reverse` | Launches a temporary sibling provider with the proxy base URL and `supports_websockets=false`, producing one self-contained HTTP/SSE trace record per request without changing `~/.codex/config.toml` |
 | `codexapp` | `transcript` | Transcript listener for `CODEX_HOME/sessions` or `~/.codex/sessions`; no proxy is created. CDP WebSocket evidence is added automatically when Codex App exposes a debug endpoint |
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |
+| `grok` | `reverse` | The official CLI honors `GROK_CLI_CHAT_PROXY_BASE_URL`; reverse mode captures model traffic plus storage/trace audit records without installing a local CA |
 | `kimi` | `reverse` | Legacy kimi-cli; native `KIMI_BASE_URL` env var |
 | `kimi-code` | `reverse` | Patches `~/.kimi-code/config.toml` via temporary `KIMI_CODE_HOME` sandbox |
 | `mimo` | `forward` | OpenCode fork; multi-provider — forward proxy captures every upstream regardless of which env var the client honors |
@@ -123,6 +125,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_cdp_recorder_writes_viewer_friendly_websocket_record` — verifies Codex App CDP WebSocket frames are reconstructed into viewer-friendly WebSocket records
 - `test_async_main_codexapp_starts_cdp_enrichment_by_default` — verifies `--tap-client codexapp` starts automatic CDP enrichment while honoring the global raw stream event storage setting
 - `test_gemini_registered_in_client_configs` — verifies Gemini CLI registration and default forward mode
+- `test_grok_*` — verifies Grok Build registration, reverse-mode URL injection, target detection, `/v1` routing, and fake-upstream Responses/storage/trace capture
 - `test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs` — verifies Gemini forward proxy launch env
 - `test_run_client_gemini_reverse_sets_both_base_url_envs` — verifies Gemini reverse proxy base URL env injection
 - `test_viewer_renders_gemini_semantic_sections` — verifies Gemini systemInstruction, contents, functionDeclarations, functionCall, functionResponse, SSE output, and token usage render as semantic viewer sections
@@ -184,6 +187,10 @@ uv run python -m claude_tap --tap-client kimi-code -- --thinking
 # Gemini CLI
 uv run python -m claude_tap --tap-client gemini -- -p "Reply OK" --yolo --output-format text
 # Verify the trace contains Google OAuth / Code Assist API records
+
+# Grok Build CLI
+uv run python -m claude_tap --tap-client grok -- -p "Reply OK"
+# Verify the trace contains /v1/responses records with Grok request, response, and token usage
 
 # Pi
 uv run python -m claude_tap --tap-client pi -- \
