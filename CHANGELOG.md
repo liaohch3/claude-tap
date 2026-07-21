@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.138] - 2026-07-21
+
+### Changed
+- Capture Codex App traffic via forward proxy (#351)
 ## [0.1.137] - 2026-07-21
 
 ### Changed
