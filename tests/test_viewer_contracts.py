@@ -1993,6 +1993,61 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert remaining_tabs == ["default", "trace"]
 
 
+def test_viewer_curl_uses_recorded_upstream_and_historical_host_fallback(tmp_path: Path, chromium_browser) -> None:
+    current_record = json.loads(json.dumps(_responses_record()))
+    current_record["upstream_base_url"] = "https://gateway.example.test:8443"
+    current_record["request"]["path"] = "/custom/v1/responses"
+    current_record["request"]["headers"] = {
+        "Host": "ignored.example.test",
+        "Authorization": "Bearer sk-test...",
+    }
+
+    historical_record = json.loads(json.dumps(_responses_record()))
+    historical_record["request_id"] = "req_historical_curl"
+    historical_record["turn"] = 2
+    historical_record["request"]["path"] = "/legacy/v1/responses"
+    historical_record["request"]["headers"] = {
+        "host": "legacy.example.test:9443",
+        "Authorization": "Bearer sk-test...",
+    }
+
+    reverse_record = json.loads(json.dumps(_responses_record()))
+    reverse_record["request_id"] = "req_historical_reverse_curl"
+    reverse_record["turn"] = 3
+    reverse_record["request"]["path"] = "/v1/responses"
+    reverse_record["request"]["headers"] = {"Host": "127.0.0.1:8080"}
+
+    html_path = _generate_case_html(tmp_path, "curl_upstream", (current_record, historical_record, reverse_record))
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.evaluate(
+            """() => {
+              window.__copiedCurl = [];
+              window.copyToClipboard = (text) => { window.__copiedCurl.push(text); return Promise.resolve(); };
+            }"""
+        )
+        curl_button = '#detail .act-btn[onclick="copyCurl(this)"]'
+        page.evaluate("filtered = entries.slice()")
+        assert page.evaluate("filtered.length") == 3
+        for index in range(3):
+            page.evaluate("index => { activeIdx = index; renderDetail(filtered[index]); }", index)
+            page.locator(curl_button).click()
+        copied = page.evaluate("window.__copiedCurl")
+    finally:
+        page.close()
+
+    assert errors == []
+    assert copied[0].startswith("curl -X POST 'https://gateway.example.test:8443/custom/v1/responses'")
+    assert "ignored.example.test" not in copied[0]
+    assert copied[1].startswith("curl -X POST 'https://legacy.example.test:9443/legacy/v1/responses'")
+    assert "Authorization: Bearer sk-test..." in copied[0]
+    assert "Authorization: Bearer sk-test..." in copied[1]
+    assert copied[2].startswith("curl -X POST 'https://api.anthropic.com/v1/responses'")
+    assert "127.0.0.1:8080" not in copied[2]
+    assert "sk-test-secret" not in "\n".join(copied)
+
+
 def test_viewer_tool_call_params_can_expand_escaped_string_newlines(tmp_path: Path, chromium_browser) -> None:
     record = json.loads(json.dumps(_responses_record()))
     decoded_command = "python - <<'PY'\nprint(\"hello\")\nPY"
@@ -2879,6 +2934,7 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
         "getUsage",
         "getResponseEvents",
         "getResponseOutput",
+        "copyCurl",
         "geminiMessages",
         "geminiResponseOutput",
         "renderTools",
@@ -2976,6 +3032,8 @@ def test_viewer_v8_coverage_exercises_core_inline_js_functions(tmp_path: Path, c
                 'beforeend',
                 renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
               );
+              window.copyToClipboard = () => Promise.resolve();
+              copyCurl(null);
               document.querySelector('.tool-input-toggle')?.click();
               const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
               if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);

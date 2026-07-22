@@ -608,6 +608,8 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     'beforeend',
                     renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
                   );
+                  window.copyToClipboard = () => Promise.resolve();
+                  copyCurl(null);
                   document.querySelector('.tool-input-toggle')?.click();
                   const tooltipTrigger = document.querySelector('.sidebar-group-header') || document.createElement('div');
                   if (!tooltipTrigger.isConnected) document.body.appendChild(tooltipTrigger);
