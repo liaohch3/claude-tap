@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.139] - 2026-07-22
+
+### Changed
+- fix: preserve forward upstream URLs in cURL exports (#395)
 ## [0.1.138] - 2026-07-21
 
 ### Changed
