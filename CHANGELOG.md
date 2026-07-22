@@ -17,6 +17,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+
+
+
+## [0.1.138] - 2026-07-21
+
+### Changed
+- Capture Codex App traffic via forward proxy (#351)
+## [0.1.137] - 2026-07-21
+
+### Changed
+- feat: add Grok Build CLI support (#394)
+## [0.1.136] - 2026-07-19
+
+### Changed
+- fix: prefer Windows npm command shims (#387)
+## [0.1.135] - 2026-07-18
+
+### Changed
+- fix: prevent SQLite locks from blocking clients (#385)
+- test: avoid PID collisions in monitor cleanup test (#390)
 ## [0.1.134] - 2026-07-11
 
 ### Changed

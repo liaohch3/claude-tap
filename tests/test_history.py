@@ -313,7 +313,7 @@ def test_cleanup_trace_sessions_skips_protected_session_set(trace_db) -> None:
     session_ids = [
         store.create_session(
             client="codexapp",
-            proxy_mode="transcript",
+            proxy_mode="forward",
             started_at=datetime(2026, 5, 1, 12, index, tzinfo=timezone.utc),
         )
         for index in range(5)

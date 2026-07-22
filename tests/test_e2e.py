@@ -432,7 +432,16 @@ def _start_fake_upstream(port, handler_fn):
     return stop
 
 
-def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout=30, tap_client="claude"):
+def _run_claude_tap(
+    project_dir,
+    trace_dir,
+    fake_bin_dir,
+    upstream_port,
+    timeout=30,
+    tap_client="claude",
+    target_suffix="",
+    no_live=False,
+):
     """Run claude_tap as a subprocess pointing at `upstream_port`.
     Returns the CompletedProcess."""
     env = os.environ.copy()
@@ -447,10 +456,12 @@ def _run_claude_tap(project_dir, trace_dir, fake_bin_dir, upstream_port, timeout
         "--tap-output-dir",
         trace_dir,
         "--tap-target",
-        f"http://127.0.0.1:{upstream_port}",
+        f"http://127.0.0.1:{upstream_port}{target_suffix}",
     ]
     if tap_client != "claude":
         cmd.extend(["--tap-client", tap_client])
+    if no_live:
+        cmd.append("--tap-no-live")
 
     return subprocess.run(
         cmd,
@@ -1926,6 +1937,145 @@ def test_codex_client_reverse_proxy():
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "codex")
+
+
+FAKE_GROK_SCRIPT = r"""#!/usr/bin/env python3
+# Fake Grok Build CLI that sends audit-relevant upload and Responses traffic
+# via GROK_CLI_CHAT_PROXY_BASE_URL.
+import json, os, sys, urllib.request
+
+base = os.environ.get("GROK_CLI_CHAT_PROXY_BASE_URL", "https://cli-chat-proxy.grok.com/v1")
+
+def post_json(path, payload):
+    req = urllib.request.Request(
+        f"{base}{path}",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer grok-test-token-12345678",
+        },
+    )
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+        return resp.read()
+
+try:
+    with urllib.request.urlopen(f"{base}/settings") as resp:
+        assert resp.status == 200
+except Exception as e:
+    print(f"[fake-grok] Settings error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+post_json("/storage/signed-upload-url", {"file_name": "repository-bundle.tar.gz"})
+post_json("/traces", {"event": "repository_bundle_uploaded"})
+
+req_body = json.dumps({
+    "model": "grok-build",
+    "input": "Reply with exactly: HELLO_GROK",
+    "stream": True,
+}).encode()
+req = urllib.request.Request(f"{base}/responses", data=req_body, headers={
+    "Content-Type": "application/json",
+    "Authorization": "Bearer grok-test-token-12345678",
+})
+try:
+    with urllib.request.urlopen(req) as resp:
+        chunks = resp.read().decode()
+        print(f"[fake-grok] status={resp.status} stream-bytes={len(chunks)}")
+except Exception as e:
+    print(f"[fake-grok] Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+print("[fake-grok] Done.")
+"""
+
+
+def test_grok_client_reverse_proxy():
+    """Test --tap-client grok against a fake Responses upstream."""
+
+    async def handler(request):
+        if request.path == "/v1/settings":
+            from aiohttp import web
+
+            return web.json_response({"features": {}})
+
+        body = await request.json()
+        from aiohttp import web
+
+        if request.path == "/v1/storage/signed-upload-url":
+            assert body == {"file_name": "repository-bundle.tar.gz"}
+            return web.json_response({"upload_url": "https://uploads.example.test/bundle"})
+        if request.path == "/v1/traces":
+            assert body == {"event": "repository_bundle_uploaded"}
+            return web.json_response({"id": "trace_grok_1"})
+
+        assert request.path == "/v1/responses"
+        assert body["model"] == "grok-build"
+
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        events = [
+            {
+                "type": "response.created",
+                "response": {"id": "resp_grok_1", "model": body["model"], "output": []},
+            },
+            {"type": "response.output_text.delta", "delta": "HELLO_GROK"},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_grok_1",
+                    "model": body["model"],
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "HELLO_GROK"}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12},
+                },
+            },
+        ]
+        for event in events:
+            await resp.write(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        await resp.write_eof()
+        return resp
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_grok_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_grok_")
+    fake_grok = Path(fake_bin_dir) / "grok"
+    fake_grok.write_text(FAKE_GROK_SCRIPT)
+    fake_grok.chmod(fake_grok.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19247, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19247,
+            tap_client="grok",
+            target_suffix="/v1",
+            no_live=True,
+        )
+
+        assert proc.returncode == 0, f"grok mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        records = read_trace_records(trace_dir)
+        assert [record["request"]["path"] for record in records] == [
+            "/v1/storage/signed-upload-url",
+            "/v1/traces",
+            "/v1/responses",
+        ]
+        assert all(record["upstream_base_url"] == "http://127.0.0.1:19247/v1" for record in records)
+        assert records[0]["request"]["body"] == {"file_name": "repository-bundle.tar.gz"}
+        assert records[1]["request"]["body"] == {"event": "repository_bundle_uploaded"}
+        assert records[2]["request"]["body"]["model"] == "grok-build"
+        assert records[2]["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_GROK"
+        assert "GROK_CLI_CHAT_PROXY_BASE_URL=http://127.0.0.1:" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "grok")
 
 
 FAKE_KIMI_SCRIPT = r"""#!/usr/bin/env python3
@@ -3684,6 +3834,118 @@ async def test_forward_proxy_skips_package_noise_but_keeps_long_model_payloads(m
 
 
 @pytest.mark.asyncio
+async def test_forward_proxy_client_filter_relays_noise_but_traces_codexapp_http(monkeypatch):
+    """Client filters should relay product traffic while persisting only configured model requests."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port, upstream_runner = await _start_fake_long_payload_https_upstream(tmpdir_path)
+        store, session_id, writer = _writer_for_dir(tmpdir_path)
+
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False)
+        original_request = session.request
+
+        async def _rewrite_to_localhost(method, url, **kwargs):
+            rewritten = URL(str(url)).with_host("127.0.0.1").with_port(upstream_port)
+            return await original_request(method=method, url=rewritten, **kwargs)
+
+        monkeypatch.setattr(session, "request", _rewrite_to_localhost)
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+            trace_methods=("POST", "WEBSOCKET"),
+            trace_path_prefixes=("/backend-api/codex/responses",),
+            store_stream_events=True,
+        )
+        proxy_port = await server.start()
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+
+            async with aiohttp.ClientSession(connector=connector, auto_decompress=False) as client:
+                async with client.post(
+                    f"https://chatgpt.com:{upstream_port}/backend-api/codex/analytics-events/events",
+                    proxy=proxy_url,
+                    json={"event": "app_noise"},
+                ) as resp:
+                    assert resp.status == 200
+                    assert await resp.json() == {"ok": True, "kind": "analytics"}
+
+                async with client.post(
+                    f"https://chatgpt.com:{upstream_port}/backend-api/codex/responses",
+                    proxy=proxy_url,
+                    json={
+                        "type": "response.create",
+                        "model": "gpt-5-test",
+                        "input": [{"role": "user", "content": "hello"}],
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    body = await resp.json()
+                    assert body["id"] == "resp_codexapp_http"
+
+            await asyncio.sleep(0.1)
+            writer.close()
+            records = [json.loads(line) for line in store.export_jsonl(session_id).splitlines()]
+
+            assert len(records) == 1
+            assert records[0]["turn"] == 1
+            assert records[0]["request"]["method"] == "POST"
+            assert records[0]["request"]["path"] == "/backend-api/codex/responses"
+            assert records[0]["request"]["body"]["type"] == "response.create"
+            assert records[0]["response"]["body"]["id"] == "resp_codexapp_http"
+        finally:
+            await server.stop()
+            await session.close()
+            await upstream_runner.cleanup()
+
+
+def test_forward_proxy_client_filter_matches_methods_and_paths(tmp_path: Path) -> None:
+    from claude_tap.forward_proxy import ForwardProxyServer
+    from claude_tap.trace import TraceWriter
+    from claude_tap.trace_store import TraceStore
+
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    session_id = store.create_session(client="codexapp", proxy_mode="forward")
+    writer = TraceWriter(session_id, store=store)
+    server = ForwardProxyServer(
+        host="127.0.0.1",
+        port=0,
+        ca=object(),
+        writer=writer,
+        session=object(),
+        trace_methods=("POST", "WEBSOCKET"),
+        trace_path_prefixes=("/backend-api/codex/responses",),
+    )
+
+    assert server._should_trace_request("POST", "/backend-api/codex/responses")
+    assert server._should_trace_request("WEBSOCKET", "/backend-api/codex/responses?conversation=abc")
+    assert not server._should_trace_request("GET", "/backend-api/codex/responses")
+    assert not server._should_trace_request("POST", "/backend-api/codex/analytics-events/events")
+    writer.close()
+
+
+@pytest.mark.asyncio
 async def test_forward_proxy_local_reverse_bridge():
     """Test local origin requests bridged through forward proxy to a target."""
     import ssl
@@ -3910,6 +4172,231 @@ async def test_forward_proxy_connect_websocket():
             await session.close()
 
     print("  test_forward_proxy_connect_websocket PASSED")
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_client_filter_traces_codexapp_websocket_but_not_noise():
+    """Codex App filters must keep real responses WebSockets, not only HTTP POST traffic."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+
+        upstream_port = await _start_fake_wss_upstream(tmpdir_path)
+        store, session_id, writer = _writer_for_dir(tmpdir_path)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        upstream_conn = aiohttp.TCPConnector(ssl=upstream_ssl_ctx)
+        session = aiohttp.ClientSession(connector=upstream_conn, auto_decompress=False)
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+            trace_methods=("POST", "WEBSOCKET"),
+            trace_path_prefixes=("/backend-api/codex/responses",),
+            store_stream_events=True,
+        )
+        proxy_port = await server.start()
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                noise_ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/backend-api/wham/remote/control/server",
+                    proxy=proxy_url,
+                    ssl=ssl_ctx,
+                )
+                await noise_ws.send_json({"kind": "noise"})
+                while True:
+                    msg = await asyncio.wait_for(noise_ws.receive(), timeout=5)
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                    ):
+                        break
+
+                model_ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/backend-api/codex/responses",
+                    proxy=proxy_url,
+                    ssl=ssl_ctx,
+                )
+                await model_ws.send_json({"type": "response.create", "model": "gpt-5-test", "input": "hello"})
+                while True:
+                    msg = await asyncio.wait_for(model_ws.receive(), timeout=5)
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                    ):
+                        break
+
+            await asyncio.sleep(0.1)
+            writer.close()
+            records = [json.loads(line) for line in store.export_jsonl(session_id).splitlines()]
+
+            assert len(records) == 1
+            assert records[0]["turn"] == 1
+            assert records[0]["transport"] == "websocket"
+            assert records[0]["request"]["method"] == "WEBSOCKET"
+            assert records[0]["request"]["path"] == "/backend-api/codex/responses"
+            assert records[0]["request"]["body"]["type"] == "response.create"
+            assert records[0]["response"]["status"] == 101
+            assert records[0]["response"]["body"]["status"] == "completed"
+            assert len(records[0]["response"]["ws_events"]) == 3
+        finally:
+            await server.stop()
+            await session.close()
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_flushes_each_codexapp_websocket_response_before_close():
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir_path / "ca")
+        ca = CertificateAuthority(ca_cert_path, ca_key_path)
+        upstream_port = await _start_fake_wss_upstream(tmpdir_path, close_after_response=False)
+        store, session_id, writer = _writer_for_dir(tmpdir_path)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=upstream_ssl_ctx),
+            auto_decompress=False,
+        )
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=ca,
+            writer=writer,
+            session=session,
+            trace_methods=("WEBSOCKET",),
+            trace_path_prefixes=("/backend-api/codex/responses",),
+            store_stream_events=True,
+        )
+        proxy_port = await server.start()
+
+        async def wait_for_records(expected: int) -> list[dict]:
+            for _ in range(100):
+                records = store.load_records(session_id)
+                if len(records) >= expected:
+                    return records
+                await asyncio.sleep(0.01)
+            raise AssertionError(f"expected {expected} records before WebSocket close")
+
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            proxy_url = f"http://127.0.0.1:{proxy_port}"
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                model_ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/backend-api/codex/responses",
+                    proxy=proxy_url,
+                    ssl=ssl_ctx,
+                )
+                for response_number in (1, 2):
+                    await model_ws.send_json(
+                        {
+                            "type": "response.create",
+                            "model": "gpt-5-test",
+                            "input": f"hello {response_number}",
+                        }
+                    )
+                    while True:
+                        msg = await asyncio.wait_for(model_ws.receive(), timeout=5)
+                        if (
+                            msg.type == aiohttp.WSMsgType.TEXT
+                            and json.loads(msg.data).get("type") == "response.completed"
+                        ):
+                            break
+                    records = await wait_for_records(response_number)
+                    assert len(records) == response_number
+                    assert model_ws.closed is False
+
+                assert [record["turn"] for record in records] == [1, "1.2"]
+                assert [record["request"]["body"]["input"] for record in records] == ["hello 1", "hello 2"]
+                assert [record["response"]["body"]["id"] for record in records] == ["resp_ws_1", "resp_ws_2"]
+                await model_ws.close()
+        finally:
+            await server.stop()
+            await session.close()
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_client_filter_records_traced_websocket_connect_failure(tmp_path: Path) -> None:
+    from claude_tap.forward_proxy import ForwardProxyServer
+    from claude_tap.trace import TraceWriter
+    from claude_tap.trace_store import TraceStore
+
+    class FailingSession:
+        trust_env = False
+
+        async def ws_connect(self, *_args, **_kwargs):
+            raise RuntimeError("upstream unavailable")
+
+    class FakeWriter:
+        def __init__(self) -> None:
+            self.data = bytearray()
+
+        def write(self, data: bytes) -> None:
+            self.data.extend(data)
+
+        async def drain(self) -> None:
+            return None
+
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    session_id = store.create_session(client="codexapp", proxy_mode="forward")
+    writer = TraceWriter(session_id, store=store)
+    server = ForwardProxyServer(
+        host="127.0.0.1",
+        port=0,
+        ca=object(),
+        writer=writer,
+        session=FailingSession(),
+        trace_methods=("POST", "WEBSOCKET"),
+        trace_path_prefixes=("/backend-api/codex/responses",),
+    )
+    response_writer = FakeWriter()
+
+    await server._forward_websocket(
+        hostname="chatgpt.com",
+        port=443,
+        path="/backend-api/codex/responses",
+        headers={"Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="},
+        reader=asyncio.StreamReader(),
+        writer=response_writer,
+    )
+
+    writer.close()
+    records = [json.loads(line) for line in store.export_jsonl(session_id).splitlines()]
+    assert bytes(response_writer.data).startswith(b"HTTP/1.1 502 Bad Gateway")
+    assert len(records) == 1
+    assert records[0]["transport"] == "websocket"
+    assert records[0]["request"]["method"] == "WEBSOCKET"
+    assert records[0]["request"]["path"] == "/backend-api/codex/responses"
+    assert records[0]["response"]["status"] == 502
+    assert records[0]["response"]["error"] == "upstream unavailable"
 
 
 @pytest.mark.asyncio
@@ -4300,6 +4787,23 @@ async def _start_fake_long_payload_https_upstream(tmpdir: Path):
                 }
             )
 
+        if request.path == "/backend-api/codex/analytics-events/events":
+            await request.json()
+            return web.json_response({"ok": True, "kind": "analytics"})
+
+        if request.path == "/backend-api/codex/responses":
+            req_body = await request.json()
+            return web.json_response(
+                {
+                    "id": "resp_codexapp_http",
+                    "object": "response",
+                    "status": "completed",
+                    "model": req_body["model"],
+                    "output": [{"type": "message", "content": [{"type": "output_text", "text": "Hello"}]}],
+                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                }
+            )
+
         return web.Response(status=404, text="not found")
 
     app = web.Application()
@@ -4313,7 +4817,7 @@ async def _start_fake_long_payload_https_upstream(tmpdir: Path):
     return port, runner
 
 
-async def _start_fake_wss_upstream(tmpdir: Path) -> int:
+async def _start_fake_wss_upstream(tmpdir: Path, *, close_after_response: bool = True) -> int:
     """Start a fake WSS upstream server for websocket proxy tests."""
     import ssl as ssl_module
 
@@ -4368,14 +4872,17 @@ async def _start_fake_wss_upstream(tmpdir: Path) -> int:
     async def ws_handler(request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
+        response_number = 0
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.TEXT:
+                response_number += 1
                 data = json.loads(msg.data)
                 model = data.get("model", "gpt-test")
+                response_id = f"resp_ws_{response_number}"
                 await ws.send_json(
                     {
                         "type": "response.created",
-                        "response": {"id": "resp_ws_1", "model": model, "status": "in_progress"},
+                        "response": {"id": response_id, "model": model, "status": "in_progress"},
                     }
                 )
                 await ws.send_bytes(b"binary-over-wss")
@@ -4384,7 +4891,7 @@ async def _start_fake_wss_upstream(tmpdir: Path) -> int:
                     {
                         "type": "response.completed",
                         "response": {
-                            "id": "resp_ws_1",
+                            "id": response_id,
                             "model": model,
                             "status": "completed",
                             "output": [
@@ -4397,12 +4904,15 @@ async def _start_fake_wss_upstream(tmpdir: Path) -> int:
                         },
                     }
                 )
-                await ws.close()
-                break
+                if close_after_response:
+                    await ws.close()
+                    break
         return ws
 
     app = web.Application()
     app.router.add_get("/v1/responses", ws_handler)
+    app.router.add_get("/backend-api/codex/responses", ws_handler)
+    app.router.add_get("/backend-api/wham/remote/control/server", ws_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=ssl_ctx)

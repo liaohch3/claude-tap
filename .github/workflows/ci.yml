@@ -108,6 +108,32 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python -m pytest tests/ -x --timeout=60
 
+  windows-client-launch:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install -e ".[dev]"
+      - name: Run Windows client launch regression tests
+        run: python -m pytest tests/test_windows_compat.py -x --timeout=60
+      - name: Install the real npm Claude Code shim
+        run: npm install --global @anthropic-ai/claude-code
+      - name: Launch the real npm shim through claude-tap
+        run: claude-tap --tap-client claude --tap-no-live --tap-no-open -- --version
+
   coverage:
     runs-on: ubuntu-latest
     steps:
