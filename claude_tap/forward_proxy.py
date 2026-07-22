@@ -34,6 +34,11 @@ from aiohttp import WSMessage, WSMsgType
 from aiohttp._websocket.reader import WebSocketDataQueue, WebSocketReader
 from aiohttp.http_websocket import WS_KEY, WebSocketWriter
 
+try:
+    from compression import zstd
+except ImportError:
+    import backports.zstd as zstd
+
 from claude_tap.bedrock import attach_bedrock_errors, is_bedrock_eventstream_path
 from claude_tap.certs import CertificateAuthority
 from claude_tap.proxy import (
@@ -108,6 +113,17 @@ def _header_value(headers: Mapping[str, str], name: str) -> str:
         if key.lower() == lower_name:
             return value
     return ""
+
+
+def _decode_request_body_for_trace(body: bytes, headers: Mapping[str, str]) -> bytes:
+    """Decode supported request content encodings without mutating upstream bytes."""
+    if _header_value(headers, "Content-Encoding").strip().lower() != "zstd":
+        return body
+    try:
+        return zstd.decompress(body)
+    except Exception as exc:
+        log.warning("Failed to decompress zstd request body for trace: %s", exc)
+        return body
 
 
 def _has_package_manager_user_agent(headers: Mapping[str, str] | None) -> bool:
@@ -509,7 +525,8 @@ class ForwardProxyServer:
         t0 = time.monotonic()
         log_prefix = f"[Turn {turn}]" if turn is not None else "[relay]"
 
-        req_body = _parse_request_body_for_trace(body)
+        trace_body = _decode_request_body_for_trace(body, headers)
+        req_body = _parse_request_body_for_trace(trace_body)
 
         is_streaming = is_capture_only_streaming_request(path, req_body)
 
