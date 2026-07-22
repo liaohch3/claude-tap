@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 from datetime import datetime, timezone
 
 from claude_tap.trace_store import TraceStore, get_trace_store
+
+_STORAGE_RETRY_SECONDS = 1.0
 
 
 class SQLiteLogHandler(logging.Handler):
@@ -16,8 +19,11 @@ class SQLiteLogHandler(logging.Handler):
         super().__init__()
         self.session_id = session_id
         self._store = store or get_trace_store()
+        self._retry_after = 0.0
 
     def emit(self, record: logging.LogRecord) -> None:
+        if time.monotonic() < self._retry_after:
+            return
         try:
             message = record.getMessage()
             formatter = self.formatter or logging.Formatter()
@@ -32,6 +38,7 @@ class SQLiteLogHandler(logging.Handler):
                 logged_at=datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%H:%M:%S"),
             )
         except sqlite3.Error:
+            self._retry_after = time.monotonic() + _STORAGE_RETRY_SECONDS
             return
         except Exception:
             self.handleError(record)
