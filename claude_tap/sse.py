@@ -90,6 +90,10 @@ class SSEReassembler:
                 self._accumulate_responses_output_item(data)
             elif event_type == "response.output_text.delta":
                 self._accumulate_responses_output_text(data)
+            elif event_type == "response.function_call_arguments.delta":
+                self._accumulate_responses_function_arguments(data)
+            elif event_type == "response.custom_tool_call_input.delta":
+                self._accumulate_responses_custom_tool_input(data)
             elif event_type in (
                 "response.completed",
                 "response.done",
@@ -213,6 +217,29 @@ class SSEReassembler:
             part = {"type": "output_text", "text": ""}
             content.append(part)
         part["text"] = (part.get("text") or "") + delta
+
+    def _accumulate_responses_function_arguments(self, data: dict) -> None:
+        """Append streamed arguments to an in-progress function call item."""
+        self._accumulate_responses_tool_delta(data, item_type="function_call", field="arguments")
+
+    def _accumulate_responses_custom_tool_input(self, data: dict) -> None:
+        """Append streamed input to an in-progress custom tool call item."""
+        self._accumulate_responses_tool_delta(data, item_type="custom_tool_call", field="input")
+
+    def _accumulate_responses_tool_delta(self, data: dict, *, item_type: str, field: str) -> None:
+        delta = data.get("delta")
+        if not isinstance(delta, str) or not delta:
+            return
+        output = self._ensure_responses_output()
+        idx = data.get("output_index")
+        if not isinstance(idx, int) or idx < 0:
+            idx = len(output) - 1
+        if idx < 0 or idx >= len(output):
+            return
+        item = output[idx]
+        if not isinstance(item, dict) or item.get("type") != item_type:
+            return
+        item[field] = (item.get(field) or "") + delta
 
     def _merge_responses_terminal(self, data: dict) -> None:
         """Apply a terminal response.completed / response.done event.
