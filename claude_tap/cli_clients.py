@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -29,6 +30,10 @@ _CODEX_APP_FAST_EXIT_HINT_SECONDS = 5.0
 _CODEX_APP_PROCESS_RE = r"Codex\.app/Contents/(MacOS/Codex|Resources/codex app-server)"
 _CODEX_APP_QUIT_TIMEOUT_SECONDS = 10.0
 _CODEX_APP_EXECUTABLE_ENV = "CODEX_APP_EXECUTABLE"
+_ASTRON_DISCOVERY_TIMEOUT_SECONDS = 5.0
+_ASTRON_VERSION_TIMEOUT_SECONDS = 5.0
+
+log = logging.getLogger("claude-tap")
 
 
 def _is_aws_native_bedrock_url(url: str) -> bool:
@@ -78,6 +83,84 @@ def _codex_app_executable_candidates() -> tuple[Path, ...]:
     return tuple(candidates)
 
 
+def _is_explicit_client_executable(path: Path) -> bool:
+    if not path.is_absolute() or not path.is_file():
+        return False
+    if sys.platform == "win32":
+        return path.suffix.lower() in {"", ".bat", ".cmd", ".exe"}
+    return os.access(path, os.X_OK)
+
+
+def _resolve_astron_from_npm_prefix() -> str | None:
+    npm_cmd = shutil.which("npm")
+    if npm_cmd is None:
+        log.warning("Astron Code discovery skipped: npm was not found in PATH")
+        return None
+
+    try:
+        result = subprocess.run(
+            [npm_cmd, "prefix", "-g"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_ASTRON_DISCOVERY_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("Astron Code discovery via npm prefix failed: %s", exc)
+        return None
+
+    if result.returncode != 0:
+        log.warning("Astron Code discovery via npm prefix exited with status %s", result.returncode)
+        return None
+
+    prefix_value = result.stdout.strip()
+    if not prefix_value:
+        log.warning("Astron Code discovery via npm prefix returned an empty path")
+        return None
+
+    prefix = Path(prefix_value)
+    if not prefix.is_absolute():
+        log.warning("Astron Code discovery via npm prefix returned a non-absolute path")
+        return None
+
+    if sys.platform == "win32":
+        candidates = (prefix / "astron-code.cmd", prefix / "astron-code")
+    else:
+        candidates = (prefix / "bin" / "astron-code",)
+
+    for candidate in candidates:
+        if _is_explicit_client_executable(candidate):
+            resolved = str(candidate.absolute())
+            log.info("Resolved Astron Code executable from npm global prefix: %s", resolved)
+            return resolved
+
+    log.warning("Astron Code was not found under the current npm global prefix")
+    return None
+
+
+def _probe_astron_version(executable: str) -> str | None:
+    command = [executable, "--version"]
+    if sys.platform == "win32" and Path(executable).suffix.lower() in {".cmd", ".bat"}:
+        shim_command = subprocess.list2cmdline([executable, "--version"])
+        command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", shim_command]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_ASTRON_VERSION_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("Astron Code version probe failed: %s", exc)
+        return None
+    if result.returncode != 0:
+        log.warning("Astron Code version probe exited with status %s", result.returncode)
+        return None
+    version = next((line.strip() for line in result.stdout.splitlines() if line.strip()), "")
+    return version[:500] or None
+
+
 def _resolve_client_executable(client: str, cfg: ClientConfig, client_cmd: str | None) -> str | None:
     """Resolve the executable path to launch for ``client``.
 
@@ -87,12 +170,25 @@ def _resolve_client_executable(client: str, cfg: ClientConfig, client_cmd: str |
     generic ``client_cmd``/``PATH`` resolution used by other clients.
     """
     if client_cmd:
-        return str(Path(client_cmd)) if Path(client_cmd).is_file() else None
+        candidate = Path(client_cmd)
+        if not _is_explicit_client_executable(candidate):
+            return None
+        resolved = str(candidate.absolute())
+        if client == "astron":
+            log.info("Resolved Astron Code executable from --tap-client-cmd: %s", resolved)
+        return resolved
     if client == "codexapp":
         for candidate in _codex_app_executable_candidates():
             if candidate.is_file():
                 return str(candidate)
         return None
+    if client == "astron":
+        path_candidate = shutil.which(cfg.cmd)
+        if path_candidate:
+            resolved = str(Path(path_candidate).absolute())
+            log.info("Resolved Astron Code executable from PATH: %s", resolved)
+            return resolved
+        return _resolve_astron_from_npm_prefix()
     return shutil.which(cfg.cmd)
 
 
@@ -303,6 +399,15 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         default_target="https://api.openai.com",
         strip_path_prefix="/v1",
         strip_path_prefix_unless_target_contains=("api.openai.com",),
+    ),
+    "astron": ClientConfig(
+        cmd="astron-code",
+        label="Astron Code",
+        install_url="https://www.npmjs.com/package/@iflytek/astron-code",
+        base_url_env="",
+        base_url_suffix="",
+        default_target="",
+        default_proxy_mode="forward",
     ),
     "grok": ClientConfig(
         cmd="grok",
@@ -515,7 +620,10 @@ async def run_client(
     resolved_cmd = _resolve_client_executable(client, cfg, client_cmd)
     if resolved_cmd is None:
         if client_cmd:
-            print(f"\nError: '{client_cmd}' command not found.\nPlease check the wrapper-provided {cfg.label} path.\n")
+            print(
+                f"\nError: '{client_cmd}' is not an absolute executable file.\n"
+                f"Please pass a valid {cfg.label} path with --tap-client-cmd.\n"
+            )
         elif client == "codexapp":
             print(
                 "\nError: Codex.app executable not found.\n"
@@ -526,6 +634,10 @@ async def run_client(
             print(cfg.missing_help)
         return 1
     resolved_cmd = _prefer_windows_command_shim(resolved_cmd)
+    if client == "astron":
+        version = _probe_astron_version(resolved_cmd)
+        print(f"   Astron Code executable: {resolved_cmd}")
+        print(f"   Astron Code version: {version or 'unavailable'}")
     if (
         client == "codexapp"
         and proxy_mode == "forward"

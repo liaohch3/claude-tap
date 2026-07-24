@@ -11,6 +11,7 @@ from claude_tap.cli import CLIENT_CONFIGS, ClientConfig, run_client
 
 SUPPORTED_CLIENTS = {
     "agy",
+    "astron",
     "claude",
     "codex",
     "codexapp",
@@ -28,10 +29,18 @@ SUPPORTED_CLIENTS = {
     "codebuddy",
 }
 
-SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"claude", "codexapp", "gemini", "kimi-code", "openclaw"}
+SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {
+    "astron",
+    "claude",
+    "codexapp",
+    "gemini",
+    "kimi-code",
+    "openclaw",
+}
 
 SUPPORTED_DEFAULT_PROXY_MODES = {
     "agy": "forward",
+    "astron": "forward",
     "claude": "reverse",
     "codex": "reverse",
     "codexapp": "forward",

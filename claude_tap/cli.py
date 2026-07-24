@@ -758,6 +758,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Client to launch (default: claude)",
     )
     proxy_group.add_argument(
+        "--tap-client-cmd",
+        default=None,
+        dest="client_cmd",
+        metavar="ABSOLUTE_PATH",
+        help="Launch the selected client from this absolute executable path",
+    )
+    proxy_group.add_argument(
         "--tap-target",
         default=None,
         dest="target",
@@ -771,7 +778,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
             "Default depends on the client: 'reverse' for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, "
-            "'forward' for agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder."
+            "'forward' for agy/astron/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder."
         ),
     )
     proxy_group.add_argument(
@@ -878,7 +885,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Strip leading "--" separator if present (argparse leaves it in remainder)
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
-    args.client_cmd, claude_args = _extract_wrapped_client_command(args.client, claude_args)
+    if args.client_cmd is None:
+        args.client_cmd, claude_args = _extract_wrapped_client_command(args.client, claude_args)
     if any(arg == "--tap-codexapp-cdp-capture" for arg in claude_args):
         tap_parser.error("--tap-codexapp-cdp-capture was removed; --tap-client codexapp now captures via forward proxy")
     if args.codexapp_cdp_endpoint is not None:
@@ -904,6 +912,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
     if args.client == "codexapp" and args.proxy_mode != "forward":
         tap_parser.error("--tap-client codexapp only supports forward proxy mode")
+    if args.client == "astron" and args.proxy_mode != "forward":
+        tap_parser.error("--tap-client astron only supports forward proxy mode")
     if args.trust_ca and args.proxy_mode != "forward":
         tap_parser.error("--tap-trust-ca only applies to forward proxy mode")
 

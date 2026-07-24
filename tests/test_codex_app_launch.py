@@ -171,6 +171,7 @@ def test_resolve_client_executable_returns_none_when_no_candidate_exists(
 def test_resolve_client_executable_prefers_explicit_client_cmd(tmp_path: Path) -> None:
     wrapper_cmd = tmp_path / "codex-wrapper"
     wrapper_cmd.write_text("")
+    wrapper_cmd.chmod(wrapper_cmd.stat().st_mode | 0o100)
 
     cfg = cli_clients.CLIENT_CONFIGS["codexapp"]
     resolved = cli_clients._resolve_client_executable("codexapp", cfg, str(wrapper_cmd))

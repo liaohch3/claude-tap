@@ -164,6 +164,7 @@ async def test_run_client_uses_wrapper_provided_claude_binary(monkeypatch, tmp_p
 
     wrapped_claude = tmp_path / "claude"
     wrapped_claude.write_text("#!/bin/sh\n", encoding="utf-8")
+    wrapped_claude.chmod(wrapped_claude.stat().st_mode | 0o100)
     _strip_sigtstp(monkeypatch)
     monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: None)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
