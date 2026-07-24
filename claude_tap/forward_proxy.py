@@ -127,6 +127,10 @@ def _header_value(headers: Mapping[str, str], name: str) -> str:
     return ""
 
 
+def _response_media_type(headers: Mapping[str, str]) -> str:
+    return _header_value(headers, "Content-Type").split(";", 1)[0].strip().lower()
+
+
 def _has_package_manager_user_agent(headers: Mapping[str, str] | None) -> bool:
     if headers is None:
         return False
@@ -151,7 +155,7 @@ def _should_skip_trace_record(
     if _matches_path_prefix(clean_path, DEFAULT_TRACE_IGNORED_PATH_PREFIXES):
         return True
 
-    media_type = _header_value(response_headers, "Content-Type").split(";", 1)[0].strip().lower()
+    media_type = _response_media_type(response_headers)
     if clean_path.endswith(DEFAULT_TRACE_IGNORED_ARCHIVE_SUFFIXES):
         return media_type in DEFAULT_TRACE_IGNORED_BINARY_CONTENT_TYPES
 
@@ -618,7 +622,10 @@ class ForwardProxyServer:
             return
 
         assert turn is not None
-        if is_streaming and upstream_resp.status == 200:
+        is_streaming = is_streaming or (
+            200 <= upstream_resp.status < 300 and _response_media_type(upstream_resp.headers) == "text/event-stream"
+        )
+        if is_streaming and 200 <= upstream_resp.status < 300:
             await self._handle_streaming(
                 upstream_resp,
                 client_writer,
@@ -668,8 +675,9 @@ class ForwardProxyServer:
         client_writer.write(status_line.encode())
 
         # Send response headers (filter hop-by-hop, use chunked transfer)
+        skip_headers = HOP_BY_HOP | {"content-length"}
         for key, value in upstream_resp.headers.items():
-            if key.lower() not in HOP_BY_HOP:
+            if key.lower() not in skip_headers:
                 client_writer.write(f"{key}: {value}\r\n".encode())
         client_writer.write(b"Transfer-Encoding: chunked\r\n")
         client_writer.write(b"\r\n")
@@ -679,6 +687,7 @@ class ForwardProxyServer:
         reassembler = SSEReassembler(store_events=self._store_stream_events)
         raw_chunks: list[bytes] = []
 
+        client_connected = True
         try:
             async for chunk in upstream_resp.content.iter_any():
                 # Send as HTTP chunked encoding
@@ -689,15 +698,20 @@ class ForwardProxyServer:
                     raw_chunks.append(chunk)
                 else:
                     reassembler.feed_bytes(chunk)
-        except (ConnectionError, asyncio.CancelledError):
-            pass
+        except ConnectionError:
+            client_connected = False
+            upstream_resp.close()
+        except asyncio.CancelledError:
+            upstream_resp.close()
+            raise
 
         # Send final chunk
-        try:
-            client_writer.write(b"0\r\n\r\n")
-            await client_writer.drain()
-        except (ConnectionError, Exception):
-            pass
+        if client_connected:
+            try:
+                client_writer.write(b"0\r\n\r\n")
+                await client_writer.drain()
+            except Exception:
+                upstream_resp.close()
 
         duration_ms = int((time.monotonic() - t0) * 1000)
 
@@ -719,7 +733,7 @@ class ForwardProxyServer:
         cache_read = usage.get("cache_read_input_tokens", 0)
         cache_create = usage.get("cache_creation_input_tokens", 0)
         log.info(
-            f"{log_prefix} <- 200 stream done ({duration_ms}ms, in={in_tok} out={out_tok}"
+            f"{log_prefix} <- {upstream_resp.status} stream done ({duration_ms}ms, in={in_tok} out={out_tok}"
             f" cache_read={cache_read} cache_create={cache_create})"
         )
 
