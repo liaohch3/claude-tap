@@ -64,7 +64,7 @@
 - 🔎 **用证据定位问题**：对比相邻请求，明确是哪段 prompt、消息、工具或参数发生了变化。
 - 📦 **留下可分享证据**：每次运行都会写入 JSONL trace，并生成自包含 HTML 查看器，方便 review 或归档。
 - 🔒 **数据留在本机**：不依赖云端 dashboard；常见认证 header 会在记录前自动脱敏。
-- 🧩 **覆盖主流编码客户端**：同一套流程可用于 Claude Code、Codex CLI、Codex App、Gemini CLI、Grok Build CLI、Kimi CLI、MiMo Code、OpenCode、OpenClaw、Pi、Hermes Agent、Cursor CLI、Qoder CLI、Antigravity CLI 和 CodeBuddy CLI。
+- 🧩 **覆盖主流编码客户端**：同一套流程可用于 Claude Code、Codex CLI、AstronCode、Codex App、Gemini CLI、Grok Build CLI、Kimi CLI、MiMo Code、OpenCode、OpenClaw、Pi、Hermes Agent、Cursor CLI、Qoder CLI、Antigravity CLI 和 CodeBuddy CLI。
 
 ## 支持的客户端
 
@@ -72,6 +72,7 @@
 |--------|----------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API、AWS Bedrock、DeepSeek / GLM 等 Claude 兼容网关，或 CC Switch 等本地代理上游 |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API 密钥模式，或 ChatGPT 订阅 OAuth |
+| [AstronCode](https://www.npmjs.com/package/@iflytek/astron-code) | 通过 forward proxy 捕获 AstronCode 的模型、目录、Apps 和远程 MCP HTTP/SSE 流量 |
 | [Codex App](https://openai.com/codex/) | 通过 forward proxy 启动桌面 App，捕获后端 HTTP/WebSocket 请求体 |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist 的多 Google 端点流量 |
 | [Grok Build CLI](https://docs.x.ai/build/overview) | 通过官方 CLI chat proxy 捕获 Grok 订阅 OAuth 会话 |
@@ -113,6 +114,9 @@ claude-tap --tap-no-live
 
 # Codex CLI
 claude-tap --tap-client codex
+
+# AstronCode
+claude-tap --tap-client astron --tap-store-stream-events
 
 # Codex App 后端请求捕获
 claude-tap --tap-client codexapp
@@ -301,6 +305,33 @@ claude-tap --tap-client codex -- --full-auto
 # OAuth + 全自动；实时查看器默认开启
 claude-tap --tap-client codex -- --full-auto
 ```
+
+</details>
+
+<details>
+<summary>AstronCode 捕获示例</summary>
+
+`astron` profile 只支持 forward proxy。它不会改写 AstronCode 编译内置或用户选择的
+模型、provider、鉴权、Apps 和插件配置，只记录实际经过 claude-tap 且符合通用规则的
+HTTP/SSE 请求。其中包括 Responses、模型目录、Apps/Connectors 目录和 Streamable
+HTTP MCP 流量；非 Responses 请求使用原始 HTTP trace 视图。
+
+未显式指定路径时，claude-tap 会先从当前 `PATH` 解析 `astron-code` shim，再检查
+当前 npm 全局 prefix。它不会 fallback 到 `codex`，也不会在运行时下载 npm 包。
+
+```bash
+# 自动发现当前 npm 环境中的 astron-code shim
+claude-tap --tap-client astron --tap-store-stream-events
+
+# 使用唯一指定的可执行文件；路径必须是绝对路径、普通文件且具有执行权限
+claude-tap --tap-client astron \
+  --tap-client-cmd "/absolute/path/to/astron-code" \
+  --tap-store-stream-events
+```
+
+`--tap-client astron --tap-proxy-mode reverse` 会被拒绝。虽然常见鉴权 header 会脱敏，
+原始 trace 仍可能包含 prompt、回答、工具和 provider payload；分享证据前必须检查并
+清洗。
 
 </details>
 
@@ -586,7 +617,8 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动或监听的客户端: claude（默认）/ agy / codex / codexapp / gemini / grok / kimi / kimi-code / mimo / opencode / openclaw / pi / hermes / cursor / qoder / codebuddy
+--tap-client CLIENT      启动或监听的客户端: claude（默认）/ agy / astron / codex / codexapp / gemini / grok / kimi / kimi-code / mimo / opencode / openclaw / pi / hermes / cursor / qoder / codebuddy
+--tap-client-cmd PATH    从指定的绝对可执行文件路径启动所选客户端
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               客户端运行时启动实时查看器（默认开启）
 --tap-no-live            关闭实时查看器（恢复 v0.1.75 之前的行为）
@@ -598,7 +630,7 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 --tap-no-launch          仅启动代理，不启动客户端
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-store-stream-events 捕获时把原始 SSE/WebSocket event 数组写入 trace 存储，以便查看器/导出结果展示（默认关闭）
---tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/grok/kimi/kimi-code/openclaw/codebuddy 用 reverse，agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder 用 forward）
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/grok/kimi/kimi-code/openclaw/codebuddy 用 reverse，agy/astron/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder 用 forward）
 --tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy 会自动执行）
 ```
 

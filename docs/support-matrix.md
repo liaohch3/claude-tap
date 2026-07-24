@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-07-18
+last_reviewed: 2026-07-24
 source_of_truth: AGENTS.md
 ---
 
@@ -22,6 +22,7 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Codex CLI | API Key (`OPENAI_API_KEY`) | `https://api.openai.com` | none | HTTP/SSE in default reverse mode | Verified |
 | Codex CLI | OAuth (`codex login`) | `https://chatgpt.com/backend-api/codex` | `/v1` | HTTP/SSE in default reverse mode | Real E2E verified with Codex 0.144.1 |
 | Codex CLI | Explicit `--tap-proxy-mode forward` | Auto-detected upstream | n/a | HTTP/SSE + WebSocket | Unit-tested |
+| AstronCode | Product-managed model/provider/auth plus Apps and remote plugins | Forward proxy to every configured HTTPS upstream; no provider or base URL rewrite | n/a | HTTP/SSE, including response-driven MCP SSE | Real E2E verified with AstronCode 0.0.0-master.000d21ff |
 | Codex App | ChatGPT account in Codex App | Forward proxy to `https://chatgpt.com/backend-api/codex` | n/a | HTTP/SSE + WebSocket (`/backend-api/codex/responses` only; other product traffic relayed but not traced) | Unit-tested |
 | Gemini CLI | Google OAuth / Code Assist | Forward proxy (Google endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Gemini CLI | API key / Vertex-compatible config (`--tap-proxy-mode reverse`) | `https://generativelanguage.googleapis.com` | none | HTTP/SSE | Unit-tested |
@@ -54,6 +55,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 |--------|--------------|--------|
 | `claude` | `reverse` | Single provider, native Claude provider base URL env vars (`ANTHROPIC_BASE_URL`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_VERTEX_BASE_URL`) |
 | `codex` | `reverse` | Launches a temporary sibling provider with the proxy base URL and `supports_websockets=false`, producing one self-contained HTTP/SSE trace record per request without changing `~/.codex/config.toml` |
+| `astron` | `forward` | AstronCode uses product-managed model, catalog, Apps, and MCP endpoints; forward proxy preserves that configuration and records every eligible upstream request |
 | `codexapp` | `forward` | Codex App is a macOS `.app` bundle with no `OPENAI_BASE_URL`-style override; forward proxy captures its real upstream HTTP/WebSocket traffic, filtered to `/backend-api/codex/responses` |
 | `gemini` | `forward` | Google OAuth / Code Assist uses several Google endpoints; forward proxy captures the flow without assuming a single base URL |
 | `grok` | `reverse` | The official CLI honors `GROK_CLI_CHAT_PROXY_BASE_URL`; reverse mode captures model traffic plus storage/trace audit records without installing a local CA |

@@ -64,7 +64,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 - 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
 - 📦 **Share one portable artifact**: each run writes a local trace session that can be exported to a self-contained HTML viewer for review or archiving.
 - 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
-- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Codex App, Gemini CLI, Grok Build CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
+- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, AstronCode, Codex App, Gemini CLI, Grok Build CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
 
 ## Supported Clients
 
@@ -72,6 +72,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 |--------|-------------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Anthropic API, AWS Bedrock, Claude-compatible gateways such as DeepSeek / GLM, or local proxy upstreams such as CC Switch |
 | [Codex CLI](https://github.com/openai/codex) | OpenAI API key mode or ChatGPT subscription OAuth |
+| [AstronCode](https://www.npmjs.com/package/@iflytek/astron-code) | AstronCode model, catalog, Apps, and remote MCP HTTP/SSE traffic through forward proxy mode |
 | [Codex App](https://openai.com/codex/) | Desktop app launched through forward proxy mode so backend HTTP/WebSocket request bodies are captured |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google OAuth / Code Assist traffic |
 | [Grok Build CLI](https://docs.x.ai/build/overview) | Grok subscription OAuth sessions through the official CLI chat proxy |
@@ -113,6 +114,9 @@ claude-tap --tap-no-live
 
 # Codex CLI
 claude-tap --tap-client codex
+
+# AstronCode
+claude-tap --tap-client astron --tap-store-stream-events
 
 # Codex App backend request capture
 claude-tap --tap-client codexapp
@@ -307,6 +311,36 @@ claude-tap --tap-client codex -- --full-auto
 # OAuth + full auto; live viewer is enabled by default
 claude-tap --tap-client codex -- --full-auto
 ```
+
+</details>
+
+<details>
+<summary>AstronCode capture examples</summary>
+
+The `astron` profile only supports forward proxy mode. It keeps AstronCode's
+compiled and user-selected model, provider, authentication, Apps, and plugin
+configuration unchanged while recording all eligible HTTP/SSE requests that
+actually pass through claude-tap. This includes Responses, model catalog,
+Apps/Connectors directory, and Streamable HTTP MCP traffic; non-Responses
+requests use the raw HTTP trace view.
+
+Without an override, claude-tap first resolves the `astron-code` shim from the
+current `PATH`, then checks the current npm global prefix. It never falls back
+to a `codex` executable or downloads a package at runtime.
+
+```bash
+# Auto-discover the current npm environment's astron-code shim
+claude-tap --tap-client astron --tap-store-stream-events
+
+# Use one exact executable; the path must be absolute, regular, and executable
+claude-tap --tap-client astron \
+  --tap-client-cmd "/absolute/path/to/astron-code" \
+  --tap-store-stream-events
+```
+
+`--tap-client astron --tap-proxy-mode reverse` is rejected. Raw traces can
+contain prompt, response, tool, and provider payloads even though common auth
+headers are redacted, so inspect and sanitize evidence before sharing it.
 
 </details>
 
@@ -595,7 +629,8 @@ By default the launcher points at the current checkout; pass `--installed` if `c
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch/listen to: claude (default), agy, codex, codexapp, gemini, grok, kimi, kimi-code, mimo, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
+--tap-client CLIENT      Client to launch/listen to: claude (default), agy, astron, codex, codexapp, gemini, grok, kimi, kimi-code, mimo, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
+--tap-client-cmd PATH    Launch the selected client from this absolute executable path
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer while the client runs (default: on)
 --tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)
@@ -607,7 +642,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-no-launch          Only start the proxy, don't launch client
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, forward for agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, forward for agy/astron/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 
