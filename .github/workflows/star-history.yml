@@ -49,12 +49,12 @@ jobs:
       - name: Publish changed charts
         working-directory: assets
         run: |
-          if git diff --quiet -- star-history-light.png star-history-dark.png; then
+          git add star-history-light.png star-history-dark.png
+          if git diff --cached --quiet -- star-history-light.png star-history-dark.png; then
             echo "Star history is already current."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add star-history-light.png star-history-dark.png
           git commit -m "chore: update star history charts"
           git push

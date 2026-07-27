@@ -59,4 +59,6 @@ def test_star_history_workflow_publishes_to_asset_branch():
     assert "scripts/check_screenshots.py" in workflow
     assert "matplotlib==3.11.1" in workflow
     assert "timeout-minutes: 10" in workflow
+    assert "git diff --cached --quiet" in workflow
+    assert workflow.index("git add star-history-light.png") < workflow.index("git diff --cached --quiet")
     assert "git push" in workflow
