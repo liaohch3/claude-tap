@@ -18,11 +18,11 @@ Best for: pure computation logic, state decisions, matching algorithms — anyth
 
 ```python
 # Replicate JS findPrevSameModel / findNextSameModel
-def find_diff_parent_by_prefix(entries, idx):
-    ...
+def find_diff_parent_by_prefix(entries, idx): ...
 
-def find_next_by_prefix(entries, idx):
-    ...
+
+def find_next_by_prefix(entries, idx): ...
+
 
 # Replicate JS updateNavButtons state computation
 def compute_nav_button_states(entries, cur_idx):
@@ -64,6 +64,7 @@ def _build_test_html():
 @pytest.fixture(scope="module")
 def browser_page(html_file):
     from playwright.sync_api import sync_playwright
+
     pw = sync_playwright().start()
     browser = pw.chromium.launch(headless=True)
     page = browser.new_page()

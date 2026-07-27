@@ -52,10 +52,10 @@ if videos:
 
 ```python
 page.click(".some-button")
-page.wait_for_timeout(800)   # let viewers see the click effect
+page.wait_for_timeout(800)  # let viewers see the click effect
 
 page.keyboard.press("ArrowRight")
-page.wait_for_timeout(600)   # let viewers see the navigation result
+page.wait_for_timeout(600)  # let viewers see the navigation result
 ```
 
 ### Combine assertions with terminal logging
