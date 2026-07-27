@@ -5,28 +5,21 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 concurrency:
   group: update-star-history
   cancel-in-progress: true
 
 jobs:
-  update:
+  generate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - name: Check out generator
         uses: actions/checkout@v4
         with:
           path: source
-
-      - name: Check out chart assets
-        uses: actions/checkout@v4
-        with:
-          ref: star-history-assets
-          path: assets
 
       - uses: actions/setup-python@v5
         with:
@@ -38,13 +31,40 @@ jobs:
       - name: Generate charts
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python source/scripts/update_star_history.py --output-dir assets
+        run: python source/scripts/update_star_history.py --output-dir generated
 
       - name: Validate charts
         run: >-
           python source/scripts/check_screenshots.py
-          assets/star-history-light.png
-          assets/star-history-dark.png
+          generated/star-history-light.png
+          generated/star-history-dark.png
+
+      - name: Upload validated charts
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-history-charts
+          path: generated/star-history-*.png
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Check out chart assets
+        uses: actions/checkout@v4
+        with:
+          ref: star-history-assets
+          path: assets
+
+      - name: Download validated charts
+        uses: actions/download-artifact@v4
+        with:
+          name: star-history-charts
+          path: assets
 
       - name: Publish changed charts
         working-directory: assets

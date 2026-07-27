@@ -74,10 +74,17 @@ def test_star_history_workflow_publishes_to_asset_branch():
     workflow = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "star-history.yml").read_text()
 
     assert 'cron: "17 3 * * *"' in workflow
+    assert workflow.count("contents: read") == 1
+    assert workflow.count("contents: write") == 1
+    assert "needs: generate" in workflow
     assert "ref: star-history-assets" in workflow
     assert "scripts/update_star_history.py" in workflow
     assert "scripts/check_screenshots.py" in workflow
     assert "matplotlib==3.11.1" in workflow
+    assert "actions/upload-artifact@v4" in workflow
+    assert "actions/download-artifact@v4" in workflow
+    assert workflow.index("contents: read") < workflow.index("matplotlib==3.11.1")
+    assert workflow.index("contents: write") > workflow.index("matplotlib==3.11.1")
     assert "timeout-minutes: 10" in workflow
     assert "git diff --cached --quiet" in workflow
     assert workflow.index("git add star-history-light.png") < workflow.index("git diff --cached --quiet")
