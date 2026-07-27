@@ -54,6 +54,7 @@ dev = [
     "pytest-timeout>=2.3",
     "pexpect>=4.9",
     "coverage>=7.6",
+    "matplotlib==3.11.1",
     "ruff>=0.11",
 ]
 

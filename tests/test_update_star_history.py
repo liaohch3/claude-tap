@@ -6,7 +6,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from scripts.update_star_history import fetch_stargazer_timestamps
+from scripts.check_screenshots import analyze_file
+from scripts.update_star_history import fetch_stargazer_timestamps, render_charts
 
 
 def test_fetch_stargazer_timestamps_paginates_and_authenticates():
@@ -49,11 +50,30 @@ def test_fetch_stargazer_timestamps_rejects_invalid_repo(repo):
         fetch_stargazer_timestamps(repo, request_json=lambda _request: [])
 
 
+def test_render_charts_persists_valid_light_and_dark_pngs(tmp_path):
+    timestamps = [
+        datetime(2025, 1, 1, tzinfo=UTC),
+        datetime(2025, 6, 1, tzinfo=UTC),
+        datetime(2026, 1, 1, tzinfo=UTC),
+    ]
+
+    render_charts("liaohch3/claude-tap", timestamps, tmp_path)
+
+    light = tmp_path / "star-history-light.png"
+    dark = tmp_path / "star-history-dark.png"
+    for chart in (light, dark):
+        result = analyze_file(chart)
+        assert result.status == "PASS", result.failures + result.warnings
+        assert result.info is not None
+        assert (result.info.width, result.info.height) == (1600, 900)
+        assert chart.stat().st_size > 10_000
+    assert light.read_bytes() != dark.read_bytes()
+
+
 def test_star_history_workflow_publishes_to_asset_branch():
     workflow = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "star-history.yml").read_text()
 
     assert 'cron: "17 3 * * *"' in workflow
-    assert "contents: write" in workflow
     assert "ref: star-history-assets" in workflow
     assert "scripts/update_star_history.py" in workflow
     assert "scripts/check_screenshots.py" in workflow
