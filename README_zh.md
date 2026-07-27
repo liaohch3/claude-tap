@@ -652,9 +652,9 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 
 <a href="https://www.star-history.com/?repos=liaohch3%2Fclaude-tap&type=date&legend=bottom-right">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=liaohch3/claude-tap&type=date&theme=dark&legend=top-left" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=liaohch3/claude-tap&type=date&legend=top-left" />
-    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=liaohch3/claude-tap&type=date&legend=top-left" />
+    <source media="(prefers-color-scheme: dark)" srcset="docs/star-history-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="docs/star-history-light.png" />
+    <img alt="Star History Chart" src="docs/star-history-light.png" />
   </picture>
 </a>
 
