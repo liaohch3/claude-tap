@@ -1326,6 +1326,7 @@ def test_viewer_renders_image_content_blocks(responses_page) -> None:
     assert "content-image" in image.first.get_attribute("class")
     assert image.first.get_attribute("src").startswith("data:image/png;base64,")
     assert image.first.get_attribute("alt") == "image"
+    responses_page.wait_for_function("image => image.complete", arg=image.first.element_handle())
     image_state = image.first.evaluate(
         """img => {
           const rect = img.getBoundingClientRect();
