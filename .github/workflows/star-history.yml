@@ -1,0 +1,60 @@
+name: Update star history
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-star-history
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out generator
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Check out chart assets
+        uses: actions/checkout@v4
+        with:
+          ref: star-history-assets
+          path: assets
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install renderer
+        run: python -m pip install matplotlib==3.11.1
+
+      - name: Generate charts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python source/scripts/update_star_history.py --output-dir assets
+
+      - name: Validate charts
+        run: >-
+          python source/scripts/check_screenshots.py
+          assets/star-history-light.png
+          assets/star-history-dark.png
+
+      - name: Publish changed charts
+        working-directory: assets
+        run: |
+          if git diff --quiet -- star-history-light.png star-history-dark.png; then
+            echo "Star history is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add star-history-light.png star-history-dark.png
+          git commit -m "chore: update star history charts"
+          git push

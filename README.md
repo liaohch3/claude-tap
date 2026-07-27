@@ -661,9 +661,9 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 
 <a href="https://www.star-history.com/?repos=liaohch3%2Fclaude-tap&type=date&legend=bottom-right">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/star-history-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="docs/star-history-light.png" />
-    <img alt="Star History Chart" src="docs/star-history-light.png" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/liaohch3/claude-tap/star-history-assets/star-history-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/liaohch3/claude-tap/star-history-assets/star-history-light.png" />
+    <img alt="Star History Chart" src="https://raw.githubusercontent.com/liaohch3/claude-tap/star-history-assets/star-history-light.png" />
   </picture>
 </a>
 
