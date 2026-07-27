@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.140] - 2026-07-27
+
+### Changed
+- docs: restore and automate README star history chart (#405)
 ## [0.1.139] - 2026-07-22
 
 ### Changed
