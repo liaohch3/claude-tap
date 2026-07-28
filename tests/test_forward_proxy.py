@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import gzip
 import json
+import zlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
-from claude_tap.forward_proxy import ForwardProxyServer
+from claude_tap.forward_proxy import ForwardProxyServer, _decode_request_body_for_trace
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_store import get_trace_store, reset_trace_store
 
@@ -34,10 +36,44 @@ class _MemoryWriter:
         return None
 
 
+@pytest.mark.parametrize(
+    ("encoding", "compress"),
+    [
+        ("gzip", gzip.compress),
+        ("deflate", zlib.compress),
+        ("zstd", zstd.compress),
+    ],
+)
+def test_decode_request_body_for_trace_supports_common_encodings(
+    encoding: str,
+    compress: Callable[[bytes], bytes],
+) -> None:
+    payload = b'{"model":"gpt-5.6-luna","stream":true}'
+    assert _decode_request_body_for_trace(compress(payload), {"Content-Encoding": encoding}) == payload
+
+
+def test_decode_request_body_for_trace_leaves_unknown_or_broken_bodies() -> None:
+    payload = b'{"model":"gpt-5.6-luna"}'
+    assert _decode_request_body_for_trace(payload, {}) == payload
+    assert _decode_request_body_for_trace(payload, {"Content-Encoding": "identity"}) == payload
+    assert _decode_request_body_for_trace(payload, {"Content-Encoding": "br"}) == payload
+    assert _decode_request_body_for_trace(b"not-zstd", {"Content-Encoding": "zstd"}) == b"not-zstd"
+
+
 @pytest.mark.asyncio
-async def test_forward_proxy_captures_zstd_compressed_pi_request(
+@pytest.mark.parametrize(
+    ("encoding", "compress"),
+    [
+        ("gzip", gzip.compress),
+        ("deflate", zlib.compress),
+        ("zstd", zstd.compress),
+    ],
+)
+async def test_forward_proxy_captures_compressed_pi_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    encoding: str,
+    compress: Callable[[bytes], bytes],
 ) -> None:
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "traces.sqlite3"))
     reset_trace_store()
@@ -59,13 +95,13 @@ async def test_forward_proxy_captures_zstd_compressed_pi_request(
         "input": [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
         "stream": True,
     }
-    compressed_body = zstd.compress(json.dumps(request_body).encode())
+    compressed_body = compress(json.dumps(request_body).encode())
 
     try:
         await server._forward_and_record(
             "POST",
             "/backend-api/codex/responses",
-            {"Content-Type": "application/json", "Content-Encoding": "zstd"},
+            {"Content-Type": "application/json", "Content-Encoding": encoding},
             compressed_body,
             "https://chatgpt.com/backend-api/codex/responses",
             client_writer,
