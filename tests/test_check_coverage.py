@@ -176,6 +176,18 @@ def test_css_selector_ranges_and_changed_viewer_css_selectors_find_touched_rules
     ) == {".header"}
 
 
+def test_merge_precise_coverage_retains_scripts_from_each_snapshot() -> None:
+    first = {"result": [{"scriptId": "1", "url": "file:///v8_coverage.html", "functions": []}]}
+    second = {"result": [{"scriptId": "2", "url": "file:///empty_coverage.html", "functions": []}]}
+
+    merged = coverage_module._merge_precise_coverage(first, second)
+
+    assert [script["url"] for script in merged["result"]] == [
+        "file:///v8_coverage.html",
+        "file:///empty_coverage.html",
+    ]
+
+
 def test_viewer_script_functions_filters_top_level_wrapper_and_detects_coverage() -> None:
     script = {
         "functions": [

@@ -421,6 +421,10 @@ def _main_viewer_script(coverage: dict[str, Any], suffix: str) -> dict[str, Any]
     return max(candidates, key=lambda script: len(script.get("functions", [])))
 
 
+def _merge_precise_coverage(*snapshots: dict[str, Any]) -> dict[str, Any]:
+    return {"result": [script for snapshot in snapshots for script in snapshot.get("result", [])]}
+
+
 def _is_top_level_wrapper(function: dict[str, Any], script_end: int) -> bool:
     if function.get("functionName"):
         return False
@@ -709,6 +713,7 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     }""",
                     index,
                 )
+            coverage_snapshots = [session.send("Profiler.takePreciseCoverage")]
             page.goto(compact_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".sidebar-item", timeout=5000)
             page.evaluate(
@@ -748,6 +753,7 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                 }""",
                 compact_bundle_path.read_text(encoding="utf-8"),
             )
+            coverage_snapshots.append(session.send("Profiler.takePreciseCoverage"))
             page.goto(remote_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".sidebar-item", timeout=5000)
             page.evaluate(
@@ -763,13 +769,16 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                 }"""
             )
             page.wait_for_selector("#detail .section", timeout=5000)
+            coverage_snapshots.append(session.send("Profiler.takePreciseCoverage"))
             page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".empty-trace-state", timeout=5000)
             page.set_input_files("#file-input", str(compact_bundle_path))
             page.wait_for_selector(".sidebar-item", timeout=5000)
+            coverage_snapshots.append(session.send("Profiler.takePreciseCoverage"))
             page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".empty-trace-state", timeout=5000)
-            coverage = session.send("Profiler.takePreciseCoverage")
+            coverage_snapshots.append(session.send("Profiler.takePreciseCoverage"))
+            coverage = _merge_precise_coverage(*coverage_snapshots)
             session.send("Profiler.stopPreciseCoverage")
             session.send("Profiler.disable")
             browser.close()
