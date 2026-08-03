@@ -31,3 +31,17 @@ def test_parse_request_body_for_trace_decodes_invalid_json_as_text() -> None:
 
 def test_parse_request_body_for_trace_empty_body_is_none() -> None:
     assert _parse_request_body_for_trace(b"") is None
+
+
+def test_parse_request_body_for_trace_protobuf_content_type_is_placeholder() -> None:
+    body = b"\x12\x04prod\x1a\x08moredata"
+
+    assert _parse_request_body_for_trace(
+        body,
+        {"Content-Type": "application/proto"},
+    ) == {"_encoding": "protobuf", "byte_length": len(body)}
+
+    assert _parse_request_body_for_trace(
+        body,
+        {"content-type": "application/connect+proto"},
+    ) == {"_encoding": "protobuf", "byte_length": len(body)}

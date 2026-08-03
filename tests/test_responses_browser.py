@@ -281,6 +281,150 @@ def test_viewer_treats_codex_forward_websocket_path_as_primary(responses_page) -
     assert result == {"tier": 0, "primary": True}
 
 
+def test_viewer_treats_cursor_transcript_as_primary_display_turn(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const entry = {
+            transport: 'cursor-transcript',
+            request: {
+              method: 'CURSOR_TRANSCRIPT',
+              path: '/cursor/transcript/abc/turn/1/step/1',
+              body: { messages: [{ role: 'user', content: 'hello' }] }
+            },
+            response: { status: 200, body: { content: [{ type: 'text', text: 'hi' }] } }
+          };
+          const turns = normalizeDisplayTurns([entry], true);
+          return {
+            tier: pathTier('/cursor/transcript/abc/turn/1/step/1'),
+            primary: isPathPrimary('/cursor/transcript/abc/turn/1/step/1'),
+            candidate: isDisplayTurnCandidate(entry),
+            displayTurn: turns[0].display_turn,
+            firstUser: firstUserInputInfo(entry).userText,
+            noiseUser: firstUserInputInfo({
+              request: {
+                path: '/aiserver.v1.DashboardService/GetCliDownloadUrl',
+                headers: { 'Content-Type': 'application/proto' },
+                body: '\\x12\\x04prod'
+              }
+            }).userText,
+            xProtobufNoise: firstUserInputInfo({
+              request: {
+                path: '/aiserver.v1.Foo/Bar',
+                headers: { 'Content-Type': 'application/x-protobuf' },
+                body: '\\x12\\x04prod'
+              }
+            }).userText,
+            latestNoise: latestUserInputInfo({
+              request: {
+                path: '/aiserver.v1.Foo/Bar',
+                headers: { 'Content-Type': 'application/connect+proto' },
+                body: { messages: [{ role: 'user', content: 'nope' }] }
+              }
+            }).userText
+          };
+        }"""
+    )
+
+    assert result["tier"] == 0
+    assert result["primary"] is True
+    assert result["candidate"] is True
+    assert result["displayTurn"] == 1
+    assert result["firstUser"] == "hello"
+    assert result["noiseUser"] == ""
+    assert result["xProtobufNoise"] == ""
+    assert result["latestNoise"] == ""
+
+
+def test_viewer_lazy_stub_keeps_cursor_user_input_in_session_group(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const meta = {
+            turn: 1,
+            transport: 'cursor-transcript',
+            method: 'CURSOR_TRANSCRIPT',
+            path: '/cursor/transcript/abc/turn/1/step/1',
+            model: 'grok-4.5',
+            session_user_text: '这是一个什么项目',
+            status: 200,
+          };
+          const stubs = [
+            buildStubEntry({ ...meta, turn: 1, path: '/cursor/transcript/abc/turn/1/step/1' }, 0),
+            buildStubEntry({ ...meta, turn: 2, path: '/cursor/transcript/abc/turn/1/step/2' }, 1),
+            buildStubEntry({ ...meta, turn: 3, path: '/cursor/transcript/abc/turn/1/step/3' }, 2),
+          ];
+          const turns = normalizeDisplayTurns(stubs, true);
+          const groups = buildSessionGroups(turns.map((entry, idx) => ({ entry, idx, order: idx })));
+          return {
+            stubHasMessages: Array.isArray(stubs[0].request.body.messages),
+            firstUser: firstUserInputInfo(stubs[0]).userText,
+            groupCount: groups.length,
+            groupUserText: groups[0]?.userText || '',
+            groupSize: groups[0]?.items.length || 0,
+          };
+        }"""
+    )
+
+    assert result["stubHasMessages"] is True
+    assert result["firstUser"] == "这是一个什么项目"
+    assert result["groupCount"] == 1
+    assert result["groupUserText"] == "这是一个什么项目"
+    assert result["groupSize"] == 3
+
+
+def test_viewer_collapses_cursor_transcript_paths_in_filter(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          entries = [
+            {
+              transport: 'cursor-transcript',
+              request: {
+                method: 'CURSOR_TRANSCRIPT',
+                path: '/cursor/transcript/abc/turn/1/step/1',
+                body: { messages: [{ role: 'user', content: 'one' }] }
+              },
+              response: { status: 200, body: { content: [{ type: 'text', text: 'a' }] } }
+            },
+            {
+              transport: 'cursor-transcript',
+              request: {
+                method: 'CURSOR_TRANSCRIPT',
+                path: '/cursor/transcript/abc/turn/1/step/2',
+                body: { messages: [{ role: 'user', content: 'one' }] }
+              },
+              response: { status: 200, body: { content: [{ type: 'text', text: 'b' }] } }
+            },
+            {
+              transport: 'cursor-transcript',
+              request: {
+                method: 'CURSOR_TRANSCRIPT',
+                path: '/cursor/transcript/abc/turn/2/step/1',
+                body: { messages: [{ role: 'user', content: 'two' }] }
+              },
+              response: { status: 200, body: { content: [{ type: 'text', text: 'c' }] } }
+            }
+          ].map((entry, idx) => ({ ...entry, turn: idx + 1, _entry_index: idx }));
+          activePaths = new Set();
+          pathFilterExpanded = false;
+          renderApp(true);
+          const chips = Array.from(document.querySelectorAll('#path-filter .filter-chip')).map(chip => ({
+            title: chip.title,
+            count: chip.querySelector('.chip-count')?.textContent || ''
+          }));
+          return {
+            filterKey: filterPathKey('/cursor/transcript/abc/turn/4/step/12'),
+            chips,
+            filteredCount: filtered.length,
+            activePaths: Array.from(activePaths)
+          };
+        }"""
+    )
+
+    assert result["filterKey"] == "/cursor/transcript/"
+    assert result["chips"] == [{"title": "/cursor/transcript/", "count": "3"}]
+    assert result["filteredCount"] == 3
+    assert result["activePaths"] == ["/cursor/transcript/"]
+
+
 def test_viewer_sorts_dotted_websocket_turns_by_numeric_segments(responses_page) -> None:
     result = responses_page.evaluate(
         """() => {

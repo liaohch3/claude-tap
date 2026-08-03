@@ -104,7 +104,10 @@ button { cursor: pointer; }
   font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0;
 }
 .header .divider { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; }
-.path-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; flex: 1 1 0; }
+.path-filter {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  min-width: 0; flex: 1 1 0; max-height: 72px; overflow-y: auto;
+}
 .filter-chip {
   font-size: 12px; font-family: var(--mono); padding: 4px 10px; border-radius: 20px;
   border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary);

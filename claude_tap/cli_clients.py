@@ -522,14 +522,16 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
     ),
     "cursor": ClientConfig(
         cmd="cursor-agent",
-        label="Cursor CLI",
+        label="Cursor",
         install_url="https://cursor.com/cli",
-        # Cursor CLI does not expose a provider base URL. Keep reverse-mode
-        # fields structurally valid, but default to forward proxy mode.
+        # Neither reverse nor forward proxy: conversations come only from local
+        # agent-transcripts JSONL (CLI + IDE Agent). default_proxy_mode is unused
+        # when transcript_only=True (kept for argparse ClientConfig shape).
         base_url_env="CURSOR_BASE_URL",
         base_url_suffix="",
         default_target="https://api2.cursor.sh",
         default_proxy_mode="forward",
+        transcript_only=True,
     ),
     "qoder": ClientConfig(
         cmd="qodercli",
@@ -639,8 +641,11 @@ async def run_client(
     cmd_args = _maybe_rewrite_hermes_gateway_start(client, cmd_args)
     kimi_code_sandbox: Path | None = None
     kimi_code_source_home: Path | None = None
+    # Transcript-only clients (Cursor) are observed from local logs; do not inject
+    # HTTPS_PROXY/CA even when the CLI default proxy_mode string is "forward".
+    inject_proxy = not cfg.transcript_only
 
-    if proxy_mode == "forward":
+    if inject_proxy and proxy_mode == "forward":
         proxy_url = f"http://127.0.0.1:{port}"
         if client == "codexapp":
             cmd_args.insert(0, f"--proxy-server={proxy_url}")
@@ -690,7 +695,7 @@ async def run_client(
                     settings_payload["env"]["NODE_EXTRA_CA_CERTS"] = str(ca_cert_path)
                 cmd_args = _settings_arg(settings_payload["env"]) + cmd_args
         # Don't set reverse-mode provider-specific base URL in forward mode.
-    else:
+    elif inject_proxy:
         if client == "kimi-code":
             kimi_code_sandbox, _patched_providers, kimi_code_source_home, cmd_args = _prepare_kimi_code_reverse_sandbox(
                 port, cmd_args
@@ -742,7 +747,9 @@ async def run_client(
 
     cmd = [resolved_cmd] + cmd_args
     print(f"\n🚀 Starting {cfg.label}: {' '.join([display_cmd, *cmd_args])}")
-    if proxy_mode == "forward":
+    if cfg.transcript_only:
+        print("   Mode: local agent-transcripts (no HTTPS_PROXY)")
+    elif proxy_mode == "forward":
         print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
         for env_key in cfg.forward_base_url_envs:
             print(f"   {env_key}={cfg.reverse_base_url(port)}")

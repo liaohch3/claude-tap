@@ -2,6 +2,16 @@
 /* ─── Path & filter ─── */
 function getPath(e) { return (e.request?.path || '/unknown').replace(/\?.*$/, ''); }
 
+/*
+ * Collapse high-cardinality synthetic paths into one filter chip.
+ * Cursor transcript steps use unique /cursor/transcript/{id}/turn/N/step/M paths;
+ * showing each as a primary chip floods the header and breaks layout.
+ */
+function filterPathKey(p) {
+  if (typeof p === 'string' && p.startsWith('/cursor/transcript/')) return '/cursor/transcript/';
+  return p;
+}
+
 function renderApp(preserveDetail) {
   $('#drop-zone').style.display = 'none';
   $('#sidebar-wrap').style.display = 'flex';
@@ -13,13 +23,26 @@ function renderApp(preserveDetail) {
   $('#stats').style.display = '';
   $('#path-filter').style.display = '';
   const pathCounts = {};
-  entries.filter(isNavigableTraceEntry).forEach(e => { const p = getPath(e); pathCounts[p] = (pathCounts[p] || 0) + 1; });
+  entries.filter(isNavigableTraceEntry).forEach(e => {
+    const p = filterPathKey(getPath(e));
+    pathCounts[p] = (pathCounts[p] || 0) + 1;
+  });
   const paths = Object.keys(pathCounts).sort();
   if (activePaths.size === 0) {
     /* If the trace has main conversation paths, hide auxiliary setup calls by default. */
     const primaryPaths = paths.filter(isPathPrimary);
     if (primaryPaths.length > 0) primaryPaths.forEach(p => activePaths.add(p));
     else paths.forEach(p => activePaths.add(p));
+  } else if ([...activePaths].some(p => p.startsWith('/cursor/transcript/') && p !== '/cursor/transcript/')) {
+    /* Migrate older per-step chip selections into the collapsed key. */
+    let collapsed = false;
+    for (const p of [...activePaths]) {
+      if (p.startsWith('/cursor/transcript/') && p !== '/cursor/transcript/') {
+        activePaths.delete(p);
+        collapsed = true;
+      }
+    }
+    if (collapsed) activePaths.add('/cursor/transcript/');
   }
   renderPathFilter(paths, pathCounts);
   renderTracePathBar();
@@ -116,7 +139,7 @@ let pathFilterExpanded = false;
  *   secondary – useful auxiliary APIs (MCP, models, token counting), collapsed behind "+N more"
  *   noise     – plugin manifests, bot APIs, asset downloads, version checks — hidden by default
  */
-const PRIMARY_PATH_PREFIXES = ['/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1beta/models', '/v1alpha/models', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
+const PRIMARY_PATH_PREFIXES = ['/cursor/transcript/', '/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1beta/models', '/v1alpha/models', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
 const SECONDARY_PATH_PREFIXES = ['/v1/mcp', '/v1/models', '/v1/embeddings', '/v1/files', '/responses', '/models', '/chat/completions', '/completions', '/files', '/search', '/fetch', '/usages', '/feedback'];
 function isBedrockInvokePath(p) {
   return p.startsWith('/model/') && (p.endsWith('/invoke') || p.endsWith('/invoke-with-response-stream'));
@@ -188,7 +211,7 @@ function compareTurns(a, b) {
 }
 
 function applyFilter(preserveDetail) {
-  filtered = entries.filter(e => isNavigableTraceEntry(e) && activePaths.has(getPath(e)));
+  filtered = entries.filter(e => isNavigableTraceEntry(e) && activePaths.has(filterPathKey(getPath(e))));
   if (searchQuery) filtered = filtered.filter(e => matchSearch(e, searchQuery));
   if (activeTools) {
     filtered = filtered.filter(e => {
@@ -414,7 +437,7 @@ function closeGlobalSearch() {
 function normalizeFiltersForGlobalSearch() {
   // Global search must be able to move across all entries.
   let changed = false;
-  const allPaths = new Set(entries.filter(isNavigableTraceEntry).map(getPath));
+  const allPaths = new Set(entries.filter(isNavigableTraceEntry).map(e => filterPathKey(getPath(e))));
   if (activePaths.size !== allPaths.size || [...allPaths].some(p => !activePaths.has(p))) {
     activePaths = allPaths;
     changed = true;

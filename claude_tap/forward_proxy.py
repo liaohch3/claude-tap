@@ -555,7 +555,7 @@ class ForwardProxyServer:
         log_prefix = f"[Turn {turn}]" if turn is not None else "[relay]"
 
         trace_body = _decode_request_body_for_trace(body, headers)
-        req_body = _parse_request_body_for_trace(trace_body)
+        req_body = _parse_request_body_for_trace(trace_body, headers)
         upstream_base_url = _upstream_base_url(upstream_url, path)
 
         is_streaming = is_capture_only_streaming_request(path, req_body)

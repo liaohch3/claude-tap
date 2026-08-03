@@ -526,6 +526,63 @@ def test_dashboard_first_message_skips_injected_user_content_blocks(trace_db, tm
     assert summary["first_user"] == "Fix the failing dashboard prompt preview."
 
 
+def test_dashboard_cursor_transcript_overrides_protobuf_first_user(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(
+        client="cursor",
+        proxy_mode="transcript",
+        started_at=datetime(2026, 5, 20, 10, 15, tzinfo=timezone.utc),
+    )
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-20T10:15:00+00:00",
+            "turn": 1,
+            "request": {
+                "method": "POST",
+                "path": "/aiserver.v1.DashboardService/GetCliDownloadUrl",
+                "headers": {"Content-Type": "application/proto"},
+                "body": "\x12\x04prod",
+            },
+            "response": {"status": 200, "body": {"_encoding": "protobuf", "byte_length": 8}},
+        },
+    )
+    store.append_record(
+        session_id,
+        {
+            "timestamp": "2026-05-20T10:15:01+00:00",
+            "turn": 2,
+            "transport": "cursor-transcript",
+            "request": {
+                "method": "CURSOR_TRANSCRIPT",
+                "path": "/cursor/transcript/abc/turn/1/step/1",
+                "headers": {},
+                "body": {
+                    "messages": [{"role": "user", "content": "hello from transcript"}],
+                },
+            },
+            "response": {
+                "status": 200,
+                "body": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hi"}],
+                },
+            },
+        },
+    )
+
+    summary = list_trace_sessions()[0]
+    assert summary["first_user"] == "hello from transcript"
+    assert "\x12" not in summary["first_user"]
+    assert "prod" not in summary["first_user"]
+
+
+def test_dashboard_skips_protobuf_binary_string_as_user_text() -> None:
+    assert _request_user_text("\x12\x04prod", headers={"Content-Type": "application/proto"}) == ""
+    assert _request_user_text({"_encoding": "protobuf", "byte_length": 12}) == ""
+    assert _request_user_text("\x12\x04prod\x1a\x08moredata") == ""
+
+
 def test_dashboard_recomputes_stale_first_message_summary_cache(trace_db) -> None:
     store = get_trace_store()
     session_id = store.create_session(

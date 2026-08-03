@@ -50,6 +50,12 @@ function buildStubEntry(meta, rawIdx) {
   if (meta.tool_names && meta.tool_names.length) {
     body.tools = meta.tool_names.map(n => ({ name: n }));
   }
+  // Preserve user prompt text for sidebar session grouping in lazy/stub mode.
+  // Full messages are not embedded in stubs; without this, Cursor transcript
+  // sessions (> LAZY_THRESHOLD) show empty "User Input" group headers.
+  if (meta.session_user_text) {
+    body.messages = [{ role: 'user', content: meta.session_user_text }];
+  }
 
   // Build minimal response content for tool filter
   const respContent = [];

@@ -81,7 +81,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 | [OpenClaw](https://github.com/openclaw/openclaw) | Multi-provider OpenClaw sessions |
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi sessions, including OpenAI Codex OAuth providers |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Multi-provider Hermes TUI or gateway sessions |
-| [Cursor CLI](https://cursor.com/cli) | Cursor Agent sessions plus readable local transcript import |
+| [Cursor](https://cursor.com/cli) CLI / IDE Agent | Launch `cursor-agent` + live transcript watch (`claude-tap --tap-client cursor`) |
 | [Qoder CLI](https://qoder.com/cli) | Qoder Agent sessions through forward proxy mode |
 | [Antigravity CLI](https://antigravity.google/product/antigravity-cli) | Antigravity Agent sessions through forward proxy mode |
 | [CodeBuddy CLI](https://www.codebuddy.ai) | Tencent CodeBuddy SaaS or internal Copilot endpoint |
@@ -135,8 +135,11 @@ claude-tap --tap-client mimo
 # Pi
 claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
 
-# Cursor CLI
-claude-tap --tap-client cursor -- -p --trust --model auto "hello"
+# Cursor: launch cursor-agent + live transcript watch + dashboard
+claude-tap --tap-client cursor
+
+# Watch IDE Agent transcripts only (no CLI launch)
+claude-tap --tap-client cursor --tap-no-launch
 
 # Qoder CLI
 claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
@@ -447,13 +450,19 @@ claude-tap --tap-client hermes --tap-proxy-mode reverse
 </details>
 
 <details>
-<summary>Cursor CLI examples</summary>
+<summary>Cursor CLI / IDE Agent examples</summary>
 
-Cursor CLI uses forward proxy mode by default. Use `--model auto` on free plans, and omit `--mode ask` when you want tool calls.
+Cursor is **transcript-only** (neither reverse nor forward proxy): claude-tap launches `cursor-agent`, watches `~/.cursor/projects/*/agent-transcripts/*.jsonl`, and writes **one dashboard session per Cursor conversation JSONL**. It does not MITM `api2.cursor.sh`.
 
 ```bash
+# Launch agent + live watch + dashboard (default)
+claude-tap --tap-client cursor
+
+# Pass args through to cursor-agent
 claude-tap --tap-client cursor -- -p --trust --model auto "hello"
-claude-tap --tap-client cursor -- -p --trust --model auto --continue "continue"
+
+# IDE Agent only (no CLI launch)
+claude-tap --tap-client cursor --tap-no-launch
 ```
 
 </details>
@@ -607,7 +616,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-no-launch          Only start the proxy, don't launch client
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, forward for agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, forward for agy/codexapp/gemini/mimo/opencode/pi/hermes/qoder; cursor is transcript-only and ignores proxy MITM)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 

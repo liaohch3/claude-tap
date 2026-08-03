@@ -56,7 +56,7 @@ from claude_tap.cli_update import (
     parse_update_args,
     update_main,
 )
-from claude_tap.cursor_transcript import import_cursor_transcripts
+from claude_tap.cursor_transcript import CursorTranscriptWatcher, model_from_cursor_args
 from claude_tap.forward_proxy import ForwardProxyServer
 from claude_tap.history import cleanup_trace_sessions, migrate_legacy_traces
 from claude_tap.live import LiveViewerServer
@@ -322,7 +322,10 @@ async def async_main(args: argparse.Namespace):
             )
 
     store = get_trace_store()
-    trace_metadata = {"client": args.client, "proxy_mode": args.proxy_mode}
+    client_cfg = CLIENT_CONFIGS[args.client]
+    transcript_only = bool(client_cfg.transcript_only)
+    effective_proxy_mode = "transcript" if transcript_only else args.proxy_mode
+    trace_metadata = {"client": args.client, "proxy_mode": effective_proxy_mode}
 
     codex_app_preflighted = False
     codex_app_user_data_dir = None
@@ -335,19 +338,27 @@ async def async_main(args: argparse.Namespace):
 
     ca_cert_path: Path | None = None
     ca_key_path: Path | None = None
-    if args.proxy_mode == "forward":
+    if not transcript_only and args.proxy_mode == "forward":
         ca_cert_path, ca_key_path = ensure_ca()
         trust_result = _ensure_ca_trust_for_forward_proxy(args, ca_cert_path)
         if trust_result != 0:
             return trust_result
 
-    writer = _create_trace_writer(
-        store=store,
-        client=args.client,
-        proxy_mode=args.proxy_mode,
-        metadata=trace_metadata,
-    )
-    session_id = writer.session_id
+    # Transcript-only clients open one tap session per Cursor conversation JSONL.
+    # Do not create an umbrella session that would merge unrelated chats.
+    writer: TraceWriter | _LazyTraceWriter | None
+    session_id: str | None
+    if transcript_only:
+        writer = None
+        session_id = None
+    else:
+        writer = _create_trace_writer(
+            store=store,
+            client=args.client,
+            proxy_mode=effective_proxy_mode,
+            metadata=trace_metadata,
+        )
+        session_id = writer.session_id
 
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
@@ -384,113 +395,166 @@ async def async_main(args: argparse.Namespace):
         asyncio_log.addHandler(sqlite_handler)
         asyncio_log.propagate = False
 
-    # Proxy clients create this lazily.
+    # Proxy clients create this lazily. Transcript-only clients skip the proxy.
     session: aiohttp.ClientSession | None = None
 
     # Forward proxy mode: raw TCP server with CONNECT/TLS termination
     # Reverse proxy mode: aiohttp web app (current behavior)
     forward_server: ForwardProxyServer | None = None
     runner: web.AppRunner | None = None
+    cursor_watcher: CursorTranscriptWatcher | None = None
     exit_code = 0
     client_started_at = time.time()
     capture_only = bool(getattr(args, "export_prompt", None))
-    if capture_only:
+    if capture_only and not transcript_only:
         print("📝 Prompt export mode: upstream calls are skipped after capture.")
     try:
-        # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY)
-        # for outbound upstream requests so users routing through Clash/VPN
-        # keep working. A loopback upstream (e.g. a local Agent Maestro/relay)
-        # must NOT be tunneled through that proxy, or aiohttp resets the
-        # connection (ServerDisconnectedError -> HTTP 502). Add only the
-        # loopback host to NO_PROXY so the bypass is per-host: remote traffic
-        # (including forward-mode CONNECT requests sharing this session) still
-        # honors the user's proxy.
-        loopback_host = _loopback_target_host(args.target)
-        if loopback_host is not None:
-            _extend_no_proxy(os.environ, (loopback_host,))
-        session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
-
-        if args.proxy_mode == "forward":
-            assert ca_cert_path is not None
-            assert ca_key_path is not None
-            assert session is not None
-            assert writer is not None
-            ca = CertificateAuthority(ca_cert_path, ca_key_path)
-            forward_server = ForwardProxyServer(
-                host=args.host,
-                port=args.port,
-                ca=ca,
-                writer=writer,
-                session=session,
-                local_reverse_target=args.target,
-                local_reverse_allowed_path_prefixes=CLIENT_CONFIGS[args.client].forward_base_url_allowed_path_prefixes,
-                trace_methods=CLIENT_CONFIGS[args.client].forward_trace_methods,
-                trace_path_prefixes=CLIENT_CONFIGS[args.client].forward_trace_path_prefixes,
-                store_stream_events=args.store_stream_events,
-                capture_only=capture_only,
-            )
-            actual_port = await forward_server.start()
-            print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
-            print(f"   CA cert: {ca_cert_path}")
-        else:
-            assert session is not None
-            assert writer is not None
-            app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
-            allowed_path_prefixes, trace_path_prefixes = _reverse_proxy_path_prefixes(
-                args.client, tuple(args.extra_allowed_paths)
-            )
-            app["trace_ctx"] = {
-                "target_url": args.target,
-                "writer": writer,
-                "session": session,
-                "turn_counter": 0,
-                "extra_allowed_path_prefixes": allowed_path_prefixes,
-                "trace_path_prefixes": trace_path_prefixes,
-                "store_stream_events": args.store_stream_events,
-                "capture_only": capture_only,
-                **_reverse_proxy_trace_options(args.client, args.target),
-            }
-            app.router.add_route("*", "/{path_info:.*}", proxy_handler)
-
-            runner = web.AppRunner(app)
-            await runner.setup()
-            site = web.TCPSite(runner, args.host, args.port)
-            await site.start()
-
-            # Resolve actual port (site._server is a private API; fall back to args.port)
-            try:
-                actual_port = site._server.sockets[0].getsockname()[1]
-            except (AttributeError, IndexError, OSError):
-                actual_port = args.port
-            print(f"🔍 claude-tap v{__version__} listening on http://{args.host}:{actual_port}")
-
-        print(f"📁 Trace session: {session_id}")
-        print(f"🗄️  Trace database: {resolve_db_path()}")
-
-        if not args.no_launch:
+        if transcript_only:
+            print(f"🔍 claude-tap v{__version__} watching Cursor agent-transcripts")
+            print("   Mode: one tap session per Cursor conversation JSONL")
+            print(f"🗄️  Trace database: {resolve_db_path()}")
             client_started_at = time.time()
-            try:
-                exit_code = await run_client(
-                    actual_port,
-                    args.claude_args,
-                    client=args.client,
-                    proxy_mode=args.proxy_mode,
-                    ca_cert_path=ca_cert_path,
-                    client_cmd=getattr(args, "client_cmd", None),
-                    capture_only=capture_only,
-                    codex_app_preflighted=codex_app_preflighted,
-                    codex_app_user_data_dir=codex_app_user_data_dir,
-                )
-            except asyncio.CancelledError:
-                pass
+            cursor_watcher = CursorTranscriptWatcher(
+                since=client_started_at,
+                model=model_from_cursor_args(args.claude_args),
+                store=store,
+                client=args.client,
+                proxy_mode=effective_proxy_mode,
+                metadata=trace_metadata,
+            )
+            await cursor_watcher.start()
+            if not args.no_launch:
+                # Bare `claude-tap --tap-client cursor` launches cursor-agent (TUI)
+                # while the watcher streams local transcripts into the dashboard.
+                try:
+                    exit_code = await run_client(
+                        0,
+                        args.claude_args,
+                        client=args.client,
+                        proxy_mode=args.proxy_mode,
+                        ca_cert_path=None,
+                        client_cmd=getattr(args, "client_cmd", None),
+                        capture_only=False,
+                        codex_app_preflighted=codex_app_preflighted,
+                        codex_app_user_data_dir=codex_app_user_data_dir,
+                    )
+                except asyncio.CancelledError:
+                    pass
+            else:
+                print("\n--tap-no-launch: watching local Cursor transcripts only. Press Ctrl+C to stop.")
+                try:
+                    while True:
+                        await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    pass
         else:
-            print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
-            try:
-                while True:
-                    await asyncio.sleep(3600)
-            except asyncio.CancelledError:
-                pass
+            # Honor system proxy env (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY)
+            # for outbound upstream requests so users routing through Clash/VPN
+            # keep working. A loopback upstream (e.g. a local Agent Maestro/relay)
+            # must NOT be tunneled through that proxy, or aiohttp resets the
+            # connection (ServerDisconnectedError -> HTTP 502). Add only the
+            # loopback host to NO_PROXY so the bypass is per-host: remote traffic
+            # (including forward-mode CONNECT requests sharing this session) still
+            # honors the user's proxy.
+            loopback_host = _loopback_target_host(args.target)
+            if loopback_host is not None:
+                _extend_no_proxy(os.environ, (loopback_host,))
+            session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
+
+            if args.proxy_mode == "forward":
+                assert ca_cert_path is not None
+                assert ca_key_path is not None
+                assert session is not None
+                assert writer is not None
+                ca = CertificateAuthority(ca_cert_path, ca_key_path)
+                forward_server = ForwardProxyServer(
+                    host=args.host,
+                    port=args.port,
+                    ca=ca,
+                    writer=writer,
+                    session=session,
+                    local_reverse_target=args.target,
+                    local_reverse_allowed_path_prefixes=CLIENT_CONFIGS[
+                        args.client
+                    ].forward_base_url_allowed_path_prefixes,
+                    trace_methods=CLIENT_CONFIGS[args.client].forward_trace_methods,
+                    trace_path_prefixes=CLIENT_CONFIGS[args.client].forward_trace_path_prefixes,
+                    store_stream_events=args.store_stream_events,
+                    capture_only=capture_only,
+                )
+                actual_port = await forward_server.start()
+                print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
+                print(f"   CA cert: {ca_cert_path}")
+            else:
+                assert session is not None
+                assert writer is not None
+                app = web.Application(client_max_size=0)  # No body size limit (proxy must forward everything)
+                allowed_path_prefixes, trace_path_prefixes = _reverse_proxy_path_prefixes(
+                    args.client, tuple(args.extra_allowed_paths)
+                )
+                app["trace_ctx"] = {
+                    "target_url": args.target,
+                    "writer": writer,
+                    "session": session,
+                    "turn_counter": 0,
+                    "extra_allowed_path_prefixes": allowed_path_prefixes,
+                    "trace_path_prefixes": trace_path_prefixes,
+                    "store_stream_events": args.store_stream_events,
+                    "capture_only": capture_only,
+                    **_reverse_proxy_trace_options(args.client, args.target),
+                }
+                app.router.add_route("*", "/{path_info:.*}", proxy_handler)
+
+                runner = web.AppRunner(app)
+                await runner.setup()
+                site = web.TCPSite(runner, args.host, args.port)
+                await site.start()
+
+                # Resolve actual port (site._server is a private API; fall back to args.port)
+                try:
+                    actual_port = site._server.sockets[0].getsockname()[1]
+                except (AttributeError, IndexError, OSError):
+                    actual_port = args.port
+                print(f"🔍 claude-tap v{__version__} listening on http://{args.host}:{actual_port}")
+
+            print(f"📁 Trace session: {session_id}")
+            print(f"🗄️  Trace database: {resolve_db_path()}")
+
+            if not args.no_launch:
+                client_started_at = time.time()
+                try:
+                    exit_code = await run_client(
+                        actual_port,
+                        args.claude_args,
+                        client=args.client,
+                        proxy_mode=args.proxy_mode,
+                        ca_cert_path=ca_cert_path,
+                        client_cmd=getattr(args, "client_cmd", None),
+                        capture_only=capture_only,
+                        codex_app_preflighted=codex_app_preflighted,
+                        codex_app_user_data_dir=codex_app_user_data_dir,
+                    )
+                except asyncio.CancelledError:
+                    pass
+            else:
+                print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
+                try:
+                    while True:
+                        await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    pass
     finally:
+        cursor_session_ids: set[str] = set()
+        if cursor_watcher is not None:
+            try:
+                imported = await cursor_watcher.stop()
+            except Exception:
+                log.debug("Cursor transcript watcher stop failed", exc_info=True)
+                imported = 0
+            cursor_session_ids = set(cursor_watcher.session_ids)
+            if imported or cursor_session_ids:
+                print(f"   Cursor transcript turns: {imported}")
+                print(f"   Cursor conversations: {len(cursor_session_ids)}")
         if forward_server:
             try:
                 await asyncio.wait_for(forward_server.stop(), timeout=10)
@@ -512,12 +576,6 @@ async def async_main(args: argparse.Namespace):
             except Exception:
                 pass
 
-        if args.client == "cursor" and not args.no_launch:
-            assert writer is not None
-            imported = await import_cursor_transcripts(writer, since=client_started_at)
-            if imported:
-                print(f"   Cursor transcript turns: {imported}")
-
         if writer is not None:
             writer.close()
 
@@ -525,11 +583,14 @@ async def async_main(args: argparse.Namespace):
         if args.export_prompt and session_id is not None:
             prompt_export_rc = _export_prompt_from_session(store, session_id, args.export_prompt)
 
+        protected_ids = set(cursor_session_ids)
+        if session_id is not None:
+            protected_ids.add(session_id)
         if args.max_traces > 0:
             try:
                 cleaned = cleanup_trace_sessions(
                     args.max_traces,
-                    protected_session_id=session_id,
+                    protected_session_ids=protected_ids or None,
                 )
             except sqlite3.Error as exc:
                 print(f"\nclaude-tap: trace cleanup skipped because storage is unavailable ({exc})", file=sys.stderr)
@@ -538,7 +599,9 @@ async def async_main(args: argparse.Namespace):
                     print(f"\n🧹 Cleaned up {cleaned} old trace session(s)")
 
         # Print summary with cost estimation
-        if writer is not None:
+        if cursor_watcher is not None:
+            stats = cursor_watcher.get_summary()
+        elif writer is not None:
             stats = writer.get_summary()
         else:
             stats = {
@@ -566,7 +629,9 @@ async def async_main(args: argparse.Namespace):
                 print(f" / {stats['cache_create_tokens']:,} cache_write", end="")
             print()
 
-        if session_id is not None:
+        if cursor_session_ids:
+            print(f"   Sessions: {len(cursor_session_ids)} (one per Cursor conversation)")
+        elif session_id is not None:
             print(f"   Session: {session_id}")
         print(f"   Database: {resolve_db_path()}")
         if dashboard_url_value:
@@ -775,7 +840,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
             "Default depends on the client: 'reverse' for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, "
-            "'forward' for agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder."
+            "'forward' for agy/codexapp/gemini/mimo/opencode/pi/hermes/qoder. "
+            "Ignored for transcript-only clients such as cursor."
         ),
     )
     proxy_group.add_argument(
@@ -788,7 +854,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     proxy_group.add_argument(
-        "--tap-no-launch", action="store_true", dest="no_launch", help="Only start the proxy, don't launch client"
+        "--tap-no-launch",
+        action="store_true",
+        dest="no_launch",
+        help="Don't launch the client (proxy-only, or Cursor IDE transcript watch)",
     )
     proxy_group.add_argument(
         "--tap-allow-path",
@@ -890,10 +959,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "--tap-codexapp-cdp-endpoint was removed; --tap-client codexapp now captures via forward proxy"
         )
     args.claude_args = claude_args
+    client_cfg = CLIENT_CONFIGS[args.client]
     # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
-    # 127.0.0.1 otherwise (launching the client locally).
+    # 127.0.0.1 otherwise (launching the client locally). Transcript-only clients
+    # have no proxy to expose, so keep them on localhost even with --tap-no-launch.
     if args.host is None:
-        args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
+        if client_cfg.transcript_only:
+            args.host = "127.0.0.1"
+        else:
+            args.host = "0.0.0.0" if args.no_launch else "127.0.0.1"
     if args.target is None:
         if args.client == "codex":
             args.target = _detect_codex_target(claude_args)
@@ -903,13 +977,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             args.target = TARGET_DETECTORS["openclaw"](claude_args)
         else:
             detector = TARGET_DETECTORS.get(args.client)
-            args.target = detector() if detector else CLIENT_CONFIGS[args.client].default_target
+            args.target = detector() if detector else client_cfg.default_target
     if args.proxy_mode is None:
-        args.proxy_mode = CLIENT_CONFIGS[args.client].default_proxy_mode
+        args.proxy_mode = client_cfg.default_proxy_mode
     if args.client == "codexapp" and args.proxy_mode != "forward":
         tap_parser.error("--tap-client codexapp only supports forward proxy mode")
-    if args.trust_ca and args.proxy_mode != "forward":
+    if args.trust_ca and (client_cfg.transcript_only or args.proxy_mode != "forward"):
         tap_parser.error("--tap-trust-ca only applies to forward proxy mode")
+    if client_cfg.transcript_only and args.export_prompt:
+        tap_parser.error("--tap-export-prompt is not supported for transcript-only clients")
+    if client_cfg.transcript_only and args.proxy_mode != client_cfg.default_proxy_mode:
+        tap_parser.error(
+            f"--tap-client {args.client} is transcript-only and ignores --tap-proxy-mode (got {args.proxy_mode!r})"
+        )
 
     # Validate --tap-allow-path prefixes
     for prefix in args.extra_allowed_paths:

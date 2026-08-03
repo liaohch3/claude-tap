@@ -104,7 +104,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   padding: 1px 6px; line-height: 1.4;
 }
 .header .divider { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; }
-.path-filter { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; flex: 1 1 0; }
+.path-filter {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  min-width: 0; flex: 1 1 0; max-height: 72px; overflow-y: auto;
+}
 .filter-chip-toggle {
   font-size: 11px; font-family: var(--sans); padding: 4px 10px; border-radius: 20px;
   border: 1px dashed var(--border); background: var(--bg); color: var(--text-tertiary);

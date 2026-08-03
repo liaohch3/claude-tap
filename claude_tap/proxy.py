@@ -21,6 +21,7 @@ from yarl import URL
 from claude_tap.bedrock import attach_bedrock_errors, bedrock_model_from_path, is_bedrock_eventstream_path
 from claude_tap.sse import SSEReassembler
 from claude_tap.trace import TraceWriter
+from claude_tap.trace_encoding import parse_request_body_for_trace as _parse_request_body_for_trace
 from claude_tap.upstream import build_upstream_url, format_upstream_error
 from claude_tap.usage import normalize_usage
 from claude_tap.viewer import _decode_bedrock_eventstream_events
@@ -79,27 +80,6 @@ def filter_headers(headers: dict[str, str], *, redact_keys: bool = False) -> dic
         else:
             out[k] = v
     return out
-
-
-def _parse_request_body_for_trace(body: bytes) -> object:
-    """Parse a request body for trace storage without mutating upstream bytes."""
-    if not body:
-        return None
-
-    try:
-        parsed = json.loads(body)
-    except (json.JSONDecodeError, ValueError):
-        return body.decode("utf-8", errors="replace")
-
-    if isinstance(parsed, str):
-        try:
-            inner = json.loads(parsed)
-        except (json.JSONDecodeError, ValueError):
-            return parsed
-        if isinstance(inner, dict):
-            return inner
-
-    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -611,7 +591,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     req_id = f"req_{uuid.uuid4().hex[:12]}"
     t0 = time.monotonic()
 
-    req_body = _parse_request_body_for_trace(body)
+    req_body = _parse_request_body_for_trace(body, request.headers)
     trace_req_body = req_body
     upstream_req_body = req_body
 

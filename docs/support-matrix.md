@@ -40,7 +40,7 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Pi | Custom OpenAI-compatible setup (`--tap-proxy-mode reverse`) | `https://api.openai.com` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
-| Cursor CLI | Cursor login (`cursor-agent login`) | Forward proxy to `https://api2.cursor.sh` | n/a | HTTPS/protobuf + local transcript import | Real E2E verified |
+| Cursor CLI / IDE Agent | Cursor login (`cursor-agent login`) or Cursor IDE | Local `agent-transcripts` watch (no MITM proxy) | n/a | Local transcript JSONL (`cursor-transcript`) | Unit-tested; manual E2E pending after transcript-only switch |
 | Qoder CLI | Qoder login / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy (Qoder endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Antigravity CLI | Antigravity login | Forward proxy + `CLOUD_CODE_URL` bridge to `https://daily-cloudcode-pa.googleapis.com` | `CLOUD_CODE_URL` | HTTP/SSE | Manual E2E verified; launch env, Code Assist bridge, and automatic macOS user-keychain CA trust are unit-tested |
 | CodeBuddy CLI | CodeBuddy login (iOA / WeChat / Google-Github / Enterprise Domain) | Auto-detected from `~/.codebuddy/local_storage/` cache; default `https://copilot.tencent.com/v2` | `CODEBUDDY_BASE_URL` | HTTP/SSE Chat Completions | Real E2E verified on iOA |
@@ -64,7 +64,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `openclaw` | `reverse` | Patches the selected OpenClaw provider config when possible, otherwise falls back to provider-specific base URL env vars |
 | `pi` | `forward` | Multi-provider; Pi can use OpenAI Codex OAuth and custom model registry providers, so forward proxy captures traffic without relying on a single base URL override |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
-| `cursor` | `forward` | Cursor CLI has no base URL override; forward proxy captures network traffic and local transcripts provide readable turns |
+| `cursor` | `transcript` (neither reverse nor forward) | Conversation comes only from `~/.cursor/projects/*/agent-transcripts/*.jsonl`. Bare `claude-tap --tap-client cursor` launches `cursor-agent` and live-watches transcripts into the dashboard (**one tap session per Cursor conversation JSONL**); `--tap-no-launch` is IDE watch-only. No HTTPS proxy / CA |
 | `qoder` | `forward` | Qoder CLI uses multiple Qoder service endpoints and has no reliable single base URL override |
 | `agy` | `forward` | Antigravity uses multiple Google / Antigravity endpoints; claude-tap sets `HTTPS_PROXY` for auxiliary traffic and `CLOUD_CODE_URL` for Code Assist model traffic |
 | `codebuddy` | `reverse` | Single provider, native `CODEBUDDY_BASE_URL` env var; supports `--settings` env injection. Endpoint auto-detected from CodeBuddy's login cache |
@@ -135,10 +135,13 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_hermes_*` — registration, parse_args default-mode resolution, forward/reverse env, argv rewrite
 - `test_openclaw_*` — verifies OpenClaw registration, selected-provider config patching, fallback env routing, and target detection
 - `test_pi_*` — registration, parse_args default-mode resolution, forward/reverse env, and argument preservation
-- `test_cursor_registered_in_client_configs` — verifies Cursor CLI registration and default forward mode
-- `test_run_client_cursor_forward_sets_proxy_ca_and_no_proxy` — verifies Cursor launch env for forward proxy mode
+- `test_cursor_registered_in_client_configs` — verifies Cursor registration and `transcript_only`
+- `test_run_client_cursor_transcript_only_skips_proxy_env` — verifies Cursor launch does not inject HTTPS_PROXY / CA
 - `test_import_cursor_transcripts_appends_viewer_friendly_records` — verifies readable Cursor transcript import
 - `test_import_cursor_transcripts_preserves_tool_uses` — verifies Cursor tool_use blocks render in the viewer trace shape
+- `test_cursor_transcript_watcher_incremental_and_dedupe` — verifies live incremental sync and path dedupe
+- `test_cursor_transcript_watcher_keeps_conversations_in_separate_sessions` — verifies each Cursor JSONL gets its own tap session
+- `test_dashboard_cursor_transcript_overrides_protobuf_first_user` — verifies transcript wins over protobuf noise in dashboard summaries
 - `test_qoder_*` — verifies Qoder registration, parse_args default-mode resolution, forward/reverse env, and argument preservation
 - `test_parse_args_agy_does_not_require_tap_trust_ca` — verifies Antigravity uses the same launch shape as other clients
 - `test_auto_ca_trust_*` — verifies Antigravity automatically requests macOS user-keychain CA trust without sudo
@@ -157,9 +160,12 @@ uv run python -m claude_tap --tap-client codex \
   --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 0
 # Verify log shows correct upstream URL
 
-# Cursor CLI
-uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Reply OK"
-# Verify the trace contains raw proxy records plus cursor-transcript records
+# Cursor: launch cursor-agent + live transcript watch + dashboard
+uv run python -m claude_tap --tap-client cursor
+# Chat in the launched agent, then verify dashboard shows readable transcript turns
+
+# IDE Agent watch only
+uv run python -m claude_tap --tap-client cursor --tap-no-launch
 
 # Codex App
 uv run python -m claude_tap --tap-client codexapp
@@ -212,10 +218,11 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex exec "Reply: OK"
 ```
 
 ```bash
-# Cursor CLI real verification
+# Cursor CLI real verification (transcript-only)
 uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto \
   "Use tools to inspect the workspace and reply OK"
 # Verify the generated HTML contains cursor-transcript turns and tool_use blocks.
+# Or watch IDE Agent: claude-tap --tap-client cursor --tap-no-launch
 ```
 
 ```bash

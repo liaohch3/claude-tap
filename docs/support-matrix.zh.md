@@ -40,7 +40,7 @@ English version: [Support Matrix](support-matrix.md).
 | Pi | 自定义 OpenAI 兼容配置（`--tap-proxy-mode reverse`） | `https://api.openai.com` | 无 | HTTP/SSE | 单测覆盖 |
 | Hermes Agent | 通过 `~/.hermes/` 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
 | Hermes Agent | 自定义 OpenAI 兼容 provider（`--tap-proxy-mode reverse`） | `https://api.openai.com` | `/v1` | HTTP/SSE | 单测覆盖 |
-| Cursor CLI | Cursor 登录（`cursor-agent login`） | Forward proxy 到 `https://api2.cursor.sh` | n/a | HTTPS/protobuf + 本地 transcript import | 真实 E2E 已验证 |
+| Cursor CLI / IDE Agent | Cursor 登录（`cursor-agent login`）或 Cursor IDE | 本地 `agent-transcripts` 监听（不走 MITM 代理） | n/a | 本地 transcript JSONL（`cursor-transcript`） | 单测已覆盖；transcript-only 切换后手动 E2E 待确认 |
 | Qoder CLI | Qoder 登录 / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy（Qoder 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | Antigravity CLI | Antigravity 登录 | Forward proxy + `CLOUD_CODE_URL` bridge 到 `https://daily-cloudcode-pa.googleapis.com` | `CLOUD_CODE_URL` | HTTP/SSE | 手动 E2E 已验证；启动环境、Code Assist bridge 和 macOS 用户 keychain CA 自动信任已由单测覆盖 |
 | CodeBuddy CLI | CodeBuddy 登录（iOA / WeChat / Google-Github / Enterprise Domain） | 自动从 `~/.codebuddy/local_storage/` 缓存识别；默认 `https://copilot.tencent.com/v2` | `CODEBUDDY_BASE_URL` | HTTP/SSE Chat Completions | iOA 真实 E2E 已验证 |
@@ -63,7 +63,7 @@ English version: [Support Matrix](support-matrix.md).
 | `openclaw` | `reverse` | 尽量补丁被选中的 OpenClaw provider 配置；否则 fallback 到对应 provider 的 base URL 环境变量 |
 | `pi` | `forward` | 多 provider；Pi 可以使用 OpenAI Codex OAuth 和自定义 model registry provider，forward proxy 不依赖单一 base URL 覆盖即可捕获流量 |
 | `hermes` | `forward` | 多 provider 的 Python agent；`httpx` 与 `requests` 都原生认 `HTTPS_PROXY`，forward proxy 捕获是最自然的默认 |
-| `cursor` | `forward` | Cursor CLI 没有 base URL 覆盖能力；forward proxy 捕获网络流量，本地 transcript 提供可读对话 |
+| `cursor` | `transcript`（既非 reverse 也非 forward） | 对话只来自 `~/.cursor/projects/*/agent-transcripts/*.jsonl`。最短命令 `claude-tap --tap-client cursor` 会启动 `cursor-agent` 并实时 watch 写入 dashboard（**每个 Cursor 会话 JSONL 对应一个独立 tap session**）；`--tap-no-launch` 仅 watch IDE。不启动 HTTPS 代理 / CA |
 | `qoder` | `forward` | Qoder CLI 会访问多个 Qoder 服务端点，且没有可靠的单一 base URL 覆盖能力 |
 | `agy` | `forward` | Antigravity 会访问多个 Google / Antigravity 端点；claude-tap 用 `HTTPS_PROXY` 捕获辅助流量，并用 `CLOUD_CODE_URL` 捕获 Code Assist 模型流量 |
 | `codebuddy` | `reverse` | 单 provider，原生支持 `CODEBUDDY_BASE_URL` 环境变量；支持 `--settings` 环境变量注入；上游 endpoint 自动从 CodeBuddy 登录缓存识别 |
@@ -129,10 +129,13 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_hermes_*`：验证 Hermes 注册、parse_args 默认模式解析、forward/reverse 启动环境、argv 改写
 - `test_openclaw_*`：验证 OpenClaw 注册、选中 provider 配置补丁、fallback 环境变量路由和目标探测
 - `test_pi_*`：验证 Pi 注册、parse_args 默认模式解析、forward/reverse 启动环境和参数透传
-- `test_cursor_registered_in_client_configs`：验证 Cursor CLI 注册和默认 forward 模式
-- `test_run_client_cursor_forward_sets_proxy_ca_and_no_proxy`：验证 Cursor forward proxy 启动环境变量
+- `test_cursor_registered_in_client_configs`：验证 Cursor 注册与 `transcript_only`
+- `test_run_client_cursor_transcript_only_skips_proxy_env`：验证 Cursor 启动不注入 HTTPS_PROXY / CA
 - `test_import_cursor_transcripts_appends_viewer_friendly_records`：验证 Cursor transcript import 会追加 viewer 友好的记录
 - `test_import_cursor_transcripts_preserves_tool_uses`：验证 Cursor tool_use block 能在 viewer trace shape 中渲染
+- `test_cursor_transcript_watcher_incremental_and_dedupe`：验证增量 sync 与 path 去重
+- `test_cursor_transcript_watcher_keeps_conversations_in_separate_sessions`：验证每个 Cursor JSONL 对应独立 tap session
+- `test_dashboard_cursor_transcript_overrides_protobuf_first_user`：验证 dashboard 摘要优先使用 transcript，忽略 protobuf 噪声
 - `test_qoder_*`：验证 Qoder 注册、parse_args 默认模式解析、forward/reverse 环境变量和参数透传
 - `test_parse_args_agy_does_not_require_tap_trust_ca`：验证 Antigravity 使用和其他客户端一致的启动形态
 - `test_auto_ca_trust_*`：验证 Antigravity 会自动请求 macOS 用户 keychain CA 信任，且不需要 sudo
@@ -151,9 +154,12 @@ uv run python -m claude_tap --tap-client codex \
   --tap-target https://chatgpt.com/backend-api/codex --tap-no-launch --tap-port 0
 # 验证日志里的上游 URL 正确
 
-# Cursor CLI
-uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto "Reply OK"
-# 验证 trace 同时包含 raw proxy records 和 cursor-transcript records
+# Cursor：启动 cursor-agent + 实时 transcript watch + dashboard
+uv run python -m claude_tap --tap-client cursor
+# 在启动的 agent 里聊天，验证 dashboard 出现可读 transcript turns
+
+# 只 watch IDE Agent
+uv run python -m claude_tap --tap-client cursor --tap-no-launch
 
 # Codex App
 uv run python -m claude_tap --tap-client codexapp
@@ -206,10 +212,11 @@ OPENAI_BASE_URL=http://127.0.0.1:8080/v1 codex exec "Reply: OK"
 ```
 
 ```bash
-# Cursor CLI 真实验证
+# Cursor CLI 真实验证（transcript-only）
 uv run python -m claude_tap --tap-client cursor -- -p --trust --model auto \
   "Use tools to inspect the workspace and reply OK"
 # 验证生成的 HTML 包含 cursor-transcript turns 和 tool_use blocks。
+# 或监听 IDE Agent：claude-tap --tap-client cursor --tap-no-launch
 ```
 
 ```bash

@@ -231,25 +231,80 @@ function latestUserInputText(entry) {
   return latestUserInputInfo(entry).userText;
 }
 
+const PROTOBUF_CONTENT_TYPE_TOKENS = [
+  'application/proto',
+  'application/x-protobuf',
+  'application/connect+proto',
+  'application/grpc',
+];
+
+function looksLikeBinaryText(text) {
+  const sample = String(text || '').slice(0, 256);
+  if (!sample) return false;
+  if (sample.includes('\uFFFD')) return true;
+  let control = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const code = sample.charCodeAt(i);
+    if (code < 32 && code !== 9 && code !== 10 && code !== 13) control += 1;
+  }
+  return control / sample.length >= 0.1;
+}
+
+function isProtobufNoiseEntry(entry) {
+  if (entry?.transport === 'cursor-transcript') return false;
+  const path = String(entry?.request?.path || '');
+  if (path.startsWith('/cursor/transcript/')) return false;
+  const headers = entry?.request?.headers || {};
+  const contentType = String(headers['Content-Type'] || headers['content-type'] || '').toLowerCase();
+  if (PROTOBUF_CONTENT_TYPE_TOKENS.some((token) => contentType.includes(token))) {
+    return true;
+  }
+  const body = entry?.request?.body;
+  if (body && typeof body === 'object' && (body._encoding === 'protobuf' || body._encoding === 'binary')) {
+    return true;
+  }
+  return typeof body === 'string' && looksLikeBinaryText(body);
+}
+
+function stubSessionUserText(entry) {
+  const text = String(entry?._session_user_text || '').trim();
+  return text && !looksLikeBinaryText(text) ? text : '';
+}
+
 function firstUserInputInfo(entry) {
-  const msgs = getMessages(entry?.request?.body);
+  if (isProtobufNoiseEntry(entry)) {
+    return { userText: '', userIndex: -1, messageCount: 0 };
+  }
+  const body = entry?.request?.body;
+  if (typeof body === 'string') {
+    const text = naturalTextForSessionContent(body);
+    return text ? { userText: text, userIndex: 0, messageCount: 1 } : { userText: '', userIndex: -1, messageCount: 0 };
+  }
+  const msgs = getMessages(body);
   for (let i = 0; i < msgs.length; i++) {
     const message = msgs[i];
     if (message?.role !== 'user' || isToolResultOnlyMessage(message)) continue;
     const text = naturalTextForSessionContent(message.content);
-    if (text) return { userText: text, userIndex: i, messageCount: msgs.length };
+    if (text && !looksLikeBinaryText(text)) return { userText: text, userIndex: i, messageCount: msgs.length };
   }
+  const stubText = stubSessionUserText(entry);
+  if (stubText) return { userText: stubText, userIndex: 0, messageCount: Math.max(msgs.length, 1) };
   return { userText: '', userIndex: -1, messageCount: msgs.length };
 }
 
 function latestUserInputInfo(entry) {
+  if (isProtobufNoiseEntry(entry)) {
+    return { userText: '', userIndex: -1, messageCount: 0 };
+  }
   const msgs = getMessages(entry?.request?.body);
   for (let i = msgs.length - 1; i >= 0; i--) {
     const message = msgs[i];
     if (message?.role !== 'user' || isToolResultOnlyMessage(message)) continue;
     const text = naturalTextForSessionContent(message.content);
-    if (text) return { userText: text, userIndex: i, messageCount: msgs.length };
+    if (text && !looksLikeBinaryText(text)) return { userText: text, userIndex: i, messageCount: msgs.length };
   }
+  const stubText = stubSessionUserText(entry);
+  if (stubText) return { userText: stubText, userIndex: 0, messageCount: Math.max(msgs.length, 1) };
   return { userText: '', userIndex: -1, messageCount: msgs.length };
 }
 
@@ -291,11 +346,18 @@ function sessionRootTurn(entry) {
   return isNaN(rootTurn) ? null : rootTurn;
 }
 
+function isCursorTranscriptEntry(entry) {
+  if (entry?.transport === 'cursor-transcript') return true;
+  return String(entry?.request?.path || '').startsWith('/cursor/transcript/');
+}
+
 function shouldContinueSessionGroup(entry, info, currentGroup) {
   if (!currentGroup || !info.userText || currentGroup.userText !== info.userText) return false;
   if (isTitleGenerationEntry(entry)) return false;
   if (currentGroup.metadataOnly) return true;
   if (info.messageCount > 1 && info.userIndex === currentGroup.userIndex) return true;
+  // Cursor transcript steps repeat the same single-user prompt across tool steps.
+  if (isCursorTranscriptEntry(entry) && info.userIndex === currentGroup.userIndex) return true;
   return false;
 }
 

@@ -11,6 +11,12 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from claude_tap.bedrock import bedrock_model_from_path
+from claude_tap.trace_encoding import (
+    content_type_from_headers,
+    is_encoded_blob_body,
+    is_protobuf_content_type,
+    looks_like_binary_text,
+)
 from claude_tap.trace_store import SessionQuery, TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
 from claude_tap.viewer import _decode_bedrock_eventstream_events
@@ -276,8 +282,12 @@ def merge_record_into_summary(
         if not summary.get("started_at"):
             summary["started_at"] = timestamp
     summary["last_response"] = _last_response_preview([record])
-    if not summary.get("first_user"):
-        summary["first_user"] = _first_user_preview([record])
+    preview_user = _first_user_preview([record])
+    if preview_user:
+        existing_first = str(summary.get("first_user") or "")
+        # Prefer readable transcript prompts over earlier protobuf/binary noise.
+        if (not existing_first) or (_is_cursor_transcript_record(record) and looks_like_binary_text(existing_first)):
+            summary["first_user"] = preview_user
     if not summary.get("agent"):
         summary["agent"] = _infer_agent([record], manifest_entry)
         summary["agent_key"] = _agent_key(summary["agent"])
@@ -850,10 +860,13 @@ def _agent_filter_values(agent_key: str) -> tuple[tuple[str, ...], tuple[str, ..
 
 
 def _preview_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    transcripts = [record for record in records if _is_cursor_transcript_record(record)]
+    if transcripts:
+        return transcripts
     primary = [record for record in records if _is_primary_model_record(record)]
     if primary:
         return primary
-    return [record for record in records if not _is_auxiliary_record(record)]
+    return [record for record in records if not _is_auxiliary_record(record) and not _is_protobuf_noise_record(record)]
 
 
 def _redact_sensitive_value(value: Any, key: str = "") -> Any:
@@ -969,6 +982,8 @@ def _is_sensitive_key(key: str) -> bool:
 
 
 def _is_primary_model_record(record: dict[str, Any]) -> bool:
+    if _is_cursor_transcript_record(record):
+        return True
     path = _record_path(record).lower()
     if not path:
         return False
@@ -977,6 +992,7 @@ def _is_primary_model_record(record: dict[str, Any]) -> bool:
         "/zen/v1/messages",
         "/v1/responses",
         "/responses",
+        "/backend-api/codex/responses",
         "/v1/chat/completions",
         "/chat/completions",
         "/v1/completions",
@@ -987,7 +1003,30 @@ def _is_primary_model_record(record: dict[str, Any]) -> bool:
     return any(fragment in path for fragment in primary_fragments)
 
 
+def _is_cursor_transcript_record(record: dict[str, Any]) -> bool:
+    if str(record.get("transport") or "") == "cursor-transcript":
+        return True
+    return _record_path(record).startswith("/cursor/transcript/")
+
+
+def _is_protobuf_noise_record(record: dict[str, Any]) -> bool:
+    if _is_cursor_transcript_record(record):
+        return False
+    request = record.get("request")
+    if not isinstance(request, dict):
+        return False
+    headers = request.get("headers")
+    if isinstance(headers, dict) and is_protobuf_content_type(content_type_from_headers(headers)):
+        return True
+    body = request.get("body")
+    if is_encoded_blob_body(body):
+        return True
+    return isinstance(body, str) and looks_like_binary_text(body)
+
+
 def _is_auxiliary_record(record: dict[str, Any]) -> bool:
+    if _is_protobuf_noise_record(record):
+        return True
     path = _record_path(record).lower()
     if _is_model_probe_path(path):
         return True
@@ -1006,6 +1045,8 @@ def _is_auxiliary_record(record: dict[str, Any]) -> bool:
         "loadcodeassist",
         "fetchavailablemodels",
         "fetchuserinfo",
+        "aiserver.v1.",
+        "/v1/traces",
     )
     return any(fragment in path for fragment in auxiliary_fragments)
 
@@ -1036,10 +1077,18 @@ def _is_successful_primary_record(record: dict[str, Any]) -> bool:
 
 
 def _first_user_preview(records: list[dict[str, Any]]) -> str:
-    for record in records:
+    ordered = sorted(
+        records,
+        key=lambda record: 0 if _is_cursor_transcript_record(record) else 1,
+    )
+    for record in ordered:
+        if _is_protobuf_noise_record(record) or _is_auxiliary_record(record):
+            if not _is_cursor_transcript_record(record):
+                continue
         request = record.get("request")
         body = request.get("body") if isinstance(request, dict) else None
-        text = _request_user_text(body)
+        headers = request.get("headers") if isinstance(request, dict) else None
+        text = _request_user_text(body, headers=headers)
         if text:
             return _preview(text, 220)
     return ""
@@ -1112,9 +1161,14 @@ def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _request_user_text(body: Any) -> str:
+def _request_user_text(body: Any, *, headers: Any = None) -> str:
+    header_map = headers if isinstance(headers, dict) else None
+    if is_protobuf_content_type(content_type_from_headers(header_map)):
+        return ""
+    if is_encoded_blob_body(body):
+        return ""
     if isinstance(body, str):
-        return body
+        return "" if looks_like_binary_text(body) else body
     if not isinstance(body, dict):
         return ""
 

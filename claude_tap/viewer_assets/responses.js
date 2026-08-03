@@ -543,7 +543,7 @@ function expandLiveWebSocketResponseEntries(rawEntries, reset = false) {
 }
 
 let nextDisplayTurn = 1;
-const DISPLAY_TURN_PRIMARY_PATH_PREFIXES = ['/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
+const DISPLAY_TURN_PRIMARY_PATH_PREFIXES = ['/cursor/transcript/', '/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
 
 function displayTurnPath(entry) {
   return (entry?.request?.path || '/unknown').replace(/\?.*$/, '');
@@ -551,6 +551,7 @@ function displayTurnPath(entry) {
 
 function isDisplayTurnCandidate(entry) {
   if (!entry || typeof entry !== 'object') return false;
+  if (entry.transport === 'cursor-transcript') return true;
   const path = displayTurnPath(entry);
   if (path.includes('/count_tokens') || path.endsWith('/models') || path.includes('/models?')) return false;
   if (isResponsesPath(path) && !isDisplayableResponsesEntry(entry)) return false;

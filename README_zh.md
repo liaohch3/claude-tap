@@ -81,7 +81,7 @@
 | [OpenClaw](https://github.com/openclaw/openclaw) | 多提供方 OpenClaw 会话 |
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi 会话，包括 OpenAI Codex OAuth 提供方 |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 多提供方 Hermes TUI 或 gateway 会话 |
-| [Cursor CLI](https://cursor.com/cli) | Cursor Agent 会话，并导入可读的本地 transcript |
+| [Cursor](https://cursor.com/cli) CLI / IDE Agent | 启动 `cursor-agent` + 实时 transcript watch（`claude-tap --tap-client cursor`） |
 | [Qoder CLI](https://qoder.com/cli) | 通过 forward proxy 捕获 Qoder Agent 会话 |
 | [Antigravity CLI](https://antigravity.google/product/antigravity-cli) | 通过 forward proxy 捕获 Antigravity Agent 会话 |
 | [CodeBuddy CLI](https://www.codebuddy.ai) | 腾讯 CodeBuddy SaaS 或内部 Copilot 端点 |
@@ -135,8 +135,11 @@ claude-tap --tap-client mimo
 # Pi
 claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
 
-# Cursor CLI
-claude-tap --tap-client cursor -- -p --trust --model auto "hello"
+# Cursor：启动 cursor-agent + 实时 transcript watch + dashboard
+claude-tap --tap-client cursor
+
+# 只 watch IDE Agent transcript（不启动 CLI）
+claude-tap --tap-client cursor --tap-no-launch
 
 # Qoder CLI
 claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask
@@ -439,13 +442,19 @@ claude-tap --tap-client hermes --tap-proxy-mode reverse
 </details>
 
 <details>
-<summary>Cursor CLI 示例</summary>
+<summary>Cursor CLI / IDE Agent 示例</summary>
 
-Cursor CLI 默认使用 forward proxy。免费套餐建议传 `--model auto`；需要工具调用时不要加 `--mode ask`。
+Cursor 是 **transcript-only**（既不是反向代理也不是正向代理）：最短命令会启动 `cursor-agent`，同时监听 `~/.cursor/projects/*/agent-transcripts/*.jsonl`，并且 **每个 Cursor 会话 JSONL 对应一个独立 dashboard session**，不 MITM `api2.cursor.sh`。
 
 ```bash
+# 启动 agent + 实时 watch + dashboard（默认）
+claude-tap --tap-client cursor
+
+# 透传参数给 cursor-agent
 claude-tap --tap-client cursor -- -p --trust --model auto "hello"
-claude-tap --tap-client cursor -- -p --trust --model auto --continue "continue"
+
+# 只 watch IDE Agent（不启动 CLI）
+claude-tap --tap-client cursor --tap-no-launch
 ```
 
 </details>
@@ -598,7 +607,7 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 --tap-no-launch          仅启动代理，不启动客户端
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-store-stream-events 捕获时把原始 SSE/WebSocket event 数组写入 trace 存储，以便查看器/导出结果展示（默认关闭）
---tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/grok/kimi/kimi-code/openclaw/codebuddy 用 reverse，agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder 用 forward）
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/grok/kimi/kimi-code/openclaw/codebuddy 用 reverse，agy/codexapp/gemini/mimo/opencode/pi/hermes/qoder 用 forward；cursor 为 transcript-only，不走 MITM 代理）
 --tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy 会自动执行）
 ```
 
