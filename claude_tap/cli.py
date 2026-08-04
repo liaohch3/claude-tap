@@ -718,8 +718,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # the local proxy via MODEL_BASE_URL, without editing your config.\n"
             "  claude-tap --tap-client sigpi\n"
             "  # Or override explicitly\n"
-            '  claude-tap --tap-client sigpi --tap-target https://api.deepseek.com/v1\n'
-            '  MODEL_BASE_URL=https://api.deepseek.com/v1 claude-tap --tap-client sigpi\n'
+            "  claude-tap --tap-client sigpi --tap-target https://api.deepseek.com/v1\n"
+            "  MODEL_BASE_URL=https://api.deepseek.com/v1 claude-tap --tap-client sigpi\n"
             "\n"
             "proxy-only mode (connect from another terminal):\n"
             "  claude-tap --tap-no-launch --tap-port 8080\n"
