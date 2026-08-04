@@ -416,19 +416,36 @@ def _main_viewer_script(coverage: dict[str, Any], suffix: str) -> dict[str, Any]
         script for script in scripts if script.get("url", "").endswith(suffix) and len(script.get("functions", [])) > 50
     ]
     if not candidates:
-        # Chromium sometimes reports the inlined viewer bundle without a stable
-        # file URL after multi-page navigation; fall back to the largest script
-        # whose URL still mentions the coverage HTML name.
         candidates = [
             script for script in scripts if suffix in script.get("url", "") and len(script.get("functions", [])) > 50
         ]
-    if not candidates:
-        candidates = [script for script in scripts if len(script.get("functions", [])) > 50]
     if not candidates:
         sizes = sorted((len(script.get("functions", [])), script.get("url", "")) for script in scripts)
         top = ", ".join(f"{count}:{url[-60:]}" for count, url in sizes[-5:]) or "none"
         raise RuntimeError(f"Could not find viewer.html main script in V8 coverage output (suffix={suffix}; top={top})")
     return max(candidates, key=lambda script: len(script.get("functions", [])))
+
+
+def _coverage_script_score(script: dict[str, Any]) -> tuple[int, int]:
+    functions = script.get("functions") or []
+    covered = sum(1 for function in functions if _is_function_covered(function))
+    return covered, len(functions)
+
+
+def _merge_precise_coverage(*snapshots: dict[str, Any]) -> dict[str, Any]:
+    """Merge CDP PreciseCoverage snapshots, preferring better-covered scripts per URL."""
+    by_url: dict[str, dict[str, Any]] = {}
+    for snapshot in snapshots:
+        for script in snapshot.get("result") or []:
+            url = str(script.get("url") or "")
+            if not url:
+                # Empty-URL eval scripts are kept as-is; URL-keyed merge cannot key them.
+                by_url.setdefault(f"__empty_{len(by_url)}__", script)
+                continue
+            previous = by_url.get(url)
+            if previous is None or _coverage_script_score(script) > _coverage_script_score(previous):
+                by_url[url] = script
+    return {"result": list(by_url.values())}
 
 
 def _is_top_level_wrapper(function: dict[str, Any], script_end: int) -> bool:
@@ -748,6 +765,9 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     }""",
                     index,
                 )
+            # Snapshot before navigating away: Linux Chromium may drop earlier
+            # file:// scripts from later PreciseCoverage results.
+            main_page_coverage = session.send("Profiler.takePreciseCoverage")
             page.goto(compact_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".sidebar-item", timeout=5000)
             page.evaluate(
@@ -808,11 +828,12 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
             page.wait_for_selector(".sidebar-item", timeout=5000)
             page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".empty-trace-state", timeout=5000)
-            coverage = session.send("Profiler.takePreciseCoverage")
+            later_page_coverage = session.send("Profiler.takePreciseCoverage")
             session.send("Profiler.stopPreciseCoverage")
             session.send("Profiler.disable")
             browser.close()
 
+    coverage = _merge_precise_coverage(main_page_coverage, later_page_coverage)
     main_functions = _viewer_script_functions(_main_viewer_script(coverage, "v8_coverage.html"))
     empty_functions = _viewer_script_functions(_main_viewer_script(coverage, "empty_coverage.html"))
     compact_functions = _viewer_script_functions(_main_viewer_script(coverage, "compact_coverage.html"))

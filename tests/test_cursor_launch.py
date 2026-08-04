@@ -8,8 +8,13 @@ import pytest
 
 from claude_tap import parse_args
 from claude_tap.cli import CLIENT_CONFIGS, run_client
+from claude_tap.cursor_metadata import CursorConversationMeta
 from claude_tap.cursor_transcript import (
     CursorTranscriptWatcher,
+    _cursor_project_slug,
+    _load_transcript,
+    build_cursor_transcript_records,
+    find_cursor_transcripts,
     import_cursor_transcripts,
     model_from_cursor_args,
 )
@@ -388,3 +393,259 @@ async def test_cursor_transcript_watcher_resets_when_file_shrinks(trace_db, tmp_
 
     records = store.load_records(db_session)
     assert any(r["request"]["body"]["messages"][0]["content"] == "new" for r in records)
+
+
+def test_load_transcript_skips_invalid_and_non_message_rows(tmp_path: Path) -> None:
+    path = tmp_path / "broken.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                "not-json",
+                json.dumps(["list"]),
+                json.dumps({"role": "system", "message": {"content": [{"type": "text", "text": "x"}]}}),
+                json.dumps({"role": "user", "message": {"content": []}}),
+                json.dumps({"role": "user", "message": {"content": [{"type": "text", "text": "ok"}]}}),
+                json.dumps({"role": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    messages = _load_transcript(path)
+    assert messages == [
+        ("user", [{"type": "text", "text": "ok"}]),
+        ("assistant", [{"type": "text", "text": "hi"}]),
+    ]
+
+
+def test_cursor_project_slug_and_find_transcripts(tmp_path: Path) -> None:
+    assert _cursor_project_slug(Path("nope.jsonl")) == ""
+    assert _cursor_project_slug(Path("agent-transcripts") / "a" / "a.jsonl") == ""
+    transcript = _transcript_path(tmp_path, "proj", "sid")
+    _write_transcript(
+        transcript,
+        [
+            {"role": "user", "message": {"content": [{"type": "text", "text": "q"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "text", "text": "a"}]}},
+        ],
+    )
+    assert _cursor_project_slug(transcript) == "proj"
+    assert find_cursor_transcripts(since=0, home=tmp_path) == [transcript]
+    assert find_cursor_transcripts(since=10**12, home=tmp_path) == []
+    assert find_cursor_transcripts(since=0, home=tmp_path / "missing-home") == []
+
+
+def test_build_records_includes_context_meta_and_skips_steps(tmp_path: Path) -> None:
+    transcript = _transcript_path(tmp_path, "proj", "sid-meta")
+    _write_transcript(
+        transcript,
+        [
+            {"role": "user", "message": {"content": [{"type": "text", "text": "one"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "text", "text": "r1"}]}},
+            {"role": "user", "message": {"content": [{"type": "text", "text": "two"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "text", "text": "r2"}]}},
+        ],
+    )
+    meta = CursorConversationMeta(
+        model="from-meta",
+        context_tokens_used=11,
+        context_token_limit=22,
+        source="composerData",
+    )
+    total, records = build_cursor_transcript_records(
+        transcript,
+        skip_steps=1,
+        conversation_meta=meta,
+    )
+    assert total == 2
+    assert len(records) == 1
+    body = records[0]["request"]["body"]
+    assert body["model"] == "from-meta"
+    assert body["cursor_context_tokens_used"] == 11
+    assert body["cursor_context_token_limit"] == 22
+    assert body["cursor_meta_source"] == "composerData"
+    assert body["messages"][0]["content"] == "two"
+
+
+@pytest.mark.asyncio
+async def test_watcher_get_summary_and_start_stop(trace_db, tmp_path: Path) -> None:
+    transcript = _transcript_path(tmp_path, "proj", "summary-session")
+    _write_transcript(
+        transcript,
+        [
+            {"role": "user", "message": {"content": [{"type": "text", "text": "ping"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "text", "text": "pong"}]}},
+        ],
+    )
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    watcher = CursorTranscriptWatcher(
+        since=0,
+        home=tmp_path,
+        store=store,
+        poll_interval_seconds=0.05,
+    )
+    await watcher.start()
+    await watcher.start()  # idempotent
+    await asyncio.sleep(0.12)
+    summary = watcher.get_summary()
+    assert summary["api_calls"] >= 1
+    assert watcher.session_ids
+    imported = await watcher.stop()
+    assert imported >= 0
+    assert isinstance(watcher.get_summary(), dict)
+
+
+@pytest.mark.asyncio
+async def test_async_main_cursor_transcript_only_skips_proxy(monkeypatch, tmp_path: Path, capsys) -> None:
+    from unittest.mock import AsyncMock
+
+    from claude_tap import async_main, parse_args
+
+    class FakeWatcher:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.session_ids = ["cursor-session-1"]
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> int:
+            return 3
+
+        def close(self) -> None:
+            return None
+
+        def get_summary(self) -> dict:
+            return {
+                "api_calls": 3,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_create_tokens": 0,
+                "models_used": {"grok-4.5": 3},
+                "has_error": False,
+            }
+
+    client_calls: list[dict] = []
+
+    async def fake_run_client(*args, **kwargs):
+        client_calls.append(kwargs)
+        return 0
+
+    ca_calls: list[object] = []
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "cursor-async-main.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.run_client", fake_run_client)
+    monkeypatch.setattr("claude_tap.cli.CursorTranscriptWatcher", FakeWatcher)
+    monkeypatch.setattr("claude_tap.cli.ensure_ca", lambda: ca_calls.append("ca") or (Path("c"), Path("k")))
+    monkeypatch.setattr(
+        "claude_tap.cli.ensure_shared_dashboard",
+        AsyncMock(return_value=("http://127.0.0.1:9/dashboard", False)),
+    )
+
+    args = parse_args(
+        [
+            "--tap-client",
+            "cursor",
+            "--tap-output-dir",
+            str(tmp_path),
+            "--tap-no-open",
+            "--",
+            "--model",
+            "grok-4.5",
+            "hello",
+        ]
+    )
+    code = await async_main(args)
+    assert code == 0
+    assert ca_calls == []
+    assert client_calls and client_calls[0].get("ca_cert_path") is None
+    out = capsys.readouterr().out
+    assert "watching Cursor agent-transcripts" in out
+    assert "Cursor transcript turns: 3" in out
+
+
+@pytest.mark.asyncio
+async def test_async_main_cursor_no_launch_watch_only(monkeypatch, tmp_path: Path, capsys) -> None:
+    from unittest.mock import AsyncMock
+
+    from claude_tap import async_main, parse_args
+
+    class FakeWatcher:
+        def __init__(self, **kwargs):
+            self.session_ids = []
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> int:
+            return 0
+
+        def close(self) -> None:
+            return None
+
+        def get_summary(self) -> dict:
+            return {
+                "api_calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_create_tokens": 0,
+                "models_used": {},
+                "has_error": False,
+            }
+
+    sleeps = {"n": 0}
+
+    async def fake_sleep(_seconds):
+        sleeps["n"] += 1
+        raise asyncio.CancelledError
+
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "cursor-no-launch.sqlite3"))
+    monkeypatch.setattr("claude_tap.cli.CursorTranscriptWatcher", FakeWatcher)
+    monkeypatch.setattr("claude_tap.cli.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(
+        "claude_tap.cli.ensure_shared_dashboard",
+        AsyncMock(side_effect=AssertionError("dashboard mocked off")),
+    )
+
+    args = parse_args(
+        [
+            "--tap-client",
+            "cursor",
+            "--tap-no-launch",
+            "--tap-no-live",
+            "--tap-no-open",
+            "--tap-output-dir",
+            str(tmp_path),
+        ]
+    )
+    code = await async_main(args)
+    assert code == 0
+    assert sleeps["n"] == 1
+    assert "watching local Cursor transcripts only" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_watcher_skips_user_only_transcript_until_assistant(trace_db, tmp_path: Path) -> None:
+    transcript = _transcript_path(tmp_path, "proj", "pending-user")
+    _write_transcript(
+        transcript,
+        [{"role": "user", "message": {"content": [{"type": "text", "text": "waiting"}]}}],
+    )
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    watcher = CursorTranscriptWatcher(since=0, home=tmp_path, store=store)
+    assert await watcher.sync_once() == 0
+    assert watcher.session_ids == []
+    _write_transcript(
+        transcript,
+        [
+            {"role": "user", "message": {"content": [{"type": "text", "text": "waiting"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "text", "text": "ready"}]}},
+        ],
+    )
+    assert await watcher.sync_once() == 1
+    watcher.close()

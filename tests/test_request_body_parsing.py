@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from claude_tap.proxy import _parse_request_body_for_trace
+from claude_tap.trace_encoding import looks_like_binary_text
 
 
 def test_parse_request_body_for_trace_unwraps_double_serialized_object() -> None:
@@ -45,3 +46,10 @@ def test_parse_request_body_for_trace_protobuf_content_type_is_placeholder() -> 
         body,
         {"content-type": "application/connect+proto"},
     ) == {"_encoding": "protobuf", "byte_length": len(body)}
+
+
+def test_looks_like_binary_text_detects_controls_and_replacement() -> None:
+    assert looks_like_binary_text("") is False
+    assert looks_like_binary_text("hello world") is False
+    assert looks_like_binary_text("\ufffd binary") is True
+    assert looks_like_binary_text("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b") is True
