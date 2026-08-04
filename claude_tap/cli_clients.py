@@ -578,6 +578,25 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         default_target="https://copilot.tencent.com/v2",
         inject_settings_env=True,
     ),
+    "sigpi": ClientConfig(
+        cmd="sigpi",
+        label="SigPi",
+        install_url="https://github.com/xiatianliang1024gm/sigpi",
+        # SigPi resolves its active model's base_url from ~/.sigpi/config.toml
+        # and applies MODEL_BASE_URL / MODEL_API_KEY env overrides on top
+        # (env wins over the TOML value). Reverse mode repoints the model at
+        # the local proxy without editing the user's config; the proxy target
+        # is auto-detected from the same config (see _detect_sigpi_target).
+        base_url_env="MODEL_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+        # SigPi's base_url convention includes /v1 and the OpenAI SDK appends
+        # /chat/completions (or /responses) to it. Keep the Codex strip rule:
+        # remove the local /v1 before relaying, except when the upstream is
+        # api.openai.com, which expects the /v1 prefix in its own URL.
+        strip_path_prefix="/v1",
+        strip_path_prefix_unless_target_contains=("api.openai.com",),
+    ),
 }
 
 
@@ -2221,6 +2240,74 @@ def _detect_openclaw_target(cmd_args: Sequence[str] = ()) -> str:
     return CLIENT_CONFIGS["openclaw"].default_target
 
 
+def _sigpi_target_from_base_url(base_url: str) -> str:
+    """Normalize a SigPi ``base_url`` into a claude-tap reverse-proxy target.
+
+    SigPi stores ``base_url`` values that include the OpenAI SDK version
+    prefix (``https://api.deepseek.com/v1``), and the SDK appends the method
+    path directly to it. The reverse proxy strips ``/v1`` from incoming paths
+    unless the target is ``api.openai.com`` (which expects ``/v1/*`` itself),
+    so the api.openai.com target must not carry ``/v1`` to avoid
+    ``/v1/v1/chat/completions``. Every other host keeps its path verbatim.
+    """
+    url = base_url.strip().rstrip("/")
+    if not url:
+        return ""
+    try:
+        from urllib.parse import urlparse
+
+        host = urlparse(url).hostname or ""
+    except ValueError:
+        return url
+    if host == "api.openai.com" and url.endswith("/v1"):
+        return url[: -len("/v1")]
+    return url
+
+
+def _read_sigpi_config() -> dict | None:
+    """Return SigPi's parsed ``~/.sigpi/config.toml``, or None when unreadable."""
+    try:
+        with (Path.home() / ".sigpi" / "config.toml").open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _sigpi_last_model_id() -> str:
+    """Return the model id SigPi last selected via ``/model``, if any."""
+    try:
+        data = json.loads((Path.home() / ".sigpi" / "state.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return ""
+    value = data.get("lastModelId") if isinstance(data, dict) else None
+    return value if isinstance(value, str) and value else ""
+
+
+def _detect_sigpi_target() -> str:
+    """Auto-detect the upstream target SigPi's active model would use.
+
+    Mirrors SigPi's own model resolution: ``MODEL_ID`` env →
+    ``~/.sigpi/state.json`` ``lastModelId`` → first ``[models.*]`` key, with
+    ``MODEL_BASE_URL`` env overriding the TOML ``base_url``.
+    """
+    env_target = os.environ.get("MODEL_BASE_URL", "").strip()
+    if env_target:
+        return _sigpi_target_from_base_url(env_target)
+
+    cfg = _read_sigpi_config()
+    models = cfg.get("models") if cfg else None
+    if not isinstance(models, dict) or not models:
+        return CLIENT_CONFIGS["sigpi"].default_target
+
+    model_id = os.environ.get("MODEL_ID", "").strip() or _sigpi_last_model_id() or next(iter(models))
+    model = models.get(model_id)
+    base_url = model.get("base_url") if isinstance(model, dict) else None
+    if isinstance(base_url, str) and base_url.strip():
+        return _sigpi_target_from_base_url(base_url)
+    return CLIENT_CONFIGS["sigpi"].default_target
+
+
 TARGET_DETECTORS = {
     "claude": _detect_claude_target,
     "codex": _detect_codex_target,
@@ -2228,4 +2315,5 @@ TARGET_DETECTORS = {
     "grok": _detect_grok_target,
     "kimi-code": _detect_kimi_code_target,
     "openclaw": _detect_openclaw_target,
+    "sigpi": _detect_sigpi_target,
 }

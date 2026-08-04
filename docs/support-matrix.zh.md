@@ -44,6 +44,7 @@ English version: [Support Matrix](support-matrix.md).
 | Qoder CLI | Qoder 登录 / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy（Qoder 端点） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | Antigravity CLI | Antigravity 登录 | Forward proxy + `CLOUD_CODE_URL` bridge 到 `https://daily-cloudcode-pa.googleapis.com` | `CLOUD_CODE_URL` | HTTP/SSE | 手动 E2E 已验证；启动环境、Code Assist bridge 和 macOS 用户 keychain CA 自动信任已由单测覆盖 |
 | CodeBuddy CLI | CodeBuddy 登录（iOA / WeChat / Google-Github / Enterprise Domain） | 自动从 `~/.codebuddy/local_storage/` 缓存识别；默认 `https://copilot.tencent.com/v2` | `CODEBUDDY_BASE_URL` | HTTP/SSE Chat Completions | iOA 真实 E2E 已验证 |
+| SigPi | `~/.sigpi/config.toml` 中的模型 `api_key` | 自动从当前激活模型的 `base_url` 识别（env `MODEL_BASE_URL` → `~/.sigpi/state.json` `lastModelId` → 第一个 `[models.*]`）；默认 `https://api.openai.com` | `MODEL_BASE_URL` | HTTP/SSE Chat Completions / Responses | 单测 + 本地 E2E 已验证 |
 
 ## 各客户端默认代理模式
 
@@ -67,6 +68,7 @@ English version: [Support Matrix](support-matrix.md).
 | `qoder` | `forward` | Qoder CLI 会访问多个 Qoder 服务端点，且没有可靠的单一 base URL 覆盖能力 |
 | `agy` | `forward` | Antigravity 会访问多个 Google / Antigravity 端点；claude-tap 用 `HTTPS_PROXY` 捕获辅助流量，并用 `CLOUD_CODE_URL` 捕获 Code Assist 模型流量 |
 | `codebuddy` | `reverse` | 单 provider，原生支持 `CODEBUDDY_BASE_URL` 环境变量；支持 `--settings` 环境变量注入；上游 endpoint 自动从 CodeBuddy 登录缓存识别 |
+| `sigpi` | `reverse` | 单激活模型，原生支持 `MODEL_BASE_URL` / `MODEL_API_KEY` 环境变量覆盖；上游 endpoint 自动从 SigPi 自己的 `~/.sigpi/config.toml` + `state.json` 识别 |
 
 用户可以通过 `--tap-proxy-mode {reverse,forward}` 覆盖有代理的客户端。
 
@@ -138,6 +140,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_auto_ca_trust_*`：验证 Antigravity 会自动请求 macOS 用户 keychain CA 信任，且不需要 sudo
 - `test_macos_*_ca_command_*`：验证 CA 信任命令使用用户 login keychain 且不会调用 sudo
 - `test_codebuddy_*`：验证 CodeBuddy 注册、parse_args 默认 reverse 模式、settings 注入、forward/reverse 环境变量、`CODEBUDDY_BASE_URL` 探测，以及登录缓存读取
+- `test_sigpi_*`：验证 SigPi 注册、parse_args 默认 reverse 模式、`MODEL_BASE_URL` 环境变量注入、与代理 strip 规则匹配的目标归一化，以及从 env / `~/.sigpi/config.toml` / `state.json` / 回退值探测目标
 
 ### 手动验证（代理变更合入前）
 
@@ -193,6 +196,10 @@ uv run python -m claude_tap --tap-client pi -- \
 # CodeBuddy（登录后自动识别端点）
 uv run python -m claude_tap --tap-client codebuddy -- -p "Reply OK"
 # 验证 trace 包含 /v2/chat/completions 记录,且响应有非零 token 计数
+
+# SigPi（自动识别当前激活模型的端点）
+uv run python -m claude-tap --tap-client sigpi
+# 验证 trace 包含当前激活模型的 /chat/completions（或 /responses）记录
 ```
 
 ### 真实 E2E（有认证时可选）

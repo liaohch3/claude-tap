@@ -712,6 +712,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client codebuddy --tap-target https://www.codebuddy.ai/v2\n"
             '  CODEBUDDY_BASE_URL=https://your-host/v2 claude-tap --tap-client codebuddy -- -p "Reply OK"\n'
             "\n"
+            "sigpi (reverse proxy mode):\n"
+            "  # Auto-detects the endpoint of SigPi's active model from\n"
+            "  # ~/.sigpi/config.toml (+ ~/.sigpi/state.json) and repoints it at\n"
+            "  # the local proxy via MODEL_BASE_URL, without editing your config.\n"
+            "  claude-tap --tap-client sigpi\n"
+            "  # Or override explicitly\n"
+            '  claude-tap --tap-client sigpi --tap-target https://api.deepseek.com/v1\n'
+            '  MODEL_BASE_URL=https://api.deepseek.com/v1 claude-tap --tap-client sigpi\n'
+            "\n"
             "proxy-only mode (connect from another terminal):\n"
             "  claude-tap --tap-no-launch --tap-port 8080\n"
             "  # then: ANTHROPIC_BASE_URL=http://127.0.0.1:8080 claude\n"

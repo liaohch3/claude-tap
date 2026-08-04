@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Support capturing SigPi agent traffic: new `sigpi` client (reverse proxy mode by default) that auto-detects the active model's upstream from `~/.sigpi/config.toml` (+ `~/.sigpi/state.json`) and repoints it at the local proxy via `MODEL_BASE_URL`, without editing SigPi's config.
+
 
 
 

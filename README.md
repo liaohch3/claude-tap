@@ -13,7 +13,7 @@
 
 Website: [Local AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · Guide: [How to view agent traces locally](docs/guides/agent-trace-viewer.md)
 
-It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Codex App](https://openai.com/codex/), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Grok Build CLI](https://docs.x.ai/build/overview), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [MiMo Code](https://mimo.xiaomi.com/en/mimocode), [OpenCode](https://opencode.ai), [OpenClaw](https://github.com/openclaw/openclaw), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
+It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Codex App](https://openai.com/codex/), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Grok Build CLI](https://docs.x.ai/build/overview), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [MiMo Code](https://mimo.xiaomi.com/en/mimocode), [OpenCode](https://opencode.ai), [OpenClaw](https://github.com/openclaw/openclaw), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), [CodeBuddy CLI](https://www.codebuddy.ai), and [SigPi](https://github.com/xiatianliang1024gm/sigpi).
 
 <p align="center">
   <img src="docs/demo.gif" alt="claude-tap demo showing a real Codex trace" width="100%">
@@ -64,7 +64,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 - 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
 - 📦 **Share one portable artifact**: each run writes a local trace session that can be exported to a self-contained HTML viewer for review or archiving.
 - 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
-- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Codex App, Gemini CLI, Grok Build CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
+- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Codex App, Gemini CLI, Grok Build CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, CodeBuddy, and SigPi.
 
 ## Supported Clients
 
@@ -85,6 +85,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 | [Qoder CLI](https://qoder.com/cli) | Qoder Agent sessions through forward proxy mode |
 | [Antigravity CLI](https://antigravity.google/product/antigravity-cli) | Antigravity Agent sessions through forward proxy mode |
 | [CodeBuddy CLI](https://www.codebuddy.ai) | Tencent CodeBuddy SaaS or internal Copilot endpoint |
+| [SigPi](https://github.com/xiatianliang1024gm/sigpi) | SigPi sessions through reverse proxy mode |
 
 ## Install
 
@@ -535,6 +536,24 @@ CODEBUDDY_BASE_URL=https://www.codebuddy.ai/v2 claude-tap --tap-client codebuddy
 </details>
 
 <details>
+<summary>SigPi examples</summary>
+
+SigPi uses reverse proxy mode by default. claude-tap reads SigPi's own config (`~/.sigpi/config.toml`, plus `~/.sigpi/state.json` for the last selected model) and auto-detects the upstream endpoint of the active model, so no extra flag is needed. The proxy repoints that model at the local port via `MODEL_BASE_URL` — your SigPi config is never edited.
+
+```bash
+# Auto-detected endpoint (from the active model's base_url)
+claude-tap --tap-client sigpi
+
+# Explicit override (e.g. another model's endpoint)
+claude-tap --tap-client sigpi --tap-target https://api.deepseek.com/v1
+
+# Or via environment variable
+MODEL_BASE_URL=https://api.deepseek.com/v1 claude-tap --tap-client sigpi
+```
+
+</details>
+
+<details>
 <summary>Viewer, export, and advanced options</summary>
 
 ```bash
@@ -595,7 +614,7 @@ By default the launcher points at the current checkout; pass `--installed` if `c
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch/listen to: claude (default), agy, codex, codexapp, gemini, grok, kimi, kimi-code, mimo, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
+--tap-client CLIENT      Client to launch/listen to: claude (default), agy, codex, codexapp, gemini, grok, kimi, kimi-code, mimo, opencode, openclaw, pi, hermes, cursor, qoder, codebuddy, or sigpi
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer while the client runs (default: on)
 --tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)
@@ -607,7 +626,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-no-launch          Only start the proxy, don't launch client
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, forward for agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy/sigpi, forward for agy/codexapp/gemini/mimo/opencode/pi/hermes/cursor/qoder)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 

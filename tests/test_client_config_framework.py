@@ -26,6 +26,7 @@ SUPPORTED_CLIENTS = {
     "cursor",
     "qoder",
     "codebuddy",
+    "sigpi",
 }
 
 SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"claude", "codexapp", "gemini", "kimi-code", "openclaw"}
@@ -47,6 +48,7 @@ SUPPORTED_DEFAULT_PROXY_MODES = {
     "cursor": "forward",
     "qoder": "forward",
     "codebuddy": "reverse",
+    "sigpi": "reverse",
 }
 
 
@@ -557,3 +559,138 @@ async def test_run_client_agy_forward_sets_proxy_ca_and_cloud_code_url(
     out = capsys.readouterr().out
     assert "HTTPS_PROXY=http://127.0.0.1:43123" in out
     assert "CLOUD_CODE_URL=http://127.0.0.1:43123" in out
+
+
+def test_sigpi_declares_model_base_url_reverse_env() -> None:
+    cfg = CLIENT_CONFIGS["sigpi"]
+
+    assert cfg.cmd == "sigpi"
+    assert cfg.label == "SigPi"
+    assert cfg.base_url_env == "MODEL_BASE_URL"
+    assert cfg.base_url_suffix == "/v1"
+    assert cfg.default_target == "https://api.openai.com"
+    assert cfg.default_proxy_mode == "reverse"
+    assert cfg.reverse_base_url_envs == ("MODEL_BASE_URL",)
+    assert cfg.reverse_base_url_env_map(43123) == {"MODEL_BASE_URL": "http://127.0.0.1:43123/v1"}
+    assert cfg.reverse_strip_path_prefix("https://api.openai.com") == ""
+    assert cfg.reverse_strip_path_prefix("https://api.deepseek.com") == "/v1"
+    assert cfg.reverse_strip_path_prefix("https://openrouter.ai/api/v1") == "/v1"
+
+
+def test_sigpi_target_normalization_matches_proxy_strip_rules() -> None:
+    assert cli_clients._sigpi_target_from_base_url("https://api.openai.com/v1") == "https://api.openai.com"
+    assert cli_clients._sigpi_target_from_base_url("https://api.openai.com/v1/") == "https://api.openai.com"
+    assert cli_clients._sigpi_target_from_base_url("https://api.deepseek.com/v1") == "https://api.deepseek.com/v1"
+    assert cli_clients._sigpi_target_from_base_url("https://openrouter.ai/api/v1") == "https://openrouter.ai/api/v1"
+    assert cli_clients._sigpi_target_from_base_url("http://192.10.27.211:54000/v1") == "http://192.10.27.211:54000/v1"
+    assert cli_clients._sigpi_target_from_base_url("https://llm.example.com") == "https://llm.example.com"
+    assert cli_clients._sigpi_target_from_base_url("   ") == ""
+
+
+def test_detect_sigpi_target_uses_model_base_url_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MODEL_BASE_URL", "https://api.deepseek.com/v1")
+
+    assert cli_clients._detect_sigpi_target() == "https://api.deepseek.com/v1"
+
+
+def test_detect_sigpi_target_reads_config_toml(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MODEL_BASE_URL", raising=False)
+    monkeypatch.delenv("MODEL_ID", raising=False)
+    (tmp_path / ".sigpi").mkdir()
+    (tmp_path / ".sigpi" / "config.toml").write_text(
+        "[models.local]\n"
+        'base_url = "http://localhost:8000/v1"\n'
+        'api_key = "your-api-key"\n'
+        'name = "your-model-name"\n'
+        "\n"
+        "[models.ds]\n"
+        'base_url = "https://api.deepseek.com/v1"\n'
+        'api_key = "sk-ds"\n'
+        'name = "deepseek-v4"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    assert cli_clients._detect_sigpi_target() == "http://localhost:8000/v1"
+
+
+def test_detect_sigpi_target_prefers_model_id_and_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MODEL_BASE_URL", raising=False)
+    (tmp_path / ".sigpi").mkdir()
+    (tmp_path / ".sigpi" / "config.toml").write_text(
+        "[models.local]\n"
+        'base_url = "http://localhost:8000/v1"\n'
+        'api_key = "k"\n'
+        "\n"
+        "[models.ds]\n"
+        'base_url = "https://api.deepseek.com/v1"\n'
+        'api_key = "sk-ds"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / ".sigpi" / "state.json").write_text('{"lastModelId": "ds"}\n', encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    assert cli_clients._detect_sigpi_target() == "https://api.deepseek.com/v1"
+
+    monkeypatch.setenv("MODEL_ID", "local")
+    assert cli_clients._detect_sigpi_target() == "http://localhost:8000/v1"
+
+
+def test_detect_sigpi_target_falls_back_without_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MODEL_BASE_URL", raising=False)
+    monkeypatch.delenv("MODEL_ID", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "missing-home")
+
+    assert cli_clients._detect_sigpi_target() == CLIENT_CONFIGS["sigpi"].default_target
+
+
+def test_detect_sigpi_target_ignores_invalid_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MODEL_BASE_URL", raising=False)
+    (tmp_path / ".sigpi").mkdir()
+    (tmp_path / ".sigpi" / "config.toml").write_text("{ not toml", encoding="utf-8")
+    (tmp_path / ".sigpi" / "state.json").write_text("not json", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    assert cli_clients._detect_sigpi_target() == CLIENT_CONFIGS["sigpi"].default_target
+
+
+@pytest.mark.asyncio
+async def test_run_client_sigpi_reverse_sets_model_base_url_env(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return _DummyProc()
+
+    monkeypatch.setattr("claude_tap.cli.shutil.which", lambda name: f"/tmp/{name}")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, ["--continue"], client="sigpi", proxy_mode="reverse")
+
+    assert code == 0
+    env = captured["env"]
+    assert env["MODEL_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    assert env["NO_PROXY"] == "127.0.0.1"
+    assert captured["cmd"] == ("/tmp/sigpi", "--continue")
+
+    out = capsys.readouterr().out
+    assert "MODEL_BASE_URL=http://127.0.0.1:43123/v1" in out
