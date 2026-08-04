@@ -40,7 +40,7 @@ CLIENT_LABELS = {
     "pi": "Pi",
     "qoder": "Qoder",
 }
-DASHBOARD_SUMMARY_VERSION = 2
+DASHBOARD_SUMMARY_VERSION = 3
 VALID_SESSION_STATUSES = {"active", "complete", "error", "empty"}
 _REDACTED_VALUE = "REDACTED"
 _SENSITIVE_KEY_NAMES = {

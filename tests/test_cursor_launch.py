@@ -234,7 +234,7 @@ async def test_import_cursor_transcripts_preserves_tool_uses(trace_db, tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_cursor_flat_and_nested_same_id_does_not_open_empty_session(trace_db, tmp_path: Path) -> None:
+async def test_cursor_flat_and_nested_same_id_shares_one_session(trace_db, tmp_path: Path) -> None:
     nested = _transcript_path(tmp_path, "project-one", "same-id")
     flat = tmp_path / ".cursor" / "projects" / "project-two" / "agent-transcripts" / "same-id.jsonl"
     rows = [
@@ -254,6 +254,18 @@ async def test_cursor_flat_and_nested_same_id_does_not_open_empty_session(trace_
         assert len(store.load_records(watcher.session_ids[0])) == 1
         empties = [row for row in store.list_session_rows() if int(row["record_count"] or 0) == 0]
         assert empties == []
+
+        # Newer turns on the other layout append into the same tap session.
+        more = rows + [
+            {"role": "user", "message": {"content": [{"type": "text", "text": "again"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "text", "text": "second"}]}},
+        ]
+        _write_transcript(flat, more)
+        assert await watcher.sync_once() == 1
+        assert len(watcher.session_ids) == 1
+        records = store.load_records(watcher.session_ids[0])
+        assert len(records) == 2
+        assert records[1]["request"]["body"]["messages"][0]["content"] == "again"
     finally:
         watcher.close()
 
@@ -450,16 +462,19 @@ async def test_cursor_meta_cache_retries_empty_until_populated(trace_db, tmp_pat
         calls["n"] += 1
         if calls["n"] == 1:
             return CursorConversationMeta()
-        return CursorConversationMeta(model="late-model", source="chat-store")
+        if calls["n"] == 2:
+            return CursorConversationMeta(context_tokens_used=99, context_token_limit=1000, source="composerData")
+        return CursorConversationMeta(model="late-model", context_tokens_used=99, source="chat-store")
 
     monkeypatch.setattr("claude_tap.cursor_transcript.resolve_cursor_conversation_meta", fake_resolve)
     store = get_trace_store()
     watcher = CursorTranscriptWatcher(since=0, home=tmp_path, store=store)
     assert watcher._meta_for(transcript).model == ""
+    assert watcher._meta_for(transcript).context_tokens_used == 99
     assert watcher._meta_for(transcript).model == "late-model"
-    assert calls["n"] == 2
+    assert calls["n"] == 3
     assert watcher._meta_for(transcript).model == "late-model"
-    assert calls["n"] == 2
+    assert calls["n"] == 3
     watcher.close()
 
 
@@ -678,13 +693,14 @@ async def test_async_main_cursor_transcript_only_skips_proxy(monkeypatch, tmp_pa
 
 @pytest.mark.asyncio
 async def test_async_main_cursor_no_launch_watch_only(monkeypatch, tmp_path: Path, capsys) -> None:
-    from unittest.mock import AsyncMock
-
     from claude_tap import async_main, parse_args
 
     class FakeWatcher:
+        last_since: float | None = None
+
         def __init__(self, **kwargs):
             self.session_ids = []
+            FakeWatcher.last_since = kwargs.get("since")
 
         async def start(self) -> None:
             return None
@@ -707,25 +723,30 @@ async def test_async_main_cursor_no_launch_watch_only(monkeypatch, tmp_path: Pat
             }
 
     sleeps = {"n": 0}
+    dashboard_started_at = {"t": None}
+    real_sleep = asyncio.sleep
 
-    async def fake_sleep(_seconds):
-        sleeps["n"] += 1
-        raise asyncio.CancelledError
+    async def fake_sleep(seconds):
+        if seconds >= 3600:
+            sleeps["n"] += 1
+            raise asyncio.CancelledError
+        await real_sleep(seconds)
+
+    async def slow_dashboard(**_kwargs):
+        await real_sleep(0.05)
+        dashboard_started_at["t"] = __import__("time").time()
+        return "http://127.0.0.1:9/dashboard", True
 
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "cursor-no-launch.sqlite3"))
     monkeypatch.setattr("claude_tap.cli.CursorTranscriptWatcher", FakeWatcher)
     monkeypatch.setattr("claude_tap.cli.asyncio.sleep", fake_sleep)
-    monkeypatch.setattr(
-        "claude_tap.cli.ensure_shared_dashboard",
-        AsyncMock(side_effect=AssertionError("dashboard mocked off")),
-    )
+    monkeypatch.setattr("claude_tap.cli.ensure_shared_dashboard", slow_dashboard)
 
     args = parse_args(
         [
             "--tap-client",
             "cursor",
             "--tap-no-launch",
-            "--tap-no-live",
             "--tap-no-open",
             "--tap-output-dir",
             str(tmp_path),
@@ -734,6 +755,9 @@ async def test_async_main_cursor_no_launch_watch_only(monkeypatch, tmp_path: Pat
     code = await async_main(args)
     assert code == 0
     assert sleeps["n"] == 1
+    assert FakeWatcher.last_since is not None
+    assert dashboard_started_at["t"] is not None
+    assert FakeWatcher.last_since <= dashboard_started_at["t"]
     assert "watching local Cursor transcripts only" in capsys.readouterr().out
 
 

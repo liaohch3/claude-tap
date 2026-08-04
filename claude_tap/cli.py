@@ -360,6 +360,10 @@ async def async_main(args: argparse.Namespace):
         )
         session_id = writer.session_id
 
+    # Capture the Cursor watch window before dashboard startup so transcripts
+    # written while ensure_shared_dashboard() boots are still imported.
+    watch_since = time.time()
+
     # Ensure the shared dashboard is running (one port for all sessions).
     dashboard_url_value: str | None = None
     dashboard_host = args.host
@@ -404,7 +408,6 @@ async def async_main(args: argparse.Namespace):
     runner: web.AppRunner | None = None
     cursor_watcher: CursorTranscriptWatcher | None = None
     exit_code = 0
-    client_started_at = time.time()
     capture_only = bool(getattr(args, "export_prompt", None))
     if capture_only and not transcript_only:
         print("📝 Prompt export mode: upstream calls are skipped after capture.")
@@ -413,9 +416,8 @@ async def async_main(args: argparse.Namespace):
             print(f"🔍 claude-tap v{__version__} watching Cursor agent-transcripts")
             print("   Mode: one tap session per Cursor conversation JSONL")
             print(f"🗄️  Trace database: {resolve_db_path()}")
-            client_started_at = time.time()
             cursor_watcher = CursorTranscriptWatcher(
-                since=client_started_at,
+                since=watch_since,
                 model=model_from_cursor_args(args.claude_args),
                 store=store,
                 client=args.client,
@@ -521,7 +523,6 @@ async def async_main(args: argparse.Namespace):
             print(f"🗄️  Trace database: {resolve_db_path()}")
 
             if not args.no_launch:
-                client_started_at = time.time()
                 try:
                     exit_code = await run_client(
                         actual_port,

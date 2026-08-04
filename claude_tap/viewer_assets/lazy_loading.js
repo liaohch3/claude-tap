@@ -56,6 +56,10 @@ function buildStubEntry(meta, rawIdx) {
   if (meta.session_user_text) {
     body.messages = [{ role: 'user', content: meta.session_user_text }];
   }
+  // Preserve Cursor turn ids so repeated identical prompts stay in separate
+  // sidebar groups when only stubs are available.
+  if (typeof meta.cursor_turn === 'number') body.cursor_turn = meta.cursor_turn;
+  if (typeof meta.cursor_step === 'number') body.cursor_step = meta.cursor_step;
 
   // Build minimal response content for tool filter
   const respContent = [];

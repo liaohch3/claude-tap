@@ -388,11 +388,10 @@ def test_viewer_keeps_repeated_cursor_prompts_in_separate_groups(responses_page)
               path: `/cursor/transcript/abc/turn/${turn}/step/${step}`,
               model: 'grok-4.5',
               session_user_text: 'continue',
+              cursor_turn: turn,
+              cursor_step: step,
               status: 200,
             }, idx);
-            stub.request.body.cursor_turn = turn;
-            stub.request.body.cursor_step = step;
-            stub.request.body.messages = [{ role: 'user', content: 'continue' }];
             return stub;
           };
           const stubs = [make(1, 1, 0), make(1, 2, 1), make(2, 1, 2)];
@@ -402,6 +401,7 @@ def test_viewer_keeps_repeated_cursor_prompts_in_separate_groups(responses_page)
             groupCount: groups.length,
             sizes: groups.map(group => group.items.length),
             texts: groups.map(group => group.userText),
+            stubTurn: stubs[2].request.body.cursor_turn,
           };
         }"""
     )
@@ -409,6 +409,7 @@ def test_viewer_keeps_repeated_cursor_prompts_in_separate_groups(responses_page)
     assert result["groupCount"] == 2
     assert result["sizes"] == [2, 1]
     assert result["texts"] == ["continue", "continue"]
+    assert result["stubTurn"] == 2
 
 
 def test_viewer_collapses_cursor_transcript_paths_in_filter(responses_page) -> None:

@@ -604,6 +604,8 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     path: '/cursor/transcript/coverage/turn/1/step/1',
                     model: 'grok-4.5',
                     session_user_text: 'coverage cursor prompt',
+                    cursor_turn: 1,
+                    cursor_step: 1,
                     status: 200,
                   }, 0);
                   isCursorTranscriptEntry(cursorStub);

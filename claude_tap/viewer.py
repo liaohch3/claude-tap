@@ -1024,6 +1024,8 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         "has_system": bool(sys_text),
         "message_count": len(msgs),
         "session_user_text": _latest_user_text(msgs) or _first_user_text(msgs),
+        "cursor_turn": body.get("cursor_turn") if isinstance(body.get("cursor_turn"), int) else None,
+        "cursor_step": body.get("cursor_step") if isinstance(body.get("cursor_step"), int) else None,
         "codex_app_session_id": codex_app_session_id,
         "sys_hint": sys_text[:200],
         "tool_names": tool_names,

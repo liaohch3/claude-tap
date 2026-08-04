@@ -323,18 +323,18 @@ class CursorTranscriptWatcher:
         self._sync_errors = 0
 
     def _meta_for(self, transcript_path: Path) -> CursorConversationMeta:
-        key = str(transcript_path)
+        key = transcript_path.stem
         cached = self._conversation_meta.get(key)
-        if cached is not None and (cached.model or cached.context_tokens_used is not None):
+        # Only a resolved model is cache-complete. Context-only results must be
+        # retried so a later chat-store / ai-tracking model can still land.
+        if cached is not None and cached.model:
             return cached
-        meta = resolve_cursor_conversation_meta(transcript_path.stem, home=self._home)
-        # Only cache populated results. The first poll can race Cursor writing
-        # chat-store / composer metadata; empty results must be retried.
-        if meta.model or meta.context_tokens_used is not None:
+        meta = resolve_cursor_conversation_meta(key, home=self._home)
+        if meta.model:
             self._conversation_meta[key] = meta
             log.debug(
                 "Cursor meta for %s: model=%s source=%s context=%s/%s",
-                transcript_path.stem,
+                key,
                 meta.model or "-",
                 meta.source or "-",
                 meta.context_tokens_used,
@@ -380,11 +380,12 @@ class CursorTranscriptWatcher:
             writer.close()
 
     def _writer_for(self, transcript_path: Path) -> TraceWriter:
-        key = str(transcript_path)
-        writer = self._writers.get(key)
+        # Key by conversation UUID so flat + nested copies of the same chat
+        # share one tap session even when path-dedupe lets newer steps through.
+        cursor_session_id = transcript_path.stem
+        writer = self._writers.get(cursor_session_id)
         if writer is not None:
             return writer
-        cursor_session_id = transcript_path.stem
         project_slug = _cursor_project_slug(transcript_path)
         metadata = {
             **self._metadata,
@@ -405,7 +406,7 @@ class CursorTranscriptWatcher:
             proxy_mode=self._proxy_mode,
             metadata=metadata,
         )
-        self._writers[key] = writer
+        self._writers[cursor_session_id] = writer
         log.info(
             "Opened tap session %s for Cursor transcript %s (%s)",
             writer.session_id,
@@ -463,7 +464,7 @@ class CursorTranscriptWatcher:
                 # Same conversation UUID can appear as both flat and nested paths;
                 # path-based dedupe must not open an empty tap session.
                 continue
-            writer = self._writers.get(key) or self._writer_for(transcript_path)
+            writer = self._writers.get(transcript_path.stem) or self._writer_for(transcript_path)
             for record in new_records:
                 path = str((record.get("request") or {}).get("path") or "")
                 await writer.write_next_turn(record)
