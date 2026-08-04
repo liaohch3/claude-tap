@@ -6,6 +6,7 @@ from pathlib import Path
 
 from claude_tap.cursor_metadata import (
     _decode_maybe_hex_json,
+    _default_cursor_state_db,
     lookup_ai_tracking_model,
     lookup_chat_store_model,
     lookup_composer_meta,
@@ -118,6 +119,23 @@ def test_resolve_merges_composer_context_with_chat_store_model(tmp_path: Path) -
     assert meta.context_tokens_used == 2048
     assert meta.context_token_limit == 256000
     assert meta.source == "chat-store"
+
+
+def test_default_cursor_state_db_is_platform_specific(monkeypatch) -> None:
+    monkeypatch.setattr("claude_tap.cursor_metadata.sys.platform", "linux")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    linux_path = _default_cursor_state_db()
+    assert linux_path.as_posix().endswith(".config/Cursor/User/globalStorage/state.vscdb")
+
+    monkeypatch.setattr("claude_tap.cursor_metadata.sys.platform", "win32")
+    monkeypatch.setenv("APPDATA", r"C:\Users\test\AppData\Roaming")
+    win_path = _default_cursor_state_db()
+    assert "Cursor" in win_path.parts
+    assert win_path.name == "state.vscdb"
+
+    monkeypatch.setattr("claude_tap.cursor_metadata.sys.platform", "darwin")
+    mac_path = _default_cursor_state_db()
+    assert "Application Support" in mac_path.parts
 
 
 def test_decode_maybe_hex_json_handles_bytes_and_invalid() -> None:

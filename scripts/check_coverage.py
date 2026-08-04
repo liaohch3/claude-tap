@@ -608,6 +608,8 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                   }, 0);
                   isCursorTranscriptEntry(cursorStub);
                   isCursorTranscriptEntry({ request: { path: '/v1/messages' } });
+                  cursorTurnOf(cursorStub);
+                  cursorTurnOf({ request: { body: {} } });
                   looksLikeBinaryText('\\x12\\x04prod');
                   isProtobufNoiseEntry({
                     request: {

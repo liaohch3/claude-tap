@@ -552,8 +552,13 @@ async def async_main(args: argparse.Namespace):
                 log.debug("Cursor transcript watcher stop failed", exc_info=True)
                 imported = 0
             cursor_session_ids = set(cursor_watcher.session_ids)
-            if imported or cursor_session_ids:
-                print(f"   Cursor transcript turns: {imported}")
+            # Prefer cumulative writer totals: stop() only returns the final-sync
+            # delta, which is often 0 after a successful live watch.
+            turns = int(cursor_watcher.get_summary().get("api_calls") or 0)
+            if turns == 0 and imported:
+                turns = int(imported)
+            if turns or cursor_session_ids:
+                print(f"   Cursor transcript turns: {turns}")
                 print(f"   Cursor conversations: {len(cursor_session_ids)}")
         if forward_server:
             try:

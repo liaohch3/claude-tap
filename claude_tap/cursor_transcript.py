@@ -33,20 +33,28 @@ def _cursor_projects_dir(home: Path | None = None) -> Path:
     return (home or Path.home()) / ".cursor" / "projects"
 
 
+def _launch_model_hint(value: str) -> str:
+    """Normalize a launch ``--model`` hint for transcript enrichment.
+
+    Cursor's ``auto`` means "pick at runtime"; it is not a concrete model id and
+    must not override richer local metadata such as ``grok-4.5``.
+    """
+    stripped = value.strip()
+    if not stripped or stripped.lower() == "auto":
+        return ""
+    return stripped
+
+
 def model_from_cursor_args(cmd_args: list[str] | tuple[str, ...] | None) -> str:
-    """Return ``--model`` from cursor-agent argv, if present."""
+    """Return a concrete ``--model`` hint from cursor-agent argv, if present."""
     if not cmd_args:
         return ""
     args = list(cmd_args)
     for index, arg in enumerate(args):
         if arg == "--model" and index + 1 < len(args):
-            value = str(args[index + 1]).strip()
-            if value:
-                return value
+            return _launch_model_hint(str(args[index + 1]))
         if arg.startswith("--model="):
-            value = arg.split("=", 1)[1].strip()
-            if value:
-                return value
+            return _launch_model_hint(arg.split("=", 1)[1])
     return ""
 
 
@@ -160,18 +168,36 @@ def find_cursor_transcripts(
     since: float,
     home: Path | None = None,
 ) -> list[Path]:
-    """Return Cursor agent transcripts modified at or after ``since``."""
+    """Return Cursor agent transcripts modified at or after ``since``.
+
+    Supports both layouts Cursor has used:
+
+    - nested: ``projects/<slug>/agent-transcripts/<id>/<id>.jsonl``
+    - flat: ``projects/<slug>/agent-transcripts/<id>.jsonl``
+    """
     projects_dir = _cursor_projects_dir(home)
     if not projects_dir.exists():
         return []
     candidates: list[tuple[float, Path]] = []
-    for path in projects_dir.glob("*/agent-transcripts/*/*.jsonl"):
-        try:
-            mtime = path.stat().st_mtime
-            if mtime >= since:
-                candidates.append((mtime, path))
-        except OSError:
-            continue
+    seen: set[Path] = set()
+    for pattern in (
+        "*/agent-transcripts/*/*.jsonl",
+        "*/agent-transcripts/*.jsonl",
+    ):
+        for path in projects_dir.glob(pattern):
+            if path in seen:
+                continue
+            # Nested layout already covers ``<id>/<id>.jsonl``; skip subagent
+            # dumps under ``.../subagents/*.jsonl`` (three levels below project).
+            if "subagents" in path.parts:
+                continue
+            seen.add(path)
+            try:
+                mtime = path.stat().st_mtime
+                if mtime >= since:
+                    candidates.append((mtime, path))
+            except OSError:
+                continue
     return [path for _, path in sorted(candidates, key=lambda item: item[0])]
 
 
@@ -195,7 +221,7 @@ def build_cursor_transcript_records(
     records: list[dict] = []
     timestamp = datetime.now(timezone.utc).isoformat()
     meta = conversation_meta or CursorConversationMeta()
-    model_name = model.strip() or meta.model
+    model_name = _launch_model_hint(model) or meta.model
 
     for index, (user_text, assistant_blocks, cursor_turn, cursor_step) in enumerate(steps, start=1):
         req_id = f"cursor_transcript_{uuid.uuid4().hex[:12]}"
@@ -299,11 +325,13 @@ class CursorTranscriptWatcher:
     def _meta_for(self, transcript_path: Path) -> CursorConversationMeta:
         key = str(transcript_path)
         cached = self._conversation_meta.get(key)
-        if cached is not None:
+        if cached is not None and (cached.model or cached.context_tokens_used is not None):
             return cached
         meta = resolve_cursor_conversation_meta(transcript_path.stem, home=self._home)
-        self._conversation_meta[key] = meta
+        # Only cache populated results. The first poll can race Cursor writing
+        # chat-store / composer metadata; empty results must be retried.
         if meta.model or meta.context_tokens_used is not None:
+            self._conversation_meta[key] = meta
             log.debug(
                 "Cursor meta for %s: model=%s source=%s context=%s/%s",
                 transcript_path.stem,
@@ -424,12 +452,20 @@ class CursorTranscriptWatcher:
                 # Do not open a tap session until there is at least one assistant step.
                 self._imported_steps[key] = max(skip_steps, total_steps)
                 continue
-            writer = self._writers.get(key) or self._writer_for(transcript_path)
+            new_records = []
             for record in records:
                 path = str((record.get("request") or {}).get("path") or "")
                 if path and path in self._imported_paths:
                     self._imported_steps[key] = self._imported_steps.get(key, skip_steps) + 1
                     continue
+                new_records.append(record)
+            if not new_records:
+                # Same conversation UUID can appear as both flat and nested paths;
+                # path-based dedupe must not open an empty tap session.
+                continue
+            writer = self._writers.get(key) or self._writer_for(transcript_path)
+            for record in new_records:
+                path = str((record.get("request") or {}).get("path") or "")
                 await writer.write_next_turn(record)
                 if path:
                     self._imported_paths.add(path)

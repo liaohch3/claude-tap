@@ -351,13 +351,26 @@ function isCursorTranscriptEntry(entry) {
   return String(entry?.request?.path || '').startsWith('/cursor/transcript/');
 }
 
+function cursorTurnOf(entry) {
+  const turn = Number(entry?.request?.body?.cursor_turn);
+  return Number.isFinite(turn) ? turn : null;
+}
+
 function shouldContinueSessionGroup(entry, info, currentGroup) {
   if (!currentGroup || !info.userText || currentGroup.userText !== info.userText) return false;
   if (isTitleGenerationEntry(entry)) return false;
   if (currentGroup.metadataOnly) return true;
   if (info.messageCount > 1 && info.userIndex === currentGroup.userIndex) return true;
-  // Cursor transcript steps repeat the same single-user prompt across tool steps.
-  if (isCursorTranscriptEntry(entry) && info.userIndex === currentGroup.userIndex) return true;
+  // Cursor transcript steps repeat the same single-user prompt across tool
+  // steps within one cursor_turn; different user turns with identical text
+  // (e.g. repeated "continue") must stay separate groups.
+  if (isCursorTranscriptEntry(entry) && info.userIndex === currentGroup.userIndex) {
+    const turn = cursorTurnOf(entry);
+    if (turn != null && currentGroup.cursorTurn != null && turn !== currentGroup.cursorTurn) {
+      return false;
+    }
+    return true;
+  }
   return false;
 }
 
@@ -429,6 +442,7 @@ function buildSessionGroups(items) {
       userIndex: info.userIndex,
       metadataOnly: !!info.metadataOnly,
       rootTurn: info.rootTurn,
+      cursorTurn: cursorTurnOf(item.entry),
       firstOrder: item.order,
       responseText: '',
       items: [],
@@ -444,6 +458,7 @@ function buildSessionGroups(items) {
       group.userIndex = info.userIndex;
     }
     if (group.rootTurn == null && info.rootTurn != null) group.rootTurn = info.rootTurn;
+    if (group.cursorTurn == null) group.cursorTurn = cursorTurnOf(item.entry);
     if (!info.metadataOnly) group.metadataOnly = false;
     const responseText = finalResponseText(item.entry);
     if (responseText) group.responseText = responseText;

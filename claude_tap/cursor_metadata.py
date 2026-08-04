@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +32,22 @@ class CursorConversationMeta:
     source: str = ""
 
 
+def _default_cursor_state_db() -> Path:
+    """Return the Cursor IDE ``state.vscdb`` path for the current platform."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+        return base / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+    # Linux / other Unix: Electron default under ~/.config
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+
+
 def _macos_cursor_state_db() -> Path:
+    """Backward-compatible alias for macOS Cursor state DB."""
     return Path.home() / "Library" / "Application Support" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
 
 
@@ -77,7 +94,7 @@ def lookup_composer_meta(
     """Read IDE composerData for a conversation UUID."""
     if not conversation_id:
         return None
-    conn = _connect_readonly(state_db or _macos_cursor_state_db())
+    conn = _connect_readonly(state_db or _default_cursor_state_db())
     if conn is None:
         return None
     try:

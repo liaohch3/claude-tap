@@ -352,6 +352,10 @@ def test_viewer_lazy_stub_keeps_cursor_user_input_in_session_group(responses_pag
             buildStubEntry({ ...meta, turn: 2, path: '/cursor/transcript/abc/turn/1/step/2' }, 1),
             buildStubEntry({ ...meta, turn: 3, path: '/cursor/transcript/abc/turn/1/step/3' }, 2),
           ];
+          stubs.forEach((stub, idx) => {
+            stub.request.body.cursor_turn = 1;
+            stub.request.body.cursor_step = idx + 1;
+          });
           const turns = normalizeDisplayTurns(stubs, true);
           const groups = buildSessionGroups(turns.map((entry, idx) => ({ entry, idx, order: idx })));
           return {
@@ -371,6 +375,40 @@ def test_viewer_lazy_stub_keeps_cursor_user_input_in_session_group(responses_pag
     assert result["groupCount"] == 1
     assert result["groupUserText"] == "这是一个什么项目"
     assert result["groupSize"] == 3
+
+
+def test_viewer_keeps_repeated_cursor_prompts_in_separate_groups(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const make = (turn, step, idx) => {
+            const stub = buildStubEntry({
+              turn,
+              transport: 'cursor-transcript',
+              method: 'CURSOR_TRANSCRIPT',
+              path: `/cursor/transcript/abc/turn/${turn}/step/${step}`,
+              model: 'grok-4.5',
+              session_user_text: 'continue',
+              status: 200,
+            }, idx);
+            stub.request.body.cursor_turn = turn;
+            stub.request.body.cursor_step = step;
+            stub.request.body.messages = [{ role: 'user', content: 'continue' }];
+            return stub;
+          };
+          const stubs = [make(1, 1, 0), make(1, 2, 1), make(2, 1, 2)];
+          const turns = normalizeDisplayTurns(stubs, true);
+          const groups = buildSessionGroups(turns.map((entry, idx) => ({ entry, idx, order: idx })));
+          return {
+            groupCount: groups.length,
+            sizes: groups.map(group => group.items.length),
+            texts: groups.map(group => group.userText),
+          };
+        }"""
+    )
+
+    assert result["groupCount"] == 2
+    assert result["sizes"] == [2, 1]
+    assert result["texts"] == ["continue", "continue"]
 
 
 def test_viewer_collapses_cursor_transcript_paths_in_filter(responses_page) -> None:

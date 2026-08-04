@@ -57,7 +57,8 @@ def test_model_from_cursor_args() -> None:
     assert model_from_cursor_args([]) == ""
     assert model_from_cursor_args(["-p", "--trust"]) == ""
     assert model_from_cursor_args(["--model", "grok-code", "-p"]) == "grok-code"
-    assert model_from_cursor_args(["--model=auto"]) == "auto"
+    assert model_from_cursor_args(["--model=auto"]) == ""
+    assert model_from_cursor_args(["--model", "auto"]) == ""
 
 
 def test_parse_args_cursor_defaults_to_launch_and_watch() -> None:
@@ -106,6 +107,12 @@ async def test_run_client_cursor_transcript_only_skips_proxy_env(monkeypatch) ->
         captured["env"] = kwargs["env"]
         return _DummyProc()
 
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("http_proxy", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    monkeypatch.delenv("ALL_PROXY", raising=False)
+    monkeypatch.delenv("all_proxy", raising=False)
     monkeypatch.setenv("NO_PROXY", "example.com")
     monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/cursor-agent")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
@@ -222,6 +229,31 @@ async def test_import_cursor_transcripts_preserves_tool_uses(trace_db, tmp_path:
 
         assert records[1]["response"]["body"]["content"][0]["name"] == "ReadFile"
         assert records[2]["response"]["body"]["content"] == [{"type": "text", "text": "done"}]
+    finally:
+        watcher.close()
+
+
+@pytest.mark.asyncio
+async def test_cursor_flat_and_nested_same_id_does_not_open_empty_session(trace_db, tmp_path: Path) -> None:
+    nested = _transcript_path(tmp_path, "project-one", "same-id")
+    flat = tmp_path / ".cursor" / "projects" / "project-two" / "agent-transcripts" / "same-id.jsonl"
+    rows = [
+        {"role": "user", "message": {"content": [{"type": "text", "text": "shared"}]}},
+        {"role": "assistant", "message": {"content": [{"type": "text", "text": "reply"}]}},
+    ]
+    _write_transcript(nested, rows)
+    _write_transcript(flat, rows)
+
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    watcher = CursorTranscriptWatcher(since=0, home=tmp_path, store=store)
+    assert await watcher.sync_once() == 1
+    try:
+        assert len(watcher.session_ids) == 1
+        assert len(store.load_records(watcher.session_ids[0])) == 1
+        empties = [row for row in store.list_session_rows() if int(row["record_count"] or 0) == 0]
+        assert empties == []
     finally:
         watcher.close()
 
@@ -364,6 +396,74 @@ async def test_cursor_transcript_records_launch_model_hint(trace_db, tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_cursor_transcript_auto_model_defers_to_metadata(trace_db, tmp_path: Path) -> None:
+    cursor_session = "auto-model-session"
+    transcript = _transcript_path(tmp_path, "project-one", cursor_session)
+    _write_transcript(
+        transcript,
+        [
+            {"role": "user", "message": {"content": [{"type": "text", "text": "hi"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "text", "text": "yo"}]}},
+        ],
+    )
+    store_db = tmp_path / ".cursor" / "chats" / "ws" / cursor_session / "store.db"
+    store_db.parent.mkdir(parents=True)
+    import sqlite3
+
+    conn = sqlite3.connect(store_db)
+    conn.execute("CREATE TABLE meta (key TEXT, value TEXT)")
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?)",
+        ("0", json.dumps({"lastUsedModel": "grok-4.5"}).encode().hex()),
+    )
+    conn.commit()
+    conn.close()
+
+    from claude_tap.trace_store import get_trace_store
+
+    store = get_trace_store()
+    watcher = await import_cursor_transcripts(since=0, home=tmp_path, store=store, model="auto")
+    try:
+        record = store.load_records(watcher.session_ids[0])[0]
+        assert record["request"]["body"]["model"] == "grok-4.5"
+    finally:
+        watcher.close()
+
+
+@pytest.mark.asyncio
+async def test_cursor_meta_cache_retries_empty_until_populated(trace_db, tmp_path: Path, monkeypatch) -> None:
+    cursor_session = "late-meta-session"
+    transcript = _transcript_path(tmp_path, "project-one", cursor_session)
+    _write_transcript(
+        transcript,
+        [
+            {"role": "user", "message": {"content": [{"type": "text", "text": "hi"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "text", "text": "yo"}]}},
+        ],
+    )
+    from claude_tap.cursor_metadata import CursorConversationMeta
+    from claude_tap.trace_store import get_trace_store
+
+    calls = {"n": 0}
+
+    def fake_resolve(conversation_id, *, home=None, state_db=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return CursorConversationMeta()
+        return CursorConversationMeta(model="late-model", source="chat-store")
+
+    monkeypatch.setattr("claude_tap.cursor_transcript.resolve_cursor_conversation_meta", fake_resolve)
+    store = get_trace_store()
+    watcher = CursorTranscriptWatcher(since=0, home=tmp_path, store=store)
+    assert watcher._meta_for(transcript).model == ""
+    assert watcher._meta_for(transcript).model == "late-model"
+    assert calls["n"] == 2
+    assert watcher._meta_for(transcript).model == "late-model"
+    assert calls["n"] == 2
+    watcher.close()
+
+
+@pytest.mark.asyncio
 async def test_cursor_transcript_watcher_resets_when_file_shrinks(trace_db, tmp_path: Path) -> None:
     cursor_session = "rewrite-session"
     transcript = _transcript_path(tmp_path, "project-one", cursor_session)
@@ -428,8 +528,18 @@ def test_cursor_project_slug_and_find_transcripts(tmp_path: Path) -> None:
             {"role": "assistant", "message": {"content": [{"type": "text", "text": "a"}]}},
         ],
     )
+    flat = tmp_path / ".cursor" / "projects" / "proj-flat" / "agent-transcripts" / "flat-sid.jsonl"
+    _write_transcript(
+        flat,
+        [
+            {"role": "user", "message": {"content": [{"type": "text", "text": "flat"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}},
+        ],
+    )
     assert _cursor_project_slug(transcript) == "proj"
-    assert find_cursor_transcripts(since=0, home=tmp_path) == [transcript]
+    found = find_cursor_transcripts(since=0, home=tmp_path)
+    assert transcript in found
+    assert flat in found
     assert find_cursor_transcripts(since=10**12, home=tmp_path) == []
     assert find_cursor_transcripts(since=0, home=tmp_path / "missing-home") == []
 
