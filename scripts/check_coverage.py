@@ -411,13 +411,23 @@ def changed_viewer_css_selectors(viewer_css: Path, changed_lines: dict[str, set[
 
 
 def _main_viewer_script(coverage: dict[str, Any], suffix: str) -> dict[str, Any]:
+    scripts = coverage.get("result") or []
     candidates = [
-        script
-        for script in coverage["result"]
-        if script.get("url", "").endswith(suffix) and len(script.get("functions", [])) > 50
+        script for script in scripts if script.get("url", "").endswith(suffix) and len(script.get("functions", [])) > 50
     ]
     if not candidates:
-        raise RuntimeError("Could not find viewer.html main script in V8 coverage output")
+        # Chromium sometimes reports the inlined viewer bundle without a stable
+        # file URL after multi-page navigation; fall back to the largest script
+        # whose URL still mentions the coverage HTML name.
+        candidates = [
+            script for script in scripts if suffix in script.get("url", "") and len(script.get("functions", [])) > 50
+        ]
+    if not candidates:
+        candidates = [script for script in scripts if len(script.get("functions", [])) > 50]
+    if not candidates:
+        sizes = sorted((len(script.get("functions", [])), script.get("url", "")) for script in scripts)
+        top = ", ".join(f"{count}:{url[-60:]}" for count, url in sizes[-5:]) or "none"
+        raise RuntimeError(f"Could not find viewer.html main script in V8 coverage output (suffix={suffix}; top={top})")
     return max(candidates, key=lambda script: len(script.get("functions", [])))
 
 
@@ -583,6 +593,35 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     output_tokens: 1,
                   }, 0);
                   normalizeDisplayTurns([stubEntry], true);
+                  const cursorStub = buildStubEntry({
+                    turn: 1,
+                    transport: 'cursor-transcript',
+                    method: 'CURSOR_TRANSCRIPT',
+                    path: '/cursor/transcript/coverage/turn/1/step/1',
+                    model: 'grok-4.5',
+                    session_user_text: 'coverage cursor prompt',
+                    status: 200,
+                  }, 0);
+                  isCursorTranscriptEntry(cursorStub);
+                  isCursorTranscriptEntry({ request: { path: '/v1/messages' } });
+                  looksLikeBinaryText('\\x12\\x04prod');
+                  isProtobufNoiseEntry({
+                    request: {
+                      path: '/aiserver.v1.DashboardService/GetCliDownloadUrl',
+                      headers: { 'Content-Type': 'application/proto' },
+                      body: '\\x12\\x04prod',
+                    },
+                  });
+                  filterPathKey('/cursor/transcript/coverage/turn/1/step/1');
+                  firstUserInputInfo(cursorStub);
+                  latestUserInputInfo(cursorStub);
+                  stubSessionUserText(cursorStub);
+                  shouldContinueSessionGroup(
+                    cursorStub,
+                    firstUserInputInfo(cursorStub),
+                    { userText: 'coverage cursor prompt', userIndex: 0, metadataOnly: false },
+                  );
+                  normalizeDisplayTurns([cursorStub, cursorStub], true);
                   const imageBlock = {
                     type: 'image',
                     source: {

@@ -357,6 +357,7 @@ def test_viewer_lazy_stub_keeps_cursor_user_input_in_session_group(responses_pag
           return {
             stubHasMessages: Array.isArray(stubs[0].request.body.messages),
             firstUser: firstUserInputInfo(stubs[0]).userText,
+            isCursor: isCursorTranscriptEntry(stubs[0]),
             groupCount: groups.length,
             groupUserText: groups[0]?.userText || '',
             groupSize: groups[0]?.items.length || 0,
@@ -366,6 +367,7 @@ def test_viewer_lazy_stub_keeps_cursor_user_input_in_session_group(responses_pag
 
     assert result["stubHasMessages"] is True
     assert result["firstUser"] == "这是一个什么项目"
+    assert result["isCursor"] is True
     assert result["groupCount"] == 1
     assert result["groupUserText"] == "这是一个什么项目"
     assert result["groupSize"] == 3
