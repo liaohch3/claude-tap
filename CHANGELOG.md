@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.142] - 2026-08-06
+
+### Changed
+- [verified] test: wait for viewer image decoding (#411)
+- fix: allow deleting abandoned empty active sessions (#412)
+- [verified] fix(sse): retain streamed Responses tool payloads (#397)
+- feat: Cursor transcript-only live watch (#418)
 ## [0.1.141] - 2026-07-29
 
 ### Changed
