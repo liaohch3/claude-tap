@@ -56,6 +56,8 @@ function buildStubEntry(meta, rawIdx) {
   if (meta.session_user_text) {
     body.messages = [{ role: 'user', content: meta.session_user_text }];
   }
+  if (meta.display_turn_key) body._display_turn_key = meta.display_turn_key;
+  if (meta.display_turn_ordinal) body._display_turn_ordinal = meta.display_turn_ordinal;
   // Preserve Cursor turn ids so repeated identical prompts stay in separate
   // sidebar groups when only stubs are available.
   if (typeof meta.cursor_turn === 'number') body.cursor_turn = meta.cursor_turn;

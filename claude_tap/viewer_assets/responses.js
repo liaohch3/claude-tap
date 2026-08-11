@@ -542,8 +542,10 @@ function expandLiveWebSocketResponseEntries(rawEntries, reset = false) {
   return expandWebSocketResponseEntries(rawEntries, liveWebSocketResponseHistoryById);
 }
 
-let nextDisplayTurn = 1;
-const DISPLAY_TURN_PRIMARY_PATH_PREFIXES = ['/cursor/transcript/', '/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
+let displayTurnPrimary = 0;
+let displayTurnSub = 0;
+let previousDisplayTurnInfo = null;
+const DISPLAY_TURN_PRIMARY_PATH_PREFIXES = ['/cursor/transcript/', '/messages', '/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/chat/completions', '/v1/chat/completions', '/v2/chat/completions', '/completions', '/v1/completions', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
 
 function displayTurnPath(entry) {
   return (entry?.request?.path || '/unknown').replace(/\?.*$/, '');
@@ -565,8 +567,162 @@ function isDisplayTurnCandidate(entry) {
   return DISPLAY_TURN_PRIMARY_PATH_PREFIXES.some(prefix => path.startsWith(prefix));
 }
 
+function displayTurnRequestBody(entry) {
+  let body = entry?.request?.body;
+  if (typeof body !== 'string') return body;
+  try { return JSON.parse(body); } catch (_) { return body; }
+}
+
+function displayTurnText(value) {
+  if (typeof value === 'string') {
+    let text = value.replace(/\s+/g, ' ').trim();
+    const session = text.match(/^<session>\s*(.*?)\s*<\/session>$/i);
+    if (session) text = session[1].trim();
+    if (/^\[SUGGESTION MODE:/i.test(text)) return '';
+    return text;
+  }
+  if (Array.isArray(value)) return value.map(displayTurnText).filter(Boolean).join('\n').trim();
+  if (!value || typeof value !== 'object') return '';
+  if (value.type === 'tool_result' || value.type === 'function_call_output') return '';
+  if (typeof value.text === 'string') return displayTurnText(value.text);
+  if (typeof value.input_text === 'string') return displayTurnText(value.input_text);
+  if (typeof value.output_text === 'string') return displayTurnText(value.output_text);
+  if (value.content !== undefined) return displayTurnText(value.content);
+  if (value.input !== undefined) return displayTurnText(value.input);
+  return '';
+}
+
+function displayTurnFingerprint(value) {
+  let hash = 2166136261;
+  const text = typeof value === 'string' ? value : (() => {
+    try { return JSON.stringify(value); } catch (_) { return String(value); }
+  })();
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function displayTurnHasContinuation(value) {
+  if (Array.isArray(value)) return value.some(displayTurnHasContinuation);
+  if (!value || typeof value !== 'object') return false;
+  const role = String(value.role || value.author?.role || '').toLowerCase();
+  if (role === 'tool' || role === 'function') return true;
+  if (value.tool_call_id || (Array.isArray(value.tool_calls) && value.tool_calls.length)) return true;
+  if (['tool_result', 'function_call_output', 'tool_use', 'function_call'].includes(value.type)) return true;
+  return Object.values(value).some(displayTurnHasContinuation);
+}
+
+function displayTurnCompactItems(items) {
+  if (!Array.isArray(items) || !items.length) return null;
+  const refs = items.map(item => item?.__claude_tap_blob_ref__);
+  if (!refs.every(ref => ref && typeof ref.hash === 'string')) return null;
+  return {
+    key: refs.map(ref => `${ref.hash}:${ref.bytes || ''}`).join('|'),
+    count: refs.length,
+  };
+}
+
+function isDisplayTurnTitleGeneration(entry) {
+  const body = displayTurnRequestBody(entry);
+  return /generate a concise.*title/i.test(String(body?.system || ''));
+}
+
+function displayTurnUserInfo(entry) {
+  const body = displayTurnRequestBody(entry);
+  const metadataKey = String(body?._display_turn_key || '').trim();
+  if (metadataKey) {
+    const ordinal = Number(body?._display_turn_ordinal) || 1;
+    return {
+      key: `metadata:${metadataKey}`,
+      userText: '',
+      userOrdinal: ordinal,
+      cursorTurn: Number.isFinite(Number(body?.cursor_turn)) ? Number(body.cursor_turn) : null,
+      hasContinuation: true,
+    };
+  }
+  const messages = [];
+  const appendMessages = (items) => {
+    if (!Array.isArray(items)) return;
+    items.forEach(item => {
+      if (!item || typeof item !== 'object') return;
+      const role = String(item.role || item.author?.role || '').toLowerCase();
+      if (role !== 'user' && role !== 'human') return;
+      const content = item.content ?? item.parts ?? item.text ?? item.input;
+      const text = displayTurnText(content);
+      if (text) messages.push({ text, raw: content });
+    });
+  };
+  if (body && typeof body === 'object') {
+    appendMessages(body.messages);
+    appendMessages(body.input);
+    appendMessages(body.contents);
+    appendMessages(body.prompt ? [{ role: 'user', content: body.prompt }] : null);
+  }
+  if (!messages.length && body && typeof body === 'object') {
+    const compact = displayTurnCompactItems(body.messages) || displayTurnCompactItems(body.input) || displayTurnCompactItems(body.contents);
+    if (compact) {
+      return {
+        key: `compact:${compact.key}`,
+        userText: '',
+        userOrdinal: compact.count,
+        cursorTurn: Number.isFinite(Number(body.cursor_turn)) ? Number(body.cursor_turn) : null,
+        hasContinuation: true,
+      };
+    }
+  }
+  const stubText = String(entry?._session_user_text || '').replace(/\s+/g, ' ').trim();
+  if (!messages.length && stubText) messages.push({ text: stubText, raw: stubText });
+  if (!messages.length && typeof body === 'string') {
+    const text = displayTurnText(body);
+    if (text) messages.push({ text, raw: body });
+  }
+  if (!messages.length) return { key: '', userText: '', userOrdinal: 0, cursorTurn: null, hasContinuation: false };
+
+  const last = messages[messages.length - 1];
+  const cursorTurn = Number(body?.cursor_turn);
+  const hasContinuation = !!(
+    entry?.previous_response_id ||
+    body?.previous_response_id ||
+    messages.length > 1 ||
+    displayTurnHasContinuation(body?.messages) ||
+    displayTurnHasContinuation(body?.input) ||
+    isDisplayTurnTitleGeneration(entry) ||
+    (Array.isArray(body?.input) && body.input.some(item => item?.type === 'function_call_output' || item?.type === 'tool_result'))
+  );
+  return {
+    key: `${messages.length}:${displayTurnFingerprint(last.text)}`,
+    userText: last.text,
+    userOrdinal: messages.length,
+    cursorTurn: Number.isFinite(cursorTurn) ? cursorTurn : null,
+    hasContinuation,
+  };
+}
+
+function displayTurnIsNewPrimary(info, previous) {
+  if (!previous) return true;
+  if (info.cursorTurn !== null && previous.cursorTurn !== null && info.cursorTurn !== previous.cursorTurn) return true;
+  if (info.key && previous.key && info.key !== previous.key) return true;
+  if (info.key && previous.key) {
+    // A new prompt normally changes either the text fingerprint or the
+    // number of user messages in the submitted conversation. Identical
+    // latest-only prompts without continuation metadata are separate turns.
+    if (info.userOrdinal !== previous.userOrdinal) return true;
+    if (!info.hasContinuation && !previous.hasContinuation) return true;
+    return false;
+  }
+  const currentRoot = String(info.captureTurn ?? '');
+  const previousRoot = String(previous.captureTurn ?? '');
+  return !!currentRoot && !!previousRoot && currentRoot !== previousRoot;
+}
+
 function normalizeDisplayTurns(rawEntries, reset = true) {
-  if (reset) nextDisplayTurn = 1;
+  if (reset) {
+    displayTurnPrimary = 0;
+    displayTurnSub = 0;
+    previousDisplayTurnInfo = null;
+  }
   return (rawEntries || []).map((entry, idx) => {
     if (!entry || typeof entry !== 'object') return entry;
     if (entry._entry_index === undefined) entry._entry_index = idx;
@@ -575,11 +731,31 @@ function normalizeDisplayTurns(rawEntries, reset = true) {
       if (reset) delete entry.display_turn;
       return entry;
     }
-    if (reset || entry.display_turn === undefined) {
-      entry.display_turn = nextDisplayTurn;
+    const userInfo = displayTurnUserInfo(entry);
+    const info = { ...userInfo, captureTurn: entry.capture_turn ?? entry.turn };
+    const titleGeneration = isDisplayTurnTitleGeneration(entry);
+    if (titleGeneration) {
+      // Title generation is a metadata request for the surrounding session,
+      // not a new user turn. Keep it inside the current primary turn even
+      // when its compacted message reference differs.
+      if (displayTurnPrimary === 0) {
+        displayTurnPrimary = 1;
+        displayTurnSub = 1;
+      } else {
+        displayTurnSub += 1;
+      }
+    } else if (displayTurnPrimary > 0 && !previousDisplayTurnInfo) {
+      // A title request can be the first captured record for a session. The
+      // first real model request that follows it still belongs to turn 1.
+      displayTurnSub += 1;
+    } else if (displayTurnIsNewPrimary(info, previousDisplayTurnInfo)) {
+      displayTurnPrimary += 1;
+      displayTurnSub = 1;
+    } else {
+      displayTurnSub += 1;
     }
-    const assignedTurn = Number(entry.display_turn);
-    nextDisplayTurn = Number.isFinite(assignedTurn) ? Math.max(nextDisplayTurn, assignedTurn + 1) : nextDisplayTurn + 1;
+    entry.display_turn = `${displayTurnPrimary}.${displayTurnSub}`;
+    if (!titleGeneration) previousDisplayTurnInfo = info;
     return entry;
   });
 }

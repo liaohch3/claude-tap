@@ -138,7 +138,7 @@ async function onDateChange(value) {
     const resp = await fetch('/api/traces/' + encodeURIComponent(value));
     activePaths.clear();
     entries = normalizeDisplayTurns(expandWebSocketResponseEntries(await resp.json()), true);
-    renderApp();
+    renderApp(true);
   } catch (e) {
     console.error('Failed to load traces for date:', value, e);
   }

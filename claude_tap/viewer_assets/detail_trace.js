@@ -57,6 +57,7 @@ function renderDetailViewTabs() {
   return `<div class="detail-inspector-bar" role="tablist" aria-label="Detail view mode"><div class="detail-tabs">
     ${detailTabButton('default', t('tab_default'))}
     ${detailTabButton('trace', t('tab_trace'))}
+    ${detailTabButton('flow', t('tab_flow'))}
   </div></div>`;
 }
 
@@ -81,11 +82,32 @@ function renderTraceFormatControls() {
 }
 
 async function renderDetailForEntry(entry) {
+  const token = ++detailLoadToken;
+  if (detailViewMode === 'flow') {
+    currentDetailRequestId = entry.request_id;
+    currentDetailEntryKey = entryStableKey(entry);
+    $('#detail').innerHTML = '<div class="empty-state" role="status" aria-live="polite"></div>';
+    try {
+      const resolvedRecords = await resolveFlowRecordsForEntryAsync(entry);
+      if (token !== detailLoadToken) return;
+      activeFlowRecords = resolvedRecords;
+      const resolvedEntry = resolvedRecords.find(item => entryStableKey(item) === entryStableKey(entry))
+        || await resolveEntryForDetailAsync(entry);
+      if (token !== detailLoadToken) return;
+      renderDetail(resolvedEntry);
+      return;
+    } catch (err) {
+      console.error('Failed to load flow records:', err);
+      if (token !== detailLoadToken) return;
+      activeFlowRecords = [];
+      renderDetail(resolveEntryForDetail(entry));
+      return;
+    }
+  }
   if (!shouldFetchRemoteEntry(entry)) {
     renderDetail(resolveEntryForDetail(entry));
     return;
   }
-  const token = ++detailLoadToken;
   currentDetailRequestId = entry.request_id;
   currentDetailEntryKey = entryStableKey(entry);
   $('#detail').innerHTML = '<div class="empty-state" role="status" aria-live="polite"></div>';
@@ -149,17 +171,21 @@ function renderDetail(e) {
       : '';
     const jsonSection = section(t('section_json'), `<div class="json-view">${renderJSONTree(e)}</div>`, false, JSON.stringify(e, null, 2));
     html += actionBarHtml;
+    html += renderDefaultTokenSummary(reqBody, usage);
     if (usage) html += renderTokenUsage(usage);
     html += toolsSection + systemSection + messagesSection + responseSection;
     if (streamEvents.length) html += streamSection;
     html += jsonSection;
   } else if (detailViewMode === 'trace') {
     html += renderTraceDetail(e, { reqBody, sysPrompt, msgs, tools, respOutput, contextOnly, streamEvents, usage });
+  } else if (detailViewMode === 'flow') {
+    html += renderFlowDetail(e);
   }
 
   d.innerHTML = html;
   bindSections(d);
   restoreSectionStates();
+  if (detailViewMode === 'flow') initializeFlowSelection();
   if (globalSearchState.open && globalSearchState.query) {
     const target = getTargetForGlobalMatch(globalSearchState.currentMatch);
     const localIndex = target && target.entryKey === entryStableKey(e) ? target.localIndex : 0;
@@ -174,12 +200,111 @@ function renderTraceBlock(title, payload, badge = '') {
   return `<div class="trace-block"><div class="trace-block-title"><span class="trace-title">${esc(title)}</span><span class="trace-actions">${badgeHtml}${copyBtn}</span></div>${renderTracePayload(payload)}</div>`;
 }
 
-function renderTraceDetail(entry, ctx) {
-  const inputPayload = {
-    system: ctx.sysPrompt || undefined,
-    messages: ctx.msgs || [],
-    tools: ctx.tools || [],
+function inputModulePreview(module) {
+  const value = module?.payload;
+  let text = '';
+  if (typeof value === 'string') text = value;
+  else if (value && typeof value === 'object') {
+    const content = value.content ?? value.text ?? value.output ?? value.name;
+    if (typeof content === 'string') text = content;
+    else if (Array.isArray(content)) text = content.map(chatMessageContentToText).join(' ');
+    else if (module.kind === 'tools' && Array.isArray(value)) text = value.map(toolDisplayName).filter(Boolean).join(', ');
+  }
+  if (!text) {
+    try { text = JSON.stringify(value); } catch (_) { text = String(value ?? ''); }
+  }
+  text = text.replace(/\s+/g, ' ').trim();
+  return text.length > 150 ? `${text.slice(0, 147)}...` : text;
+}
+
+function renderTraceInputPayload(payload) {
+  if (traceFormatMode === 'pretty') return `<div class="trace-input-pretty">${renderTracePrettyValue(payload)}</div>`;
+  return renderTracePayload(payload);
+}
+
+function renderTraceInput(reqBody, usage) {
+  const modules = getInputModules(reqBody);
+  const allocation = allocateInputModuleTokens(modules, usage);
+  const latestUserIndex = modules.reduce((found, module, index) => module.kind === 'user' ? index : found, -1);
+  const totalPrefix = allocation.totalEstimated ? '≈' : '';
+  const rows = modules.map((module, index) => {
+    const open = index === latestUserIndex ? ' open' : '';
+    const preview = inputModulePreview(module);
+    return `<details class="trace-input-module"${open}>
+      <summary class="trace-input-module-summary">
+        <span class="trace-input-index">${String(index + 1).padStart(2, '0')}</span>
+        <span class="trace-input-label">${esc(module.label)}</span>
+        <span class="trace-input-preview">${esc(preview)}</span>
+        <span class="trace-input-tokens">≈${allocation.counts[index].toLocaleString()} ${esc(t('tok'))}</span>
+      </summary>
+      <div class="trace-input-payload">${renderTraceInputPayload(module.payload)}</div>
+    </details>`;
+  }).join('');
+  const copyPayload = {
+    system: extractSystem(reqBody) || undefined,
+    messages: getMessages(reqBody),
+    tools: getRequestTools(reqBody),
+    modules: modules.map((module, index) => ({ ...module, estimated_tokens: allocation.counts[index] })),
   };
+  const copyBtn = `<button class="trace-copy-btn" type="button" data-copy="${encodeCopyText(tracePayloadText(copyPayload))}">${t('copy')}</button>`;
+  const sourceLabel = traceFormatMode === 'json' ? '"messages"' : (traceFormatMode === 'yaml' ? 'messages:' : 'messages');
+  const prettyClass = traceFormatMode === 'pretty' ? ' trace-pretty' : '';
+  return `<div class="trace-block trace-input-block">
+    <div class="trace-block-title">
+      <span class="trace-title">${esc(t('tok_input'))}</span>
+      <span class="trace-input-total"><strong>${totalPrefix}${allocation.total.toLocaleString()}</strong> ${esc(t('tok'))}</span>
+      <span class="trace-actions"><span class="trace-badge">${esc(t('input_estimated_split'))}</span>${copyBtn}</span>
+    </div>
+    <div class="trace-input-modules${prettyClass}"><span class="trace-input-source">${esc(sourceLabel)}</span>${rows}</div>
+  </div>`;
+}
+
+function renderTraceOutput(entry, responsePayload, responseOutput, usage) {
+  const outputTokens = Number(usage?.output_tokens || 0);
+  const copyBtn = `<button class="trace-copy-btn" type="button" data-copy="${encodeCopyText(tracePayloadText(responsePayload))}">${t('copy')}</button>`;
+  const status = getResponseStatus(entry);
+  let contentHtml = '';
+  if (responseOutput?.content) {
+    contentHtml = renderContent(responseOutput.content, 'assistant');
+  } else if (status >= 400) {
+    const errorMessage = getResponseErrorMessage(entry);
+    contentHtml = `<div class="trace-output-error"><strong>HTTP ${status}</strong><span>${esc(errorMessage)}</span></div>`;
+  } else {
+    contentHtml = `<em class="trace-output-empty">${esc(t('no_content'))}</em>`;
+  }
+  return `<div class="trace-block trace-output-block">
+    <div class="trace-block-title">
+      <span class="trace-title">${esc(t('tok_output'))}</span>
+      <span class="trace-output-total"><strong>${outputTokens.toLocaleString()}</strong> ${esc(t('tok'))}</span>
+      <span class="trace-actions"><span class="trace-badge">HTTP ${status}</span>${copyBtn}</span>
+    </div>
+    <div class="trace-output-content">${contentHtml}</div>
+    <details class="trace-output-raw">
+      <summary>${esc(t('section_json'))}</summary>
+      <div class="trace-output-payload">${renderTracePayload(responsePayload)}</div>
+    </details>
+  </div>`;
+}
+
+function renderDefaultTokenSummary(reqBody, usage) {
+  const inputAllocation = allocateInputModuleTokens(getInputModules(reqBody), usage);
+  const inputPrefix = inputAllocation.totalEstimated ? '≈' : '';
+  const outputTokens = Number(usage?.output_tokens || 0);
+  return `<div class="default-token-summary" aria-label="${esc(t('section_usage'))}">
+    <div class="default-token-card input">
+      <span class="default-token-label">${esc(t('tok_input'))}</span>
+      <span class="default-token-value">${inputPrefix}${inputAllocation.total.toLocaleString()}</span>
+      <span class="default-token-unit">${esc(t('tok'))}</span>
+    </div>
+    <div class="default-token-card output">
+      <span class="default-token-label">${esc(t('tok_output'))}</span>
+      <span class="default-token-value">${outputTokens.toLocaleString()}</span>
+      <span class="default-token-unit">${esc(t('tok'))}</span>
+    </div>
+  </div>`;
+}
+
+function renderTraceDetail(entry, ctx) {
   const responsePayload = {
     status: getResponseStatus(entry),
     output: ctx.respOutput?.content || [],
@@ -205,16 +330,8 @@ function renderTraceDetail(entry, ctx) {
   let html = renderTraceFormatControls();
   if (ctx.usage) html += renderTokenUsage(ctx.usage);
   html += '<div class="trace-grid">';
-  html += renderTraceBlock(
-    t('tok_input'),
-    inputPayload,
-    `${(ctx.msgs || []).length} ${t('badge_messages')}`
-  );
-  html += renderTraceBlock(
-    t('tok_output'),
-    responsePayload,
-    `${getResponseStatus(entry)}`
-  );
+  html += renderTraceInput(ctx.reqBody, ctx.usage);
+  html += renderTraceOutput(entry, responsePayload, ctx.respOutput, ctx.usage);
   if (ctx.streamEvents.length) {
     html += renderTraceBlock(
       t('section_sse'),

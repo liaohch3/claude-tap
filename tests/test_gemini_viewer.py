@@ -399,3 +399,46 @@ def test_viewer_renders_direct_gemini_native_body(tmp_path: Path) -> None:
     assert "unknown" not in "\n".join(result["tools"]).lower()
     assert "run_shell_command" in result["detail"]
     assert "Final OK from Gemini." in result["detail"]
+
+
+@pytest.mark.skipif(pw_missing, reason="playwright not installed")
+def test_gemini_flow_joins_function_response_by_name_when_function_call_has_no_id(
+    gemini_html_file: Path,
+) -> None:
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+        page.on(
+            "console",
+            lambda message: errors.append(f"console.error: {message.text}") if message.type == "error" else None,
+        )
+        page.goto(f"file://{gemini_html_file}", timeout=10000)
+        page.wait_for_selector(".sidebar-item", timeout=5000)
+        page.locator(".sidebar-item").first.click()
+        page.locator('#detail .detail-tab[data-tab="flow"]').click()
+        page.wait_for_selector("#detail .flow-canvas", timeout=5000)
+        tool = page.evaluate(
+            """() => {
+              const stage = activeFlowGraph?.stages?.[0];
+              const node = stage?.tools?.[0];
+              return node ? {
+                callId: node.payload?.call_id || '',
+                name: node.title,
+                pending: node.pending,
+                resultSummary: node.resultSummary || '',
+              } : null;
+            }"""
+        )
+        browser.close()
+
+    assert errors == []
+    assert tool == {
+        "callId": "",
+        "name": "run_shell_command",
+        "pending": False,
+        "resultSummary": "Output: /repo Process Group PGID: 123",
+    }

@@ -82,6 +82,7 @@ def test_split_viewer_js_assets_use_semantic_filenames() -> None:
         "sidebar.js",
         "detail_trace.js",
         "renderers.js",
+        "flow.js",
         "sections_json.js",
         "diff.js",
         "utilities_mobile.js",

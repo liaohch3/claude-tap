@@ -799,6 +799,62 @@ body.detail-route .detail-inspector-bar {
 .badge.active { background: var(--green-bg); color: var(--green); }
 .badge.error { background: var(--red-bg); color: var(--red); }
 .badge.empty { background: var(--amber-bg); color: var(--amber); }
+.agent-flow {
+  display: grid; gap: 10px; margin: 0 0 12px;
+}
+.agent-flow-heading {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  color: var(--text); font-size: 13px; font-weight: 700;
+}
+.agent-flow-evidence {
+  color: var(--green); background: var(--green-bg); border-radius: 999px;
+  padding: 3px 8px; font-size: 10px; font-weight: 700;
+}
+.agent-journey {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-card); box-shadow: var(--shadow-sm); overflow: hidden;
+}
+.agent-journey-title {
+  display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  border-bottom: 1px solid var(--border-light); color: var(--text-secondary); font-size: 12px;
+}
+.agent-journey-title strong { color: var(--text); }
+.agent-journey-id { margin-left: auto; color: var(--text-tertiary); font-family: var(--mono); font-size: 10px; }
+.agent-journey-grid {
+  display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1.15fr) 24px minmax(0, 1fr) 24px minmax(0, 1fr);
+  align-items: stretch; padding: 12px;
+}
+.agent-stage {
+  min-width: 0; padding: 11px; border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm); background: var(--bg);
+}
+.agent-stage.child { border-color: #f5d08a; background: var(--amber-bg); }
+[data-theme="dark"] .agent-stage.child { border-color: #604918; }
+.agent-stage.return { border-color: #a7f3d0; background: var(--green-bg); }
+[data-theme="dark"] .agent-stage.return { border-color: #1a3a26; }
+.agent-stage-label {
+  margin-bottom: 7px; color: var(--text-tertiary); font-size: 10px;
+  font-weight: 800; letter-spacing: .45px; text-transform: uppercase;
+}
+.agent-stage-title { color: var(--text); font-size: 12px; font-weight: 700; line-height: 1.45; }
+.agent-stage-text {
+  margin-top: 7px; color: var(--text-secondary); font-size: 11px; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.agent-stage-arrow { display: flex; align-items: center; justify-content: center; color: var(--text-tertiary); font-weight: 800; }
+.agent-context-facts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.agent-context-fact {
+  padding: 3px 6px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-card); color: var(--text-tertiary); font-size: 9px; white-space: nowrap;
+}
+.agent-context-fact.verified { border-color: #a7f3d0; color: var(--green); background: var(--green-bg); }
+.agent-evidence-details { margin-top: 8px; border-top: 1px solid var(--border-light); padding-top: 7px; }
+.agent-evidence-details summary { cursor: pointer; color: var(--blue); font-size: 10px; font-weight: 700; }
+.agent-evidence-details pre { margin-top: 7px; max-height: 220px; overflow: auto; font-size: 10px; }
+@media (max-width: 1050px) {
+  .agent-journey-grid { grid-template-columns: 1fr; gap: 7px; }
+  .agent-stage-arrow { min-height: 12px; transform: rotate(90deg); }
+}
 .records { display: grid; gap: 8px; }
 .section {
   margin-bottom: 0; border: 1px solid var(--border);
@@ -811,6 +867,13 @@ body.detail-route .detail-inspector-bar {
 }
 .section-header .chevron { font-size: 10px; color: var(--text-tertiary); width: 12px; }
 .section-header .title { font-size: 13px; font-weight: 600; color: var(--text); }
+.record-kind {
+  display: inline-flex; align-items: center; font-size: 10px; font-weight: 700;
+  padding: 2px 7px; border-radius: 999px; background: var(--blue-bg); color: var(--blue);
+  white-space: nowrap;
+}
+.record-kind.subagent { background: var(--amber-bg); color: var(--amber); }
+.record-kind.system { background: var(--bg); color: var(--text-tertiary); }
 .section-header .path {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--text-tertiary); font-family: var(--mono); font-size: 11px;
@@ -1120,6 +1183,7 @@ const SESSION_DETAIL_ROUTE = /^\/dashboard\/session\/([^/]+)\/?$/;
 const CLAUDE_TAP_VERSION = "";
 const DASHBOARD_QUIT_TOKEN = "";
 const DASHBOARD_CAN_STOP = false;
+const DASHBOARD_STATE_KEY = "claude-tap-dashboard-state";
 
 const state = {
   sessions: [],
@@ -1159,9 +1223,74 @@ const state = {
 
 const $ = selector => document.querySelector(selector);
 	const MAX_INLINE_DETAIL_RECORDS = 10;
-	let deleteSessionReturnFocusEl = null;
-	let searchRefreshTimer = null;
-	let dashboardEvents = null;
+let deleteSessionReturnFocusEl = null;
+let searchRefreshTimer = null;
+let dashboardEvents = null;
+let dashboardRefreshTimer = null;
+let dashboardRefreshPromise = null;
+let dashboardRefreshPending = false;
+const agentFlowRecordCache = new Map();
+const agentFlowFetches = new Map();
+
+function readDashboardState() {
+  try {
+    const raw = window.sessionStorage.getItem(DASHBOARD_STATE_KEY);
+    const saved = raw ? JSON.parse(raw) : null;
+    return saved && typeof saved === "object" ? saved : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function persistDashboardState() {
+  try {
+    window.sessionStorage.setItem(DASHBOARD_STATE_KEY, JSON.stringify({
+      selectedAgent: state.selectedAgent,
+      selectedSessionId: state.selectedSessionId,
+      view: state.view,
+      activeTab: state.activeTab,
+      search: state.search,
+      date: state.date,
+      status: state.status,
+    }));
+  } catch (_) {
+    // Storage can be unavailable in private or embedded browser contexts.
+  }
+}
+
+function restoreDashboardState() {
+  const saved = readDashboardState();
+  if (!saved) return;
+  if (!state.pendingSessionId && typeof saved.selectedSessionId === "string") {
+    state.pendingSessionId = saved.selectedSessionId;
+  }
+  if (typeof saved.selectedAgent === "string" && saved.selectedAgent) state.selectedAgent = saved.selectedAgent;
+  if (typeof saved.activeTab === "string") state.activeTab = saved.activeTab === "conversation" ? "conversation" : "raw";
+  if (typeof saved.search === "string") state.search = saved.search;
+  if (typeof saved.date === "string") state.date = saved.date || "all";
+  if (typeof saved.status === "string") state.status = saved.status || "all";
+}
+
+function scheduleDashboardRefresh({refreshDetail = false} = {}) {
+  if (state.quittingDashboard) return;
+  dashboardRefreshPending = dashboardRefreshPending || refreshDetail;
+  if (dashboardRefreshTimer) return;
+  dashboardRefreshTimer = setTimeout(() => {
+    dashboardRefreshTimer = null;
+    const forceDetail = dashboardRefreshPending;
+    dashboardRefreshPending = false;
+    const run = () => refreshSessions({preserveSelection: true, refreshDetail: forceDetail});
+    if (dashboardRefreshPromise) {
+      dashboardRefreshPromise = dashboardRefreshPromise.then(run, run);
+    } else {
+      dashboardRefreshPromise = run();
+    }
+    dashboardRefreshPromise = dashboardRefreshPromise.catch(console.error).finally(() => {
+      dashboardRefreshPromise = null;
+      if (dashboardRefreshPending) scheduleDashboardRefresh();
+    });
+  }, 150);
+}
 
 function applyVersionBadge() {
   const badge = $("#logo-version");
@@ -1287,6 +1416,34 @@ const DASHBOARD_I18N = {
 	    full_viewer: "Full viewer",
     request_empty: "Request body has no user-facing message.",
     response_empty: "Response body has no assistant text.",
+    agent_flow: "Agent flow",
+    main_agent: "Main",
+    subagent: "{name} subagent",
+    system_request: "System",
+    session_title_request: "Generate a session title",
+    launch_subagent: "Launch {name}: {description}",
+    tool_call: "Call {name}: {detail}",
+    tool_result: "{name} returned: {result}",
+    agent_flow_verified: "API evidence",
+    agent_delegation: "1. Parent delegates",
+    agent_child_context: "2. Child context",
+    agent_child_work: "3. Child executes",
+    agent_return: "4. Result returns",
+    agent_task_request: "Original goal",
+    agent_delegated_prompt: "Delegated prompt",
+    agent_context_verified: "Prompt is the child's first user message",
+    agent_system_context: "System {count} chars",
+    agent_context_messages: "{count} messages",
+    agent_context_tools: "{count} tools",
+    agent_context_model: "Model {model}",
+    agent_child_actions: "{count} tool calls",
+    agent_no_child_actions: "No child tool call captured",
+    agent_parent_received: "Completion result received by parent",
+    agent_parent_continues: "Parent continuation",
+    agent_view_prompt: "Show exact delegated prompt",
+    agent_view_system: "Show child system context",
+    agent_view_result: "Show complete returned result",
+    agent_evidence_id: "tool_use_id {id}",
     request: "Request",
     response: "Response",
     json: "JSON",
@@ -1394,6 +1551,34 @@ const DASHBOARD_I18N = {
 	    full_viewer: "完整 Viewer",
     request_empty: "请求体里没有面向用户的消息。",
     response_empty: "响应体里没有 assistant 文本。",
+    agent_flow: "Agent 流程",
+    main_agent: "主任务",
+    subagent: "{name} 子 Agent",
+    system_request: "系统请求",
+    session_title_request: "生成会话标题",
+    launch_subagent: "启动 {name}：{description}",
+    tool_call: "调用 {name}：{detail}",
+    tool_result: "{name} 返回：{result}",
+    agent_flow_verified: "API 实证",
+    agent_delegation: "1. 母 Agent 委派",
+    agent_child_context: "2. 子 Agent 上下文",
+    agent_child_work: "3. 子 Agent 执行",
+    agent_return: "4. 结果回传",
+    agent_task_request: "用户原始目标",
+    agent_delegated_prompt: "母 Agent 传入的 Prompt",
+    agent_context_verified: "该 Prompt 是子 Agent 的第一条 user 消息",
+    agent_system_context: "System 上下文 {count} 字符",
+    agent_context_messages: "{count} 条消息",
+    agent_context_tools: "{count} 个工具",
+    agent_context_model: "模型 {model}",
+    agent_child_actions: "{count} 次工具调用",
+    agent_no_child_actions: "未捕获子 Agent 工具调用",
+    agent_parent_received: "母 Agent 收到的完成事件结果",
+    agent_parent_continues: "母 Agent 使用结果继续回答",
+    agent_view_prompt: "查看完整委派 Prompt",
+    agent_view_system: "查看子 Agent System 上下文",
+    agent_view_result: "查看完整回传结果",
+    agent_evidence_id: "tool_use_id {id}",
     request: "请求",
     response: "响应",
     json: "JSON",
@@ -1590,17 +1775,18 @@ async function fetchJSON(url, options = {}) {
 	  state.selectedSessionIds.clear();
 	}
 
-	function refreshForFilters() {
+function refreshForFilters() {
 	  state.selectedSessionId = null;
 	  state.pendingSessionId = null;
 	  state.view = "list";
 	  resetSessionPaging();
 	  renderFilters();
 	  renderAgents();
-	  renderSessions();
-	  showListView();
-	  refreshSessions({preserveSelection: false}).catch(console.error);
-	}
+  renderSessions();
+  showListView();
+  persistDashboardState();
+  refreshSessions({preserveSelection: false}).catch(console.error);
+}
 
 async function quitDashboard() {
   if (state.quittingDashboard) return;
@@ -2068,6 +2254,9 @@ function renderOverview() {
 	}
 
 function openSession(sessionId) {
+  state.selectedSessionId = sessionId;
+  state.view = "detail";
+  persistDashboardState();
   window.location.assign(sessionDetailUrl(sessionId));
 }
 
@@ -2086,6 +2275,7 @@ function showListView() {
   if (window.location.pathname.match(SESSION_DETAIL_ROUTE)) {
     history.replaceState(null, "", "/dashboard");
   }
+  persistDashboardState();
 }
 
 function showDetailView() {
@@ -2182,7 +2372,310 @@ async function loadMoreSessionRecords(session, records, button) {
   }
 }
 
-	function renderDetail(session, records) {
+async function hydrateAgentFlow(session, visibleRecords) {
+  const total = Number(session.record_count || visibleRecords.length);
+  if (total <= visibleRecords.length || !/claude/i.test(`${session.agent || ""} ${session.agent_key || ""}`)) return;
+  const cached = agentFlowRecordCache.get(session.id);
+  if (cached?.total === total) return;
+  if (agentFlowFetches.has(session.id)) return agentFlowFetches.get(session.id);
+  const load = fetchJSON(`/api/sessions/${encodeURIComponent(session.id)}/records?offset=0&limit=${total}`)
+    .then(payload => {
+      const records = payload.records || [];
+      agentFlowRecordCache.set(session.id, {total, records});
+      if (state.selectedSessionId !== session.id) return;
+      const panel = document.querySelector("[data-agent-flow-panel]");
+      if (!panel) return;
+      const context = buildAgentRecordContext(records);
+      panel.innerHTML = renderAgentFlow(records, context);
+    })
+    .finally(() => agentFlowFetches.delete(session.id));
+  agentFlowFetches.set(session.id, load);
+  return load;
+}
+
+function claudeToolUses(record) {
+  const content = record?.response?.body?.content;
+  if (!Array.isArray(content)) return [];
+  return content.filter(item => item && item.type === "tool_use" && item.name);
+}
+
+function claudeMessages(record) {
+  const messages = record?.request?.body?.messages;
+  return Array.isArray(messages) ? messages : [];
+}
+
+function stripClaudeContext(text) {
+  let cleaned = String(text || "");
+  cleaned = cleaned.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/gi, "");
+  const sessionMatch = cleaned.match(/<session>\s*([\s\S]*?)\s*<\/session>/i);
+  if (sessionMatch) cleaned = sessionMatch[1];
+  return cleaned.replace(/^(?:\s|\\n)+|(?:\s|\\n)+$/g, "");
+}
+
+function normalizeClaudePrompt(text) {
+  return stripClaudeContext(text).replace(/\\n/g, "\n").replace(/\s+/g, " ").trim();
+}
+
+function firstClaudeUserText(record) {
+  for (const message of claudeMessages(record)) {
+    if (message?.role !== "user") continue;
+    const text = stripClaudeContext(contentText(message.content));
+    if (text) return text;
+  }
+  return "";
+}
+
+function claudeToolResults(record) {
+  const results = [];
+  claudeMessages(record).forEach(message => {
+    if (message?.role !== "user" || !Array.isArray(message.content)) return;
+    message.content.forEach(item => {
+      if (item?.type !== "tool_result") return;
+      results.push({
+        id: item.tool_use_id || "",
+        text: contentText(item.content).trim(),
+      });
+    });
+  });
+  return results;
+}
+
+function claudeTaskNotifications(record) {
+  const notifications = [];
+  claudeMessages(record).forEach(message => {
+    if (message?.role !== "user") return;
+    const text = contentText(message.content);
+    const pattern = /<task-notification>([\s\S]*?)<\/task-notification>/gi;
+    for (const match of text.matchAll(pattern)) {
+      const payload = match[1];
+      const id = payload.match(/<tool-use-id>\s*([\s\S]*?)\s*<\/tool-use-id>/i)?.[1]?.trim() || "";
+      const result = payload.match(/<result>\s*([\s\S]*?)\s*<\/result>/i)?.[1]?.trim() || "";
+      const status = payload.match(/<status>\s*([\s\S]*?)\s*<\/status>/i)?.[1]?.trim() || "";
+      if (id && result) notifications.push({id, text: result, status});
+    }
+  });
+  return notifications;
+}
+
+function toolInputDetail(tool) {
+  const input = tool?.input && typeof tool.input === "object" ? tool.input : {};
+  const filePath = input.file_path ? String(input.file_path).split(/[\\/]/).filter(Boolean).pop() : "";
+  const value = input.description || filePath || input.path || input.command || input.query || input.pattern || input.url;
+  if (value) return String(value);
+  try {
+    const raw = JSON.stringify(input);
+    return raw.length > 180 ? `${raw.slice(0, 177)}...` : raw;
+  } catch (_) {
+    return "";
+  }
+}
+
+function buildAgentRecordContext(records) {
+  const agentCalls = [];
+  records.forEach((record, recordIndex) => {
+    claudeToolUses(record).forEach(tool => {
+      if (!/^(Agent|Task)$/i.test(tool.name)) return;
+      const input = tool.input && typeof tool.input === "object" ? tool.input : {};
+      agentCalls.push({
+        id: tool.id || "",
+        name: input.subagent_type || input.agent_type || "Agent",
+        description: input.description || "",
+        prompt: stripClaudeContext(input.prompt || ""),
+        record,
+        recordIndex,
+      });
+    });
+  });
+  return {agentCalls};
+}
+
+function agentCallForRecord(record, context) {
+  const firstPrompt = normalizeClaudePrompt(firstClaudeUserText(record));
+  return context.agentCalls.find(call => call.prompt && firstPrompt === normalizeClaudePrompt(call.prompt)) || null;
+}
+
+function agentResultForRecord(record, context) {
+  const completion = [...claudeTaskNotifications(record)].reverse().find(item => {
+    return context.agentCalls.some(call => call.id && call.id === item.id);
+  });
+  if (completion) {
+    const call = context.agentCalls.find(item => item.id === completion.id);
+    return {...completion, call, record, source: "task-notification"};
+  }
+  const messages = claudeMessages(record);
+  const latestUser = [...messages].reverse().find(message => message?.role === "user");
+  if (!latestUser || !Array.isArray(latestUser.content)) return null;
+  const latestResults = latestUser.content
+    .filter(item => item?.type === "tool_result")
+    .map(item => ({id: item.tool_use_id || "", text: contentText(item.content).trim()}));
+  for (const result of latestResults) {
+    const call = context.agentCalls.find(item => item.id && item.id === result.id);
+    if (call) return {...result, call, record, source: "tool-result"};
+  }
+  return null;
+}
+
+function isClaudeTitleRequest(record) {
+  return claudeMessages(record).some(message => message?.role === "user" && /<session>[\s\S]*<\/session>/i.test(contentText(message.content)));
+}
+
+function recordPresentation(record, context) {
+  const tools = claudeToolUses(record);
+  const agentTool = tools.find(tool => /^(Agent|Task)$/i.test(tool.name));
+  const childCall = agentCallForRecord(record, context);
+  const agentResult = agentResultForRecord(record, context);
+  const titleRequest = isClaudeTitleRequest(record);
+  let kind = t("main_agent");
+  let kindClass = "primary";
+  if (titleRequest) {
+    kind = t("system_request");
+    kindClass = "system";
+  } else if (childCall) {
+    kind = t("subagent", {name: childCall.name});
+    kindClass = "subagent";
+  }
+
+  let request = readableRequestText(record);
+  let response = responseTextFromRecord(record);
+  if (titleRequest) request = t("session_title_request");
+  if (agentTool) {
+    const input = agentTool.input && typeof agentTool.input === "object" ? agentTool.input : {};
+    response = t("launch_subagent", {
+      name: input.subagent_type || input.agent_type || "Agent",
+      description: input.description || toolInputDetail(agentTool),
+    });
+  } else if (!response && tools.length) {
+    const tool = tools[0];
+    response = t("tool_call", {name: tool.name, detail: toolInputDetail(tool)});
+  }
+  if (agentResult) {
+    request = t("tool_result", {
+      name: agentResult.call.name,
+      result: agentResult.text || t("ok"),
+    });
+  }
+  return {kind, kindClass, request, response};
+}
+
+function readableRequestText(record) {
+  const messages = claudeMessages(record);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "user") continue;
+    if (Array.isArray(message.content) && message.content.some(item => item?.type === "tool_result")) continue;
+    const text = stripClaudeContext(contentText(message.content));
+    if (text) return text;
+  }
+  return stripClaudeContext(requestText(record?.request?.body));
+}
+
+function claudeSystemText(record) {
+  return contentText(record?.request?.body?.system).trim();
+}
+
+function recordTimestamp(record) {
+  const value = Date.parse(record?.timestamp || "");
+  return Number.isFinite(value) ? value : 0;
+}
+
+function truncateAgentText(text, limit = 260) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit - 3)}...` : normalized;
+}
+
+function agentJourneyForCall(records, call, context) {
+  const childRecords = records
+    .filter(record => agentCallForRecord(record, {agentCalls: [call]}))
+    .sort((left, right) => recordTimestamp(left) - recordTimestamp(right));
+  const childTools = childRecords
+    .flatMap(record => claudeToolUses(record))
+    .filter(tool => !/^(Agent|Task)$/i.test(tool.name));
+  const uniqueTools = childTools.filter((tool, index, tools) => {
+    const key = tool.id || `${tool.name}:${JSON.stringify(tool.input || {})}`;
+    return tools.findIndex(candidate => {
+      const candidateKey = candidate.id || `${candidate.name}:${JSON.stringify(candidate.input || {})}`;
+      return candidateKey === key;
+    }) === index;
+  });
+  const firstChild = childRecords[0] || null;
+  const childFinalRecord = [...childRecords].reverse().find(record => responseTextFromRecord(record)) || null;
+  const results = records.map(record => agentResultForRecord(record, context)).filter(item => item?.call === call);
+  const result = [...results].reverse().find(item => item.source === "task-notification") || results.at(-1) || null;
+  const body = firstChild?.request?.body || {};
+  const childPrompt = firstChild ? firstClaudeUserText(firstChild) : "";
+  return {
+    call,
+    originalGoal: readableRequestText(call.record),
+    childPrompt,
+    promptVerified: Boolean(childPrompt && normalizeClaudePrompt(childPrompt) === normalizeClaudePrompt(call.prompt)),
+    childSystem: firstChild ? claudeSystemText(firstChild) : "",
+    childMessageCount: childRecords.reduce((count, record) => Math.max(count, claudeMessages(record).length), 0),
+    childToolDefinitionCount: Array.isArray(body.tools) ? body.tools.length : 0,
+    model: body.model || "",
+    childTools: uniqueTools,
+    childFinal: childFinalRecord ? responseTextFromRecord(childFinalRecord) : "",
+    returnedResult: result?.text || "",
+    parentContinuation: result?.record ? responseTextFromRecord(result.record) : "",
+  };
+}
+
+function renderAgentEvidenceDetails(label, text) {
+  if (!text) return "";
+  return `<details class="agent-evidence-details"><summary>${esc(label)}</summary><pre>${esc(text)}</pre></details>`;
+}
+
+function renderAgentStage(label, title, text, className = "", details = "", facts = "") {
+  return `<div class="agent-stage ${className}">
+    <div class="agent-stage-label">${esc(label)}</div>
+    <div class="agent-stage-title">${esc(title)}</div>
+    ${text ? `<div class="agent-stage-text">${esc(text)}</div>` : ""}
+    ${facts ? `<div class="agent-context-facts">${facts}</div>` : ""}
+    ${details}
+  </div>`;
+}
+
+function renderAgentFlow(records, context) {
+  if (!context.agentCalls.length) return "";
+  const journeys = context.agentCalls.map(call => {
+    const journey = agentJourneyForCall(records, call, context);
+    const contextFacts = [
+      journey.promptVerified ? `<span class="agent-context-fact verified">${esc(t("agent_context_verified"))}</span>` : "",
+      journey.childSystem ? `<span class="agent-context-fact">${esc(t("agent_system_context", {count: journey.childSystem.length}))}</span>` : "",
+      `<span class="agent-context-fact">${esc(t("agent_context_messages", {count: journey.childMessageCount}))}</span>`,
+      `<span class="agent-context-fact">${esc(t("agent_context_tools", {count: journey.childToolDefinitionCount}))}</span>`,
+      journey.model ? `<span class="agent-context-fact">${esc(t("agent_context_model", {model: journey.model}))}</span>` : "",
+    ].join("");
+    const childActions = journey.childTools.length
+      ? journey.childTools.map(tool => `${tool.name}: ${toolInputDetail(tool)}`).join("\n")
+      : t("agent_no_child_actions");
+    const returned = journey.returnedResult || journey.childFinal;
+    const delegationDetails = renderAgentEvidenceDetails(t("agent_view_prompt"), call.prompt);
+    const contextDetails = renderAgentEvidenceDetails(t("agent_view_system"), journey.childSystem);
+    const returnDetails = renderAgentEvidenceDetails(t("agent_view_result"), returned);
+    return `<article class="agent-journey" data-agent-call-id="${esc(call.id)}">
+      <div class="agent-journey-title">
+        <strong>${esc(t("main_agent"))} &rarr; ${esc(t("subagent", {name: call.name}))}</strong>
+        <span>${esc(call.description)}</span>
+        <span class="agent-journey-id">${esc(t("agent_evidence_id", {id: call.id || t("unknown")}))}</span>
+      </div>
+      <div class="agent-journey-grid">
+        ${renderAgentStage(t("agent_delegation"), t("agent_task_request"), truncateAgentText(journey.originalGoal), "", delegationDetails)}
+        <div class="agent-stage-arrow">&rarr;</div>
+        ${renderAgentStage(t("agent_child_context"), t("agent_delegated_prompt"), truncateAgentText(journey.childPrompt || call.prompt), "child", contextDetails, contextFacts)}
+        <div class="agent-stage-arrow">&rarr;</div>
+        ${renderAgentStage(t("agent_child_work"), t("agent_child_actions", {count: journey.childTools.length}), childActions)}
+        <div class="agent-stage-arrow">&rarr;</div>
+        ${renderAgentStage(t("agent_return"), t("agent_parent_received"), truncateAgentText(returned), "return", returnDetails + (journey.parentContinuation ? `<div class="agent-stage-text"><strong>${esc(t("agent_parent_continues"))}</strong><br>${esc(truncateAgentText(journey.parentContinuation))}</div>` : ""))}
+      </div>
+    </article>`;
+  }).join("");
+  return `<section class="agent-flow">
+    <div class="agent-flow-heading"><span>${esc(t("agent_flow"))}</span><span class="agent-flow-evidence">${esc(t("agent_flow_verified"))}</span></div>
+    ${journeys}
+  </section>`;
+}
+
+function renderDetail(session, records) {
 	  const totalRecords = Number(session.record_count || records.length);
 	  const hasHiddenRecords = totalRecords > records.length;
 	  const alternateTab = detailAlternateTab();
@@ -2195,6 +2688,9 @@ async function loadMoreSessionRecords(session, records, button) {
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
   $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
+  const cachedFlow = agentFlowRecordCache.get(session.id);
+  const flowRecords = cachedFlow?.total === totalRecords ? cachedFlow.records : records;
+  const agentContext = buildAgentRecordContext(flowRecords);
   $("#detail").innerHTML = `
     <div class="detail-inspector-bar">
       <div class="detail-tabs">
@@ -2215,7 +2711,8 @@ async function loadMoreSessionRecords(session, records, button) {
 	    </div>
     <div id="raw-tab" class="${state.activeTab === "raw" ? "" : "hidden"}">
       ${hasHiddenRecords ? `<div class="detail-fallback-note">${esc(t("limited_records", {shown: records.length, total: totalRecords}))}</div>` : ""}
-      <div class="records">${records.map((record, index) => renderRecord(record, index)).join("") || emptyRecord()}</div>
+      <div data-agent-flow-panel>${renderAgentFlow(flowRecords, agentContext)}</div>
+      <div class="records">${records.map((record, index) => renderRecord(record, index, agentContext)).join("") || emptyRecord()}</div>
       ${hasHiddenRecords ? `<div class="detail-load-more"><button class="load-more-btn" type="button" data-load-more>${esc(t("load_more_records"))}</button></div>` : ""}
     </div>
   `;
@@ -2242,6 +2739,7 @@ async function loadMoreSessionRecords(session, records, button) {
   document.querySelectorAll("[data-copy-path]").forEach(button => {
     button.addEventListener("click", () => navigator.clipboard?.writeText(button.dataset.copyPath || ""));
   });
+  hydrateAgentFlow(session, records).catch(console.error);
 }
 
 function detailAlternateTab() {
@@ -2262,6 +2760,7 @@ function updateDetailTabToggle() {
 
 function setDetailTab(tab, session) {
   state.activeTab = tab === "conversation" ? "conversation" : "raw";
+  persistDashboardState();
   $("#conversation-tab")?.classList.toggle("hidden", state.activeTab !== "conversation");
   $("#raw-tab")?.classList.toggle("hidden", state.activeTab !== "raw");
   if (state.activeTab === "conversation") ensureViewerFrame(session);
@@ -2297,11 +2796,12 @@ function updateDetailI18n(session) {
   });
 }
 
-function renderRecord(record, index) {
+function renderRecord(record, index, agentContext = buildAgentRecordContext([record])) {
   const request = record.request || {};
   const response = record.response || {};
-  const userText = requestText(request.body) || t("request_empty");
-  const responseText = responseTextFromRecord(record) || response.error || t("response_empty");
+  const presentation = recordPresentation(record, agentContext);
+  const userText = presentation.request || t("request_empty");
+  const responseText = presentation.response || response.error || t("response_empty");
   const status = response.status ?? "";
   const path = request.path || "";
   const jsonId = `json-${index}`;
@@ -2311,6 +2811,7 @@ function renderRecord(record, index) {
       <div class="section-header">
         <span class="chevron">&#9654;</span>
         <span class="title">Turn ${esc(record.turn ?? index + 1)}</span>
+        <span class="record-kind ${esc(presentation.kindClass)}">${esc(presentation.kind)}</span>
         <span class="badge ${statusClass}">${esc(status || t("ok"))}</span>
         <span class="path">${esc(path)}</span>
         <button class="json-btn" data-json-toggle="${jsonId}">${esc(t("json"))}</button>
@@ -2417,21 +2918,22 @@ function partsText(parts) {
 	      clearInterval(state.pollingIntervalId);
 	      state.pollingIntervalId = null;
 	    }
+	    scheduleDashboardRefresh();
 	  });
 	  events.addEventListener("refresh", () => {
 	    if (state.quittingDashboard) return;
-	    refreshSessions({preserveSelection: true}).catch(console.error);
+	    scheduleDashboardRefresh();
 	  });
 	  events.addEventListener("record", () => {
 	    if (state.quittingDashboard) return;
-	    refreshSessions({preserveSelection: true}).catch(console.error);
+	    scheduleDashboardRefresh();
 	  });
 	  events.addEventListener("error", () => {
 	    if (state.quittingDashboard) return;
 	    $("#live-label").textContent = t("live_reconnecting");
 	    if (!state.pollingIntervalId) {
 	      state.pollingIntervalId = setInterval(() => {
-	        refreshSessions({preserveSelection: true}).catch(console.error);
+	        scheduleDashboardRefresh();
 	      }, 5000);
 	    }
 	  });
@@ -2485,7 +2987,7 @@ $("#status-filter").addEventListener("change", event => {
   refreshForFilters();
 });
 
-	$("#refresh").addEventListener("click", () => refreshSessions({preserveSelection: true, refreshDetail: true}).catch(console.error));
+	$("#refresh").addEventListener("click", () => scheduleDashboardRefresh({refreshDetail: true}));
 	$("#edit-sessions").addEventListener("click", () => setEditMode(!state.editMode));
 	$("#done-edit-sessions").addEventListener("click", () => setEditMode(false));
 	$("#select-all-sessions").addEventListener("change", event => toggleSelectAllVisible(event.target.checked));
@@ -2510,6 +3012,7 @@ if (dashboardQuitButton) {
 }
 $("#lang-select").addEventListener("change", event => setLang(event.target.value));
 
+	restoreDashboardState();
 	applyI18n();
 	applyVersionBadge();
 	initTheme();
@@ -2520,8 +3023,9 @@ $("#lang-select").addEventListener("change", event => setLang(event.target.value
 	  $("#detail").innerHTML = `<div class="empty">${esc(t("unable_load_dashboard", {error: error.message}))}</div>`;
 	});
 	if (!hasDashboardEvents) {
-	  setInterval(() => refreshSessions({preserveSelection: true}).catch(console.error), 5000);
+	  state.pollingIntervalId = setInterval(() => scheduleDashboardRefresh(), 5000);
 	}
+	window.addEventListener("pagehide", persistDashboardState);
 </script>
 </body>
 </html>
