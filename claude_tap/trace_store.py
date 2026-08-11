@@ -282,6 +282,50 @@ class TraceStore:
                     return row
         return None
 
+    def find_hermes_session_row(self, hermes_session_id: str) -> sqlite3.Row | None:
+        """Return the canonical tap session already linked to a Hermes root session."""
+        hermes_session_id = hermes_session_id.strip()
+        if not hermes_session_id:
+            return None
+        with self._read_connect() as conn:
+            return conn.execute(
+                """
+                SELECT s.*
+                FROM sessions s
+                WHERE LOWER(COALESCE(s.client, '')) = 'hermes'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM records r
+                    WHERE r.session_id = s.id
+                      AND json_valid(r.payload_json)
+                      AND json_extract(r.payload_json, '$.capture.hermes_session_id') = ?
+                  )
+                ORDER BY COALESCE(julianday(s.started_at), 0) ASC,
+                         s.id ASC
+                LIMIT 1
+                """,
+                (hermes_session_id,),
+            ).fetchone()
+
+    def delete_session_if_empty(self, session_id: str) -> bool:
+        """Delete a startup shell only when it has no captured API records."""
+        with self._write_access() as conn:
+            row = conn.execute(
+                """
+                SELECT id
+                FROM sessions s
+                WHERE s.id = ?
+                  AND s.record_count = 0
+                  AND NOT EXISTS (SELECT 1 FROM records r WHERE r.session_id = s.id)
+                """,
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.commit()
+            return True
+
     def count_non_partial_records(self, session_id: str) -> int:
         with self._read_connect() as conn:
             row = conn.execute(

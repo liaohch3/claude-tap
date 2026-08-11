@@ -689,7 +689,11 @@ function createSessionGroupHeader(group, groupIdx, groupKey, onToggle) {
 
 function renderSidebar(preserveDetail) {
   const sb = $('#sidebar');
-  const prevScrollTop = sb.scrollTop;
+  const prevScrollTop = preserveDetail ? Math.max(sb.scrollTop, savedViewerSidebarScrollTop()) : sb.scrollTop;
+  if (!sb.dataset.viewStateScrollBound) {
+    sb.addEventListener('scroll', () => persistViewerViewState(), { passive: true });
+    sb.dataset.viewStateScrollBound = '1';
+  }
   updateSidebarSortControls();
 
   // Use virtual scroll for large filtered sets
@@ -930,7 +934,11 @@ function selectEntry(idx, opts) {
   const force = !opts || opts.force !== false;
   const entry = filtered[idx];
   const entryKey = entryStableKey(entry);
+  const sameEntry = currentDetailEntryKey === entryKey;
   activeIdx = idx;
+  currentDetailRequestId = entry.request_id || entry.req_id || null;
+  currentDetailEntryKey = entryKey;
+  persistViewerViewState();
   if (virtualMode) {
     vsRenderVisible();
   } else {
@@ -939,7 +947,7 @@ function selectEntry(idx, opts) {
     });
   }
   // Skip re-render if same entry and force=false (preserves scroll position in live mode)
-  if (!force && currentDetailEntryKey === entryKey) {
+  if (!force && sameEntry) {
     // Just update sidebar highlight, keep detail as-is
   } else {
     renderDetailForEntry(entry);

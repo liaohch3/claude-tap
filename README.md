@@ -427,7 +427,7 @@ Pi stores OAuth credentials in `~/.pi/agent/auth.json` after `/login`. If you ke
 <details>
 <summary>Hermes Agent examples</summary>
 
-Hermes Agent is a multi-provider Python AI agent (Nous Portal, OpenRouter, NVIDIA NIM, Xiaomi MiMo, GLM, Kimi, MiniMax, Hugging Face, OpenAI, Anthropic, custom). Because it can talk to any of these providers — and `httpx` / `requests` both honor `HTTPS_PROXY` natively — claude-tap defaults to **forward proxy** mode for hermes: it injects `HTTPS_PROXY` plus the local CA into the child process so any provider is captured.
+Hermes Agent is a multi-provider Python AI agent (Nous Portal, OpenRouter, NVIDIA NIM, Xiaomi MiMo, GLM, Kimi, MiniMax, Hugging Face, OpenAI, Anthropic, custom). claude-tap defaults to **reverse proxy** mode for Hermes so model requests follow the same deterministic capture path as Claude Code. It auto-detects the active `model.base_url` from `~/.hermes/config.yaml` (or `OPENAI_BASE_URL`) and temporarily points Hermes at the local proxy.
 
 ```bash
 # Interactive TUI — the recommended way for local trace capture.
@@ -440,9 +440,8 @@ claude-tap --tap-client hermes
 # would not go through the proxy and no traces would be recorded.
 claude-tap --tap-client hermes -- gateway start
 
-# Reverse mode is opt-in and only useful when ~/.hermes is configured with an
-# OpenAI-compatible provider that reads OPENAI_BASE_URL.
-claude-tap --tap-client hermes --tap-proxy-mode reverse
+# Forward mode remains available for providers that do not honor OPENAI_BASE_URL.
+claude-tap --tap-client hermes --tap-proxy-mode forward
 ```
 
 > **Note:** Gateway mode only produces traces when a configured messaging platform (Slack, Telegram, etc.) delivers a message to the bot. Without an active platform integration, the gateway makes no LLM calls and no traces are recorded.
@@ -616,7 +615,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-no-launch          Only start the proxy, don't launch client
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, forward for agy/codexapp/gemini/mimo/opencode/pi/hermes/qoder; cursor is transcript-only and ignores proxy MITM)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/grok/kimi/kimi-code/openclaw/hermes/codebuddy, forward for agy/codexapp/gemini/mimo/opencode/pi/qoder; cursor is transcript-only and ignores proxy MITM)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 

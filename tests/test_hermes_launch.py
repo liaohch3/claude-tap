@@ -7,6 +7,7 @@ import pytest
 
 from claude_tap import parse_args
 from claude_tap.cli import CLIENT_CONFIGS, ClientConfig, run_client
+from claude_tap.cli_clients import _patch_dotenv_values, _patch_hermes_model_base_url
 
 
 class _DummyProc:
@@ -44,7 +45,7 @@ def test_hermes_registered_in_client_configs() -> None:
     assert cfg.default_target == "https://api.openai.com"
     assert cfg.base_url_env == "OPENAI_BASE_URL"
     assert cfg.base_url_suffix == "/v1"
-    assert cfg.default_proxy_mode == "forward"
+    assert cfg.default_proxy_mode == "reverse"
 
 
 def test_claude_default_proxy_mode_unchanged() -> None:
@@ -55,10 +56,81 @@ def test_codex_default_proxy_mode_unchanged() -> None:
     assert CLIENT_CONFIGS["codex"].default_proxy_mode == "reverse"
 
 
-def test_parse_args_hermes_defaults_to_forward_mode() -> None:
+def test_parse_args_hermes_defaults_to_reverse_mode() -> None:
     args = parse_args(["--tap-client", "hermes"])
     assert args.client == "hermes"
-    assert args.proxy_mode == "forward"
+    assert args.proxy_mode == "reverse"
+
+
+def test_patch_hermes_model_base_url_preserves_other_config() -> None:
+    source = (
+        "model:\n  provider: custom\n  base_url: https://upstream.example/v1\n"
+        "providers:\n  custom:\n    base_url: https://provider.example/v1\n"
+        "toolsets:\n  - web\n"
+    )
+
+    patched = _patch_hermes_model_base_url(source, "http://127.0.0.1:43123/v1")
+
+    assert "  provider: custom\n" in patched
+    assert "  base_url: http://127.0.0.1:43123/v1\n" in patched
+    assert "toolsets:\n  - web\n" in patched
+    assert "upstream.example" not in patched
+    assert "provider.example" not in patched
+    assert patched.count("base_url: http://127.0.0.1:43123/v1") == 2
+
+
+def test_patch_hermes_base_urls_adds_missing_model_section() -> None:
+    source = "providers:\n  custom:\n    base_url: https://provider.example/v1\n"
+
+    patched = _patch_hermes_model_base_url(source, "http://127.0.0.1:43123/v1")
+
+    assert patched.startswith("model:\n  base_url: http://127.0.0.1:43123/v1\n")
+    assert "provider.example" not in patched
+
+
+def test_patch_dotenv_values_preserves_secrets_and_replaces_provider_url() -> None:
+    source = "CUSTOM_API_KEY=secret\nCUSTOM_BASE_URL=https://upstream.example/v1\n# keep\n"
+
+    patched = _patch_dotenv_values(source, {"CUSTOM_BASE_URL": "http://127.0.0.1:43123/v1"})
+
+    assert "CUSTOM_API_KEY=secret\n" in patched
+    assert "CUSTOM_BASE_URL=http://127.0.0.1:43123/v1\n" in patched
+    assert "# keep\n" in patched
+
+
+def test_parse_args_hermes_reverse_detects_active_model_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "model:\n"
+        "  provider: my-api\n"
+        "  base_url: http://127.0.0.1:3000/v1\n"
+        "providers:\n"
+        "  my-api:\n"
+        "    base_url: http://127.0.0.1:4000/v1\n",
+        encoding="utf-8",
+    )
+
+    args = parse_args(["--tap-client", "hermes"])
+
+    assert args.proxy_mode == "reverse"
+    assert args.target == "http://127.0.0.1:3000"
+
+
+def test_parse_args_hermes_explicit_target_overrides_detected_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text("model:\n  base_url: http://127.0.0.1:3000/v1\n", encoding="utf-8")
+
+    args = parse_args(["--tap-client", "hermes", "--tap-target", "https://gateway.example/v1"])
+
+    assert args.target == "https://gateway.example/v1"
 
 
 def test_parse_args_hermes_explicit_reverse_overrides_default() -> None:
@@ -266,12 +338,24 @@ async def test_run_client_codex_not_affected_by_hermes_rewrite(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_run_client_hermes_reverse_sets_openai_base_url(monkeypatch) -> None:
+async def test_run_client_hermes_reverse_sets_openai_base_url(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
+    original_config = "model:\n  provider: custom\n  base_url: https://upstream.example/v1\n"
+    (tmp_path / "config.yaml").write_text(original_config, encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        "CUSTOM_API_KEY=secret\nCUSTOM_BASE_URL=https://upstream.example/v1\n", encoding="utf-8"
+    )
+    (tmp_path / "state.db").write_text("state", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
         captured["env"] = kwargs["env"]
+        hermes_home = Path(kwargs["env"]["HERMES_HOME"])
+        captured["sandbox_home"] = hermes_home
+        captured["sandbox_config"] = (hermes_home / "config.yaml").read_text(encoding="utf-8")
+        captured["sandbox_env"] = (hermes_home / ".env").read_text(encoding="utf-8")
+        captured["state_target"] = (hermes_home / "state.db").resolve()
         return _DummyProc()
 
     monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/hermes")
@@ -286,16 +370,24 @@ async def test_run_client_hermes_reverse_sets_openai_base_url(monkeypatch) -> No
     assert code == 0
     env = captured["env"]
     assert env["OPENAI_BASE_URL"] == "http://127.0.0.1:43123/v1"
-    assert "ANTHROPIC_BASE_URL" not in env
-    assert "OPENROUTER_BASE_URL" not in env
-    assert "CUSTOM_BASE_URL" not in env
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:43123"
+    assert env["OPENROUTER_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    assert env["CUSTOM_BASE_URL"] == "http://127.0.0.1:43123/v1"
+    assert "base_url: http://127.0.0.1:43123/v1" in captured["sandbox_config"]
+    assert "CUSTOM_API_KEY=secret" in captured["sandbox_env"]
+    assert "CUSTOM_BASE_URL=http://127.0.0.1:43123/v1" in captured["sandbox_env"]
+    assert captured["state_target"] == tmp_path / "state.db"
+    assert not captured["sandbox_home"].exists()
+    assert (tmp_path / "config.yaml").read_text(encoding="utf-8") == original_config
     # Reverse mode for hermes must not inject the codex-only -c flag
     assert captured["cmd"] == ("/tmp/hermes", "chat")
 
 
 @pytest.mark.asyncio
-async def test_run_client_hermes_capture_only_reverse_sets_multi_provider_urls(monkeypatch) -> None:
+async def test_run_client_hermes_capture_only_reverse_sets_multi_provider_urls(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
+    (tmp_path / "config.yaml").write_text("model:\n  provider: custom\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

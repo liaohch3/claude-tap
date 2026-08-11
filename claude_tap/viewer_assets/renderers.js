@@ -391,6 +391,146 @@ function getMessages(body) {
   return [];
 }
 
+function inputModuleRoleLabel(role) {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (!normalized) return 'Message';
+  if (normalized === 'tool') return 'Tool Result';
+  return normalized.replace(/(^|[_-])([a-z])/g, (_, prefix, letter) => `${prefix ? ' ' : ''}${letter.toUpperCase()}`);
+}
+
+function inputModuleFromMessage(message) {
+  const role = String(message?.role || message?.author?.role || 'message').toLowerCase();
+  return {
+    kind: role === 'human' ? 'user' : role,
+    label: inputModuleRoleLabel(role === 'human' ? 'user' : role),
+    payload: message,
+  };
+}
+
+function responsesInputModule(item) {
+  const type = String(item?.type || '').toLowerCase();
+  const role = String(item?.role || '').toLowerCase();
+  if (role) return inputModuleFromMessage(item);
+  const labels = {
+    function_call: 'Function Call',
+    function_call_output: 'Tool Result',
+    tool_result: 'Tool Result',
+    reasoning: 'Reasoning',
+    computer_call_output: 'Computer Result',
+  };
+  return {
+    kind: type || 'input',
+    label: labels[type] || inputModuleRoleLabel(type || 'input'),
+    payload: item,
+  };
+}
+
+function getInputModules(body) {
+  if (body === undefined || body === null) return [];
+  if (typeof body !== 'object') return [{ kind: 'prompt', label: 'Prompt', payload: body }];
+
+  const modules = [];
+  const add = (kind, label, payload) => {
+    if (payload === undefined || payload === null || payload === '') return;
+    if (Array.isArray(payload) && payload.length === 0) return;
+    modules.push({ kind, label, payload });
+  };
+
+  add('system', t('section_system'), body.system);
+  add('system', t('section_system'), body.instructions);
+  const geminiSystem = geminiRequest(body).systemInstruction;
+  add('system', t('section_system'), geminiSystem);
+
+  const chatMessages = Array.isArray(body.messages) ? body.messages : [];
+  let leadingInstructionCount = 0;
+  while (leadingInstructionCount < chatMessages.length && isChatInstructionRole(chatMessages[leadingInstructionCount]?.role)) {
+    modules.push(inputModuleFromMessage(chatMessages[leadingInstructionCount]));
+    leadingInstructionCount += 1;
+  }
+
+  const tools = getRequestTools(body);
+  if (tools.length) add('tools', t('section_tools'), tools);
+
+  for (let i = leadingInstructionCount; i < chatMessages.length; i++) {
+    modules.push(inputModuleFromMessage(chatMessages[i]));
+  }
+
+  if (!chatMessages.length && Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (!item || typeof item !== 'object' || item.type === 'additional_tools') continue;
+      modules.push(responsesInputModule(item));
+    }
+  }
+
+  if (!chatMessages.length && !Array.isArray(body.input) && isGeminiRequestBody(body)) {
+    for (const content of geminiRequest(body).contents || []) {
+      modules.push(inputModuleFromMessage({ ...content, role: geminiRole(content?.role) }));
+    }
+  }
+
+  if (!modules.length && Object.prototype.hasOwnProperty.call(body, 'prompt')) {
+    add('prompt', 'Prompt', body.prompt);
+  }
+  if (!modules.length) add('request', 'Request', body);
+  return modules;
+}
+
+function estimatedTokenWeight(value) {
+  let text;
+  if (typeof value === 'string') text = value;
+  else {
+    try { text = JSON.stringify(value); } catch (_) { text = String(value); }
+  }
+  if (!text) return 1;
+  let weight = 0;
+  let latinRun = 0;
+  const flushLatin = () => {
+    if (!latinRun) return;
+    weight += Math.ceil(latinRun / 4);
+    latinRun = 0;
+  };
+  for (const char of text) {
+    if (/^[A-Za-z0-9]$/.test(char)) {
+      latinRun += 1;
+      continue;
+    }
+    flushLatin();
+    if (/^[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]$/.test(char)) weight += 1;
+    else if (!/^\s$/.test(char)) weight += 0.25;
+  }
+  flushLatin();
+  return Math.max(1, Math.round(weight));
+}
+
+function inputTokenTotal(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  const hasInput = ['input_tokens', 'prompt_tokens', 'promptTokenCount', 'inputTokens']
+    .some(key => usage[key] !== undefined && usage[key] !== null);
+  const hasCache = usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined;
+  if (!hasInput && !hasCache) return null;
+  let total = Number(usage.input_tokens || usage.prompt_tokens || usage.promptTokenCount || usage.inputTokens || 0);
+  if (!usage._cache_read_in_input) {
+    total += Number(usage.cache_read_input_tokens || 0);
+    total += Number(usage.cache_creation_input_tokens || 0);
+  }
+  return Math.max(0, Math.round(total));
+}
+
+function allocateInputModuleTokens(modules, usage) {
+  const weights = (modules || []).map(module => estimatedTokenWeight(module.payload));
+  const reportedTotal = inputTokenTotal(usage);
+  const total = reportedTotal === null ? weights.reduce((sum, value) => sum + value, 0) : reportedTotal;
+  if (!weights.length) return { total, counts: [], totalEstimated: reportedTotal === null };
+  const weightTotal = weights.reduce((sum, value) => sum + value, 0) || 1;
+  const raw = weights.map(weight => total * weight / weightTotal);
+  const counts = raw.map(Math.floor);
+  let remainder = total - counts.reduce((sum, value) => sum + value, 0);
+  const order = raw.map((value, index) => ({ index, fraction: value - counts[index] }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+  for (let i = 0; i < remainder; i++) counts[order[i % order.length].index] += 1;
+  return { total, counts, totalEstimated: reportedTotal === null };
+}
+
 function shouldPrependResponsesInstructions(body, messages) {
   if (!Array.isArray(body?.input) || body.input.length === 0) return false;
   if (!Array.isArray(messages) || messages.length === 0) return false;

@@ -421,7 +421,7 @@ Pi 在 `/login` 后会把 OAuth 凭据保存在 `~/.pi/agent/auth.json`。如果
 <details>
 <summary>Hermes Agent 示例</summary>
 
-Hermes Agent 是基于 Python 的多 provider AI agent（Nous Portal / OpenRouter / NVIDIA NIM / 小米 MiMo / GLM / Kimi / MiniMax / Hugging Face / OpenAI / Anthropic / 自定义）。由于它能对接任意 provider，且 `httpx`、`requests` 都默认认 `HTTPS_PROXY` 环境变量，claude-tap 默认对 hermes 使用 **forward proxy** 模式——通过向子进程注入 `HTTPS_PROXY` 与本地 CA，捕获它对接的任意 provider 流量。
+Hermes Agent 是基于 Python 的多 provider AI agent（Nous Portal / OpenRouter / NVIDIA NIM / 小米 MiMo / GLM / Kimi / MiniMax / Hugging Face / OpenAI / Anthropic / 自定义）。claude-tap 默认对 Hermes 使用 **reverse proxy** 模式，使模型请求与 Claude Code 一样走确定的捕获链路。它会自动识别 `~/.hermes/config.yaml` 中当前的 `model.base_url`（或 `OPENAI_BASE_URL`），并临时让 Hermes 指向本地代理。
 
 ```bash
 # 交互式 TUI — 本地抓 trace 的推荐方式。
@@ -433,8 +433,8 @@ claude-tap --tap-client hermes
 # 继承 HTTPS_PROXY；否则 systemd/launchd 启动的守护进程不会经过代理，无法抓到 trace。
 claude-tap --tap-client hermes -- gateway start
 
-# 反向模式仅在 ~/.hermes 配了一个读 OPENAI_BASE_URL 的 OpenAI 兼容 provider 时才有用
-claude-tap --tap-client hermes --tap-proxy-mode reverse
+# 不支持 OPENAI_BASE_URL 的 provider 仍可显式使用 forward 模式
+claude-tap --tap-client hermes --tap-proxy-mode forward
 ```
 
 > **注意：** Gateway 模式只有在配置的消息平台（Slack、Telegram 等）推送消息给 bot 时才会产生 trace。若没有活跃的平台集成，gateway 不会发起 LLM 请求，也不会生成任何 trace。
@@ -607,7 +607,7 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 --tap-no-launch          仅启动代理，不启动客户端
 --tap-max-traces N       最大保留 trace 数量（默认: 50，0 = 不限）
 --tap-store-stream-events 捕获时把原始 SSE/WebSocket event 数组写入 trace 存储，以便查看器/导出结果展示（默认关闭）
---tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/grok/kimi/kimi-code/openclaw/codebuddy 用 reverse，agy/codexapp/gemini/mimo/opencode/pi/hermes/qoder 用 forward；cursor 为 transcript-only，不走 MITM 代理）
+--tap-proxy-mode MODE    代理模式: reverse 或 forward（默认：claude/codex/grok/kimi/kimi-code/openclaw/hermes/codebuddy 用 reverse，agy/codexapp/gemini/mimo/opencode/pi/qoder 用 forward；cursor 为 transcript-only，不走 MITM 代理）
 --tap-trust-ca           macOS 上显式把本地 CA 信任到当前用户 login keychain（agy 会自动执行）
 ```
 

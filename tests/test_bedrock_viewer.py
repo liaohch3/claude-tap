@@ -367,3 +367,110 @@ def test_bedrock_converse_response_output_and_usage_render(tmp_path) -> None:
     assert result["usage"]["output_tokens"] == 4
     assert result["usage"]["cache_read_input_tokens"] == 3
     assert result["usage"]["cache_creation_input_tokens"] == 2
+
+
+@pytest.mark.skipif(pw_missing, reason="playwright not installed")
+def test_bedrock_converse_flow_joins_tool_use_and_tool_result(tmp_path) -> None:
+    from playwright.sync_api import sync_playwright
+
+    from claude_tap.viewer import _generate_html_viewer
+
+    trace_path = tmp_path / "bedrock-converse-flow.jsonl"
+    html_path = tmp_path / "bedrock-converse-flow.html"
+    record = {
+        "timestamp": "2026-04-27T09:15:01+00:00",
+        "request_id": "req_bedrock_flow",
+        "turn": 1,
+        "duration_ms": 250,
+        "request": {
+            "method": "POST",
+            "path": "/model/anthropic.claude-sonnet-4-20250514-v1:0/converse",
+            "headers": {},
+            "body": {
+                "messages": [
+                    {"role": "user", "content": [{"text": "Look up ping."}]},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "toolUse": {
+                                    "toolUseId": "tool-1",
+                                    "name": "lookup",
+                                    "input": {"query": "ping"},
+                                }
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "toolResult": {
+                                    "toolUseId": "tool-1",
+                                    "content": [{"text": "lookup result"}],
+                                }
+                            }
+                        ],
+                    },
+                ]
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "toolUse": {
+                                    "toolUseId": "tool-1",
+                                    "name": "lookup",
+                                    "input": {"query": "ping"},
+                                }
+                            }
+                        ],
+                    }
+                },
+                "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+            },
+        },
+    }
+    _write_trace(trace_path, [record])
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
+        page.on(
+            "console",
+            lambda message: errors.append(f"console.error: {message.text}") if message.type == "error" else None,
+        )
+        page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
+        page.wait_for_selector(".sidebar-item", timeout=5000)
+        page.locator(".sidebar-item").first.click()
+        page.locator('#detail .detail-tab[data-tab="flow"]').click()
+        page.wait_for_selector("#detail .flow-canvas", timeout=5000)
+        tool = page.evaluate(
+            """() => {
+              const stage = activeFlowGraph?.stages?.[0];
+              const node = stage?.tools?.[0];
+              return node ? {
+                name: node.title,
+                pending: node.pending,
+                resultSummary: node.resultSummary || '',
+                result: node.result,
+              } : null;
+            }"""
+        )
+        browser.close()
+
+    assert errors == []
+    assert tool is not None
+    assert tool["name"] == "lookup"
+    assert tool["pending"] is False
+    assert tool["resultSummary"] == "lookup result"
+    assert tool["result"] == [{"text": "lookup result"}]

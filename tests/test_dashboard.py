@@ -1789,6 +1789,171 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_dashboard_claude_subagent_trace_has_readable_agent_flow(trace_db, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    prompt = "Inspect pyproject.toml and report its project name."
+    child_prompt = "Read pyproject.toml and report only the project name."
+    records = [
+        {
+            **_anthropic_record(turn=1),
+            "request_id": "req_parent_start",
+            "request": {
+                **_anthropic_record()["request"],
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "messages": [
+                        {"role": "user", "content": f"<system-reminder>private context</system-reminder>\\n{prompt}"}
+                    ],
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "agent_call_1",
+                            "name": "Agent",
+                            "input": {
+                                "subagent_type": "Explore",
+                                "description": "Inspect metadata",
+                                "prompt": child_prompt,
+                            },
+                        }
+                    ]
+                },
+            },
+        },
+        {
+            **_anthropic_record(turn=2),
+            "request_id": "req_child_tool",
+            "request": {
+                **_anthropic_record()["request"],
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "system": [{"type": "text", "text": "You are an Explore subagent."}],
+                    "tools": [{"name": "Read", "description": "Read a file", "input_schema": {}}],
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": f"<system-reminder>child context</system-reminder>\\n{child_prompt}",
+                        }
+                    ],
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "read_call_1",
+                            "name": "Read",
+                            "input": {"file_path": "/repo/pyproject.toml"},
+                        }
+                    ]
+                },
+            },
+        },
+        {
+            **_anthropic_record(turn=3),
+            "request_id": "req_parent_result",
+            "request": {
+                **_anthropic_record()["request"],
+                "body": {
+                    "model": "claude-sonnet-4-6",
+                    "messages": [
+                        {"role": "user", "content": prompt},
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "agent_call_1",
+                                    "content": "Async agent launched successfully.",
+                                }
+                            ],
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                "<task-notification><tool-use-id>agent_call_1</tool-use-id>"
+                                "<status>completed</status><result>claude-tap</result></task-notification>"
+                            ),
+                        },
+                    ],
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {"content": [{"type": "text", "text": "The subagent returned claude-tap."}]},
+            },
+        },
+    ]
+    records[2:2] = [
+        {
+            **_anthropic_record(turn=turn),
+            "request_id": f"req_background_wait_{turn}",
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {"content": [{"type": "text", "text": "Waiting for child agent."}]},
+            },
+        }
+        for turn in range(4, 13)
+    ]
+    trace_path = tmp_path / "2026-05-20" / "trace_subagent.jsonl"
+    _write_jsonl(trace_path, records)
+    _seed_legacy(tmp_path)
+    session_id = list_trace_sessions()[0]["id"]
+
+    server = LiveViewerServer(port=0, migrate_from=tmp_path, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard/session/{session_id}", wait_until="domcontentloaded"
+                )
+                await page.wait_for_selector(".agent-flow", timeout=5000)
+                await page.wait_for_function(
+                    "document.querySelector('[data-agent-flow-panel]')?.innerText.includes('Parent continuation')",
+                    timeout=5000,
+                )
+                flow_text = " ".join((await page.locator(".agent-flow").inner_text()).split())
+                flow_text_lower = flow_text.lower()
+                assert "agent flow api evidence" in flow_text_lower
+                assert "1. parent delegates original goal" in flow_text_lower
+                assert "2. child context delegated prompt" in flow_text_lower
+                assert "prompt is the child's first user message" in flow_text_lower
+                assert "system 28 chars" in flow_text_lower
+                assert "1 tools" in flow_text_lower
+                assert "3. child executes 1 tool calls read: pyproject.toml" in flow_text_lower
+                assert "4. result returns completion result received by parent claude-tap" in flow_text_lower
+                assert "parent continuation the subagent returned claude-tap." in flow_text_lower
+                assert await page.locator(".agent-journey").count() == 1
+                assert await page.locator(".agent-stage").count() == 4
+                assert await page.locator(".agent-context-fact.verified").count() == 1
+                record_kinds = await page.locator(".record-kind").all_text_contents()
+                assert record_kinds[:2] == ["Main", "Explore subagent"]
+                assert len(record_kinds) == 10
+                body_text = await page.locator("#raw-tab").inner_text()
+                assert "private context" not in body_text
+                assert "child context" not in body_text
+                assert "Launch Explore: Inspect metadata" in body_text
+                assert "Call Read: pyproject.toml" in body_text
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_dashboard_session_export_menu_is_not_clipped_on_mobile(trace_db, tmp_path: Path) -> None:
     playwright = pytest.importorskip("playwright.async_api")
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"

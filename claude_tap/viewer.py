@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 from importlib.metadata import version as _pkg_version
@@ -32,6 +33,7 @@ VIEWER_JS_PATHS = (
     VIEWER_ASSETS_DIR / "sidebar.js",
     VIEWER_ASSETS_DIR / "detail_trace.js",
     VIEWER_ASSETS_DIR / "renderers.js",
+    VIEWER_ASSETS_DIR / "flow.js",
     VIEWER_ASSETS_DIR / "sections_json.js",
     VIEWER_ASSETS_DIR / "diff.js",
     VIEWER_ASSETS_DIR / "utilities_mobile.js",
@@ -886,6 +888,22 @@ def _latest_user_text(messages: list[dict]) -> str:
     return ""
 
 
+def _compact_message_sequence(value: object) -> tuple[str, int] | None:
+    """Return a stable key for compacted message/blob references."""
+    if not isinstance(value, list) or not value:
+        return None
+    refs: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        ref = item.get("__claude_tap_blob_ref__")
+        if not isinstance(ref, dict) or not isinstance(ref.get("hash"), str):
+            return None
+        refs.append(ref)
+    key = "|".join(f"{ref['hash']}:{ref.get('bytes', '')}" for ref in refs)
+    return key, len(refs)
+
+
 def _extract_metadata(record_json: str) -> dict | None:
     """Extract sidebar-relevant metadata from a raw JSON record string."""
     try:
@@ -953,6 +971,11 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
 
     # Messages
     msgs = _extract_request_messages(body)
+    compact_messages = (
+        _compact_message_sequence(body.get("messages"))
+        or _compact_message_sequence(body.get("input"))
+        or _compact_message_sequence(body.get("contents"))
+    )
 
     metadata = _dict_or_empty(body.get("metadata"))
     headers = _dict_or_empty(req.get("headers"))
@@ -995,6 +1018,15 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
     if isinstance(err_obj, dict):
         error_msg = err_obj.get("message", "")
 
+    session_user_text = _latest_user_text(msgs) or _first_user_text(msgs)
+    display_turn_key = compact_messages[0] if compact_messages else ""
+    if not display_turn_key and session_user_text:
+        display_turn_key = "text:" + hashlib.sha256(session_user_text.encode("utf-8")).hexdigest()
+    display_turn_ordinal = (
+        compact_messages[1]
+        if compact_messages
+        else sum(1 for message in msgs if message.get("role") == "user" and not _is_tool_result_only_message(message))
+    )
     return {
         "turn": r.get("turn"),
         "request_id": r.get("request_id", ""),
@@ -1023,7 +1055,9 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
         "has_system": bool(sys_text),
         "message_count": len(msgs),
-        "session_user_text": _latest_user_text(msgs) or _first_user_text(msgs),
+        "session_user_text": session_user_text,
+        "display_turn_key": display_turn_key,
+        "display_turn_ordinal": display_turn_ordinal,
         "cursor_turn": body.get("cursor_turn") if isinstance(body.get("cursor_turn"), int) else None,
         "cursor_step": body.get("cursor_step") if isinstance(body.get("cursor_step"), int) else None,
         "codex_app_session_id": codex_app_session_id,

@@ -13,6 +13,8 @@ function filterPathKey(p) {
 }
 
 function renderApp(preserveDetail) {
+  const restoredView = restoreViewerViewState();
+  preserveDetail = !!preserveDetail || restoredView;
   $('#drop-zone').style.display = 'none';
   $('#sidebar-wrap').style.display = 'flex';
   $('#search-bar').style.display = '';
@@ -139,7 +141,7 @@ let pathFilterExpanded = false;
  *   secondary – useful auxiliary APIs (MCP, models, token counting), collapsed behind "+N more"
  *   noise     – plugin manifests, bot APIs, asset downloads, version checks — hidden by default
  */
-const PRIMARY_PATH_PREFIXES = ['/cursor/transcript/', '/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1beta/models', '/v1alpha/models', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
+const PRIMARY_PATH_PREFIXES = ['/cursor/transcript/', '/messages', '/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/chat/completions', '/v1/chat/completions', '/v2/chat/completions', '/completions', '/v1/completions', '/v1beta/models', '/v1alpha/models', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
 const SECONDARY_PATH_PREFIXES = ['/v1/mcp', '/v1/models', '/v1/embeddings', '/v1/files', '/responses', '/models', '/chat/completions', '/completions', '/files', '/search', '/fetch', '/usages', '/feedback'];
 function isBedrockInvokePath(p) {
   return p.startsWith('/model/') && (p.endsWith('/invoke') || p.endsWith('/invoke-with-response-stream'));
@@ -221,7 +223,10 @@ function applyFilter(preserveDetail) {
       return rc.some(b => b.type === 'tool_use' && activeTools.has(b.name));
     });
   }
-  filtered.sort((a, b) => compareTurns(captureTurnValue(a), captureTurnValue(b)));
+  // Sidebar order must follow the user-turn/subturn labels. Capture order can
+  // place title-generation or auxiliary records before the model requests
+  // they belong to.
+  filtered.sort((a, b) => compareTurns(displayTurnValue(a), displayTurnValue(b)));
   let totalTokens = 0, totalDuration = 0;
   let sumInput = 0, sumOutput = 0, sumCacheRead = 0, sumCacheCreate = 0;
   let sumCacheDenominator = 0;

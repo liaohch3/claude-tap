@@ -3245,6 +3245,18 @@ def test_live_viewer_scroll_preservation():
     # SSE handler should pass true to renderApp
     assert "renderApp(true)" in html, "SSE handler should call renderApp(true)"
 
+    # Dashboard state must survive a browser refresh or route switch, while
+    # live events are coalesced so a burst cannot cancel the newest refresh.
+    from claude_tap.dashboard import read_dashboard_template
+
+    dashboard_html = read_dashboard_template()
+    assert "DASHBOARD_STATE_KEY" in dashboard_html
+    assert "persistDashboardState" in dashboard_html
+    assert "restoreDashboardState" in dashboard_html
+    assert "function scheduleDashboardRefresh" in dashboard_html
+    assert "scheduleDashboardRefresh();" in dashboard_html
+    assert 'new EventSource("/dashboard/events")' in dashboard_html
+
     print("  test_live_viewer_scroll_preservation PASSED")
 
 

@@ -1585,6 +1585,118 @@ def _codex_display_turn_records() -> tuple[dict[str, Any], ...]:
     )
 
 
+def _flow_multi_call_records() -> tuple[dict[str, Any], ...]:
+    """Three continuation calls that should render as Turn 1.1/1.2/1.3."""
+
+    def make_record(
+        turn: str,
+        request_id: str,
+        input_blocks: list[dict[str, Any]],
+        output_blocks: list[dict[str, Any]],
+        *,
+        duration_ms: int,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> dict[str, Any]:
+        return {
+            "timestamp": f"2026-06-02T00:00:{turn[-1]}+00:00",
+            "request_id": request_id,
+            "turn": turn,
+            "duration_ms": duration_ms,
+            "request": {
+                "method": "POST",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "model": "gpt-5.5",
+                    "_display_turn_key": "flow-multi-call",
+                    "_display_turn_ordinal": 1,
+                    "input": input_blocks,
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "output": output_blocks,
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": input_tokens + output_tokens,
+                    },
+                },
+            },
+        }
+
+    return (
+        make_record(
+            "1.1",
+            "req_flow_turn_1_1",
+            [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Inspect repository root."}],
+                }
+            ],
+            [
+                {
+                    "type": "function_call",
+                    "name": "list_files",
+                    "call_id": "call_list_files",
+                    "arguments": '{"path":"."}',
+                }
+            ],
+            duration_ms=120,
+            input_tokens=10,
+            output_tokens=3,
+        ),
+        make_record(
+            "1.2",
+            "req_flow_turn_1_2",
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_list_files",
+                    "output": "README.md\nsrc/",
+                }
+            ],
+            [
+                {
+                    "type": "function_call",
+                    "name": "read_file",
+                    "call_id": "call_read_file",
+                    "arguments": '{"path":"README.md"}',
+                }
+            ],
+            duration_ms=140,
+            input_tokens=20,
+            output_tokens=4,
+        ),
+        make_record(
+            "1.3",
+            "req_flow_turn_1_3",
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_read_file",
+                    "output": "Project README contents",
+                }
+            ],
+            [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Repository inspected."}],
+                }
+            ],
+            duration_ms=160,
+            input_tokens=30,
+            output_tokens=5,
+        ),
+    )
+
+
 def _codex_lazy_display_turn_records() -> tuple[dict[str, Any], ...]:
     records = list(_codex_display_turn_records())
     for idx in range(60):
@@ -1965,6 +2077,7 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert default_state["tabs"] == [
         {"mode": "default", "label": "Default", "active": True},
         {"mode": "trace", "label": "Trace", "active": False},
+        {"mode": "flow", "label": "Flow", "active": False},
     ]
     assert default_state["sectionTitles"] == ["Tools", "System Prompt", "Messages", "Response", "Full JSON"]
     assert "Responses final OK." in default_state["text"]
@@ -1990,7 +2103,221 @@ def test_viewer_detail_tabs_keep_default_view_and_expose_trace_mode(tmp_path: Pa
     assert pretty_state["prettyCount"] == 3
     assert "messages" in pretty_state["text"]
     assert "req_responses_contract" in pretty_state["text"]
-    assert remaining_tabs == ["default", "trace"]
+    assert remaining_tabs == ["default", "trace", "flow"]
+
+
+def test_viewer_flow_tab_renders_turn_nodes_and_tool_details(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "flow_tab", (_responses_record(),))
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").first.click()
+        page.wait_for_selector('#detail .detail-tab[data-tab="default"].active', timeout=5000)
+
+        page.locator('#detail .detail-tab[data-tab="flow"]').click()
+        page.wait_for_selector('#detail .detail-tab[data-tab="flow"].active', timeout=5000)
+        page.wait_for_selector("#detail .flow-canvas", timeout=5000)
+        flow_state = page.evaluate(
+            """() => ({
+              nodes: Array.from(document.querySelectorAll('#detail .flow-node')).map(el => ({
+                kind: Array.from(el.classList).find(name => name.startsWith('flow-node-') && name !== 'flow-node'),
+                text: el.textContent || '',
+              })),
+              turns: Array.from(document.querySelectorAll('#detail .flow-node-turn')).map(el => ({
+                turn: el.dataset.turn || '',
+                input: el.querySelector('.flow-turn-input')?.innerText || '',
+                output: el.querySelector('.flow-turn-output')?.innerText || '',
+              })),
+              hasLegacyNodes: Boolean(document.querySelector(
+                '#detail .flow-node-model, #detail .flow-node-input, #detail .flow-node-output'
+              )),
+              summary: document.querySelector('#detail .flow-summary')?.innerText || '',
+              details: document.querySelector('#detail .flow-details')?.innerText || '',
+            })"""
+        )
+
+        page.locator("#detail .flow-node-tool").first.click()
+        page.wait_for_function(
+            """() => {
+              const text = document.querySelector('#detail .flow-details')?.innerText || '';
+              return text.includes('exec_command') && text.includes('call_pwd');
+            }"""
+        )
+        tool_details = page.locator("#detail .flow-details").inner_text()
+    finally:
+        page.close()
+
+    assert errors == []
+    node_kinds = [node["kind"] for node in flow_state["nodes"]]
+    assert flow_state["hasLegacyNodes"] is False
+    assert [turn["turn"] for turn in flow_state["turns"]] == ["1.1"]
+    assert "Run pwd." in flow_state["turns"][0]["input"]
+    assert "Responses final OK." in flow_state["turns"][0]["output"]
+    assert "flow-node-tool" in node_kinds
+    assert "144 tok" in flow_state["summary"]
+    assert "100 ms" in flow_state["summary"]
+    assert "exec_command" in tool_details
+    assert "call_pwd" in tool_details
+    assert "cmd" in tool_details
+    assert "pwd" in tool_details
+
+
+def test_viewer_flow_groups_continuation_calls_inside_one_turn(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "flow_turn_group", _codex_display_turn_records())
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        state = page.evaluate(
+            """async () => {
+            const idx = filtered.findIndex(entry => entry.request_id === 'req_second_visible');
+              activeIdx = idx;
+              detailViewMode = 'flow';
+              await renderDetailForEntry(filtered[idx]);
+              return {
+                displayTurn: filtered[idx].display_turn,
+                turnNodes: Array.from(document.querySelectorAll('#detail .flow-node-turn')).map(el => ({
+                  turn: el.dataset.turn || '',
+                  isError: el.classList.contains('flow-node-error'),
+                  hasInput: Boolean(el.querySelector('.flow-turn-input')),
+                  hasOutput: Boolean(el.querySelector('.flow-turn-output')),
+                  input: el.querySelector('.flow-turn-input')?.innerText || '',
+                  output: el.querySelector('.flow-turn-output')?.innerText || '',
+                })),
+                toolCount: document.querySelectorAll('#detail .flow-node-tool').length,
+                errorCount: document.querySelectorAll('#detail .flow-node-error').length,
+                summary: document.querySelector('#detail .flow-summary')?.innerText || '',
+                toolText: document.querySelector('#detail .flow-node-tool')?.innerText || '',
+              };
+            }"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["displayTurn"] == "1.2"
+    assert [turn["turn"] for turn in state["turnNodes"]] == ["1.1", "1.2", "1.3"]
+    assert all(turn["hasInput"] and turn["hasOutput"] for turn in state["turnNodes"])
+    assert "Clean local branches." in state["turnNodes"][0]["input"]
+    assert "I will inspect the worktree." in state["turnNodes"][0]["output"]
+    assert "No content" in state["turnNodes"][1]["input"]
+    assert "exec_command" in state["turnNodes"][1]["output"]
+    assert "upstream timeout" in state["turnNodes"][2]["output"]
+    assert state["toolCount"] == 1
+    assert state["errorCount"] == 1
+    assert "Tools\n1" in state["summary"]
+    assert "exec_command" in state["toolText"]
+    assert "No content" in state["toolText"]
+
+
+def test_viewer_flow_renders_each_internal_turn_with_input_output_and_tool_links(
+    tmp_path: Path, chromium_browser
+) -> None:
+    html_path = _generate_case_html(tmp_path, "flow_multi_call_turns", _flow_multi_call_records())
+
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.locator(".sidebar-item").first.click()
+        page.wait_for_selector('#detail .detail-tab[data-tab="default"].active', timeout=5000)
+        page.locator('#detail .detail-tab[data-tab="flow"]').click()
+        page.wait_for_selector('#detail .detail-tab[data-tab="flow"].active', timeout=5000)
+        page.wait_for_selector("#detail .flow-canvas", timeout=5000)
+        state = page.evaluate(
+            """() => ({
+              turns: Array.from(document.querySelectorAll('#detail .flow-node-turn')).map(el => ({
+                turn: el.dataset.turn || '',
+                cardText: el.innerText || '',
+                input: el.querySelector('.flow-turn-input')?.innerText || '',
+                output: el.querySelector('.flow-turn-output')?.innerText || '',
+                inputModules: Array.from(el.querySelectorAll('.flow-input-module')).map(module => ({
+                  text: module.innerText || '',
+                  source: module.querySelector('.flow-module-source')?.innerText || '',
+                  preview: module.querySelector('.flow-module-preview')?.innerText || '',
+                })),
+                outputModules: Array.from(el.querySelectorAll('.flow-output-module')).map(module => ({
+                  text: module.innerText || '',
+                  source: module.querySelector('.flow-module-source')?.innerText || '',
+                  preview: module.querySelector('.flow-module-preview')?.innerText || '',
+                })),
+                tools: Array.from(el.querySelectorAll('.flow-node-tool')).map(tool => ({
+                  text: tool.innerText || '',
+                  pending: Boolean(tool.querySelector('.flow-node-badge.pending')),
+                })),
+              })),
+              tools: Array.from(document.querySelectorAll('#detail .flow-node-tool')).map(el => ({
+                text: el.innerText || '',
+                pending: Boolean(el.querySelector('.flow-node-badge.pending')),
+              })),
+              hasLegacyNodes: Boolean(document.querySelector(
+                '#detail .flow-node-model, #detail .flow-node-input, #detail .flow-node-output'
+              )),
+            })"""
+        )
+
+        input_details: list[str] = []
+        for turn, expected in (("1.2", "call_list_files"), ("1.3", "call_read_file")):
+            input_module = page.locator(f"#detail .flow-node-turn[data-turn='{turn}'] .flow-input-module").first
+            input_module.click()
+            page.wait_for_function(
+                """expected => (document.querySelector('#detail .flow-details')?.innerText || '').includes(expected)""",
+                arg=expected,
+            )
+            input_details.append(page.locator("#detail .flow-details").inner_text())
+
+        tool_details: list[str] = []
+        for expected in ("README.md", "Project README contents"):
+            tool = page.locator("#detail .flow-node-tool").nth(len(tool_details))
+            tool.click()
+            page.wait_for_function(
+                """expected => (document.querySelector('#detail .flow-details')?.innerText || '').includes(expected)""",
+                arg=expected,
+            )
+            tool_details.append(page.locator("#detail .flow-details").inner_text())
+    finally:
+        page.close()
+
+    assert errors == []
+    assert state["hasLegacyNodes"] is False
+    assert [turn["turn"] for turn in state["turns"]] == ["1.1", "1.2", "1.3"]
+    assert all(turn["input"] and turn["output"] for turn in state["turns"])
+    assert "Inspect repository root." in state["turns"][0]["input"]
+    assert "list_files" in state["turns"][0]["output"]
+    assert "README.md" in state["turns"][1]["input"]
+    assert "read_file" in state["turns"][1]["output"]
+    assert "Project README contents" in state["turns"][2]["input"]
+    assert "Repository inspected." in state["turns"][2]["output"]
+    assert "call_" not in state["turns"][0]["cardText"]
+    assert "call_" not in state["turns"][1]["cardText"]
+    assert "call_" not in state["turns"][2]["cardText"]
+    assert '{"' not in state["turns"][0]["cardText"]
+    assert '{"' not in state["turns"][1]["cardText"]
+    assert '{"' not in state["turns"][2]["cardText"]
+    assert any(
+        "From Turn 1.1" in module["source"] and "list_files" in module["source"]
+        for module in state["turns"][1]["inputModules"]
+    )
+    assert any(
+        "From Turn 1.2" in module["source"] and "read_file" in module["source"]
+        for module in state["turns"][2]["inputModules"]
+    )
+    assert "README.md" in state["turns"][1]["inputModules"][0]["preview"]
+    assert "Project README contents" in state["turns"][2]["inputModules"][0]["preview"]
+    assert len(state["tools"]) == 2
+    assert all(tool["pending"] is False for tool in state["tools"])
+    assert "list_files" in state["tools"][0]["text"]
+    assert "README.md" in state["tools"][0]["text"]
+    assert "read_file" in state["tools"][1]["text"]
+    assert "Project README contents" in state["tools"][1]["text"]
+    assert '{"path"' not in state["tools"][0]["text"]
+    assert '{"path"' not in state["tools"][1]["text"]
+    assert "call_list_files" in input_details[0]
+    assert "README.md" in input_details[0]
+    assert "call_read_file" in input_details[1]
+    assert "Project README contents" in input_details[1]
+    assert "call_" not in state["tools"][0]["text"]
+    assert "call_" not in state["tools"][1]["text"]
 
 
 def test_viewer_curl_uses_recorded_upstream_and_historical_host_fallback(tmp_path: Path, chromium_browser) -> None:
@@ -2262,14 +2589,14 @@ def test_viewer_sidebar_order_can_switch_between_model_turn_and_session_sequence
         {"mode": "session", "label": "Query", "active": False},
     ]
     assert model_state["groups"] == ["aws.claude-opus-4.6", "aws.claude-sonnet-4.6", "other-model"]
-    assert model_state["turns"] == ["Turn 3", "Turn 2", "Turn 1"]
+    assert model_state["turns"] == ["Turn 3.1", "Turn 2.1", "Turn 1.1"]
     assert turn_state["buttons"] == [
         {"mode": "model", "label": "Model", "active": False},
         {"mode": "turn", "label": "Turn", "active": True},
         {"mode": "session", "label": "Query", "active": False},
     ]
     assert turn_state["groupCount"] == 0
-    assert turn_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
+    assert turn_state["turns"] == ["Turn 1.1", "Turn 2.1", "Turn 3.1"]
     assert session_state["buttons"] == [
         {"mode": "model", "label": "Model", "active": False},
         {"mode": "turn", "label": "Turn", "active": False},
@@ -2281,7 +2608,7 @@ def test_viewer_sidebar_order_can_switch_between_model_turn_and_session_sequence
         "Query 3 - Second sidebar task",
     ]
     assert session_state["counts"] == ["1", "1", "1"]
-    assert session_state["turns"] == ["Turn 1", "Turn 2", "Turn 3"]
+    assert session_state["turns"] == ["Turn 1.1", "Turn 2.1", "Turn 3.1"]
 
 
 def test_viewer_session_order_groups_claude_code_tool_loop_rounds(tmp_path: Path, chromium_browser) -> None:
@@ -2309,7 +2636,7 @@ def test_viewer_session_order_groups_claude_code_tool_loop_rounds(tmp_path: Path
         "Query 3 - Add portfolio positions",
     ]
     assert state["counts"] == ["3", "2", "2"]
-    assert state["turns"] == ["Turn 1", "Turn 2", "Turn 3", "Turn 4", "Turn 5", "Turn 6", "Turn 7"]
+    assert state["turns"] == ["Turn 1.1", "Turn 1.2", "Turn 1.3", "Turn 2.1", "Turn 2.2", "Turn 3.1", "Turn 3.2"]
     assert "SUGGESTION MODE" not in state["headerText"]
 
 
@@ -2370,7 +2697,7 @@ def test_viewer_codex_display_turns_skip_capture_control_records(tmp_path: Path,
                   requestId: entry.request_id,
                 })),
               resetTurns: (() => {
-                const extra = JSON.parse(JSON.stringify(entries.find(entry => entry.request?.path === '/v1/responses' && entry.display_turn === 3)));
+                const extra = JSON.parse(JSON.stringify(entries.find(entry => entry.request?.path === '/v1/responses' && entry.display_turn === '1.3')));
                 delete extra.display_turn;
                 extra.turn = '2.5';
                 extra.capture_turn = '2.5';
@@ -2385,28 +2712,28 @@ def test_viewer_codex_display_turns_skip_capture_control_records(tmp_path: Path,
         page.close()
 
     assert errors == []
-    assert state["sidebarTurns"] == ["Turn 1", "Turn 2", "Turn 3"]
+    assert state["sidebarTurns"] == ["Turn 1.1", "Turn 1.2", "Turn 1.3"]
     assert state["codexEntries"] == [
         {
             "turn": "2.2",
-            "displayTurn": 1,
+            "displayTurn": "1.1",
             "captureTurn": "2.2",
             "requestId": "req_first_visible",
         },
         {
             "turn": "2.3",
-            "displayTurn": 2,
+            "displayTurn": "1.2",
             "captureTurn": "2.3",
             "requestId": "req_second_visible",
         },
         {
             "turn": "2.4",
-            "displayTurn": 3,
+            "displayTurn": "1.3",
             "captureTurn": "2.4",
             "requestId": "req_zero_output_visible",
         },
     ]
-    assert state["resetTurns"] == [1, 2, 3, 4]
+    assert state["resetTurns"] == ["1.1", "1.2", "1.3", "1.4"]
 
 
 def test_viewer_direct_responses_generate_false_is_not_navigable(tmp_path: Path, chromium_browser) -> None:
@@ -2434,7 +2761,7 @@ def test_viewer_direct_responses_generate_false_is_not_navigable(tmp_path: Path,
         page.close()
 
     assert errors == []
-    assert state["sidebarTurns"] == ["Turn 1"]
+    assert state["sidebarTurns"] == ["Turn 1.1"]
     assert state["filteredRequestIds"] == ["req_direct_visible"]
     assert state["entriesById"]["req_direct_prefetch"] == {
         "displayTurn": None,
@@ -2442,7 +2769,7 @@ def test_viewer_direct_responses_generate_false_is_not_navigable(tmp_path: Path,
         "navigable": False,
     }
     assert state["entriesById"]["req_direct_visible"] == {
-        "displayTurn": 1,
+        "displayTurn": "1.1",
         "captureTurn": 2,
         "navigable": True,
     }
@@ -2480,14 +2807,14 @@ def test_viewer_codex_lazy_display_turns_skip_capture_control_records(tmp_path: 
     assert errors == []
     assert state["usesCompactBundle"] is True
     assert state["usesMetadataMode"] is False
-    assert state["sidebarTurns"] == ["Turn 1", "Turn 2", "Turn 3"]
+    assert state["sidebarTurns"] == ["Turn 1.1", "Turn 1.2", "Turn 1.3"]
     assert state["sidebarPaths"] == ["WEBSOCKET /v1/responses", "WEBSOCKET /v1/responses", "WEBSOCKET /v1/responses"]
     assert state["filteredRequestIds"] == ["req_first_visible", "req_second_visible", "req_zero_output_visible"]
     assert state["codexEntries"] == [
         {
             "requestId": "req_first_visible",
             "turn": "2.2",
-            "displayTurn": 1,
+            "displayTurn": "1.1",
             "captureTurn": "2.2",
             "responseOutputCount": 1,
             "outputTokens": 407,
@@ -2496,7 +2823,7 @@ def test_viewer_codex_lazy_display_turns_skip_capture_control_records(tmp_path: 
         {
             "requestId": "req_second_visible",
             "turn": "2.3",
-            "displayTurn": 2,
+            "displayTurn": "1.2",
             "captureTurn": "2.3",
             "responseOutputCount": 1,
             "outputTokens": 303,
@@ -2505,7 +2832,7 @@ def test_viewer_codex_lazy_display_turns_skip_capture_control_records(tmp_path: 
         {
             "requestId": "req_zero_output_visible",
             "turn": "2.4",
-            "displayTurn": 3,
+            "displayTurn": "1.3",
             "captureTurn": "2.4",
             "responseOutputCount": 0,
             "outputTokens": 0,
@@ -2550,12 +2877,12 @@ def test_viewer_codex_lazy_stubs_read_generate_from_websocket_events(tmp_path: P
     assert errors == []
     assert state["usesCompactBundle"] is True
     assert state["usesMetadataMode"] is False
-    assert state["sidebarTurns"] == ["Turn 1"]
+    assert state["sidebarTurns"] == ["Turn 1.1"]
     assert state["filteredRequestIds"] == ["req_event_visible"]
     assert state["eventEntries"] == [
         {
             "requestId": "req_event_visible",
-            "displayTurn": 1,
+            "displayTurn": "1.1",
             "captureTurn": 2,
             "requestGenerate": None,
             "responseGenerate": None,
@@ -2583,7 +2910,7 @@ def test_viewer_codex_lazy_trace_tab_preserves_display_turn_metadata(tmp_path: P
                 const block = blocks.find(el => el.querySelector('.trace-title')?.textContent === 'Metadata');
                 return block?.innerText || '';
               }
-              const idx = filtered.findIndex(entry => entry.request?.path === '/v1/responses' && entry.display_turn === 1);
+              const idx = filtered.findIndex(entry => entry.request?.path === '/v1/responses' && entry.display_turn === '1.1');
               selectEntry(idx);
               document.querySelector('#detail .detail-tab[data-tab="trace"]').click();
               const jsonMetadata = metadataText();
@@ -2605,10 +2932,10 @@ def test_viewer_codex_lazy_trace_tab_preserves_display_turn_metadata(tmp_path: P
 
     assert errors == []
     assert state["selectedIdx"] >= 0
-    assert state["activeDisplayTurn"] == 1
-    assert '"display_turn": 1' in state["jsonMetadata"]
+    assert state["activeDisplayTurn"] == "1.1"
+    assert '"display_turn": "1.1"' in state["jsonMetadata"]
     assert '"capture_turn": "2.2"' in state["jsonMetadata"]
-    assert "display_turn: 1" in state["yamlMetadata"]
+    assert "display_turn: 1.1" in state["yamlMetadata"]
     assert "capture_turn: 2.2" in state["yamlMetadata"]
     assert "display_turn" in state["prettyMetadata"]
     assert "capture_turn" in state["prettyMetadata"]
@@ -3458,4 +3785,4 @@ def test_viewer_codex_global_search_skips_non_navigable_and_orders_by_capture_tu
 
     assert errors == []
     assert search_state["totalMatches"] == 0
-    assert sorted_ids == ["req_response_2", "req_mcp_between", "req_response_4"]
+    assert sorted_ids == ["req_response_2", "req_response_4", "req_mcp_between"]

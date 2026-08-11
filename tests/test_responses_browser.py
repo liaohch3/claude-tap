@@ -328,11 +328,144 @@ def test_viewer_treats_cursor_transcript_as_primary_display_turn(responses_page)
     assert result["tier"] == 0
     assert result["primary"] is True
     assert result["candidate"] is True
-    assert result["displayTurn"] == 1
+    assert result["displayTurn"] == "1.1"
     assert result["firstUser"] == "hello"
     assert result["noiseUser"] == ""
     assert result["xProtobufNoise"] == ""
     assert result["latestNoise"] == ""
+
+
+def test_viewer_groups_agent_requests_by_user_message_into_subturns(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const make = (requestId, messages) => ({
+            request_id: requestId,
+            request: { method: 'POST', path: '/v1/messages', body: { model: 'agent-test', messages } },
+            response: { status: 200, body: { content: [{ type: 'text', text: 'ok' }] } },
+          });
+          const first = { role: 'user', content: 'Inspect the project' };
+          const toolUse = { role: 'assistant', content: [{ type: 'tool_use', name: 'read_file' }] };
+          const toolResult = { role: 'user', content: [{ type: 'tool_result', content: 'done' }] };
+          const rows = normalizeDisplayTurns([
+            make('req_1', [first]),
+            make('req_2', [first, toolUse, toolResult]),
+            make('req_3', [first, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'Now summarize it' }]),
+            make('req_4', [first, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'Now summarize it' }, toolUse, toolResult]),
+          ], true);
+          return rows.map(entry => entry.display_turn);
+        }"""
+    )
+
+    assert result == ["1.1", "1.2", "2.1", "2.2"]
+
+
+def test_viewer_recognizes_hermes_openai_compatible_paths(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const entry = {
+            request_id: 'hermes_req_1',
+            request: {
+              method: 'POST',
+              path: '/v2/chat/completions',
+              body: { model: 'hermes-test', messages: [{ role: 'user', content: 'Check the repo' }] },
+            },
+            response: { status: 200, body: { choices: [{ message: { role: 'assistant', content: 'done' } }] } },
+          };
+          const turns = normalizeDisplayTurns([entry], true);
+          return {
+            candidate: isDisplayTurnCandidate(entry),
+            primary: isPathPrimary('/v2/chat/completions'),
+            displayTurn: turns[0].display_turn,
+          };
+        }"""
+    )
+
+    assert result == {"candidate": True, "primary": True, "displayTurn": "1.1"}
+
+
+def test_viewer_groups_compacted_claude_messages_by_blob_sequence(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const ref = (hash, bytes) => ({ __claude_tap_blob_ref__: { version: 1, kind: 'json', hash, bytes } });
+          const make = (id, messages, system = '') => ({
+            request_id: id,
+            request: { method: 'POST', path: '/v1/messages?beta=true', body: { model: 'claude-test', messages, system } },
+            response: { status: 200, body: { content: [{ type: 'text', text: 'ok' }] } },
+          });
+          const firstContext = [ref('sha256:user', 100), ref('sha256:assistant', 200)];
+          const nextUserContext = [ref('sha256:user', 100), ref('sha256:assistant', 200), ref('sha256:next-user', 120)];
+          const rows = normalizeDisplayTurns([
+            make('req_1', firstContext),
+            make('req_2', firstContext),
+            make('req_title', [ref('sha256:title', 20)], 'Generate a concise, sentence-case title for the session.'),
+            make('req_3', nextUserContext),
+          ], true);
+          return rows.map(entry => entry.display_turn);
+        }"""
+    )
+
+    assert result == ["1.1", "1.2", "1.3", "2.1"]
+
+
+def test_viewer_lazy_stub_keeps_compact_message_sequence_metadata(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          const make = (id, key, ordinal) => buildStubEntry({
+            request_id: id,
+            turn: ordinal,
+            method: 'POST',
+            path: '/v1/messages?beta=true',
+            model: 'claude-test',
+            display_turn_key: key,
+            display_turn_ordinal: ordinal,
+            status: 200,
+          }, ordinal - 1);
+          const rows = normalizeDisplayTurns([
+            make('req_1', 'context-a', 2),
+            make('req_2', 'context-a', 2),
+            make('req_3', 'context-b', 3),
+          ], true);
+          return rows.map(entry => entry.display_turn);
+        }"""
+    )
+
+    assert result == ["1.1", "1.2", "2.1"]
+
+
+def test_viewer_refresh_preserves_selected_detail_and_sidebar_position(responses_page) -> None:
+    result = responses_page.evaluate(
+        """() => {
+          sessionStorage.clear();
+          entries = Array.from({ length: 20 }, (_, index) => index + 1).map((n) => ({
+            request_id: 'refresh_req_' + n,
+            turn: n,
+            request: { method: 'POST', path: '/v1/messages', body: { model: 'agent-test', messages: [{ role: 'user', content: 'prompt ' + n }] } },
+            response: { status: 200, body: { content: [{ type: 'text', text: 'response ' + n }] } },
+          }));
+          entries = normalizeDisplayTurns(entries, true);
+          activePaths = new Set(['/v1/messages']);
+          renderApp(false);
+          selectEntry(10);
+          const before = document.querySelector('#detail')?.innerHTML || '';
+          const sidebar = document.querySelector('#sidebar');
+          sidebar.scrollTop = 120;
+          persistViewerViewState();
+          renderApp(true);
+          return {
+            activeRequestId: filtered[activeIdx]?.request_id || null,
+            activeTurn: filtered[activeIdx]?.display_turn || null,
+            detailUnchanged: before === (document.querySelector('#detail')?.innerHTML || ''),
+            scrollTop: sidebar.scrollTop,
+          };
+        }"""
+    )
+
+    assert result == {
+        "activeRequestId": "refresh_req_11",
+        "activeTurn": "11.1",
+        "detailUnchanged": True,
+        "scrollTop": 120,
+    }
 
 
 def test_viewer_lazy_stub_keeps_cursor_user_input_in_session_group(responses_page) -> None:

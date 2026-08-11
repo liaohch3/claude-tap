@@ -387,7 +387,11 @@ async def async_main(args: argparse.Namespace):
     # Proxy logs go to SQLite, not terminal (avoids polluting Claude TUI)
     sqlite_handler: SQLiteLogHandler | None = None
     if session_id is not None:
-        sqlite_handler = SQLiteLogHandler(session_id, store=store)
+        sqlite_handler = SQLiteLogHandler(
+            session_id,
+            store=store,
+            session_id_getter=(lambda: writer.session_id) if writer is not None else None,
+        )
         sqlite_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
         log.addHandler(sqlite_handler)
         log.setLevel(logging.DEBUG)
@@ -585,13 +589,15 @@ async def async_main(args: argparse.Namespace):
         if writer is not None:
             writer.close()
 
+        final_session_id = writer.session_id if writer is not None else session_id
+
         prompt_export_rc: int | None = None
-        if args.export_prompt and session_id is not None:
-            prompt_export_rc = _export_prompt_from_session(store, session_id, args.export_prompt)
+        if args.export_prompt and final_session_id is not None:
+            prompt_export_rc = _export_prompt_from_session(store, final_session_id, args.export_prompt)
 
         protected_ids = set(cursor_session_ids)
-        if session_id is not None:
-            protected_ids.add(session_id)
+        if final_session_id is not None:
+            protected_ids.add(final_session_id)
         if args.max_traces > 0:
             try:
                 cleaned = cleanup_trace_sessions(
@@ -637,8 +643,8 @@ async def async_main(args: argparse.Namespace):
 
         if cursor_session_ids:
             print(f"   Sessions: {len(cursor_session_ids)} (one per Cursor conversation)")
-        elif session_id is not None:
-            print(f"   Session: {session_id}")
+        elif final_session_id is not None:
+            print(f"   Session: {final_session_id}")
         print(f"   Database: {resolve_db_path()}")
         if dashboard_url_value:
             print(f"   Dashboard: {dashboard_url_value}")
@@ -756,8 +762,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             '  claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"\n'
             "  # Pi OAuth is configured with /login inside pi, or via PI_CODING_AGENT_DIR\n"
             "\n"
-            "hermes agent (multi-provider Python agent — forward proxy default):\n"
-            "  # Interactive TUI — captures LLM calls directly\n"
+            "hermes agent (multi-provider Python agent — reverse proxy default):\n"
+            "  # Interactive TUI — captures LLM calls through OPENAI_BASE_URL\n"
             "  claude-tap --tap-client hermes\n"
             "  # Gateway mode — captures LLM calls triggered by Slack/Telegram/etc. messages\n"
             "  #   (requires messaging platform configured in ~/.hermes/.env)\n"
@@ -845,8 +851,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="proxy_mode",
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
-            "Default depends on the client: 'reverse' for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, "
-            "'forward' for agy/codexapp/gemini/mimo/opencode/pi/hermes/qoder. "
+            "Default depends on the client: 'reverse' for claude/codex/grok/kimi/kimi-code/openclaw/hermes/codebuddy, "
+            "'forward' for agy/codexapp/gemini/mimo/opencode/pi/qoder. "
             "Ignored for transcript-only clients such as cursor."
         ),
     )

@@ -38,6 +38,59 @@ function cloneJson(value) {
   try { return JSON.parse(JSON.stringify(value)); } catch(e) { return value; }
 }
 
+let viewerViewState = null;
+let viewerViewStateLoadedKey = null;
+
+function viewerViewStateKey() {
+  let traceIdentity = '';
+  if (typeof TRACE_JSONL_PATH !== 'undefined') traceIdentity = TRACE_JSONL_PATH || '';
+  if (!traceIdentity && typeof TRACE_HTML_PATH !== 'undefined') traceIdentity = TRACE_HTML_PATH || '';
+  if (!traceIdentity) traceIdentity = window.location.pathname + window.location.search;
+  const date = typeof viewingDate !== 'undefined' && viewingDate ? viewingDate : 'live';
+  return `claude-tap-view-state:${traceIdentity}:${date}`;
+}
+
+function safeSessionStorageGet(key) {
+  try { return window.sessionStorage.getItem(key); } catch(e) { return null; }
+}
+function safeSessionStorageSet(key, value) {
+  try { window.sessionStorage.setItem(key, value); } catch(e) {}
+}
+
+function restoreViewerViewState() {
+  const stateKey = viewerViewStateKey();
+  if (viewerViewStateLoadedKey === stateKey) return !!viewerViewState;
+  viewerViewStateLoadedKey = stateKey;
+  viewerViewState = null;
+  const raw = safeSessionStorageGet(stateKey);
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return false;
+    viewerViewState = parsed;
+    if (typeof currentDetailRequestId !== 'undefined') currentDetailRequestId = parsed.requestId || null;
+    if (typeof currentDetailEntryKey !== 'undefined') currentDetailEntryKey = parsed.entryKey || null;
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+
+function persistViewerViewState() {
+  const sidebar = $('#sidebar');
+  viewerViewState = {
+    requestId: typeof currentDetailRequestId !== 'undefined' ? currentDetailRequestId : null,
+    entryKey: typeof currentDetailEntryKey !== 'undefined' ? currentDetailEntryKey : null,
+    sidebarScrollTop: sidebar ? sidebar.scrollTop : 0,
+  };
+  safeSessionStorageSet(viewerViewStateKey(), JSON.stringify(viewerViewState));
+}
+
+function savedViewerSidebarScrollTop() {
+  const value = Number(viewerViewState?.sidebarScrollTop);
+  return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
 function entryStableKey(entry) {
   if (!entry) return '';
   const requestId = entry.request_id || entry.req_id || '';
