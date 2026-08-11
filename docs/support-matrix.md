@@ -38,8 +38,8 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | OpenClaw | No patchable config (`--tap-proxy-mode reverse`) | Provider env fallback (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, or `OPENROUTER_BASE_URL`) | provider-dependent | HTTP/SSE | Unit-tested |
 | Pi | Provider creds via Pi `/login` or `PI_CODING_AGENT_DIR` auth file (`openai-codex` OAuth verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE + WebSocket | Real E2E verified |
 | Pi | Custom OpenAI-compatible setup (`--tap-proxy-mode reverse`) | `https://api.openai.com` | none | HTTP/SSE | Unit-tested |
-| Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
-| Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
+| Hermes Agent | OpenAI-compatible provider via `~/.hermes/config.yaml` or `OPENAI_BASE_URL` | Auto-detected active model base URL through reverse proxy | `/v1` | HTTP/SSE | Unit-tested |
+| Hermes Agent | Provider that does not honor `OPENAI_BASE_URL` (`--tap-proxy-mode forward`) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | Cursor CLI / IDE Agent | Cursor login (`cursor-agent login`) or Cursor IDE | Local `agent-transcripts` watch (no MITM proxy) | n/a | Local transcript JSONL (`cursor-transcript`) | Unit-tested; manual E2E pending after transcript-only switch |
 | Qoder CLI | Qoder login / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy (Qoder endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Antigravity CLI | Antigravity login | Forward proxy + `CLOUD_CODE_URL` bridge to `https://daily-cloudcode-pa.googleapis.com` | `CLOUD_CODE_URL` | HTTP/SSE | Manual E2E verified; launch env, Code Assist bridge, and automatic macOS user-keychain CA trust are unit-tested |
@@ -63,7 +63,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
 | `openclaw` | `reverse` | Patches the selected OpenClaw provider config when possible, otherwise falls back to provider-specific base URL env vars |
 | `pi` | `forward` | Multi-provider; Pi can use OpenAI Codex OAuth and custom model registry providers, so forward proxy captures traffic without relying on a single base URL override |
-| `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
+| `hermes` | `reverse` | Auto-detects the active `model.base_url` from `~/.hermes/config.yaml` (or `OPENAI_BASE_URL`) so parent/child model traffic follows one deterministic capture path; forward remains an explicit fallback |
 | `cursor` | `transcript` (neither reverse nor forward) | Conversation comes only from `~/.cursor/projects/*/agent-transcripts/*.jsonl`. Bare `claude-tap --tap-client cursor` launches `cursor-agent` and live-watches transcripts into the dashboard (**one tap session per Cursor conversation JSONL**); `--tap-no-launch` is IDE watch-only. No HTTPS proxy / CA |
 | `qoder` | `forward` | Qoder CLI uses multiple Qoder service endpoints and has no reliable single base URL override |
 | `agy` | `forward` | Antigravity uses multiple Google / Antigravity endpoints; claude-tap sets `HTTPS_PROXY` for auxiliary traffic and `CLOUD_CODE_URL` for Code Assist model traffic |

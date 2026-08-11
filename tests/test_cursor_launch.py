@@ -113,6 +113,7 @@ async def test_run_client_cursor_transcript_only_skips_proxy_env(monkeypatch) ->
     monkeypatch.delenv("https_proxy", raising=False)
     monkeypatch.delenv("ALL_PROXY", raising=False)
     monkeypatch.delenv("all_proxy", raising=False)
+    monkeypatch.delenv("NODE_EXTRA_CA_CERTS", raising=False)
     monkeypatch.setenv("NO_PROXY", "example.com")
     monkeypatch.setattr("claude_tap.cli.shutil.which", lambda _: "/tmp/cursor-agent")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)

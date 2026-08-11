@@ -43,7 +43,7 @@ SUPPORTED_DEFAULT_PROXY_MODES = {
     "opencode": "forward",
     "openclaw": "reverse",
     "pi": "forward",
-    "hermes": "forward",
+    "hermes": "reverse",
     "cursor": "forward",
     "qoder": "forward",
     "codebuddy": "reverse",
@@ -456,6 +456,8 @@ def test_openclaw_reverse_env_falls_back_without_patchable_config(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(tmp_path / "missing.json"))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     env = cli_clients._openclaw_reverse_env(43123)
 
@@ -477,6 +479,8 @@ def test_detect_openclaw_target_uses_config_then_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
     config = tmp_path / "openclaw.json"
     config.write_text(
         json.dumps(

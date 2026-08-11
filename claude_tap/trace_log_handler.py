@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import datetime, timezone
+from typing import Callable
 
 from claude_tap.trace_store import TraceStore, get_trace_store
 
@@ -12,10 +13,16 @@ from claude_tap.trace_store import TraceStore, get_trace_store
 class SQLiteLogHandler(logging.Handler):
     """Write log records to the active trace session."""
 
-    def __init__(self, session_id: str, store: TraceStore | None = None):
+    def __init__(
+        self,
+        session_id: str,
+        store: TraceStore | None = None,
+        session_id_getter: Callable[[], str] | None = None,
+    ):
         super().__init__()
         self.session_id = session_id
         self._store = store or get_trace_store()
+        self._session_id_getter = session_id_getter
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -26,7 +33,7 @@ class SQLiteLogHandler(logging.Handler):
             if record.stack_info:
                 message = f"{message}\n{formatter.formatStack(record.stack_info)}"
             self._store.append_log(
-                self.session_id,
+                self._session_id_getter() if self._session_id_getter else self.session_id,
                 message,
                 level=record.levelname,
                 logged_at=datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%H:%M:%S"),

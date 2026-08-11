@@ -312,7 +312,7 @@ class ClientConfig:
     strip_path_prefix: str = ""
     strip_path_prefix_unless_target_contains: tuple[str, ...] = ()
     # Default proxy mode when --tap-proxy-mode is not explicitly set.
-    # Multi-provider clients (e.g. hermes, opencode, pi) default to "forward" so that all
+    # Multi-provider clients (e.g. opencode and pi) may default to "forward" so that all
     # provider traffic is captured regardless of which env var the client honors.
     default_proxy_mode: str = "reverse"
     # Some non-Python/non-Node macOS clients do not honor per-process CA env
@@ -515,10 +515,10 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="OPENAI_BASE_URL",
         base_url_suffix="/v1",
         default_target="https://api.openai.com",
-        # hermes is a Python 3.11+ multi-provider agent; reverse mode requires
-        # a user-configured OpenAI-compatible provider in ~/.hermes that honors
-        # OPENAI_BASE_URL. Default to forward proxy capture.
-        default_proxy_mode="forward",
+        # Keep Hermes on the same deterministic reverse-proxy path as Claude
+        # Code. Users with providers that do not honor OPENAI_BASE_URL can still
+        # opt into forward capture explicitly.
+        default_proxy_mode="reverse",
     ),
     "cursor": ClientConfig(
         cmd="cursor-agent",
@@ -636,6 +636,7 @@ async def run_client(
 
     env = os.environ.copy()
     cleanup_paths: list[Path] = []
+    cleanup_dirs: list[Path] = []
 
     cmd_args = list(extra_args)
     cmd_args = _maybe_rewrite_hermes_gateway_start(client, cmd_args)
@@ -715,7 +716,7 @@ async def run_client(
                 reverse_env["KIMI_MODEL_BASE_URL"] = cfg.reverse_base_url(port)
         elif client == "openclaw":
             reverse_env = _openclaw_reverse_env(port, cmd_args)
-        elif capture_only and client in {"hermes", "kimi"}:
+        elif client == "hermes" or (capture_only and client == "kimi"):
             reverse_env = _multi_provider_reverse_env(port)
         elif capture_only and client == "mimo":
             reverse_env = _opencode_reverse_env(port)
@@ -727,6 +728,10 @@ async def run_client(
             reverse_env["MIMOCODE_MIMO_ONLY"] = "false"
         else:
             reverse_env = cfg.reverse_base_url_env_map(port)
+        if client == "hermes":
+            hermes_home, hermes_temp_root = _prepare_hermes_reverse_home(port, cmd_args)
+            reverse_env["HERMES_HOME"] = str(hermes_home)
+            cleanup_dirs.append(hermes_temp_root)
         cleanup_path = reverse_env.pop(_OPENCLAW_CLEANUP_ENV, None)
         if cleanup_path:
             cleanup_paths.append(Path(cleanup_path))
@@ -785,6 +790,8 @@ async def run_client(
                 path.unlink(missing_ok=True)
             except OSError:
                 pass
+        for path in cleanup_dirs:
+            shutil.rmtree(path, ignore_errors=True)
         if client == "kimi-code" and proxy_mode == "reverse" and kimi_code_sandbox is not None:
             shutil.rmtree(kimi_code_sandbox, ignore_errors=True)
         raise
@@ -836,6 +843,8 @@ async def run_client(
                 path.unlink(missing_ok=True)
             except OSError:
                 pass
+        for path in cleanup_dirs:
+            shutil.rmtree(path, ignore_errors=True)
         if (
             client == "kimi-code"
             and proxy_mode == "reverse"
@@ -1217,6 +1226,192 @@ def _detect_claude_target() -> str:
         return env_target
 
     return CLIENT_CONFIGS["claude"].default_target
+
+
+def _normalize_hermes_target(value: str) -> str:
+    target = value.strip().rstrip("/")
+    if target.endswith("/v1"):
+        target = target[:-3]
+    return target.rstrip("/")
+
+
+def _read_hermes_target(path: Path) -> str:
+    """Read the active Hermes OpenAI-compatible base URL without loading secrets."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+
+    section = ""
+    selected_provider = ""
+    model_base_url = ""
+    provider_name = ""
+    provider_urls: dict[str, str] = {}
+    for raw_line in lines:
+        line = raw_line.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        stripped = line.strip()
+        if indent == 0:
+            section = stripped[:-1] if stripped.endswith(":") else ""
+            provider_name = ""
+            continue
+        if section == "model" and indent == 2 and ":" in stripped:
+            key, value = stripped.split(":", 1)
+            value = value.strip().strip("'\"")
+            if key == "provider":
+                selected_provider = value
+            elif key == "base_url":
+                model_base_url = value
+        elif section == "providers":
+            if indent == 2 and stripped.endswith(":"):
+                provider_name = stripped[:-1].strip("'\"")
+            elif indent == 4 and provider_name and stripped.startswith("base_url:"):
+                provider_urls[provider_name] = stripped.split(":", 1)[1].strip().strip("'\"")
+
+    configured = model_base_url or provider_urls.get(selected_provider, "")
+    return _normalize_hermes_target(configured) if configured else ""
+
+
+def _detect_hermes_target() -> str:
+    env_target = os.environ.get("OPENAI_BASE_URL", "").strip()
+    if env_target:
+        return _normalize_hermes_target(env_target)
+    hermes_home = _resolve_hermes_home([])
+    configured_target = _read_hermes_target(hermes_home / "config.yaml")
+    return configured_target or CLIENT_CONFIGS["hermes"].default_target
+
+
+def _hermes_profile_arg(args: list[str]) -> str | None:
+    for index, arg in enumerate(args):
+        if arg in {"-p", "--profile"} and index + 1 < len(args):
+            return args[index + 1].strip() or None
+        if arg.startswith("--profile="):
+            return arg.split("=", 1)[1].strip() or None
+    return None
+
+
+def _resolve_hermes_home(args: list[str]) -> Path:
+    """Resolve the profile directory Hermes will select before importing config."""
+    configured = os.environ.get("HERMES_HOME", "").strip()
+    base = Path(configured).expanduser() if configured else Path.home() / ".hermes"
+    if base.parent.name == "profiles":
+        return base
+
+    profile = _hermes_profile_arg(args)
+    if profile is None:
+        try:
+            profile = (base / "active_profile").read_text(encoding="utf-8").strip()
+        except OSError:
+            profile = ""
+    if profile and profile != "default":
+        candidate = base / "profiles" / profile
+        if candidate.is_dir():
+            return candidate
+    return base
+
+
+def _patch_hermes_model_base_url(config_text: str, base_url: str) -> str:
+    """Route model and provider base URLs without rewriting unrelated Hermes YAML."""
+    lines = config_text.splitlines(keepends=True)
+    model_index: int | None = None
+    model_end = len(lines)
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if indent == 0 and stripped == "model:":
+            model_index = index
+            continue
+        if model_index is not None and index > model_index and indent == 0 and stripped:
+            model_end = index
+            break
+
+    replacement = f"  base_url: {base_url}\n"
+    if model_index is None:
+        prefix = "" if not config_text or config_text.endswith("\n") else "\n"
+        lines = f"model:\n{replacement}{prefix}{config_text}".splitlines(keepends=True)
+    else:
+        replaced_model = False
+        for index in range(model_index + 1, model_end):
+            line = lines[index]
+            if len(line) - len(line.lstrip()) == 2 and line.strip().startswith("base_url:"):
+                lines[index] = replacement
+                replaced_model = True
+                break
+        if not replaced_model:
+            lines.insert(model_index + 1, replacement)
+
+    section = ""
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if indent == 0 and stripped:
+            section = stripped[:-1] if stripped.endswith(":") else ""
+        elif section == "providers" and indent == 4 and stripped.startswith("base_url:"):
+            lines[index] = f"    base_url: {base_url}\n"
+    return "".join(lines)
+
+
+def _patch_dotenv_values(env_text: str, values: dict[str, str]) -> str:
+    """Replace selected dotenv keys while preserving credentials and comments."""
+    remaining = dict(values)
+    lines = env_text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        candidate = line.lstrip()
+        if not candidate or candidate.startswith("#") or "=" not in candidate:
+            continue
+        key = candidate.split("=", 1)[0].strip()
+        if key in remaining:
+            lines[index] = f"{key}={remaining.pop(key)}\n"
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    lines.extend(f"{key}={value}\n" for key, value in remaining.items())
+    return "".join(lines)
+
+
+def _prepare_hermes_reverse_home(port: int, args: list[str]) -> tuple[Path, Path]:
+    """Create an isolated config view while sharing Hermes' persistent profile state."""
+    source = _resolve_hermes_home(args)
+    temp_root = Path(tempfile.mkdtemp(prefix="claude-tap-hermes-"))
+    sandbox = temp_root / "profiles" / (source.name or "default")
+    sandbox.mkdir(parents=True)
+    try:
+        for child in source.iterdir():
+            if child.name in {"config.yaml", ".env"}:
+                continue
+            (sandbox / child.name).symlink_to(child, target_is_directory=child.is_dir())
+        try:
+            config_text = (source / "config.yaml").read_text(encoding="utf-8")
+        except OSError:
+            config_text = ""
+        (sandbox / "config.yaml").write_text(
+            _patch_hermes_model_base_url(config_text, f"http://127.0.0.1:{port}/v1"),
+            encoding="utf-8",
+        )
+        try:
+            env_text = (source / ".env").read_text(encoding="utf-8")
+        except OSError:
+            env_text = ""
+        proxy_url = f"http://127.0.0.1:{port}"
+        sandbox_env = sandbox / ".env"
+        sandbox_env.write_text(
+            _patch_dotenv_values(
+                env_text,
+                {
+                    "OPENAI_BASE_URL": f"{proxy_url}/v1",
+                    "ANTHROPIC_BASE_URL": proxy_url,
+                    "OPENROUTER_BASE_URL": f"{proxy_url}/v1",
+                    "CUSTOM_BASE_URL": f"{proxy_url}/v1",
+                },
+            ),
+            encoding="utf-8",
+        )
+        sandbox_env.chmod(0o600)
+    except Exception:
+        shutil.rmtree(temp_root, ignore_errors=True)
+        raise
+    return sandbox, temp_root
 
 
 def _reverse_proxy_trace_options(client: str, target: str) -> dict[str, object]:
@@ -2233,6 +2428,7 @@ TARGET_DETECTORS = {
     "codex": _detect_codex_target,
     "codebuddy": _detect_codebuddy_target,
     "grok": _detect_grok_target,
+    "hermes": _detect_hermes_target,
     "kimi-code": _detect_kimi_code_target,
     "openclaw": _detect_openclaw_target,
 }
