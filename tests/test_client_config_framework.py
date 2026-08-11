@@ -134,7 +134,10 @@ def test_codexapp_declares_raw_backend_capture_mode() -> None:
     assert cfg.default_target == "https://chatgpt.com/backend-api/codex"
     assert cfg.default_proxy_mode == "forward"
     assert cfg.forward_trace_methods == ("POST", "WEBSOCKET")
-    assert cfg.forward_trace_path_prefixes == ("/backend-api/codex/responses",)
+    assert cfg.forward_trace_path_prefixes == (
+        "/backend-api/codex/responses",
+        "/v1/responses",
+    )
     assert cfg.transcript_only is False
 
 

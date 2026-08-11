@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 import pytest
 
+from claude_tap.cli_clients import CLIENT_CONFIGS
 from claude_tap.forward_proxy import ForwardProxyServer, _decode_request_body_for_trace
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_store import get_trace_store, reset_trace_store
@@ -34,6 +35,80 @@ class _MemoryWriter:
 
     async def drain(self) -> None:
         return None
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "expected"),
+    [
+        ("POST", "/backend-api/codex/responses", True),
+        ("POST", "/v1/responses", True),
+        ("WEBSOCKET", "/v1/responses", True),
+        ("GET", "/v1/responses", False),
+        ("POST", "/v1/chat/completions", False),
+        ("POST", "/v1/responses-other", False),
+    ],
+)
+def test_codexapp_capture_filter(method: str, path: str, expected: bool) -> None:
+    cfg = CLIENT_CONFIGS["codexapp"]
+    server = ForwardProxyServer(
+        host="127.0.0.1",
+        port=0,
+        ca=object(),
+        writer=object(),
+        session=object(),
+        trace_methods=cfg.forward_trace_methods,
+        trace_path_prefixes=cfg.forward_trace_path_prefixes,
+    )
+
+    assert server._should_trace_request(method, path) is expected
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_captures_codexapp_custom_responses_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "traces.sqlite3"))
+    reset_trace_store()
+    store = get_trace_store()
+    session_id = store.create_session(client="codexapp", proxy_mode="forward")
+    trace_writer = TraceWriter(session_id, store=store)
+    client_writer = _MemoryWriter()
+    cfg = CLIENT_CONFIGS["codexapp"]
+    server = ForwardProxyServer(
+        host="127.0.0.1",
+        port=0,
+        ca=object(),
+        writer=trace_writer,
+        session=_UnexpectedSession(),
+        trace_methods=cfg.forward_trace_methods,
+        trace_path_prefixes=cfg.forward_trace_path_prefixes,
+        capture_only=True,
+    )
+    request_body = {
+        "model": "MiniMax-M3",
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+        "stream": False,
+    }
+
+    try:
+        await server._forward_and_record(
+            "POST",
+            "/v1/responses",
+            {"Content-Type": "application/json"},
+            json.dumps(request_body).encode(),
+            "https://api.minimaxi.com/v1/responses",
+            client_writer,
+        )
+        trace_writer.close()
+
+        records = store.load_records(session_id)
+        assert len(records) == 1
+        assert records[0]["request"]["path"] == "/v1/responses"
+        assert records[0]["request"]["body"] == request_body
+        assert records[0]["response"]["status"] == 200
+    finally:
+        reset_trace_store()
 
 
 @pytest.mark.parametrize(

@@ -441,7 +441,10 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         default_proxy_mode="forward",
         auto_trust_ca_macos=True,
         forward_trace_methods=("POST", "WEBSOCKET"),
-        forward_trace_path_prefixes=("/backend-api/codex/responses",),
+        forward_trace_path_prefixes=(
+            "/backend-api/codex/responses",
+            "/v1/responses",
+        ),
     ),
     "kimi": ClientConfig(
         cmd="kimi",
