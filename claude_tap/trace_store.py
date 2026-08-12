@@ -225,6 +225,16 @@ class TraceStore:
                     "id": session_id,
                     "updated_at": updated_at,
                 }
+                if existing_summary.get("summary_version") is not None:
+                    for key in (
+                        "input_tokens",
+                        "output_tokens",
+                        "cache_read_tokens",
+                        "cache_create_tokens",
+                        "total_tokens",
+                    ):
+                        if key in existing_summary:
+                            final_summary[key] = existing_summary[key]
                 summary_json_str = json.dumps(final_summary, ensure_ascii=False, separators=(",", ":"))
             else:
                 summary_json_str = json.dumps(summary, ensure_ascii=False, separators=(",", ":")) if summary else None
@@ -356,6 +366,22 @@ class TraceStore:
             "total_tokens": int(row["total_tokens"] or 0) if row else 0,
             "total_errors": int(row["total_errors"] or 0) if row else 0,
         }
+
+    def list_stale_summary_rows(
+        self,
+        summary_version: int,
+        query: SessionQuery | None = None,
+    ) -> list[sqlite3.Row]:
+        """Return completed matching sessions with an outdated dashboard summary."""
+        where_sql, params = self._session_where(query)
+        clauses = ["status != 'active'", "json_valid(summary_json)"]
+        clauses.append(
+            "(json_extract(summary_json, '$.summary_version') IS NOT ? OR json_extract(summary_json, '$.id') IS NOT id)"
+        )
+        params.append(summary_version)
+        suffix = " AND " + " AND ".join(clauses) if where_sql else " WHERE " + " AND ".join(clauses)
+        with self._read_connect() as conn:
+            return conn.execute(f"SELECT * FROM sessions {where_sql}{suffix}", params).fetchall()
 
     def list_agent_buckets(self) -> list[sqlite3.Row]:
         """Return session counts grouped by stored agent signal without loading records."""

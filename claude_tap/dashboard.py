@@ -149,6 +149,13 @@ def sum_trace_session_records(query: SessionQuery | None = None) -> int:
         return 0
 
 
+def repair_stale_session_summaries(query: SessionQuery | None = None) -> None:
+    """Rebuild all outdated completed summaries before aggregate queries."""
+    store = ensure_trace_store()
+    for row in store.list_stale_summary_rows(DASHBOARD_SUMMARY_VERSION, query):
+        _session_summary_from_row(store, row, repair_stale_summary=True)
+
+
 def list_trace_agents(
     current_session_id: str | None = None,
     *,

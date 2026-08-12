@@ -24,6 +24,7 @@ from claude_tap.dashboard import (
     load_trace_session,
     read_dashboard_template,
     redact_dashboard_summary,
+    repair_stale_session_summaries,
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
 from claude_tap.shared_dashboard import CLAUDE_TAP_VERSION, dashboard_url
@@ -516,6 +517,7 @@ class LiveViewerServer:
         offset = _session_offset_from_request(request)
         limit = _session_limit_from_request(request)
         query = _session_query_from_request(request)
+        repair_stale_session_summaries(query)
         aggregates = get_trace_store().get_session_aggregates(query)
         total = aggregates["total_sessions"]
         total_records = aggregates["total_records"]
