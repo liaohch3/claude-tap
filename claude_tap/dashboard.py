@@ -18,7 +18,7 @@ from claude_tap.trace_encoding import (
     looks_like_binary_text,
 )
 from claude_tap.trace_store import SessionQuery, TraceStore, get_trace_store
-from claude_tap.usage import normalize_usage
+from claude_tap.usage import normalize_usage, usage_total_tokens
 from claude_tap.viewer import _decode_bedrock_eventstream_events
 
 DASHBOARD_TEMPLATE_PATH = Path(__file__).parent / "dashboard.html"
@@ -40,7 +40,7 @@ CLIENT_LABELS = {
     "pi": "Pi",
     "qoder": "Qoder",
 }
-DASHBOARD_SUMMARY_VERSION = 3
+DASHBOARD_SUMMARY_VERSION = 4
 VALID_SESSION_STATUSES = {"active", "complete", "error", "empty"}
 _REDACTED_VALUE = "REDACTED"
 _SENSITIVE_KEY_NAMES = {
@@ -266,12 +266,7 @@ def merge_record_into_summary(
     summary["cache_create_tokens"] = int(summary.get("cache_create_tokens") or 0) + (
         usage.get("cache_creation_input_tokens") or 0
     )
-    summary["total_tokens"] = (
-        summary["input_tokens"]
-        + summary["output_tokens"]
-        + summary["cache_read_tokens"]
-        + summary["cache_create_tokens"]
-    )
+    summary["total_tokens"] = int(summary.get("total_tokens") or 0) + usage_total_tokens(usage)
     summary["duration_ms"] = int(summary.get("duration_ms") or 0) + _duration_ms(record)
     model = _record_model(record)
     if model:
@@ -360,12 +355,15 @@ def _session_summary_from_row(
         except json.JSONDecodeError:
             cached = None
         if isinstance(cached, dict) and (not cached.get("id") or cached.get("id") == row["id"]):
+            needs_version_repair = not is_dashboard_summary_current(cached, row["id"])
             needs_error_repair = row["status"] == "error" and not cached.get("error")
-            if (
-                repair_stale_summary
-                and row["status"] != "active"
-                and (not is_dashboard_summary_current(cached, row["id"]) or needs_error_repair)
-            ):
+            if repair_stale_summary and row["status"] != "active" and needs_version_repair:
+                records = store.load_records(row["id"])
+                if records:
+                    summary = build_stored_session_summary(row, records)
+                    store.store_summary(row["id"], summary)
+                    return summary
+            if repair_stale_summary and row["status"] != "active" and needs_error_repair:
                 boundary_records = store.load_boundary_records(row["id"])
                 if boundary_records:
                     summary = _summary_from_boundary_records(row, boundary_records, cached)
@@ -509,12 +507,7 @@ def _normalize_cached_session_summary(row: sqlite3.Row, cached: dict[str, Any]) 
     if not summary.get("agent"):
         summary["agent"] = _infer_agent([], {"client": row["client"] or "", "proxy_mode": row["proxy_mode"] or ""})
     summary["agent_key"] = _agent_key(str(summary.get("agent") or ""))
-    token_total = (
-        int(summary.get("input_tokens") or 0)
-        + int(summary.get("output_tokens") or 0)
-        + int(summary.get("cache_read_tokens") or 0)
-        + int(summary.get("cache_create_tokens") or 0)
-    )
+    token_total = int(summary.get("total_tokens") or 0)
     summary["total_tokens"] = token_total if token_total else int(cached.get("total_tokens") or 0)
     return redact_dashboard_summary(summary)
 
@@ -558,7 +551,7 @@ def _summarize_session(
     started_at = _timestamp_from_record(first_record) or started_at or _iso_now()
     updated_at = _timestamp_from_record(last_record) or updated_at or started_at
     agent = _infer_agent(records, manifest_entry)
-    input_tokens = output_tokens = cache_read_tokens = cache_create_tokens = 0
+    input_tokens = output_tokens = cache_read_tokens = cache_create_tokens = total_tokens = 0
     models: dict[str, int] = {}
     duration_ms = 0
     turns: set[int] = set()
@@ -569,6 +562,7 @@ def _summarize_session(
         output_tokens += usage.get("output_tokens") or 0
         cache_read_tokens += usage.get("cache_read_input_tokens") or 0
         cache_create_tokens += usage.get("cache_creation_input_tokens") or 0
+        total_tokens += usage_total_tokens(usage)
         model = _record_model(record)
         if model:
             models[model] = models.get(model, 0) + 1
@@ -614,7 +608,7 @@ def _summarize_session(
             "output_tokens": output_tokens,
             "cache_read_tokens": cache_read_tokens,
             "cache_create_tokens": cache_create_tokens,
-            "total_tokens": input_tokens + output_tokens + cache_read_tokens + cache_create_tokens,
+            "total_tokens": total_tokens,
             "model": _top_key(models) or _record_model(last_record) or "unknown",
             "first_user": _first_user_preview(preview_records),
             "last_response": _last_response_preview(preview_records),

@@ -55,3 +55,20 @@ def normalize_usage(usage: object) -> dict:
             normalized["cache_creation_input_tokens"] = cache_write
 
     return normalized
+
+
+def usage_total_tokens(usage: dict) -> int:
+    """Return the provider-reported total, or a compatible derived fallback."""
+    reported = usage.get("total_tokens")
+    if isinstance(reported, int) and not isinstance(reported, bool) and reported >= 0:
+        return reported
+
+    return sum(
+        int(usage.get(field) or 0)
+        for field in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        )
+    )

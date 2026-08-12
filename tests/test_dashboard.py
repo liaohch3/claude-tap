@@ -260,6 +260,68 @@ def test_dashboard_summarizes_null_usage_token_fields(trace_db, tmp_path: Path) 
     assert summary["total_tokens"] == 51
 
 
+def test_dashboard_uses_responses_reported_total_without_double_counting_cache(trace_db, tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_082500.jsonl"
+    record = _anthropic_record()
+    record["capture"]["client"] = "codex"
+    record["request"]["path"] = "/v1/responses"
+    record["response"]["body"]["usage"] = {
+        "input_tokens": 219921,
+        "input_tokens_details": {"cached_tokens": 170496},
+        "output_tokens": 3562,
+        "total_tokens": 223483,
+    }
+    _write_jsonl(trace_path, [record])
+    _seed_legacy(tmp_path)
+
+    summary = list_trace_sessions()[0]
+
+    assert summary["input_tokens"] == 219921
+    assert summary["cache_read_tokens"] == 170496
+    assert summary["total_tokens"] == 223483
+
+
+def test_dashboard_repairs_stale_responses_total_from_records(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(
+        client="codex",
+        proxy_mode="reverse",
+        started_at=datetime(2026, 5, 20, 8, 25, tzinfo=timezone.utc),
+    )
+    record = _anthropic_record()
+    record["capture"]["client"] = "codex"
+    record["request"]["path"] = "/v1/responses"
+    record["response"]["body"]["usage"] = {
+        "input_tokens": 219921,
+        "input_tokens_details": {"cached_tokens": 170496},
+        "output_tokens": 3562,
+        "total_tokens": 223483,
+    }
+    store.append_record(session_id, record)
+    stale_summary = {
+        "id": session_id,
+        "summary_version": DASHBOARD_SUMMARY_VERSION - 1,
+        "status": "complete",
+        "input_tokens": 219921,
+        "output_tokens": 3562,
+        "cache_read_tokens": 170496,
+        "total_tokens": 393979,
+    }
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (json.dumps(stale_summary, separators=(",", ":")), session_id),
+    )
+    conn.commit()
+
+    summary = list_trace_sessions()[0]
+    cached = json.loads(store.load_session_row(session_id)["summary_json"])
+
+    assert summary["total_tokens"] == 223483
+    assert cached["total_tokens"] == 223483
+    assert cached["summary_version"] == DASHBOARD_SUMMARY_VERSION
+
+
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])
