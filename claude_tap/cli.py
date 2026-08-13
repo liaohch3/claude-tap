@@ -690,7 +690,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
         description=(
-            "Trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, "
+            "Trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Oh My Pi, Hermes Agent, "
             "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy or transcript import. "
             "All flags not listed below are forwarded to the selected client."
         ),
@@ -755,6 +755,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  # Forward proxy captures OpenAI Codex OAuth and other providers\n"
             '  claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"\n'
             "  # Pi OAuth is configured with /login inside pi, or via PI_CODING_AGENT_DIR\n"
+            "\n"
+            "oh my pi (Pi-derived multi-provider agent; defaults to forward proxy mode):\n"
+            '  claude-tap --tap-client omp -- -p "hello"\n'
+            "  # OMP uses its existing auth, model registry, profiles, and session storage\n"
             "\n"
             "hermes agent (multi-provider Python agent — forward proxy default):\n"
             "  # Interactive TUI — captures LLM calls directly\n"

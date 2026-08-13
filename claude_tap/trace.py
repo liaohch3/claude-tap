@@ -168,6 +168,8 @@ def _is_auxiliary_status_probe(record: dict) -> bool:
     if not isinstance(path, str):
         return False
     clean_path = path.lower().split("?", 1)[0].rstrip("/")
+    if clean_path in {"/mcp", "/v1/mcp"}:
+        return True
     if clean_path in {"/models", "/v1/models", "/v1alpha/models", "/v1beta/models"}:
         return True
     match = re.fullmatch(r"/(?:v1/)?models/([^/:]+)", clean_path)

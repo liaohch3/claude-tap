@@ -2555,3 +2555,87 @@ async def test_kimi_code_model_probe_error_marks_probe_only_session_failed(trace
     assert payload is not None
     assert payload["session"]["status"] == "error"
     assert payload["session"]["error"] == "missing bearer token"
+
+
+@pytest.mark.asyncio
+async def test_omp_mcp_error_does_not_mark_successful_session_failed(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="omp", proxy_mode="forward")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "omp", "proxy_mode": "forward"})
+    try:
+        await writer.write(
+            {
+                "timestamp": "2026-08-13T08:00:00+00:00",
+                "request": {
+                    "method": "POST",
+                    "path": "/v1/mcp",
+                    "body": {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                },
+                "response": {"status": 401, "body": "Unauthorized"},
+            }
+        )
+        await writer.write(
+            {
+                "timestamp": "2026-08-13T08:00:02+00:00",
+                "request": {
+                    "method": "POST",
+                    "path": "/chat/completions",
+                    "body": {
+                        "model": "deepseek-v4-flash",
+                        "messages": [{"role": "user", "content": "ping"}],
+                    },
+                },
+                "response": {
+                    "status": 200,
+                    "body": {
+                        "model": "deepseek-v4-flash",
+                        "choices": [{"message": {"content": "pong"}}],
+                        "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+                    },
+                },
+            }
+        )
+    finally:
+        writer.close()
+
+    conn = store._connect()
+    row = conn.execute("SELECT status, summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    summary = json.loads(row["summary_json"])
+
+    assert row["status"] == "complete"
+    assert summary["status"] == "complete"
+
+    conn.execute("UPDATE sessions SET summary_json = NULL WHERE id = ?", (session_id,))
+    conn.commit()
+    payload = load_trace_session(session_id)
+
+    assert payload is not None
+    assert payload["session"]["status"] == "complete"
+    assert payload["session"]["error"] == ""
+
+
+@pytest.mark.asyncio
+async def test_omp_mcp_error_marks_mcp_only_session_failed(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="omp", proxy_mode="forward")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "omp", "proxy_mode": "forward"})
+    try:
+        await writer.write(
+            {
+                "timestamp": "2026-08-13T08:00:00+00:00",
+                "request": {
+                    "method": "POST",
+                    "path": "/mcp",
+                    "body": {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                },
+                "response": {"status": 401, "body": "Unauthorized"},
+            }
+        )
+    finally:
+        writer.close()
+
+    row = store._connect().execute("SELECT status, summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    summary = json.loads(row["summary_json"])
+
+    assert row["status"] == "error"
+    assert summary["status"] == "error"

@@ -38,6 +38,8 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | OpenClaw | No patchable config (`--tap-proxy-mode reverse`) | Provider env fallback (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, or `OPENROUTER_BASE_URL`) | provider-dependent | HTTP/SSE | Unit-tested |
 | Pi | Provider creds via Pi `/login` or `PI_CODING_AGENT_DIR` auth file (`openai-codex` OAuth verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE + WebSocket | Real E2E verified |
 | Pi | Custom OpenAI-compatible setup (`--tap-proxy-mode reverse`) | `https://api.openai.com` | none | HTTP/SSE | Unit-tested |
+| Oh My Pi | Existing OMP auth, model registry, or profile | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE + WebSocket | HTTP/SSE real E2E verified with OMP 17.2.15; WebSocket covered by shared forward-proxy tests |
+| Oh My Pi | Custom OpenAI-compatible setup (`--tap-proxy-mode reverse`) | `https://api.openai.com` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
 | Cursor CLI / IDE Agent | Cursor login (`cursor-agent login`) or Cursor IDE | Local `agent-transcripts` watch (no MITM proxy) | n/a | Local transcript JSONL (`cursor-transcript`) | Unit-tested; manual E2E pending after transcript-only switch |
@@ -63,6 +65,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
 | `openclaw` | `reverse` | Patches the selected OpenClaw provider config when possible, otherwise falls back to provider-specific base URL env vars |
 | `pi` | `forward` | Multi-provider; Pi can use OpenAI Codex OAuth and custom model registry providers, so forward proxy captures traffic without relying on a single base URL override |
+| `omp` | `forward` | Pi-derived multi-provider client; forward proxy preserves OMP's existing auth, model registry, and profiles while capturing every provider |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
 | `cursor` | `transcript` (neither reverse nor forward) | Conversation comes only from `~/.cursor/projects/*/agent-transcripts/*.jsonl`. Bare `claude-tap --tap-client cursor` launches `cursor-agent` and live-watches transcripts into the dashboard (**one tap session per Cursor conversation JSONL**); `--tap-no-launch` is IDE watch-only. No HTTPS proxy / CA |
 | `qoder` | `forward` | Qoder CLI uses multiple Qoder service endpoints and has no reliable single base URL override |
@@ -201,6 +204,10 @@ uv run python -m claude_tap --tap-client grok -- -p "Reply OK"
 uv run python -m claude_tap --tap-client pi -- \
   --model openai-codex/gpt-5.3-codex-spark -p "Reply OK"
 # Verify the trace contains chatgpt.com/backend-api records and readable OpenAI Responses sections
+
+# Oh My Pi
+uv run python -m claude_tap --tap-client omp -- -p "Reply OK"
+# Verify the session client is omp and the trace contains readable request and response sections
 
 # CodeBuddy (auto-detected endpoint after login)
 uv run python -m claude_tap --tap-client codebuddy -- -p "Reply OK"

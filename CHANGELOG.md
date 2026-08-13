@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Add native Oh My Pi client support with `--tap-client omp`.
+
+### Fixed
+- Keep successful sessions complete when an auxiliary MCP startup request fails.
 
 
 

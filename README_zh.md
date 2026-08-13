@@ -13,7 +13,7 @@
 
 网站：[本地 AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · 指南：[如何本地查看 Agent traces](docs/guides/agent-trace-viewer.zh.md)
 
-它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Codex App](https://openai.com/codex/)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Grok Build CLI](https://docs.x.ai/build/overview)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[MiMo Code](https://mimo.xiaomi.com/en/mimocode)、[OpenCode](https://opencode.ai)、[OpenClaw](https://github.com/openclaw/openclaw)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli)、[Qoder CLI](https://qoder.com/cli)、[Antigravity CLI](https://antigravity.google/product/antigravity-cli) 和 [CodeBuddy CLI](https://www.codebuddy.ai)。
+它支持 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex CLI](https://github.com/openai/codex)、[Codex App](https://openai.com/codex/)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Grok Build CLI](https://docs.x.ai/build/overview)、[Kimi CLI](https://github.com/MoonshotAI/kimi-cli)、[MiMo Code](https://mimo.xiaomi.com/en/mimocode)、[OpenCode](https://opencode.ai)、[OpenClaw](https://github.com/openclaw/openclaw)、[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)、[Oh My Pi](https://github.com/can1357/oh-my-pi)、[Hermes Agent](https://github.com/NousResearch/hermes-agent)、[Cursor CLI](https://cursor.com/cli)、[Qoder CLI](https://qoder.com/cli)、[Antigravity CLI](https://antigravity.google/product/antigravity-cli) 和 [CodeBuddy CLI](https://www.codebuddy.ai)。
 
 <p align="center">
   <img src="docs/demo_zh.gif" alt="claude-tap 演示：真实 Codex trace" width="100%">
@@ -64,7 +64,7 @@
 - 🔎 **用证据定位问题**：对比相邻请求，明确是哪段 prompt、消息、工具或参数发生了变化。
 - 📦 **留下可分享证据**：每次运行都会写入 JSONL trace，并生成自包含 HTML 查看器，方便 review 或归档。
 - 🔒 **数据留在本机**：不依赖云端 dashboard；常见认证 header 会在记录前自动脱敏。
-- 🧩 **覆盖主流编码客户端**：同一套流程可用于 Claude Code、Codex CLI、Codex App、Gemini CLI、Grok Build CLI、Kimi CLI、MiMo Code、OpenCode、OpenClaw、Pi、Hermes Agent、Cursor CLI、Qoder CLI、Antigravity CLI 和 CodeBuddy CLI。
+- 🧩 **覆盖主流编码客户端**：同一套流程可用于 Claude Code、Codex CLI、Codex App、Gemini CLI、Grok Build CLI、Kimi CLI、MiMo Code、OpenCode、OpenClaw、Pi、Oh My Pi、Hermes Agent、Cursor CLI、Qoder CLI、Antigravity CLI 和 CodeBuddy CLI。
 
 ## 支持的客户端
 
@@ -80,6 +80,7 @@
 | [OpenCode](https://opencode.ai) | 多提供方 OpenCode 会话 |
 | [OpenClaw](https://github.com/openclaw/openclaw) | 多提供方 OpenClaw 会话 |
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi 会话，包括 OpenAI Codex OAuth 提供方 |
+| [Oh My Pi](https://github.com/can1357/oh-my-pi) | 基于 Pi 的多 provider OMP 会话 |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 多提供方 Hermes TUI 或 gateway 会话 |
 | [Cursor](https://cursor.com/cli) CLI / IDE Agent | 启动 `cursor-agent` + 实时 transcript watch（`claude-tap --tap-client cursor`） |
 | [Qoder CLI](https://qoder.com/cli) | 通过 forward proxy 捕获 Qoder Agent 会话 |
@@ -134,6 +135,9 @@ claude-tap --tap-client mimo
 
 # Pi
 claude-tap --tap-client pi -- --model openai-codex/gpt-5.3-codex-spark -p "hello"
+
+# Oh My Pi
+claude-tap --tap-client omp -- -p "hello"
 
 # Cursor：启动 cursor-agent + 实时 transcript watch + dashboard
 claude-tap --tap-client cursor
@@ -419,6 +423,23 @@ Pi 在 `/login` 后会把 OAuth 凭据保存在 `~/.pi/agent/auth.json`。如果
 </details>
 
 <details>
+<summary>Oh My Pi 示例</summary>
+
+[Oh My Pi](https://github.com/can1357/oh-my-pi) 是基于 Pi 的多 provider coding agent。claude-tap 默认对 OMP 使用 **forward proxy** 模式，并沿用 OMP 现有的认证、模型注册表、profile 和会话存储。
+
+```bash
+# 追踪已配置的默认模型
+claude-tap --tap-client omp
+
+# 选择 OMP 模型注册表中的任意模型
+claude-tap --tap-client omp -- --model provider/model -p "hello"
+```
+
+localhost 上的 provider base URL 默认会绕过 forward proxy。如需捕获，请选择远程 provider；兼容的本地配置也可显式指定 reverse proxy target。
+
+</details>
+
+<details>
 <summary>Hermes Agent 示例</summary>
 
 Hermes Agent 是基于 Python 的多 provider AI agent（Nous Portal / OpenRouter / NVIDIA NIM / 小米 MiMo / GLM / Kimi / MiniMax / Hugging Face / OpenAI / Anthropic / 自定义）。由于它能对接任意 provider，且 `httpx`、`requests` 都默认认 `HTTPS_PROXY` 环境变量，claude-tap 默认对 hermes 使用 **forward proxy** 模式——通过向子进程注入 `HTTPS_PROXY` 与本地 CA，捕获它对接的任意 provider 流量。
@@ -595,7 +616,7 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动或监听的客户端: claude（默认）/ agy / codex / codexapp / gemini / grok / kimi / kimi-code / mimo / opencode / openclaw / pi / hermes / cursor / qoder / codebuddy
+--tap-client CLIENT      启动或监听的客户端: claude（默认）/ agy / codex / codexapp / gemini / grok / kimi / kimi-code / mimo / opencode / openclaw / pi / omp / hermes / cursor / qoder / codebuddy
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               客户端运行时启动实时查看器（默认开启）
 --tap-no-live            关闭实时查看器（恢复 v0.1.75 之前的行为）

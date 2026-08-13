@@ -37,10 +37,11 @@ CLIENT_LABELS = {
     "kimi-code": "Kimi Code",
     "mimo": "MiMo Code",
     "opencode": "OpenCode",
+    "omp": "Oh My Pi",
     "pi": "Pi",
     "qoder": "Qoder",
 }
-DASHBOARD_SUMMARY_VERSION = 3
+DASHBOARD_SUMMARY_VERSION = 4
 VALID_SESSION_STATUSES = {"active", "complete", "error", "empty"}
 _REDACTED_VALUE = "REDACTED"
 _SENSITIVE_KEY_NAMES = {
@@ -1028,7 +1029,7 @@ def _is_auxiliary_record(record: dict[str, Any]) -> bool:
     if _is_protobuf_noise_record(record):
         return True
     path = _record_path(record).lower()
-    if _is_model_probe_path(path):
+    if _is_model_probe_path(path) or _is_mcp_path(path):
         return True
     auxiliary_fragments = (
         "/token",
@@ -1057,6 +1058,11 @@ def _is_model_probe_path(path: str) -> bool:
         return True
     match = re.fullmatch(r"/(?:v1/)?models/([^/:]+)", clean_path)
     return match is not None
+
+
+def _is_mcp_path(path: str) -> bool:
+    clean_path = path.split("?", 1)[0].rstrip("/")
+    return clean_path in {"/mcp", "/v1/mcp"}
 
 
 def _is_session_error_record(record: dict[str, Any]) -> bool:

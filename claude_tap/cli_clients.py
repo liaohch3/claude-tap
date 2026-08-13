@@ -508,6 +508,17 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         default_target="https://api.openai.com",
         default_proxy_mode="forward",
     ),
+    "omp": ClientConfig(
+        cmd="omp",
+        label="Oh My Pi",
+        install_url="https://github.com/can1357/oh-my-pi",
+        # OMP is Pi-derived and uses the same multi-provider model registry.
+        # Forward mode captures every provider without relying on one base URL.
+        base_url_env="OPENAI_BASE_URL",
+        base_url_suffix="/v1",
+        default_target="https://api.openai.com",
+        default_proxy_mode="forward",
+    ),
     "hermes": ClientConfig(
         cmd="hermes",
         label="Hermes Agent",
@@ -659,9 +670,9 @@ async def run_client(
         env["http_proxy"] = proxy_url
         env["https_proxy"] = proxy_url
         env["all_proxy"] = proxy_url
-        if client == "pi":
-            # Pi's SSE transport uses Node fetch, which only reads proxy env vars
-            # when built-in environment proxy support is enabled.
+        if client in {"pi", "omp"}:
+            # Pi-derived SSE transports use Node fetch, which only reads proxy
+            # env vars when built-in environment proxy support is enabled.
             env["NODE_USE_ENV_PROXY"] = "1"
         _extend_no_proxy(env, ("localhost", "127.0.0.1", "::1"))
         if client == "mimo":

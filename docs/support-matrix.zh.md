@@ -38,6 +38,8 @@ English version: [Support Matrix](support-matrix.md).
 | OpenClaw | 无可补丁配置（`--tap-proxy-mode reverse`） | provider 环境变量 fallback（`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL`、`GOOGLE_GEMINI_BASE_URL` 或 `OPENROUTER_BASE_URL`） | 取决于 provider | HTTP/SSE | 单测覆盖 |
 | Pi | 通过 Pi `/login` 或 `PI_CODING_AGENT_DIR` auth 文件配置 provider 凭据（`openai-codex` OAuth 已验证） | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE + WebSocket | 真实 E2E 已验证 |
 | Pi | 自定义 OpenAI 兼容配置（`--tap-proxy-mode reverse`） | `https://api.openai.com` | 无 | HTTP/SSE | 单测覆盖 |
+| Oh My Pi | OMP 现有认证、模型注册表或 profile | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE + WebSocket | 已使用 OMP 17.2.15 完成 HTTP/SSE 真实 E2E 验证；WebSocket 由共享 forward proxy 测试覆盖 |
+| Oh My Pi | 自定义 OpenAI 兼容配置（`--tap-proxy-mode reverse`） | `https://api.openai.com` | 无 | HTTP/SSE | 单测覆盖 |
 | Hermes Agent | 通过 `~/.hermes/` 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
 | Hermes Agent | 自定义 OpenAI 兼容 provider（`--tap-proxy-mode reverse`） | `https://api.openai.com` | `/v1` | HTTP/SSE | 单测覆盖 |
 | Cursor CLI / IDE Agent | Cursor 登录（`cursor-agent login`）或 Cursor IDE | 本地 `agent-transcripts` 监听（不走 MITM 代理） | n/a | 本地 transcript JSONL（`cursor-transcript`） | 单测已覆盖；transcript-only 切换后手动 E2E 待确认 |
@@ -62,6 +64,7 @@ English version: [Support Matrix](support-matrix.md).
 | `opencode` | `forward` | 多 provider；forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
 | `openclaw` | `reverse` | 尽量补丁被选中的 OpenClaw provider 配置；否则 fallback 到对应 provider 的 base URL 环境变量 |
 | `pi` | `forward` | 多 provider；Pi 可以使用 OpenAI Codex OAuth 和自定义 model registry provider，forward proxy 不依赖单一 base URL 覆盖即可捕获流量 |
+| `omp` | `forward` | 基于 Pi 的多 provider 客户端；forward proxy 可保留 OMP 现有认证、模型注册表和 profile，并捕获所有 provider |
 | `hermes` | `forward` | 多 provider 的 Python agent；`httpx` 与 `requests` 都原生认 `HTTPS_PROXY`，forward proxy 捕获是最自然的默认 |
 | `cursor` | `transcript`（既非 reverse 也非 forward） | 对话只来自 `~/.cursor/projects/*/agent-transcripts/*.jsonl`。最短命令 `claude-tap --tap-client cursor` 会启动 `cursor-agent` 并实时 watch 写入 dashboard（**每个 Cursor 会话 JSONL 对应一个独立 tap session**）；`--tap-no-launch` 仅 watch IDE。不启动 HTTPS 代理 / CA |
 | `qoder` | `forward` | Qoder CLI 会访问多个 Qoder 服务端点，且没有可靠的单一 base URL 覆盖能力 |
@@ -195,6 +198,10 @@ uv run python -m claude_tap --tap-client grok -- -p "Reply OK"
 uv run python -m claude_tap --tap-client pi -- \
   --model openai-codex/gpt-5.3-codex-spark -p "Reply OK"
 # 验证 trace 包含 chatgpt.com/backend-api 记录和可读的 OpenAI Responses 区块
+
+# Oh My Pi
+uv run python -m claude_tap --tap-client omp -- -p "Reply OK"
+# 验证 session client 为 omp，且 trace 包含可读的请求和响应区块
 
 # CodeBuddy（登录后自动识别端点）
 uv run python -m claude_tap --tap-client codebuddy -- -p "Reply OK"
