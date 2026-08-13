@@ -62,8 +62,10 @@ def _custom_codex_http_args(provider: str, *tail: str) -> tuple[str, ...]:
 @pytest.mark.parametrize(
     "client_args",
     [
+        ["exec", "--json", "hello"],
         ["exec", "--experimental-json", "hello"],
         ["debug", "models"],
+        ["debug", "prompt-input", "hello"],
     ],
 )
 def test_parse_args_preserves_stdout_for_machine_readable_codex_commands(client_args: list[str]) -> None:

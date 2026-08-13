@@ -980,8 +980,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.client == "codex":
         args.preserve_stdout = (
             args.preserve_stdout
+            or "--json" in claude_args
             or "--experimental-json" in claude_args
-            or any(claude_args[index : index + 2] == ["debug", "models"] for index in range(len(claude_args) - 1))
+            or any(
+                claude_args[index : index + 2] in (["debug", "models"], ["debug", "prompt-input"])
+                for index in range(len(claude_args) - 1)
+            )
         )
     client_cfg = CLIENT_CONFIGS[args.client]
     # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
