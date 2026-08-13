@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve machine-readable wrapped-client stdout by routing claude-tap status output to stderr with `--tap-preserve-stdout`, enabled automatically for Codex JSON commands.
 
 
 

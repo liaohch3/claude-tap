@@ -59,6 +59,44 @@ def _custom_codex_http_args(provider: str, *tail: str) -> tuple[str, ...]:
     )
 
 
+@pytest.mark.parametrize(
+    "client_args",
+    [
+        ["exec", "--experimental-json", "hello"],
+        ["debug", "models"],
+    ],
+)
+def test_parse_args_preserves_stdout_for_machine_readable_codex_commands(client_args: list[str]) -> None:
+    args = parse_args(["--tap-client", "codex", *client_args])
+
+    assert args.preserve_stdout is True
+
+
+def test_parse_args_keeps_status_output_for_interactive_codex() -> None:
+    args = parse_args(["--tap-client", "codex", "exec", "hello"])
+
+    assert args.preserve_stdout is False
+
+
+@pytest.mark.asyncio
+async def test_output_policy_routes_wrapper_status_to_stderr(monkeypatch, capsys) -> None:
+    from claude_tap import cli
+
+    async def fake_async_main(_args) -> int:
+        print("wrapper status")
+        return 0
+
+    args = parse_args(["--tap-client", "codex", "debug", "models"])
+    monkeypatch.setattr(cli, "async_main", fake_async_main)
+
+    code = await cli._run_with_output_policy(args)
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out == ""
+    assert captured.err == "wrapper status\n"
+
+
 @pytest.mark.asyncio
 async def test_run_client_codex_reverse_forces_builtin_provider_to_http(monkeypatch) -> None:
     captured: dict[str, object] = {}

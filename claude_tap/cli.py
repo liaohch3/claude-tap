@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import webbrowser
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -871,6 +872,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Don't launch the client (proxy-only, or Cursor IDE transcript watch)",
     )
     proxy_group.add_argument(
+        "--tap-preserve-stdout",
+        action="store_true",
+        dest="preserve_stdout",
+        help="Send claude-tap status output to stderr so the wrapped client's stdout remains machine-readable",
+    )
+    proxy_group.add_argument(
         "--tap-allow-path",
         action="append",
         default=[],
@@ -970,6 +977,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "--tap-codexapp-cdp-endpoint was removed; --tap-client codexapp now captures via forward proxy"
         )
     args.claude_args = claude_args
+    if args.client == "codex":
+        args.preserve_stdout = (
+            args.preserve_stdout
+            or "--experimental-json" in claude_args
+            or any(claude_args[index : index + 2] == ["debug", "models"] for index in range(len(claude_args) - 1))
+        )
     client_cfg = CLIENT_CONFIGS[args.client]
     # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
     # 127.0.0.1 otherwise (launching the client locally). Transcript-only clients
@@ -1014,6 +1027,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             tap_parser.error(f"--tap-allow-path '{prefix}' must not end with '/' (specify exact prefix)")
 
     return args
+
+
+async def _run_with_output_policy(args: argparse.Namespace) -> int:
+    output_context = redirect_stdout(sys.stderr) if args.preserve_stdout else nullcontext()
+    with output_context:
+        return await async_main(args)
 
 
 def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -1181,7 +1200,7 @@ def main_entry() -> None:
 
     args = parse_args()
     try:
-        code = asyncio.run(async_main(args))
+        code = asyncio.run(_run_with_output_policy(args))
     except KeyboardInterrupt:
         code = 0
     sys.exit(code)
