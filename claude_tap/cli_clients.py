@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from claude_tap.cli_output import print_status as _print
+
 _BEDROCK_HOST_RE = re.compile(
     r"(^|\.)("
     r"(bedrock-runtime|bedrock-runtime-fips)"
@@ -260,17 +262,17 @@ async def _prepare_codex_app_forward_launch() -> CodexAppLaunchPlan:
     profile_dir = _codex_app_isolated_profile_dir()
     profile_dir.mkdir(parents=True, exist_ok=True)
     if processes:
-        print("\n⚠️  Codex/ChatGPT App is already running.")
-        print("   Launching an isolated second instance with a dedicated profile so the")
-        print("   current window keeps working and the new one inherits HTTPS_PROXY/CA.")
+        _print("\n⚠️  Codex/ChatGPT App is already running.")
+        _print("   Launching an isolated second instance with a dedicated profile so the")
+        _print("   current window keeps working and the new one inherits HTTPS_PROXY/CA.")
         for line in processes[:3]:
-            print(f"   {line}")
+            _print(f"   {line}")
         if len(processes) > 3:
-            print(f"   ... {len(processes) - 3} more process(es)")
+            _print(f"   ... {len(processes) - 3} more process(es)")
     else:
-        print("\nℹ️  Using isolated Codex/ChatGPT profile from CODEX_APP_USER_DATA_DIR.")
-    print(f"   Isolated profile: {profile_dir}")
-    print("   You may need to sign in again inside the tapped window.")
+        _print("\nℹ️  Using isolated Codex/ChatGPT profile from CODEX_APP_USER_DATA_DIR.")
+    _print(f"   Isolated profile: {profile_dir}")
+    _print("   You may need to sign in again inside the tapped window.")
     return CodexAppLaunchPlan(proceed=True, user_data_dir=profile_dir)
 
 
@@ -650,16 +652,16 @@ async def run_client(
     resolved_cmd = _resolve_client_executable(client, cfg, client_cmd)
     if resolved_cmd is None:
         if client_cmd:
-            print(f"\nError: '{client_cmd}' command not found.\nPlease check the wrapper-provided {cfg.label} path.\n")
+            _print(f"\nError: '{client_cmd}' command not found.\nPlease check the wrapper-provided {cfg.label} path.\n")
         elif client == "codexapp":
-            print(
+            _print(
                 "\nError: Codex desktop app executable not found.\n"
                 "Install Codex.app or ChatGPT.app (bundle id com.openai.codex) in "
                 "/Applications, or set "
                 f"{_CODEX_APP_EXECUTABLE_ENV}=/path/to/App.app/Contents/MacOS/<Executable>.\n"
             )
         else:
-            print(cfg.missing_help)
+            _print(cfg.missing_help)
         return 1
     resolved_cmd = _prefer_windows_command_shim(resolved_cmd)
     if client == "codexapp" and proxy_mode == "forward" and not codex_app_preflighted:
@@ -682,7 +684,7 @@ async def run_client(
 
     if inject_proxy and proxy_mode == "forward":
         if client == "dsh" and not _node_supports_env_proxy(env):
-            print(
+            _print(
                 "\nError: DeepSeek Harness forward capture requires a Node runtime "
                 "with --use-env-proxy support.\n"
                 "Upgrade Node until `node --use-env-proxy --version` succeeds, or use "
@@ -796,22 +798,22 @@ async def run_client(
         env.pop(key, None)
 
     cmd = [resolved_cmd] + cmd_args
-    print(f"\n🚀 Starting {cfg.label}: {' '.join([display_cmd, *cmd_args])}")
+    _print(f"\n🚀 Starting {cfg.label}: {' '.join([display_cmd, *cmd_args])}")
     if cfg.transcript_only:
-        print("   Mode: local agent-transcripts (no HTTPS_PROXY)")
+        _print("   Mode: local agent-transcripts (no HTTPS_PROXY)")
     elif proxy_mode == "forward":
-        print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
+        _print(f"   HTTPS_PROXY=http://127.0.0.1:{port}")
         for env_key in cfg.forward_base_url_envs:
-            print(f"   {env_key}={cfg.reverse_base_url(port)}")
+            _print(f"   {env_key}={cfg.reverse_base_url(port)}")
         if ca_cert_path:
-            print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
+            _print(f"   NODE_EXTRA_CA_CERTS={ca_cert_path}")
     elif client == "kimi-code":
-        print(f"   KIMI_CODE_HOME={env.get('KIMI_CODE_HOME', '')}")
-        print(f"   KIMI_CODE_BASE_URL={env.get('KIMI_CODE_BASE_URL', '')}")
+        _print(f"   KIMI_CODE_HOME={env.get('KIMI_CODE_HOME', '')}")
+        _print(f"   KIMI_CODE_BASE_URL={env.get('KIMI_CODE_BASE_URL', '')}")
     else:
         for env_key, base_url in cfg.reverse_base_url_env_map(port).items():
-            print(f"   {env_key}={base_url}")
-    print()
+            _print(f"   {env_key}={base_url}")
+    _print()
 
     # Give TUI children their own process group and make them the foreground
     # group so they have full terminal control (e.g. Cmd+Delete, Ctrl+U).
@@ -860,7 +862,7 @@ async def run_client(
         if sigint_count == 1:
             if proc.returncode is None:
                 proc.terminate()
-                print(f"\n⏳ Shutting down {cfg.label}... (Ctrl+C again to force)")
+                _print(f"\n⏳ Shutting down {cfg.label}... (Ctrl+C again to force)")
         else:
             if proc.returncode is None:
                 proc.kill()
@@ -868,7 +870,7 @@ async def run_client(
     def _handle_sigtstp():
         if proc.returncode is None:
             proc.terminate()
-            print(f"\n⏳ Shutting down {cfg.label}...")
+            _print(f"\n⏳ Shutting down {cfg.label}...")
 
     try:
         loop.add_signal_handler(signal.SIGINT, _handle_sigint)
@@ -922,9 +924,9 @@ async def run_client(
             pass
 
     elapsed = loop.time() - started_at
-    print(f"\n📋 {cfg.label} exited with code {code}")
+    _print(f"\n📋 {cfg.label} exited with code {code}")
     if client == "codexapp" and proxy_mode == "forward" and code == 0 and elapsed < _CODEX_APP_FAST_EXIT_HINT_SECONDS:
-        print(
+        _print(
             "   Codex App exited immediately. If macOS printed something like "
             "'opening in an existing browser session', an already-running "
             "Codex/ChatGPT App handled the launch and did not inherit "
@@ -968,7 +970,7 @@ def _maybe_rewrite_hermes_gateway_start(client: str, cmd_args: list[str]) -> lis
             continue
         break
     if i + 1 < len(cmd_args) and cmd_args[i] == "gateway" and cmd_args[i + 1] == "start":
-        print(
+        _print(
             "ℹ️  Rewriting `hermes gateway start` to `hermes gateway run` so the "
             "gateway runs in the foreground under claude-tap. Recent hermes "
             "versions delegate `gateway start` to systemd / launchd, which spawns "

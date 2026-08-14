@@ -65,7 +65,7 @@ async def test_output_policy_keeps_client_stdout_and_routes_wrapper_status_to_st
     from claude_tap import cli
 
     async def fake_async_main(_args) -> int:
-        print("wrapper status")
+        cli._print("wrapper status")
         os.write(1, b"client output\n")
         return 0
 
@@ -77,6 +77,33 @@ async def test_output_policy_keeps_client_stdout_and_routes_wrapper_status_to_st
     captured = capfd.readouterr()
     assert code == 0
     assert captured.out == "client output\n"
+    assert captured.err == "wrapper status\n"
+
+
+@pytest.mark.asyncio
+async def test_output_policy_does_not_redirect_concurrent_host_output(monkeypatch, capsys) -> None:
+    from claude_tap import cli
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_async_main(_args) -> int:
+        cli._print("wrapper status")
+        started.set()
+        await release.wait()
+        return 0
+
+    args = parse_args(["--tap-client", "codex", "exec", "hello"])
+    monkeypatch.setattr(cli, "_async_main", fake_async_main)
+
+    task = asyncio.create_task(cli.async_main(args))
+    await started.wait()
+    print("host output")
+    release.set()
+    assert await task == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == "host output\n"
     assert captured.err == "wrapper status\n"
 
 
@@ -98,7 +125,7 @@ async def test_output_policy_keeps_prompt_export_payload_on_stdout(monkeypatch, 
             ]
 
     async def fake_async_main(_args) -> int:
-        print("wrapper status")
+        cli._print("wrapper status")
         return cli._export_prompt_from_session(FakeStore(), "session", "-")
 
     args = parse_args(

@@ -458,7 +458,7 @@ def test_export_prompt_from_session_also_writes_raw_trace(trace_db, tmp_path, ca
     assert trace_path.exists()
     assert trace_path.read_text(encoding="utf-8") == store.export_jsonl(session_id)
     assert json.loads(trace_path.read_text(encoding="utf-8"))["request_id"] == "req_1"
-    output = capsys.readouterr().out
+    output = capsys.readouterr().err
     assert f"Prompt snapshot: {prompt_path}" in output
     assert f"Raw trace: {trace_path}" in output
 

@@ -348,7 +348,7 @@ async def test_prepare_codex_app_forward_launch_uses_isolated_profile_when_alrea
     assert plan.proceed is True
     assert plan.user_data_dir == profile
     assert profile.is_dir()
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "already running" in out
     assert "isolated second instance" in out
     assert str(profile) in out
@@ -381,7 +381,7 @@ async def test_prepare_codex_app_forward_launch_forces_isolated_profile_from_env
     assert plan.proceed is True
     assert plan.user_data_dir == profile
     assert profile.is_dir()
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "CODEX_APP_USER_DATA_DIR" in out
     assert str(profile) in out
 
@@ -430,7 +430,7 @@ async def test_run_client_codexapp_forward_launches_app_with_proxy_env(
     assert captured["stdin"] == subprocess.DEVNULL
     assert captured["stdout"] == subprocess.DEVNULL
     assert captured["stderr"] == subprocess.DEVNULL
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "Codex App exited immediately" in out
     assert "already-running Codex/ChatGPT App" in out
 
@@ -469,7 +469,7 @@ async def test_run_client_codexapp_forward_launches_isolated_instance_when_app_r
         "--proxy-server=http://127.0.0.1:43123",
     )
     assert profile.is_dir()
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "isolated second instance" in out
 
 

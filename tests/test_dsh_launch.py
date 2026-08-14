@@ -93,7 +93,7 @@ async def test_run_client_dsh_forward_rejects_node_without_env_proxy_support(
     code = await run_client(43123, [], client="dsh", proxy_mode="forward")
 
     assert code == 1
-    output = capsys.readouterr().out
+    output = capsys.readouterr().err
     assert "requires a Node runtime with --use-env-proxy support" in output
     assert "--tap-proxy-mode reverse" in output
 

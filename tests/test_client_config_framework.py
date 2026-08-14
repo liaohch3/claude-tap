@@ -236,7 +236,7 @@ async def test_run_client_reverse_sets_all_base_url_envs_and_settings(
     )
     assert cmd[3:] == ("--flag",)
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert out.count("PRIMARY_BASE_URL=http://127.0.0.1:43123/v1") == 1
     assert out.count("SECONDARY_BASE_URL=http://127.0.0.1:43123/v1") == 1
 
@@ -556,6 +556,6 @@ async def test_run_client_agy_forward_sets_proxy_ca_and_cloud_code_url(
     assert "AGY_BASE_URL" not in env
     assert captured["cmd"] == ("/tmp/agy", "--print", "ok")
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "HTTPS_PROXY=http://127.0.0.1:43123" in out
     assert "CLOUD_CODE_URL=http://127.0.0.1:43123" in out

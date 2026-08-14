@@ -17,7 +17,6 @@ import sys
 import threading
 import time
 import webbrowser
-from contextlib import redirect_stdout
 from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import urlparse
@@ -52,6 +51,7 @@ from claude_tap.cli_clients import (
     _toml_dotted_key_segment,
     run_client,
 )
+from claude_tap.cli_output import print_status as _print
 from claude_tap.cli_update import (
     _build_update_command,
     _detect_installer,
@@ -267,29 +267,29 @@ def _extract_wrapped_client_command(client: str, args: list[str]) -> tuple[str |
 def _trust_ca_for_current_user(ca_cert_path: Path) -> int:
     """Trust the forward-proxy CA in the current user's macOS login keychain."""
     if sys.platform != "darwin":
-        print("--tap-trust-ca is currently only supported on macOS.", file=sys.stderr)
-        print(f"CA certificate: {ca_cert_path}", file=sys.stderr)
+        _print("--tap-trust-ca is currently only supported on macOS.", file=sys.stderr)
+        _print(f"CA certificate: {ca_cert_path}", file=sys.stderr)
         return 1
 
     if is_macos_ca_trusted(ca_cert_path):
-        print(f"🔐 CA already trusted in the macOS login keychain: {ca_cert_path}")
+        _print(f"🔐 CA already trusted in the macOS login keychain: {ca_cert_path}")
         return 0
 
     result = trust_macos_ca(ca_cert_path)
     if result.returncode != 0:
         details = (result.stderr or result.stdout or "").strip()
-        print("Error: failed to trust claude-tap CA in the macOS login keychain.", file=sys.stderr)
+        _print("Error: failed to trust claude-tap CA in the macOS login keychain.", file=sys.stderr)
         if details:
-            print(details, file=sys.stderr)
-        print("This command does not use sudo; macOS may require unlocking your login keychain.", file=sys.stderr)
+            _print(details, file=sys.stderr)
+        _print("This command does not use sudo; macOS may require unlocking your login keychain.", file=sys.stderr)
         return result.returncode or 1
 
     if not is_macos_ca_trusted(ca_cert_path):
-        print("Error: macOS did not report the claude-tap CA as trusted after installation.", file=sys.stderr)
-        print(f"CA certificate: {ca_cert_path}", file=sys.stderr)
+        _print("Error: macOS did not report the claude-tap CA as trusted after installation.", file=sys.stderr)
+        _print(f"CA certificate: {ca_cert_path}", file=sys.stderr)
         return 1
 
-    print(f"🔐 Trusted claude-tap CA in the current user's macOS login keychain: {ca_cert_path}")
+    _print(f"🔐 Trusted claude-tap CA in the current user's macOS login keychain: {ca_cert_path}")
     return 0
 
 
@@ -308,8 +308,8 @@ def _ensure_ca_trust_for_forward_proxy(args: argparse.Namespace, ca_cert_path: P
     if is_macos_ca_trusted(ca_cert_path):
         return 0
 
-    print(f"🔐 {cfg.label} needs the claude-tap CA trusted in your macOS login keychain.")
-    print("   Installing for the current user only; no sudo or System keychain write is used.")
+    _print(f"🔐 {cfg.label} needs the claude-tap CA trusted in your macOS login keychain.")
+    _print("   Installing for the current user only; no sudo or System keychain write is used.")
     return _trust_ca_for_current_user(ca_cert_path)
 
 
@@ -320,7 +320,7 @@ async def _async_main(args: argparse.Namespace) -> int:
         try:
             migrate_legacy_traces(output_dir)
         except sqlite3.Error as exc:
-            print(
+            _print(
                 f"claude-tap: legacy trace migration skipped because storage is unavailable ({exc})",
                 file=sys.stderr,
             )
@@ -382,11 +382,11 @@ async def _async_main(args: argparse.Namespace) -> int:
                 open_browser_fn=_open_browser,
             )
             if spawned:
-                print(f"🌐 Dashboard: {dashboard_url_value}")
+                _print(f"🌐 Dashboard: {dashboard_url_value}")
             else:
-                print(f"🌐 Dashboard: {dashboard_url_value} (shared)")
+                _print(f"🌐 Dashboard: {dashboard_url_value} (shared)")
         except (RuntimeError, sqlite3.Error) as exc:
-            print(f"⚠️  {exc}", file=sys.stderr)
+            _print(f"⚠️  {exc}", file=sys.stderr)
 
     # Proxy logs go to SQLite, not terminal (avoids polluting Claude TUI)
     sqlite_handler: SQLiteLogHandler | None = None
@@ -414,12 +414,12 @@ async def _async_main(args: argparse.Namespace) -> int:
     exit_code = 0
     capture_only = bool(getattr(args, "export_prompt", None))
     if capture_only and not transcript_only:
-        print("📝 Prompt export mode: upstream calls are skipped after capture.")
+        _print("📝 Prompt export mode: upstream calls are skipped after capture.")
     try:
         if transcript_only:
-            print(f"🔍 claude-tap v{__version__} watching Cursor agent-transcripts")
-            print("   Mode: one tap session per Cursor conversation JSONL")
-            print(f"🗄️  Trace database: {resolve_db_path()}")
+            _print(f"🔍 claude-tap v{__version__} watching Cursor agent-transcripts")
+            _print("   Mode: one tap session per Cursor conversation JSONL")
+            _print(f"🗄️  Trace database: {resolve_db_path()}")
             cursor_watcher = CursorTranscriptWatcher(
                 since=watch_since,
                 model=model_from_cursor_args(args.claude_args),
@@ -447,7 +447,7 @@ async def _async_main(args: argparse.Namespace) -> int:
                 except asyncio.CancelledError:
                     pass
             else:
-                print("\n--tap-no-launch: watching local Cursor transcripts only. Press Ctrl+C to stop.")
+                _print("\n--tap-no-launch: watching local Cursor transcripts only. Press Ctrl+C to stop.")
                 try:
                     while True:
                         await asyncio.sleep(3600)
@@ -490,8 +490,8 @@ async def _async_main(args: argparse.Namespace) -> int:
                     capture_only=capture_only,
                 )
                 actual_port = await forward_server.start()
-                print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
-                print(f"   CA cert: {ca_cert_path}")
+                _print(f"🔍 claude-tap v{__version__} forward proxy on http://{args.host}:{actual_port}")
+                _print(f"   CA cert: {ca_cert_path}")
             else:
                 assert session is not None
                 assert writer is not None
@@ -522,10 +522,10 @@ async def _async_main(args: argparse.Namespace) -> int:
                     actual_port = site._server.sockets[0].getsockname()[1]
                 except (AttributeError, IndexError, OSError):
                     actual_port = args.port
-                print(f"🔍 claude-tap v{__version__} listening on http://{args.host}:{actual_port}")
+                _print(f"🔍 claude-tap v{__version__} listening on http://{args.host}:{actual_port}")
 
-            print(f"📁 Trace session: {session_id}")
-            print(f"🗄️  Trace database: {resolve_db_path()}")
+            _print(f"📁 Trace session: {session_id}")
+            _print(f"🗄️  Trace database: {resolve_db_path()}")
 
             if not args.no_launch:
                 try:
@@ -543,7 +543,7 @@ async def _async_main(args: argparse.Namespace) -> int:
                 except asyncio.CancelledError:
                     pass
             else:
-                print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
+                _print("\n--no-launch mode: proxy running. Press Ctrl+C to stop.")
                 try:
                     while True:
                         await asyncio.sleep(3600)
@@ -564,8 +564,8 @@ async def _async_main(args: argparse.Namespace) -> int:
             if turns == 0 and imported:
                 turns = int(imported)
             if turns or cursor_session_ids:
-                print(f"   Cursor transcript turns: {turns}")
-                print(f"   Cursor conversations: {len(cursor_session_ids)}")
+                _print(f"   Cursor transcript turns: {turns}")
+                _print(f"   Cursor conversations: {len(cursor_session_ids)}")
         if forward_server:
             try:
                 await asyncio.wait_for(forward_server.stop(), timeout=10)
@@ -604,10 +604,10 @@ async def _async_main(args: argparse.Namespace) -> int:
                     protected_session_ids=protected_ids or None,
                 )
             except sqlite3.Error as exc:
-                print(f"\nclaude-tap: trace cleanup skipped because storage is unavailable ({exc})", file=sys.stderr)
+                _print(f"\nclaude-tap: trace cleanup skipped because storage is unavailable ({exc})", file=sys.stderr)
             else:
                 if cleaned:
-                    print(f"\n🧹 Cleaned up {cleaned} old trace session(s)")
+                    _print(f"\n🧹 Cleaned up {cleaned} old trace session(s)")
 
         # Print summary with cost estimation
         if cursor_watcher is not None:
@@ -624,30 +624,30 @@ async def _async_main(args: argparse.Namespace) -> int:
                 "models_used": {},
                 "has_error": False,
             }
-        print("\n📊 Trace summary:")
-        print(f"   API calls: {stats['api_calls']}")
+        _print("\n📊 Trace summary:")
+        _print(f"   API calls: {stats['api_calls']}")
         if stats.get("trace_storage_errors"):
-            print(f"   Trace storage errors: {stats['trace_storage_errors']}")
-            print(f"   Dropped trace records: {stats.get('dropped_trace_records', 0)}")
+            _print(f"   Trace storage errors: {stats['trace_storage_errors']}")
+            _print(f"   Dropped trace records: {stats.get('dropped_trace_records', 0)}")
 
         # Token breakdown
         total_tokens = stats["input_tokens"] + stats["output_tokens"]
         if total_tokens > 0:
-            print(f"   Tokens: {stats['input_tokens']:,} in / {stats['output_tokens']:,} out", end="")
+            _print(f"   Tokens: {stats['input_tokens']:,} in / {stats['output_tokens']:,} out", end="")
             if stats["cache_read_tokens"] > 0:
-                print(f" / {stats['cache_read_tokens']:,} cache_read", end="")
+                _print(f" / {stats['cache_read_tokens']:,} cache_read", end="")
             if stats["cache_create_tokens"] > 0:
-                print(f" / {stats['cache_create_tokens']:,} cache_write", end="")
-            print()
+                _print(f" / {stats['cache_create_tokens']:,} cache_write", end="")
+            _print()
 
         if cursor_session_ids:
-            print(f"   Sessions: {len(cursor_session_ids)} (one per Cursor conversation)")
+            _print(f"   Sessions: {len(cursor_session_ids)} (one per Cursor conversation)")
         elif session_id is not None:
-            print(f"   Session: {session_id}")
-        print(f"   Database: {resolve_db_path()}")
+            _print(f"   Session: {session_id}")
+        _print(f"   Database: {resolve_db_path()}")
         if dashboard_url_value:
-            print(f"   Dashboard: {dashboard_url_value}")
-            print(f"   Stop dashboard: {_dashboard_stop_command(dashboard_host, dashboard_port)}")
+            _print(f"   Dashboard: {dashboard_url_value}")
+            _print(f"   Stop dashboard: {_dashboard_stop_command(dashboard_host, dashboard_port)}")
 
         if prompt_export_rc is not None:
             if prompt_export_rc != 0:
@@ -662,20 +662,20 @@ def _export_prompt_from_session(store, session_id: str, output: str) -> int:
     try:
         text = render_prompt_markdown(snapshot_from_records(store.load_records(session_id)))
     except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        _print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     if output == "-":
-        print(text, end="", file=_COMMAND_STDOUT.get())
+        _print(text, end="", file=_COMMAND_STDOUT.get())
         return 0
 
     path = Path(output).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
-    print(f"📝 Prompt snapshot: {path}")
+    _print(f"📝 Prompt snapshot: {path}")
     trace_path = _prompt_trace_path(path)
     trace_path.write_text(store.export_jsonl(session_id), encoding="utf-8")
-    print(f"🧾 Raw trace: {trace_path}")
+    _print(f"🧾 Raw trace: {trace_path}")
     return 0
 
 
@@ -1022,14 +1022,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 async def async_main(args: argparse.Namespace) -> int:
     """Run claude-tap while keeping operational output off command stdout."""
-    return await _run_with_output_policy(args)
-
-
-async def _run_with_output_policy(args: argparse.Namespace) -> int:
     command_stdout = _COMMAND_STDOUT.set(sys.stdout)
     try:
-        with redirect_stdout(sys.stderr):
-            return await _async_main(args)
+        return await _async_main(args)
     finally:
         _COMMAND_STDOUT.reset(command_stdout)
 
@@ -1083,12 +1078,12 @@ async def dashboard_main(args: argparse.Namespace) -> int:
     port = resolve_dashboard_port(args.live_port)
     if args.command in {"stop", "quit"}:
         if not await is_dashboard_healthy(host, port, require_current_db=False):
-            print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
+            _print(f"claude-tap dashboard is not running on {dashboard_url(host, port)}")
             return 1
         if not await stop_dashboard_service(host, port):
-            print(f"Unable to stop claude-tap dashboard on {dashboard_url(host, port)}")
+            _print(f"Unable to stop claude-tap dashboard on {dashboard_url(host, port)}")
             return 1
-        print(f"Stopped claude-tap dashboard on {dashboard_url(host, port)}")
+        _print(f"Stopped claude-tap dashboard on {dashboard_url(host, port)}")
         return 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1096,8 +1091,8 @@ async def dashboard_main(args: argparse.Namespace) -> int:
     if await _is_dashboard_reusable(host, port):
         migrate_legacy_traces(output_dir)
         url = dashboard_url(host, port)
-        print(f"🌐 claude-tap dashboard already running: {url}")
-        print(f"🗄️  Trace database: {resolve_db_path()}")
+        _print(f"🌐 claude-tap dashboard already running: {url}")
+        _print(f"🗄️  Trace database: {resolve_db_path()}")
         if args.open_viewer:
             _open_browser(url)
         return 0
@@ -1117,16 +1112,16 @@ async def dashboard_main(args: argparse.Namespace) -> int:
         if await _is_dashboard_reusable(host, port):
             migrate_legacy_traces(output_dir)
             url = dashboard_url(host, port)
-            print(f"🌐 claude-tap dashboard already running: {url}")
+            _print(f"🌐 claude-tap dashboard already running: {url}")
             if args.open_viewer:
                 _open_browser(url)
             return 0
         raise
-    print(f"🌐 claude-tap dashboard: {server.url}")
-    print(f"🗄️  Trace database: {resolve_db_path()}")
+    _print(f"🌐 claude-tap dashboard: {server.url}")
+    _print(f"🗄️  Trace database: {resolve_db_path()}")
     if output_dir.exists():
-        print(f"📁 Legacy import dir: {output_dir}")
-    print("Press Ctrl+C to stop.")
+        _print(f"📁 Legacy import dir: {output_dir}")
+    _print("Press Ctrl+C to stop.")
     if args.open_viewer:
         _open_browser(server.url)
 
@@ -1199,7 +1194,7 @@ def main_entry() -> None:
 
     args = parse_args()
     try:
-        code = asyncio.run(_run_with_output_policy(args))
+        code = asyncio.run(async_main(args))
     except KeyboardInterrupt:
         code = 0
     sys.exit(code)
