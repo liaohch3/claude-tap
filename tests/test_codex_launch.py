@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -59,88 +60,23 @@ def _custom_codex_http_args(provider: str, *tail: str) -> tuple[str, ...]:
     )
 
 
-@pytest.mark.parametrize(
-    "client_args",
-    [
-        ["exec", "--json", "hello"],
-        ["exec", "--experimental-json", "hello"],
-        ["debug", "models"],
-        ["debug", "prompt-input", "hello"],
-    ],
-)
-def test_parse_args_preserves_stdout_for_machine_readable_codex_commands(client_args: list[str]) -> None:
-    args = parse_args(["--tap-client", "codex", *client_args])
-
-    assert args.preserve_stdout is True
-
-
-def test_parse_args_keeps_status_output_for_interactive_codex() -> None:
-    args = parse_args(["--tap-client", "codex", "exec", "hello"])
-
-    assert args.preserve_stdout is False
-
-
-@pytest.mark.parametrize("client_args", [["mcp-server"], ["app-server"]])
-def test_parse_args_preserves_stdout_for_codex_stdio_servers(client_args: list[str]) -> None:
-    args = parse_args(["--tap-client", "codex", *client_args])
-
-    assert args.preserve_stdout is True
-
-
-@pytest.mark.parametrize(
-    "client_args",
-    [
-        ["exec-server", "--listen", "stdio"],
-        ["exec-server", "--listen", "stdio://"],
-        ["exec-server", "--listen=stdio"],
-        ["exec-server", "--listen=stdio://"],
-    ],
-)
-def test_parse_args_preserves_stdout_for_codex_exec_server_stdio(client_args: list[str]) -> None:
-    args = parse_args(["--tap-client", "codex", *client_args])
-
-    assert args.preserve_stdout is True
-
-
-def test_parse_args_keeps_status_output_for_codex_exec_server_websocket() -> None:
-    args = parse_args(["--tap-client", "codex", "exec-server", "--listen", "ws://127.0.0.1:4500"])
-
-    assert args.preserve_stdout is False
-
-
-@pytest.mark.parametrize(
-    "client_args",
-    [
-        ["debug", "-c", 'model="gpt-5"', "models", "--bundled"],
-        ["debug", '--config=model="gpt-5"', "models", "--bundled"],
-        ["debug", "--enable", "unified_exec", "models", "--bundled"],
-        ["debug", "--enable=unified_exec", "models", "--bundled"],
-        ["debug", "--disable", "unified_exec", "prompt-input", "hello"],
-        ["debug", "--disable=unified_exec", "prompt-input", "hello"],
-    ],
-)
-def test_parse_args_preserves_stdout_for_codex_debug_options(client_args: list[str]) -> None:
-    args = parse_args(["--tap-client", "codex", *client_args])
-
-    assert args.preserve_stdout is True
-
-
 @pytest.mark.asyncio
-async def test_output_policy_routes_wrapper_status_to_stderr(monkeypatch, capsys) -> None:
+async def test_output_policy_keeps_client_stdout_and_routes_wrapper_status_to_stderr(monkeypatch, capfd) -> None:
     from claude_tap import cli
 
     async def fake_async_main(_args) -> int:
         print("wrapper status")
+        os.write(1, b"client output\n")
         return 0
 
-    args = parse_args(["--tap-client", "codex", "debug", "models"])
+    args = parse_args(["--tap-client", "codex", "exec", "hello"])
     monkeypatch.setattr(cli, "async_main", fake_async_main)
 
     code = await cli._run_with_output_policy(args)
 
-    captured = capsys.readouterr()
+    captured = capfd.readouterr()
     assert code == 0
-    assert captured.out == ""
+    assert captured.out == "client output\n"
     assert captured.err == "wrapper status\n"
 
 
@@ -169,7 +105,6 @@ async def test_output_policy_keeps_prompt_export_payload_on_stdout(monkeypatch, 
         [
             "--tap-client",
             "codex",
-            "--tap-preserve-stdout",
             "--tap-export-prompt",
             "-",
         ]

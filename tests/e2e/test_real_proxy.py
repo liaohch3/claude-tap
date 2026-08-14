@@ -198,8 +198,8 @@ class TestRealProxy:
         html_content = html_files[0].read_text()
         assert "EMBEDDED_TRACE_COMPACT_DATA" in html_content, "HTML viewer should contain EMBEDDED_TRACE_COMPACT_DATA"
 
-        # Verify Dashboard: line in stdout
-        assert "Dashboard:" in result.stdout, "Expected 'Dashboard:' URL in stdout"
+        # Verify Dashboard: line in stderr
+        assert "Dashboard:" in result.stderr, "Expected 'Dashboard:' URL in stderr"
 
     @pytest.mark.timeout(180)
     def test_api_key_redaction(self, claude_env):
@@ -257,5 +257,5 @@ class TestRealProxy:
         result = _run_claude_tap(env, trace_dir, "Reply with exactly: SUMMARY_CHECK", proxy_mode=proxy_mode)
         assert result.returncode == 0
 
-        assert "Trace summary" in result.stdout, f"Expected 'Trace summary' in stdout:\n{result.stdout[:500]}"
-        assert "API calls:" in result.stdout, f"Expected 'API calls:' in stdout:\n{result.stdout[:500]}"
+        assert "Trace summary" in result.stderr, f"Expected 'Trace summary' in stderr:\n{result.stderr[:500]}"
+        assert "API calls:" in result.stderr, f"Expected 'API calls:' in stderr:\n{result.stderr[:500]}"

@@ -115,9 +115,6 @@ claude-tap --tap-no-live
 # Codex CLI
 claude-tap --tap-client codex
 
-# Keep wrapped client stdout machine-readable; Codex JSON modes enable this automatically
-claude-tap --tap-client codex --tap-preserve-stdout -- debug models
-
 # Codex App backend request capture
 claude-tap --tap-client codexapp
 

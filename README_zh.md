@@ -115,9 +115,6 @@ claude-tap --tap-no-live
 # Codex CLI
 claude-tap --tap-client codex
 
-# 保持被包装客户端的 stdout 为机器可读；Codex JSON 模式会自动启用此行为
-claude-tap --tap-client codex --tap-preserve-stdout -- debug models
-
 # Codex App 后端请求捕获
 claude-tap --tap-client codexapp
 

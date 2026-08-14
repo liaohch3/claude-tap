@@ -345,8 +345,8 @@ def _run_test(upstream_port, store_stream_events=False):
         print("  ✅ Turn 2 (streaming, SSE reassembly without raw event storage): OK")
 
     # ── Terminal output is clean ──
-    assert "Trace summary" in proc.stdout
-    assert "API calls: 2" in proc.stdout
+    assert "Trace summary" in proc.stderr
+    assert "API calls: 2" in proc.stderr
     assert "[Turn" not in proc.stdout, "Proxy logs leaked to stdout!"
     print("  ✅ Terminal output: clean")
 
@@ -354,7 +354,7 @@ def _run_test(upstream_port, store_stream_events=False):
     assert "[Turn 1]" in log_content
     assert "[Turn 2]" in log_content
     print("  ✅ Proxy log: has Turn details")
-    assert "Session:" in proc.stdout or "Trace session:" in proc.stdout
+    assert "Session:" in proc.stderr or "Trace session:" in proc.stderr
     print("  ✅ SQLite session persisted")
 
     print("\n✅ E2E test PASSED")
@@ -621,8 +621,8 @@ for suffix, stream in [(":rawPredict", False), (":streamRawPredict", True)]:
         )
 
         assert proc.returncode == 0, f"vertex e2e failed: stdout={proc.stdout} stderr={proc.stderr}"
-        assert "ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:" in proc.stdout
-        assert "ANTHROPIC_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert "ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:" in proc.stderr
+        assert "ANTHROPIC_BASE_URL=http://127.0.0.1:" in proc.stderr
         assert received_paths == [
             "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7:rawPredict",
             "/v1/projects/test-project/locations/us-east5/publishers/anthropic/models/claude-opus-4-7:streamRawPredict",
@@ -830,8 +830,8 @@ def test_upstream_error():
         print("  OK: 500 status recorded correctly in trace")
 
         # The proxy should still produce summary output
-        assert "Trace summary" in proc.stdout
-        assert "API calls: 1" in proc.stdout
+        assert "Trace summary" in proc.stderr
+        assert "API calls: 1" in proc.stderr
         print("  OK: proxy summary output present")
 
         print("\n  test_upstream_error PASSED")
@@ -980,7 +980,7 @@ def test_malformed_sse():
         assert body["content"][0]["text"] == "partial"
         print("  OK: reconstructed body has 'partial' text from valid events")
 
-        assert "Trace summary" in proc.stdout
+        assert "Trace summary" in proc.stderr
         print("  OK: summary present")
 
         print("\n  test_malformed_sse PASSED")
@@ -1107,8 +1107,8 @@ def test_large_payload():
         assert reported_len > 100_000, f"Upstream only received {reported_len} chars"
         print(f"  OK: upstream received full payload ({reported_len} chars)")
 
-        assert "Trace summary" in proc.stdout
-        assert "API calls: 1" in proc.stdout
+        assert "Trace summary" in proc.stderr
+        assert "API calls: 1" in proc.stderr
         print("  OK: summary present")
 
         payload_size = sum(len(json.dumps(record)) for record in records)
@@ -1272,8 +1272,8 @@ def test_concurrent_requests():
         assert len(set(req_ids)) == 5, f"Expected 5 unique request IDs, got {len(set(req_ids))}"
         print("  OK: all request IDs are unique")
 
-        assert "Trace summary" in proc.stdout
-        assert "API calls: 5" in proc.stdout
+        assert "Trace summary" in proc.stderr
+        assert "API calls: 5" in proc.stderr
         print("  OK: summary present")
 
         print("\n  test_concurrent_requests PASSED")
@@ -1943,7 +1943,7 @@ def test_codex_client_reverse_proxy():
         assert record["request"]["path"] == "/v1/messages"
         assert record["upstream_base_url"] == "http://127.0.0.1:19242"
         assert record["request"]["body"]["model"] == "gpt-5-codex"
-        assert "OPENAI_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert "OPENAI_BASE_URL=http://127.0.0.1:" in proc.stderr
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "codex")
@@ -2082,7 +2082,7 @@ def test_grok_client_reverse_proxy():
         assert records[1]["request"]["body"] == {"event": "repository_bundle_uploaded"}
         assert records[2]["request"]["body"]["model"] == "grok-build"
         assert records[2]["response"]["body"]["output"][0]["content"][0]["text"] == "HELLO_GROK"
-        assert "GROK_CLI_CHAT_PROXY_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert "GROK_CLI_CHAT_PROXY_BASE_URL=http://127.0.0.1:" in proc.stderr
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "grok")
@@ -2213,7 +2213,7 @@ def test_dsh_client_forward_proxy_captures_local_gateway():
         assert record["response"]["body"]["content"][0]["type"] == "thinking"
         assert record["response"]["body"]["content"][1]["text"] == "HELLO_DSH"
         assert record["response"]["body"]["usage"]["input_tokens"] == 21
-        assert "forward proxy" in proc.stdout
+        assert "forward proxy" in proc.stderr
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "dsh")
@@ -2320,7 +2320,7 @@ def test_kimi_client_reverse_proxy():
         assert record["response"]["body"]["content"][1]["text"] == "HELLO_KIMI"
         assert record["response"]["body"]["usage"]["input_tokens"] == 13
         assert record["response"]["body"]["usage"]["cache_read_input_tokens"] == 5
-        assert "KIMI_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert "KIMI_BASE_URL=http://127.0.0.1:" in proc.stderr
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "kimi")
@@ -2574,7 +2574,7 @@ def test_kimi_multiturn_tool_calls_reverse_proxy():
         expected_tool_names = {"read_file", "search_code", "list_dir", "run_tests", "inspect_git", "parse_json"}
         assert total_tool_calls == 10
         assert unique_tool_names == expected_tool_names
-        assert "KIMI_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert "KIMI_BASE_URL=http://127.0.0.1:" in proc.stderr
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "kimi_multiturn")
@@ -2680,8 +2680,8 @@ def test_kimi_code_client_reverse_proxy():
         assert record["request"]["path"] == "/chat/completions"
         assert record["upstream_base_url"] == "http://127.0.0.1:19246"
         assert record["response"]["body"]["content"][1]["text"] == "HELLO_KIMI_CODE"
-        assert "KIMI_CODE_HOME=" in proc.stdout
-        assert "KIMI_CODE_BASE_URL=http://127.0.0.1:" in proc.stdout
+        assert "KIMI_CODE_HOME=" in proc.stderr
+        assert "KIMI_CODE_BASE_URL=http://127.0.0.1:" in proc.stderr
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "kimi_code")
@@ -3062,7 +3062,7 @@ def test_upstream_unreachable():
             print(f"[test_upstream_unreachable] stderr:\n{proc.stderr.rstrip()}")
 
         # The proxy should still produce summary output
-        assert "Trace summary" in proc.stdout
+        assert "Trace summary" in proc.stderr
         print("  OK: proxy did not crash")
 
         # No trace records (502 returned in-process, not from upstream)
@@ -3213,7 +3213,7 @@ def test_startup_does_not_contact_pypi():
 
         assert proc.returncode == 0, proc.stderr
         assert "[fake-claude] noop exit" in proc.stdout
-        assert "Update available" not in proc.stdout
+        assert "Update available" not in proc.stderr
         assert requests == []
         print("  test_startup_does_not_contact_pypi PASSED")
     except subprocess.TimeoutExpired as exc:
@@ -3348,7 +3348,7 @@ def test_e2e_with_cleanup():
             print(f"[test_e2e_with_cleanup] stdout:\n{proc.stdout.rstrip()}")
 
         assert proc.returncode == 0
-        assert "Cleaned up" in proc.stdout, f"Expected cleanup message in stdout:\n{proc.stdout}"
+        assert "Cleaned up" in proc.stderr, f"Expected cleanup message in stderr:\n{proc.stderr}"
         reset_trace_store()
         os.environ["CLOUDTAP_DB"] = str(db_path)
         assert len(get_trace_store().list_session_rows()) == 3

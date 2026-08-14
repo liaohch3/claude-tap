@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 import webbrowser
-from contextlib import nullcontext, redirect_stdout
+from contextlib import redirect_stdout
 from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import urlparse
@@ -76,7 +76,7 @@ from claude_tap.trace import TraceWriter, create_trace_writer
 from claude_tap.trace_log_handler import SQLiteLogHandler
 from claude_tap.trace_store import TraceStore, get_trace_store, resolve_db_path
 
-_CLIENT_STDOUT = ContextVar("client_stdout", default=None)
+_COMMAND_STDOUT = ContextVar("command_stdout", default=None)
 
 # Force UTF-8 + line-buffered stdout/stderr so emoji output works on Windows
 # consoles (GBK/cp936) and `uv tool` doesn't fully buffer our progress prints.
@@ -666,7 +666,7 @@ def _export_prompt_from_session(store, session_id: str, output: str) -> int:
         return 1
 
     if output == "-":
-        print(text, end="", file=_CLIENT_STDOUT.get())
+        print(text, end="", file=_COMMAND_STDOUT.get())
         return 0
 
     path = Path(output).expanduser()
@@ -683,36 +683,6 @@ def _prompt_trace_path(prompt_path: Path) -> Path:
     if prompt_path.name in {"prompt.md", "prompt.markdown", "system.md", "system.markdown"}:
         return prompt_path.with_name("trace.jsonl")
     return prompt_path.with_name(f"{prompt_path.stem}.trace.jsonl")
-
-
-def _codex_debug_outputs_json(client_args: list[str]) -> bool:
-    if "debug" not in client_args:
-        return False
-    debug_args = client_args[client_args.index("debug") + 1 :]
-    options_with_values = {"-c", "--config", "--enable", "--disable"}
-    index = 0
-    while index < len(debug_args):
-        arg = debug_args[index]
-        if arg in options_with_values:
-            index += 2
-            continue
-        if arg.startswith("-"):
-            index += 1
-            continue
-        return arg in {"models", "prompt-input"}
-    return False
-
-
-def _codex_exec_server_uses_stdio(client_args: list[str]) -> bool:
-    if "exec-server" not in client_args:
-        return False
-    server_args = client_args[client_args.index("exec-server") + 1 :]
-    for index, arg in enumerate(server_args):
-        if arg == "--listen" and index + 1 < len(server_args):
-            return server_args[index + 1] in {"stdio", "stdio://"}
-        if arg.startswith("--listen="):
-            return arg.partition("=")[2] in {"stdio", "stdio://"}
-    return False
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -905,12 +875,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Don't launch the client (proxy-only, or Cursor IDE transcript watch)",
     )
     proxy_group.add_argument(
-        "--tap-preserve-stdout",
-        action="store_true",
-        dest="preserve_stdout",
-        help="Send claude-tap status output to stderr so the wrapped client's stdout remains machine-readable",
-    )
-    proxy_group.add_argument(
         "--tap-allow-path",
         action="append",
         default=[],
@@ -1010,16 +974,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "--tap-codexapp-cdp-endpoint was removed; --tap-client codexapp now captures via forward proxy"
         )
     args.claude_args = claude_args
-    if args.client == "codex":
-        args.preserve_stdout = (
-            args.preserve_stdout
-            or "--json" in claude_args
-            or "--experimental-json" in claude_args
-            or "mcp-server" in claude_args
-            or "app-server" in claude_args
-            or _codex_debug_outputs_json(claude_args)
-            or _codex_exec_server_uses_stdio(claude_args)
-        )
     client_cfg = CLIENT_CONFIGS[args.client]
     # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
     # 127.0.0.1 otherwise (launching the client locally). Transcript-only clients
@@ -1067,13 +1021,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 async def _run_with_output_policy(args: argparse.Namespace) -> int:
-    output_context = redirect_stdout(sys.stderr) if args.preserve_stdout else nullcontext()
-    client_stdout = _CLIENT_STDOUT.set(sys.stdout)
+    command_stdout = _COMMAND_STDOUT.set(sys.stdout)
     try:
-        with output_context:
+        with redirect_stdout(sys.stderr):
             return await async_main(args)
     finally:
-        _CLIENT_STDOUT.reset(client_stdout)
+        _COMMAND_STDOUT.reset(command_stdout)
 
 
 def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:

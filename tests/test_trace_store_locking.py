@@ -277,7 +277,7 @@ def test_real_proxy_continues_when_database_is_locked_at_startup(tmp_path: Path)
         stop_upstream()
 
     assert process.returncode == 0, process.stderr
-    assert "API calls: 1" in process.stdout
+    assert "API calls: 1" in process.stderr
     assert "legacy trace migration skipped" in process.stderr
     assert "continuing without blocking proxy" in process.stderr
 
@@ -290,9 +290,9 @@ def test_real_proxy_continues_when_database_locks_during_request(tmp_path: Path)
         stop_upstream()
 
     assert process.returncode == 0, process.stderr
-    assert "API calls: 1" in process.stdout
-    assert "Trace storage errors: 1" in process.stdout
-    assert "Dropped trace records: 1" in process.stdout
+    assert "API calls: 1" in process.stderr
+    assert "Trace storage errors: 1" in process.stderr
+    assert "Dropped trace records: 1" in process.stderr
     assert "continuing without blocking proxy" in process.stderr
 
     conn = sqlite3.connect(db_path)
