@@ -695,9 +695,10 @@ async def test_async_main_cursor_transcript_only_skips_proxy(monkeypatch, tmp_pa
     assert code == 0
     assert ca_calls == []
     assert client_calls and client_calls[0].get("ca_cert_path") is None
-    out = capsys.readouterr().out
-    assert "watching Cursor agent-transcripts" in out
-    assert "Cursor transcript turns: 3" in out
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "watching Cursor agent-transcripts" in captured.err
+    assert "Cursor transcript turns: 3" in captured.err
 
 
 @pytest.mark.asyncio
@@ -767,7 +768,9 @@ async def test_async_main_cursor_no_launch_watch_only(monkeypatch, tmp_path: Pat
     assert FakeWatcher.last_since is not None
     assert dashboard_started_at["t"] is not None
     assert FakeWatcher.last_since <= dashboard_started_at["t"]
-    assert "watching local Cursor transcripts only" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "watching local Cursor transcripts only" in captured.err
 
 
 @pytest.mark.asyncio

@@ -70,9 +70,9 @@ async def test_output_policy_keeps_client_stdout_and_routes_wrapper_status_to_st
         return 0
 
     args = parse_args(["--tap-client", "codex", "exec", "hello"])
-    monkeypatch.setattr(cli, "async_main", fake_async_main)
+    monkeypatch.setattr(cli, "_async_main", fake_async_main)
 
-    code = await cli._run_with_output_policy(args)
+    code = await cli.async_main(args)
 
     captured = capfd.readouterr()
     assert code == 0
@@ -109,9 +109,9 @@ async def test_output_policy_keeps_prompt_export_payload_on_stdout(monkeypatch, 
             "-",
         ]
     )
-    monkeypatch.setattr(cli, "async_main", fake_async_main)
+    monkeypatch.setattr(cli, "_async_main", fake_async_main)
 
-    code = await cli._run_with_output_policy(args)
+    code = await cli.async_main(args)
 
     captured = capsys.readouterr()
     assert code == 0

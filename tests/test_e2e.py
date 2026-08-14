@@ -1601,7 +1601,7 @@ async def test_async_main_live_viewer_default_opens_when_allowed(monkeypatch, tm
     assert len(opened_urls) == 1
     assert all(url.startswith("http://127.0.0.1:") for url in opened_urls)
     assert migration_calls == []
-    output = capsys.readouterr().out
+    output = capsys.readouterr().err
     assert "Stop dashboard: claude-tap dashboard stop" in output
 
 
@@ -1634,7 +1634,7 @@ async def test_async_main_stop_hint_includes_custom_dashboard_address(monkeypatc
     code = await async_main(args)
 
     assert code == 0
-    output = capsys.readouterr().out
+    output = capsys.readouterr().err
     assert "Stop dashboard: claude-tap dashboard stop --tap-live-port 3000 --tap-host 0.0.0.0" in output
 
 

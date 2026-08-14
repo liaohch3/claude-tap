@@ -313,7 +313,7 @@ def _ensure_ca_trust_for_forward_proxy(args: argparse.Namespace, ca_cert_path: P
     return _trust_ca_for_current_user(ca_cert_path)
 
 
-async def async_main(args: argparse.Namespace):
+async def _async_main(args: argparse.Namespace) -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     if not args.live_viewer:
@@ -1020,11 +1020,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+async def async_main(args: argparse.Namespace) -> int:
+    """Run claude-tap while keeping operational output off command stdout."""
+    return await _run_with_output_policy(args)
+
+
 async def _run_with_output_policy(args: argparse.Namespace) -> int:
     command_stdout = _COMMAND_STDOUT.set(sys.stdout)
     try:
         with redirect_stdout(sys.stderr):
-            return await async_main(args)
+            return await _async_main(args)
     finally:
         _COMMAND_STDOUT.reset(command_stdout)
 
