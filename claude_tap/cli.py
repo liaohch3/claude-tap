@@ -685,6 +685,36 @@ def _prompt_trace_path(prompt_path: Path) -> Path:
     return prompt_path.with_name(f"{prompt_path.stem}.trace.jsonl")
 
 
+def _codex_debug_outputs_json(client_args: list[str]) -> bool:
+    if "debug" not in client_args:
+        return False
+    debug_args = client_args[client_args.index("debug") + 1 :]
+    options_with_values = {"-c", "--config", "--enable", "--disable"}
+    index = 0
+    while index < len(debug_args):
+        arg = debug_args[index]
+        if arg in options_with_values:
+            index += 2
+            continue
+        if arg.startswith("-"):
+            index += 1
+            continue
+        return arg in {"models", "prompt-input"}
+    return False
+
+
+def _codex_exec_server_uses_stdio(client_args: list[str]) -> bool:
+    if "exec-server" not in client_args:
+        return False
+    server_args = client_args[client_args.index("exec-server") + 1 :]
+    for index, arg in enumerate(server_args):
+        if arg == "--listen" and index + 1 < len(server_args):
+            return server_args[index + 1] in {"stdio", "stdio://"}
+        if arg.startswith("--listen="):
+            return arg.partition("=")[2] in {"stdio", "stdio://"}
+    return False
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse argv, extracting ``--tap-*`` flags for ourselves and forwarding
     everything else to the selected client.
@@ -987,10 +1017,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             or "--experimental-json" in claude_args
             or "mcp-server" in claude_args
             or "app-server" in claude_args
-            or any(
-                claude_args[index : index + 2] in (["debug", "models"], ["debug", "prompt-input"])
-                for index in range(len(claude_args) - 1)
-            )
+            or _codex_debug_outputs_json(claude_args)
+            or _codex_exec_server_uses_stdio(claude_args)
         )
     client_cfg = CLIENT_CONFIGS[args.client]
     # Default host: 0.0.0.0 in --tap-no-launch mode (proxy-only, typically remote),
