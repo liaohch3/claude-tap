@@ -80,6 +80,13 @@ def test_parse_args_keeps_status_output_for_interactive_codex() -> None:
     assert args.preserve_stdout is False
 
 
+@pytest.mark.parametrize("client_args", [["mcp-server"], ["app-server"]])
+def test_parse_args_preserves_stdout_for_codex_stdio_servers(client_args: list[str]) -> None:
+    args = parse_args(["--tap-client", "codex", *client_args])
+
+    assert args.preserve_stdout is True
+
+
 @pytest.mark.asyncio
 async def test_output_policy_routes_wrapper_status_to_stderr(monkeypatch, capsys) -> None:
     from claude_tap import cli

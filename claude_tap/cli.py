@@ -985,6 +985,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             args.preserve_stdout
             or "--json" in claude_args
             or "--experimental-json" in claude_args
+            or "mcp-server" in claude_args
+            or "app-server" in claude_args
             or any(
                 claude_args[index : index + 2] in (["debug", "models"], ["debug", "prompt-input"])
                 for index in range(len(claude_args) - 1)
