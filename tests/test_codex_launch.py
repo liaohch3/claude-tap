@@ -100,6 +100,47 @@ async def test_output_policy_routes_wrapper_status_to_stderr(monkeypatch, capsys
 
 
 @pytest.mark.asyncio
+async def test_output_policy_keeps_prompt_export_payload_on_stdout(monkeypatch, capsys) -> None:
+    from claude_tap import cli
+
+    class FakeStore:
+        def load_records(self, _session_id):
+            return [
+                {
+                    "request": {
+                        "body": {
+                            "model": "gpt-5",
+                            "instructions": "system instructions",
+                        }
+                    }
+                }
+            ]
+
+    async def fake_async_main(_args) -> int:
+        print("wrapper status")
+        return cli._export_prompt_from_session(FakeStore(), "session", "-")
+
+    args = parse_args(
+        [
+            "--tap-client",
+            "codex",
+            "--tap-preserve-stdout",
+            "--tap-export-prompt",
+            "-",
+        ]
+    )
+    monkeypatch.setattr(cli, "async_main", fake_async_main)
+
+    code = await cli._run_with_output_policy(args)
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "# System Prompt\n\nsystem instructions" in captured.out
+    assert "wrapper status" not in captured.out
+    assert captured.err == "wrapper status\n"
+
+
+@pytest.mark.asyncio
 async def test_run_client_codex_reverse_forces_builtin_provider_to_http(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

@@ -18,6 +18,7 @@ import threading
 import time
 import webbrowser
 from contextlib import nullcontext, redirect_stdout
+from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -74,6 +75,8 @@ from claude_tap.shared_dashboard import (
 from claude_tap.trace import TraceWriter, create_trace_writer
 from claude_tap.trace_log_handler import SQLiteLogHandler
 from claude_tap.trace_store import TraceStore, get_trace_store, resolve_db_path
+
+_CLIENT_STDOUT = ContextVar("client_stdout", default=None)
 
 # Force UTF-8 + line-buffered stdout/stderr so emoji output works on Windows
 # consoles (GBK/cp936) and `uv tool` doesn't fully buffer our progress prints.
@@ -663,7 +666,7 @@ def _export_prompt_from_session(store, session_id: str, output: str) -> int:
         return 1
 
     if output == "-":
-        print(text, end="")
+        print(text, end="", file=_CLIENT_STDOUT.get())
         return 0
 
     path = Path(output).expanduser()
@@ -1035,8 +1038,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 async def _run_with_output_policy(args: argparse.Namespace) -> int:
     output_context = redirect_stdout(sys.stderr) if args.preserve_stdout else nullcontext()
-    with output_context:
-        return await async_main(args)
+    client_stdout = _CLIENT_STDOUT.set(sys.stdout)
+    try:
+        with output_context:
+            return await async_main(args)
+    finally:
+        _CLIENT_STDOUT.reset(client_stdout)
 
 
 def parse_dashboard_args(argv: list[str] | None = None) -> argparse.Namespace:
