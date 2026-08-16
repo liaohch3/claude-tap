@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.145] - 2026-08-16
+
+### Changed
+- fix(codexapp): capture standard Responses API paths (#422)
 ## [0.1.144] - 2026-08-13
 
 ### Changed
