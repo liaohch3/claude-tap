@@ -787,6 +787,20 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           assert.equal(bloatList.length, 1);
           assert.equal(bloatList[0].charCount, 25000);
 
+          /* String-valued tool role messages from Chat Completions */
+          const stringToolEntry = {
+            request: {
+              body: {
+                messages: [
+                  { role: 'tool', content: 'x'.repeat(25000) },
+                ],
+              },
+            },
+          };
+          const stringBloatList = detectEntryToolBloat(stringToolEntry);
+          assert.equal(stringBloatList.length, 1);
+          assert.equal(stringBloatList[0].charCount, 25000);
+
           /* ── Direct DOM: Cost and Saved in applyFilter ── */
           entries = [
             makeUsageEntry({
@@ -811,6 +825,8 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           applyFilter();
           assert.equal(_statEls['stat-cost-group'].style.display, 'flex',
             'a priced turn still yields a cost even alongside an unpriced one');
+          assert.ok(_statEls['stat-cost'].textContent.indexOf('*') !== -1,
+            'partial cost total must be marked with asterisk indicator');
           assert.ok(_statEls['stat-cost-group'].title.indexOf('cost_unpriced_turns') !== -1,
             'mixed session must disclose the excluded turns');
 
@@ -824,4 +840,7 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
         """
     )
 
-    subprocess.run(["node", "-e", script, str(REPO_ROOT)], check=True, capture_output=True, text=True)
+    try:
+        subprocess.run(["node", "-e", script, str(REPO_ROOT)], check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as err:
+        raise AssertionError(f"Node test script failed:\nSTDOUT:\n{err.stdout}\nSTDERR:\n{err.stderr}") from err

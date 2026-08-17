@@ -1086,7 +1086,12 @@ function detectEntryToolBloat(entry) {
   if (!reqBody) return [];
   const bloated = [];
   getMessages(reqBody).forEach(msg => {
-    const blocks = Array.isArray(msg?.content) ? msg.content : [];
+    if (msg?.role === 'tool' && typeof msg?.content === 'string') {
+      const info = toolResultBloatInfo({ type: 'tool_result', content: msg.content });
+      if (info) bloated.push(info);
+      return;
+    }
+    const blocks = Array.isArray(msg?.content) ? msg.content : (typeof msg?.content === 'object' && msg?.content ? [msg.content] : []);
     blocks.forEach(b => {
       const info = toolResultBloatInfo(b);
       if (info) bloated.push(info);

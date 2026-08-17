@@ -996,13 +996,22 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         error_msg = err_obj.get("message", "")
 
     cache_read_in_input = None
-    if "prompt_tokens_details" in usage and isinstance(usage["prompt_tokens_details"], dict):
+    if ("prompt_tokens_details" in usage and isinstance(usage["prompt_tokens_details"], dict)) or (
+        "input_tokens_details" in usage and isinstance(usage["input_tokens_details"], dict)
+    ):
         cache_read_in_input = True
 
     worst_bloat_chars = 0
     bloat_count = 0
     for msg in msgs:
+        role = msg.get("role")
         content = msg.get("content")
+        if role == "tool" and isinstance(content, str):
+            if len(content) >= 10000:
+                bloat_count += 1
+                if len(content) > worst_bloat_chars:
+                    worst_bloat_chars = len(content)
+            continue
         blocks = content if isinstance(content, list) else [content]
         for b in blocks:
             if isinstance(b, dict) and b.get("type") in {"tool_result", "function_call_output"}:

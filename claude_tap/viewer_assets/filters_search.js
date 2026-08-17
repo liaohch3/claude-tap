@@ -368,11 +368,11 @@ function applyFilter(preserveDetail) {
   $('#stat-tokens').textContent = totalTokens.toLocaleString();
   $('#stat-duration').textContent = fmtDuration(totalDuration);
   // Token breakdown in header
-  if (totalTokens > 0) {
-    $('#stat-input').textContent = sumInput.toLocaleString();
-    $('#stat-input-group').style.display = 'flex';
-    $('#stat-output').textContent = sumOutput.toLocaleString();
-    $('#stat-output-group').style.display = 'flex';
+  if (totalTokens > 0 || sumCacheRead > 0 || sumCacheCreate > 0) {
+    if (sumInput > 0) { $('#stat-input').textContent = sumInput.toLocaleString(); $('#stat-input-group').style.display = 'flex'; }
+    else { $('#stat-input-group').style.display = 'none'; }
+    if (sumOutput > 0) { $('#stat-output').textContent = sumOutput.toLocaleString(); $('#stat-output-group').style.display = 'flex'; }
+    else { $('#stat-output-group').style.display = 'none'; }
     if (sumCacheRead) { $('#stat-cache-read').textContent = sumCacheRead.toLocaleString(); $('#stat-cache-read-group').style.display = 'flex'; }
     else { $('#stat-cache-read-group').style.display = 'none'; }
     if (sumCacheCreate) { $('#stat-cache-write').textContent = sumCacheCreate.toLocaleString(); $('#stat-cache-write-group').style.display = 'flex'; }
@@ -384,28 +384,30 @@ function applyFilter(preserveDetail) {
     } else {
       $('#stat-cache-hit-rate-group').style.display = 'none';
     }
-    if (sumCost > 0) {
-      $('#stat-cost').textContent = formatCostUsd(sumCost);
-      /* Turns on an unpriced model contribute nothing to the total, so say so
-         rather than letting a partial sum read as the whole session's cost. */
-      const asOf = formatText('cost_rates_as_of', { date: PRICING_AS_OF });
-      $('#stat-cost-group').title = unpricedTurns > 0
-        ? asOf + '\n' + formatText('cost_unpriced_turns', { count: unpricedTurns })
-        : asOf;
-      $('#stat-cost-group').style.display = 'flex';
-      if (sumSaved > 0) {
-        const savePercent = Math.round((sumSaved / (sumCost + sumSaved)) * 100);
-        $('#stat-saved').textContent = formatCostUsd(sumSaved) + (savePercent > 0 ? ` (${savePercent}%)` : '');
-        $('#stat-saved-group').style.display = 'flex';
-      } else {
-        $('#stat-saved-group').style.display = 'none';
-      }
+  } else {
+    ['stat-input-group','stat-output-group','stat-cache-read-group','stat-cache-write-group','stat-cache-hit-rate-group'].forEach(id => $('#'+id).style.display = 'none');
+  }
+
+  if (sumCost > 0) {
+    const costText = formatCostUsd(sumCost) + (unpricedTurns > 0 ? '*' : '');
+    $('#stat-cost').textContent = costText;
+    /* Turns on an unpriced model contribute nothing to the total, so say so
+       rather than letting a partial sum read as the whole session's cost. */
+    const asOf = formatText('cost_rates_as_of', { date: PRICING_AS_OF });
+    $('#stat-cost-group').title = unpricedTurns > 0
+      ? asOf + '\n' + formatText('cost_unpriced_turns', { count: unpricedTurns })
+      : asOf;
+    $('#stat-cost-group').style.display = 'flex';
+    if (sumSaved > 0) {
+      const savePercent = Math.round((sumSaved / (sumCost + sumSaved)) * 100);
+      $('#stat-saved').textContent = formatCostUsd(sumSaved) + (savePercent > 0 ? ` (${savePercent}%)` : '');
+      $('#stat-saved-group').style.display = 'flex';
     } else {
-      $('#stat-cost-group').style.display = 'none';
       $('#stat-saved-group').style.display = 'none';
     }
   } else {
-    ['stat-input-group','stat-output-group','stat-cache-read-group','stat-cache-write-group','stat-cache-hit-rate-group','stat-cost-group','stat-saved-group'].forEach(id => $('#'+id).style.display = 'none');
+    $('#stat-cost-group').style.display = 'none';
+    $('#stat-saved-group').style.display = 'none';
   }
   renderToolFilter();
   renderSidebar(preserveDetail);
