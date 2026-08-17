@@ -30,11 +30,14 @@ function buildStubEntry(meta, rawIdx) {
   const hasCacheCreate = meta.cache_creation_input_tokens !== undefined && meta.cache_creation_input_tokens !== null;
   if (meta.cache_read_input_tokens) {
     usage.cache_read_input_tokens = meta.cache_read_input_tokens;
-    /* Infer cache embedding style from model name so the cache hit rate
-       denominator is correct in lazy/dashboard mode.  Claude/Anthropic and
-       Bedrock keep cache_read as a separate bucket; OpenAI/Gemini embed it. */
-    const m = (meta.model || '').toLowerCase();
-    usage._cache_read_in_input = !(hasCacheCreate || m.includes('claude') || m.includes('anthropic') || m.includes('bedrock'));
+    /* Respect explicit embedding flag from metadata; fallback to model inference
+       when flag is absent. */
+    if (meta.cache_read_in_input !== undefined && meta.cache_read_in_input !== null) {
+      usage._cache_read_in_input = !!meta.cache_read_in_input;
+    } else {
+      const m = (meta.model || '').toLowerCase();
+      usage._cache_read_in_input = !(hasCacheCreate || m.includes('claude') || m.includes('anthropic') || m.includes('bedrock'));
+    }
   }
   if (meta.cache_creation_input_tokens) usage.cache_creation_input_tokens = meta.cache_creation_input_tokens;
 
@@ -75,7 +78,7 @@ function buildStubEntry(meta, rawIdx) {
   if (typeof meta.response_generate === 'boolean') responseBody.generate = meta.response_generate;
   if (meta.response_output_count) responseBody.output = Array.from({ length: meta.response_output_count }, () => ({}));
 
-  return {
+  const stub = {
     _isStub: true,
     _rawIdx: rawIdx,
     _entry_index: rawIdx,
@@ -96,6 +99,8 @@ function buildStubEntry(meta, rawIdx) {
       body: responseBody,
     },
   };
+  if (meta.tool_bloat) stub._tool_bloat = meta.tool_bloat;
+  return stub;
 }
 
 function toolDisplayName(td) {

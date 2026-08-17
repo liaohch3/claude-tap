@@ -1046,11 +1046,23 @@ const CHARS_PER_TOKEN = 4;
 function toolResultBloatInfo(block) {
   if (!block || block.type !== 'tool_result') return null;
   const rc = block.content;
-  const text = typeof rc === 'string'
-    ? rc
-    : Array.isArray(rc)
-      ? rc.map(c => (typeof c === 'string' ? c : c?.text ?? JSON.stringify(c))).join('\n')
-      : rc === null || rc === undefined ? '' : JSON.stringify(rc);
+  let text = '';
+  if (typeof rc === 'string') {
+    text = rc;
+  } else if (Array.isArray(rc)) {
+    text = rc.map(c => {
+      if (typeof c === 'string') return c;
+      if (c && typeof c === 'object') {
+        if (c.type === 'image' || c.type === 'input_image') return '';
+        if (typeof c.text === 'string') return c.text;
+        return JSON.stringify(c);
+      }
+      return c === null || c === undefined ? '' : JSON.stringify(c);
+    }).filter(Boolean).join('\n');
+  } else if (rc && typeof rc === 'object') {
+    if (rc.type === 'image' || rc.type === 'input_image') return null;
+    text = JSON.stringify(rc);
+  }
   if (text.length < TOOL_BLOAT_MIN_CHARS) return null;
   return {
     charCount: text.length,
@@ -1060,6 +1072,15 @@ function toolResultBloatInfo(block) {
 }
 
 function detectEntryToolBloat(entry) {
+  if (entry?._tool_bloat) {
+    const tb = entry._tool_bloat;
+    return [{
+      charCount: tb.char_count,
+      sizeKB: String(tb.size_kb),
+      estTokens: Math.round(tb.char_count / CHARS_PER_TOKEN),
+      _count: tb.count,
+    }];
+  }
   const resolved = resolveEntryForDetail(entry);
   const reqBody = resolved?.request?.body;
   if (!reqBody) return [];

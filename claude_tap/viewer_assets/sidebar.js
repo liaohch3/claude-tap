@@ -659,8 +659,9 @@ function createSidebarItem(e, i) {
   let bloatBadgeHtml = '';
   if (bloatList.length > 0) {
     const worst = bloatList.reduce((a, b) => (b.charCount > a.charCount ? b : a));
-    const hint = bloatList.length > 1
-      ? `${t('tool_bloat_hint')} (${bloatList.length})`
+    const count = worst._count || bloatList.length;
+    const hint = count > 1
+      ? `${t('tool_bloat_hint')} (${count})`
       : t('tool_bloat_hint');
     bloatBadgeHtml = `<span class="si-bloat-badge" title="${esc(hint)}">&#9888; ${worst.sizeKB}KB</span>`;
   }

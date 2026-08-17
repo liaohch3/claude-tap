@@ -687,6 +687,7 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           asOfParts.forEach(part => assert.ok(Number.isInteger(Number(part))));
 
           assert.equal(formatCostUsd(0), '$0.00');
+          assert.equal(formatCostUsd(0.00003), '<$0.0001');
           assert.equal(formatCostUsd(0.0003), '$0.0003');
           assert.equal(formatCostUsd(0.0052), '$0.005');
           assert.equal(formatCostUsd(0.1234), '$0.12');
@@ -713,6 +714,15 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
              0.0225 - 0.009375 = $0.013125. */
           assert.ok(Math.abs(costInfo.saved - 0.013125) < 1e-6);
 
+          /* Cache creation has a 25% write premium (1.25x), so a write-only turn
+             yields a negative saving (it cost more than uncached). */
+          const writeOnlyInfo = calculateEntryCost({
+            request: { body: { model: 'claude-3-7-sonnet-20250219' } },
+            response: { body: { usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 1000 } } },
+          });
+          assert.ok(writeOnlyInfo.saved < 0, 'write-only turn must have negative savings');
+          assert.ok(Math.abs(writeOnlyInfo.saved - (-0.00075)) < 1e-6);
+
           /* With no cache activity there is nothing to have saved, and the header
              hides the Saved stat rather than showing $0.00. */
           const uncachedInfo = calculateEntryCost({
@@ -731,6 +741,13 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           assert.ok(largeInfo);
           assert.equal(largeInfo.charCount, 25000);
           assert.ok(parseFloat(largeInfo.sizeKB) >= 24);
+
+          const imageToolBlock = {
+            type: 'tool_result',
+            tool_use_id: 'tool_img',
+            content: [{ type: 'image', source: { type: 'base64', data: 'x'.repeat(50000) } }],
+          };
+          assert.equal(toolResultBloatInfo(imageToolBlock), null, 'image blocks must not count as text bloat');
 
           /* The threshold is inclusive: exactly TOOL_BLOAT_MIN_CHARS counts as bloat,
              one character less does not. */

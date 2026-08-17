@@ -995,6 +995,52 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
     if isinstance(err_obj, dict):
         error_msg = err_obj.get("message", "")
 
+    cache_read_in_input = None
+    if "prompt_tokens_details" in usage and isinstance(usage["prompt_tokens_details"], dict):
+        cache_read_in_input = True
+
+    worst_bloat_chars = 0
+    bloat_count = 0
+    for msg in msgs:
+        content = msg.get("content")
+        blocks = content if isinstance(content, list) else [content]
+        for b in blocks:
+            if isinstance(b, dict) and b.get("type") in {"tool_result", "function_call_output"}:
+                rc = b.get("content")
+                text = ""
+                if isinstance(rc, str):
+                    text = rc
+                elif isinstance(rc, list):
+                    text = "\n".join(
+                        (
+                            part
+                            if isinstance(part, str)
+                            else (
+                                part.get("text", "")
+                                if isinstance(part, dict) and part.get("type") not in {"image", "input_image"}
+                                else ""
+                            )
+                        )
+                        for part in rc
+                    )
+                elif isinstance(rc, dict):
+                    if rc.get("type") not in {"image", "input_image"}:
+                        text = json.dumps(rc)
+                elif rc is not None:
+                    text = json.dumps(rc)
+                if len(text) >= 10000:
+                    bloat_count += 1
+                    if len(text) > worst_bloat_chars:
+                        worst_bloat_chars = len(text)
+
+    tool_bloat = None
+    if bloat_count > 0:
+        tool_bloat = {
+            "count": bloat_count,
+            "char_count": worst_bloat_chars,
+            "size_kb": f"{worst_bloat_chars / 1024:.1f}",
+        }
+
     return {
         "turn": r.get("turn"),
         "request_id": r.get("request_id", ""),
@@ -1021,6 +1067,8 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         "output_tokens": usage.get("output_tokens", 0),
         "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
         "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+        "cache_read_in_input": cache_read_in_input,
+        "tool_bloat": tool_bloat,
         "has_system": bool(sys_text),
         "message_count": len(msgs),
         "session_user_text": _latest_user_text(msgs) or _first_user_text(msgs),

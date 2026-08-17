@@ -300,17 +300,20 @@ function calculateEntryCost(entry) {
   ) / 1000000;
 
   /* What the same turn would have cost with no cache: every input token, cached
-     or not, billed at the full input rate.  The difference is what caching saved. */
+     or not, billed at the full input rate.  The difference is what caching saved.
+     Retain signed delta (write premium produces a negative saving) so session
+     aggregates accurately reflect net savings. */
   const uncachedCost = (
     (nonCachedIn + cacheRead + cacheCreate) * pricing.input +
     outTok * pricing.output
   ) / 1000000;
 
-  return { cost, saved: Math.max(0, uncachedCost - cost) };
+  return { cost, saved: uncachedCost - cost };
 }
 
 function formatCostUsd(amount) {
   if (!amount || amount === 0) return '$0.00';
+  if (amount > 0 && amount < 0.0001) return '<$0.0001';
   if (amount < 0.01) {
     return '$' + amount.toFixed(amount < 0.001 ? 4 : 3);
   }
