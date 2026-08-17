@@ -1044,8 +1044,15 @@ const CHARS_PER_TOKEN = 4;
    `responseInputItemToMessage` rewrites `*_call_output` items before any
    renderer sees them. */
 function toolResultBloatInfo(block) {
-  if (!block || block.type !== 'tool_result') return null;
-  const rc = block.content;
+  if (!block || typeof block !== 'object') return null;
+  let rc = block.content;
+  if (block.type !== 'tool_result' && block.type !== 'function_call_output') {
+    if (block.toolResult && typeof block.toolResult === 'object') {
+      rc = block.toolResult.content;
+    } else {
+      return null;
+    }
+  }
   let text = '';
   if (typeof rc === 'string') {
     text = rc;
@@ -1053,14 +1060,15 @@ function toolResultBloatInfo(block) {
     text = rc.map(c => {
       if (typeof c === 'string') return c;
       if (c && typeof c === 'object') {
-        if (c.type === 'image' || c.type === 'input_image') return '';
+        if (c.type === 'image' || c.type === 'input_image' || c.image) return '';
         if (typeof c.text === 'string') return c.text;
+        if (typeof c.json === 'object') return JSON.stringify(c.json);
         return JSON.stringify(c);
       }
       return c === null || c === undefined ? '' : JSON.stringify(c);
     }).filter(Boolean).join('\n');
   } else if (rc && typeof rc === 'object') {
-    if (rc.type === 'image' || rc.type === 'input_image') return null;
+    if (rc.type === 'image' || rc.type === 'input_image' || rc.image) return null;
     text = JSON.stringify(rc);
   }
   if (text.length < TOOL_BLOAT_MIN_CHARS) return null;
@@ -1081,6 +1089,7 @@ function detectEntryToolBloat(entry) {
       _count: tb.count,
     }];
   }
+  if (entry?._isStub) return [];
   const resolved = resolveEntryForDetail(entry);
   const reqBody = resolved?.request?.body;
   if (!reqBody) return [];

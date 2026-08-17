@@ -274,9 +274,17 @@ function getModelPricing(model) {
   }
   return null;
 }
+function extractModelFromPath(path) {
+  if (!path || typeof path !== 'string') return '';
+  const bedrockMatch = path.match(/\/model\/([^/]+)/i);
+  if (bedrockMatch) return bedrockMatch[1];
+  const geminiMatch = path.match(/\/v1(?:beta|alpha)?\/models\/([^/:]+)/i);
+  if (geminiMatch) return geminiMatch[1];
+  return '';
+}
 
 function calculateEntryCost(entry) {
-  const model = entry?.request?.body?.model || entry?.model || '';
+  const model = entry?.request?.body?.model || entry?.model || extractModelFromPath(entry?.request?.path) || '';
   const pricing = getModelPricing(model);
   const u = getUsage(entry);
   if (!pricing || !u) return null;
@@ -400,7 +408,8 @@ function applyFilter(preserveDetail) {
     $('#stat-cost-group').style.display = 'flex';
     if (sumSaved > 0) {
       const savePercent = Math.round((sumSaved / (sumCost + sumSaved)) * 100);
-      $('#stat-saved').textContent = formatCostUsd(sumSaved) + (savePercent > 0 ? ` (${savePercent}%)` : '');
+      const savedText = formatCostUsd(sumSaved) + (unpricedTurns > 0 ? '*' : '') + (savePercent > 0 ? ` (${savePercent}%)` : '');
+      $('#stat-saved').textContent = savedText;
       $('#stat-saved-group').style.display = 'flex';
     } else {
       $('#stat-saved-group').style.display = 'none';

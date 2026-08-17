@@ -996,8 +996,10 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         error_msg = err_obj.get("message", "")
 
     cache_read_in_input = None
-    if ("prompt_tokens_details" in usage and isinstance(usage["prompt_tokens_details"], dict)) or (
-        "input_tokens_details" in usage and isinstance(usage["input_tokens_details"], dict)
+    if (
+        ("prompt_tokens_details" in usage and isinstance(usage["prompt_tokens_details"], dict))
+        or ("input_tokens_details" in usage and isinstance(usage["input_tokens_details"], dict))
+        or ("cached_tokens" in usage and "prompt_tokens" in usage)
     ):
         cache_read_in_input = True
 
