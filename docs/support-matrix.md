@@ -32,7 +32,9 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Kimi CLI (legacy kimi-cli) | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
 | Kimi Code CLI | `~/.kimi-code/config.toml` + OAuth (`managed:kimi-code`) | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested (`KIMI_CODE_HOME` sandbox) |
 | Kimi Code CLI | Custom `type = "kimi"` provider in config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported via `--tap-target` |
-| MiniMax Code (`mcode`) | Managed MiniMax access, BYOK, custom providers, or Codex OAuth | Forward proxy (any HTTPS upstream); only model paths are persisted | n/a | HTTP/SSE + WebSocket; requires Node `--use-env-proxy` support | Real E2E verified with MCode 0.1.2 |
+| MiniMax Code (`mcode`) | Managed MiniMax access | Forward proxy to the managed MiniMax model upstream; only validated model-request shapes are persisted | n/a | HTTP/SSE Chat Completions; requires Node `--use-env-proxy` support | Real interactive multi-turn E2E verified with MCode 0.1.2 |
+| MiniMax Code (`mcode`) | BYOK or custom provider | Forward proxy to the configured provider; only validated model-request shapes are persisted | n/a | HTTP/SSE for Messages, Chat Completions, or Responses | Configuration and integration tested; real-provider E2E varies by user configuration |
+| MiniMax Code (`mcode`) | Codex OAuth | Forward proxy to the Codex backend | n/a | HTTP/SSE + WebSocket Responses | Path filtering and relay unit-tested; real Codex OAuth/WebSocket E2E not yet verified |
 | OpenCode | Provider creds via `opencode providers` (OpenAI OAuth and OpenCode free provider verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Real E2E verified |
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
 | MiMo Code | Provider creds via `mimo` TUI config or MiMo Platform OAuth | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |

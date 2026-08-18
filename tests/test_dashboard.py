@@ -844,6 +844,7 @@ def test_dashboard_parses_provider_fallbacks(trace_db, tmp_path: Path) -> None:
 
     provider_cases = [
         ({"metadata": {"client": "agy"}}, [], "Antigravity"),
+        ({"metadata": {"client": "mcode"}}, [], "MiniMax Code"),
         ({}, [{"capture": {"client": "cursor"}}], "Cursor"),
         ({}, [{"request": {"headers": {"host": "generativelanguage.googleapis.com"}}}], "Gemini"),
         ({}, [{"request": {"path": "/v1/responses"}}], "Codex"),

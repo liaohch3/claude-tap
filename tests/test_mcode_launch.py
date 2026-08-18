@@ -36,6 +36,7 @@ def test_mcode_registered_as_filtered_forward_proxy_client() -> None:
     assert cfg.default_proxy_mode == "forward"
     assert cfg.forward_trace_methods == ("POST", "WEBSOCKET")
     assert cfg.forward_trace_path_prefixes == ("/backend-api/codex/responses",)
+    assert cfg.forward_trace_model_requests_only is True
     assert cfg.forward_trace_path_suffixes == (
         "/messages",
         "/messages/count_tokens",
@@ -59,19 +60,22 @@ def test_parse_args_mcode_rejects_reverse_mode(capsys: pytest.CaptureFixture[str
 
 
 @pytest.mark.parametrize(
-    ("method", "path", "expected"),
+    ("method", "path", "request_body", "expected"),
     [
-        ("POST", "/mavis/api/v1/llm/v1/messages", True),
-        ("POST", "/v1/messages/count_tokens", True),
-        ("POST", "/v1/chat/completions", True),
-        ("POST", "/v1/responses", True),
-        ("WEBSOCKET", "/backend-api/codex/responses", True),
-        ("GET", "/v1/messages", False),
-        ("POST", "/mavis/api/v1/auth/refresh", False),
-        ("POST", "/v1/models", False),
+        ("POST", "/mavis/api/v1/llm/v1/messages", {"model": "MiniMax-M3", "messages": []}, True),
+        ("POST", "/v1/messages/count_tokens", {"model": "MiniMax-M3", "messages": []}, True),
+        ("POST", "/v1/chat/completions", {"model": "custom-model", "messages": []}, True),
+        ("POST", "/v1/responses", {"model": "gpt-5", "input": "hello"}, True),
+        ("WEBSOCKET", "/backend-api/codex/responses", None, True),
+        ("GET", "/v1/messages", None, False),
+        ("POST", "/mavis/api/v1/auth/refresh", {"refresh_token": "secret"}, False),
+        ("POST", "/v1/models", {}, False),
+        ("POST", "/tools/messages", {"tool": "remote-service", "payload": "sensitive"}, False),
+        ("POST", "/chat/completions", {"messages": []}, False),
+        ("WEBSOCKET", "/tools/responses", None, False),
     ],
 )
-def test_mcode_capture_filter(method: str, path: str, expected: bool) -> None:
+def test_mcode_capture_filter(method: str, path: str, request_body: dict | None, expected: bool) -> None:
     cfg = CLIENT_CONFIGS["mcode"]
     server = ForwardProxyServer(
         host="127.0.0.1",
@@ -82,9 +86,10 @@ def test_mcode_capture_filter(method: str, path: str, expected: bool) -> None:
         trace_methods=cfg.forward_trace_methods,
         trace_path_prefixes=cfg.forward_trace_path_prefixes,
         trace_path_suffixes=cfg.forward_trace_path_suffixes,
+        trace_model_requests_only=cfg.forward_trace_model_requests_only,
     )
 
-    assert server._should_trace_request(method, path) is expected
+    assert server._should_trace_request(method, path, request_body) is expected
 
 
 @pytest.mark.asyncio

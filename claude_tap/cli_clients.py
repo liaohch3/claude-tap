@@ -332,6 +332,10 @@ class ClientConfig:
     forward_trace_methods: tuple[str, ...] = ()
     forward_trace_path_prefixes: tuple[str, ...] = ()
     forward_trace_path_suffixes: tuple[str, ...] = ()
+    # Require a recognized model request body before persisting a matching HTTP
+    # path. This keeps generic tool/control-plane endpoints with model-like path
+    # suffixes out of trace storage while still relaying them.
+    forward_trace_model_requests_only: bool = False
     # Transcript-only clients are observed from local session logs instead of a
     # spawned process and do not need a reverse or forward proxy.
     transcript_only: bool = False
@@ -502,6 +506,7 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
             "/chat/completions",
             "/responses",
         ),
+        forward_trace_model_requests_only=True,
     ),
     "gemini": ClientConfig(
         cmd="gemini",

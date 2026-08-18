@@ -32,7 +32,9 @@ English version: [Support Matrix](support-matrix.md).
 | Kimi CLI（旧版 kimi-cli） | Kimi CLI 认证/配置 | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 配置支持 |
 | Kimi Code CLI | `~/.kimi-code/config.toml` + OAuth（`managed:kimi-code`） | `https://api.kimi.com/coding/v1` | 无 | HTTP/SSE Chat Completions | 单测覆盖（`KIMI_CODE_HOME` sandbox） |
 | Kimi Code CLI | 配置中自定义 `type = "kimi"` provider | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 支持 `--tap-target` |
-| MiniMax Code（`mcode`） | MiniMax 托管访问、BYOK、自定义 provider 或 Codex OAuth | Forward proxy（任意 HTTPS 上游）；只持久化模型路径 | n/a | HTTP/SSE + WebSocket；要求 Node 支持 `--use-env-proxy` | 已使用 MCode 0.1.2 完成真实 E2E 验证 |
+| MiniMax Code（`mcode`） | MiniMax 托管访问 | Forward proxy 到 MiniMax 托管模型上游；只持久化通过校验的模型请求结构 | n/a | HTTP/SSE Chat Completions；要求 Node 支持 `--use-env-proxy` | 已使用 MCode 0.1.2 完成真实交互式多轮 E2E 验证 |
+| MiniMax Code（`mcode`） | BYOK 或自定义 provider | Forward proxy 到已配置 provider；只持久化通过校验的模型请求结构 | n/a | Messages、Chat Completions 或 Responses 的 HTTP/SSE | 配置与集成测试已覆盖；真实 provider E2E 取决于用户配置 |
+| MiniMax Code（`mcode`） | Codex OAuth | Forward proxy 到 Codex backend | n/a | HTTP/SSE + WebSocket Responses | 路径过滤与 relay 已由单测覆盖；尚未完成真实 Codex OAuth/WebSocket E2E |
 | OpenCode | 通过 `opencode providers` 配置 provider 凭据（OpenAI OAuth 与 OpenCode free provider 均已验证） | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | OpenCode | 仅 Anthropic provider（`--tap-proxy-mode reverse`） | `https://api.anthropic.com` | 无 | HTTP/SSE | 单测覆盖 |
 | MiMo Code | 通过 `mimo` TUI 配置或 MiMo Platform OAuth 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |

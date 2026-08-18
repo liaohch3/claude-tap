@@ -2236,6 +2236,14 @@ refresh_req = urllib.request.Request(
 with urllib.request.urlopen(refresh_req) as refresh_resp:
     assert refresh_resp.status == 204
 
+non_model_req = urllib.request.Request(
+    f"{base}/tools/messages",
+    data=json.dumps({"tool": "remote-service", "payload": "must-not-be-persisted"}).encode(),
+    headers={"Content-Type": "application/json"},
+)
+with urllib.request.urlopen(non_model_req) as non_model_resp:
+    assert non_model_resp.status == 204
+
 req_body = json.dumps({
     "model": "MiniMax-M3",
     "system": "You are a helpful software engineer assistant.",
@@ -2277,7 +2285,7 @@ def test_mcode_client_forward_proxy_filters_non_model_requests():
     async def handler(request):
         from aiohttp import web
 
-        if request.path == "/mavis/api/v1/auth/refresh":
+        if request.path in {"/mavis/api/v1/auth/refresh", "/tools/messages"}:
             return web.Response(status=204)
 
         body = await request.json()
@@ -2355,6 +2363,7 @@ def test_mcode_client_forward_proxy_filters_non_model_requests():
             "output_tokens": 4,
         }
         assert "auth/refresh" not in json.dumps(records)
+        assert "must-not-be-persisted" not in json.dumps(records)
         assert "MiniMax Code" in proc.stdout
         assert "forward proxy" in proc.stdout
     finally:
