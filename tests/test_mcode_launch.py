@@ -142,6 +142,6 @@ async def test_run_client_mcode_rejects_node_without_env_proxy_support(
     code = await run_client(43123, [], client="mcode", proxy_mode="forward")
 
     assert code == 1
-    output = capsys.readouterr().out
+    output = capsys.readouterr().err
     assert "MiniMax Code forward capture requires a Node runtime" in output
     assert "node --use-env-proxy --version" in output

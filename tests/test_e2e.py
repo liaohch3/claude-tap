@@ -2364,8 +2364,8 @@ def test_mcode_client_forward_proxy_filters_non_model_requests():
         }
         assert "auth/refresh" not in json.dumps(records)
         assert "must-not-be-persisted" not in json.dumps(records)
-        assert "MiniMax Code" in proc.stdout
-        assert "forward proxy" in proc.stdout
+        assert "MiniMax Code" in proc.stderr
+        assert "forward proxy" in proc.stderr
     finally:
         stop()
         _cleanup(trace_dir, fake_bin_dir, "mcode")
