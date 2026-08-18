@@ -2,6 +2,9 @@ import asyncio
 import base64
 import json
 import logging
+import shutil
+import subprocess
+import textwrap
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -762,6 +765,68 @@ def test_dashboard_detail_navigation_uses_lazy_shell_route() -> None:
     assert "data-tab-toggle" in template
     assert 'container.querySelector("[data-viewer-frame]")' in template
     assert "setDetailTab(event.currentTarget.dataset.tab, session)" in template
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required for dashboard JS unit tests")
+def test_dashboard_request_text_prefers_latest_user_message() -> None:
+    template = read_dashboard_template()
+    start = template.index("function requestText(body) {")
+    end = template.index("\n}\n\nfunction responseTextFromBody", start) + 2
+    request_text_source = template[start:end]
+    content_start = template.index("function contentText(value) {")
+    content_end = template.index("\n}\n\nfunction partsText", content_start) + 2
+    content_text_source = template[content_start:content_end]
+    script = textwrap.dedent(
+        f"""
+        const assert = require("assert/strict");
+
+        {content_text_source}
+
+        function partsText(parts) {{
+          return contentText(parts);
+        }}
+
+        {request_text_source}
+
+        for (const userMessageCount of [2, 3, 10]) {{
+          const messages = [];
+          for (let index = 1; index <= userMessageCount; index += 1) {{
+            messages.push({{role: "user", content: [{{type: "text", text: `request ${{index}}`}}]}});
+            if (index < userMessageCount) messages.push({{role: "assistant", content: `response ${{index}}`}});
+          }}
+          assert.equal(requestText({{messages}}), `request ${{userMessageCount}}`);
+        }}
+
+        assert.equal(requestText({{
+          messages: [
+            {{role: "user", content: [{{type: "text", text: "human request"}}]}},
+            {{role: "assistant", content: [{{type: "tool_use", id: "tool-1", name: "read"}}]}},
+            {{role: "user", content: [
+              {{type: "tool_result", tool_use_id: "tool-1", content: "large tool output"}},
+              {{type: "function_call_output", output: "function output"}},
+              {{type: "text", text: "<system-reminder>injected context</system-reminder>"}},
+            ]}},
+          ],
+        }}), "human request");
+
+        assert.equal(requestText({{
+          messages: [{{role: "user", content: [
+            {{type: "tool_result", tool_use_id: "tool-1", content: "large tool output"}},
+            {{type: "text", text: "<system-reminder>injected context</system-reminder>"}},
+            {{type: "text", text: "human follow-up"}},
+          ]}}],
+        }}), "human follow-up");
+
+        assert.equal(requestText({{
+          messages: [{{role: "user", content: [
+            {{type: "text", text: "<USER_REQUEST>wrapped human request</USER_REQUEST>"}},
+            {{type: "text", text: "<additional_metadata>injected metadata</additional_metadata>"}},
+          ]}}],
+        }}), "wrapped human request");
+        """
+    )
+
+    subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
 
 
 def test_dashboard_template_exposes_session_delete_controls() -> None:
@@ -1787,6 +1852,59 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert "EMBEDDED_TRACE_COMPACT_DATA" in exported_html
                 assert "const EMBEDDED_TRACE_DATA =" not in exported_html
                 assert "req_claude" in exported_html
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_trace_tab_renders_latest_user_message(trace_db) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    store = get_trace_store()
+    session_id = store.create_session(client="pi", proxy_mode="forward")
+    record = _anthropic_record(turn=6)
+    record["request"]["path"] = "/v1/chat/completions"
+    messages = []
+    for index in range(1, 11):
+        messages.append({"role": "user", "content": [{"type": "text", "text": f"request {index}"}]})
+        if index < 10:
+            messages.append({"role": "assistant", "content": f"response {index}"})
+    record["request"]["body"]["messages"] = messages
+    store.append_record(session_id, record)
+    tool_record = _anthropic_record(turn=7)
+    tool_record["request"]["body"]["messages"] = [
+        {"role": "user", "content": [{"type": "text", "text": "human request"}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "tool-1", "name": "read", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "tool-1", "content": "large tool output"},
+                {"type": "text", "text": "<system-reminder>injected context</system-reminder>"},
+            ],
+        },
+    ]
+    store.append_record(session_id, tool_record)
+    store.finalize_session(session_id, {"api_calls": 2})
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 1440, "height": 900})
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
+                    wait_until="domcontentloaded",
+                )
+                request_text = page.locator("#raw-tab .section .msg.user .content-block")
+                await request_text.last.wait_for(timeout=5000)
+
+                assert await request_text.all_inner_texts() == ["request 10", "human request"]
             finally:
                 await browser.close()
     finally:
