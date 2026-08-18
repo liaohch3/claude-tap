@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add filtered forward-proxy tracing for MiniMax Code (`--tap-client mcode`).
+
 ### Fixed
 
 - Preserve wrapped-client stdout for every mode by always routing claude-tap operational output to stderr.
-
 
 
 

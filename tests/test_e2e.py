@@ -2219,6 +2219,149 @@ def test_dsh_client_forward_proxy_captures_local_gateway():
         _cleanup(trace_dir, fake_bin_dir, "dsh")
 
 
+FAKE_MCODE_SCRIPT = r"""#!/usr/bin/env python3
+# Fake MCode CLI that mirrors one managed-provider Anthropic Messages request.
+import json, os, sys, urllib.request
+
+if sys.argv[1:] != ["exec", "Reply with exactly: HELLO_MCODE"]:
+    print(f"[fake-mcode] Unexpected argv: {sys.argv[1:]}", file=sys.stderr)
+    sys.exit(2)
+
+base = os.environ["FAKE_MCODE_BASE_URL"]
+refresh_req = urllib.request.Request(
+    f"{base}/mavis/api/v1/auth/refresh",
+    data=b"{}",
+    headers={"Content-Type": "application/json"},
+)
+with urllib.request.urlopen(refresh_req) as refresh_resp:
+    assert refresh_resp.status == 204
+
+req_body = json.dumps({
+    "model": "MiniMax-M3",
+    "system": "You are a helpful software engineer assistant.",
+    "messages": [{"role": "user", "content": "Reply with exactly: HELLO_MCODE"}],
+    "tools": [{
+        "name": "bash",
+        "description": "Run a shell command.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    }],
+    "stream": True,
+}).encode()
+messages_req = urllib.request.Request(
+    f"{base}/mavis/api/v1/llm/v1/messages",
+    data=req_body,
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer mcode-test-key-12345678",
+    },
+)
+try:
+    with urllib.request.urlopen(messages_req) as resp:
+        chunks = resp.read().decode()
+        print(f"[fake-mcode] status={resp.status} stream-bytes={len(chunks)}")
+except Exception as error:
+    print(f"[fake-mcode] Error: {error}", file=sys.stderr)
+    sys.exit(1)
+
+print("HELLO_MCODE")
+"""
+
+
+def test_mcode_client_forward_proxy_filters_non_model_requests():
+    """Test MCode forward mode captures model traffic but omits auth traffic."""
+
+    async def handler(request):
+        from aiohttp import web
+
+        if request.path == "/mavis/api/v1/auth/refresh":
+            return web.Response(status=204)
+
+        body = await request.json()
+        assert request.path == "/mavis/api/v1/llm/v1/messages"
+        assert body["model"] == "MiniMax-M3"
+        assert body["tools"][0]["name"] == "bash"
+
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        events = [
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "mcode_message_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": body["model"],
+                    "usage": {"input_tokens": 18, "output_tokens": 0},
+                },
+            },
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "HELLO_MCODE"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 4},
+            },
+            {"type": "message_stop"},
+        ]
+        for event in events:
+            await resp.write(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode())
+        await resp.write_eof()
+        return resp
+
+    trace_dir = tempfile.mkdtemp(prefix="claude_tap_test_mcode_")
+    fake_bin_dir = tempfile.mkdtemp(prefix="fake_bin_mcode_")
+    fake_mcode = Path(fake_bin_dir) / "mcode"
+    fake_mcode.write_text(FAKE_MCODE_SCRIPT)
+    fake_mcode.chmod(fake_mcode.stat().st_mode | stat.S_IEXEC)
+    stop = _start_fake_upstream(19249, handler)
+
+    try:
+        proc = _run_claude_tap(
+            Path(__file__).parent,
+            trace_dir,
+            fake_bin_dir,
+            19249,
+            tap_client="mcode",
+            proxy_mode="forward",
+            client_args=["exec", "Reply with exactly: HELLO_MCODE"],
+            client_env={"FAKE_MCODE_BASE_URL": "http://127.0.0.1:19249"},
+        )
+
+        assert proc.returncode == 0, f"mcode mode failed: stdout={proc.stdout} stderr={proc.stderr}"
+        records = read_trace_records(trace_dir)
+        assert len(records) == 1
+        record = records[0]
+        assert record["request"]["path"] == "/mavis/api/v1/llm/v1/messages"
+        assert record["upstream_base_url"] == "http://127.0.0.1:19249"
+        assert record["request"]["body"]["model"] == "MiniMax-M3"
+        assert record["request"]["body"]["tools"][0]["name"] == "bash"
+        assert record["response"]["body"]["content"][0]["text"] == "HELLO_MCODE"
+        assert record["response"]["body"]["usage"] == {
+            "input_tokens": 18,
+            "output_tokens": 4,
+        }
+        assert "auth/refresh" not in json.dumps(records)
+        assert "MiniMax Code" in proc.stdout
+        assert "forward proxy" in proc.stdout
+    finally:
+        stop()
+        _cleanup(trace_dir, fake_bin_dir, "mcode")
+
+
 FAKE_KIMI_SCRIPT = r"""#!/usr/bin/env python3
 # Fake Kimi CLI that sends one streaming Chat Completions request via KIMI_BASE_URL
 import json, os, sys, urllib.request

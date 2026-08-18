@@ -695,7 +695,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tap_parser = argparse.ArgumentParser(
         prog="claude-tap",
         description=(
-            "Trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, "
+            "Trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, MiniMax Code, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, "
             "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy or transcript import. "
             "All flags not listed below are forwarded to the selected client."
         ),
@@ -730,6 +730,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap --tap-client kimi-code\n"
             "  claude-tap --tap-client kimi-code -- --thinking\n"
             "  claude-tap --tap-client kimi-code --tap-target https://api.moonshot.ai/v1\n"
+            "\n"
+            "minimax code (multi-provider; forward proxy mode):\n"
+            "  claude-tap --tap-client mcode\n"
+            '  claude-tap --tap-client mcode -- exec "Reply OK"\n'
             "\n"
             "gemini cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client gemini -- -p "hello"\n'
@@ -855,7 +859,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "'reverse' sets provider base URL, 'forward' sets HTTPS_PROXY with CONNECT/TLS termination. "
             "Default depends on the client: 'reverse' for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, "
-            "'forward' for agy/codexapp/dsh/gemini/mimo/opencode/pi/hermes/qoder. "
+            "'forward' for agy/codexapp/dsh/gemini/mcode/mimo/opencode/pi/hermes/qoder. "
             "Ignored for transcript-only clients such as cursor."
         ),
     )
@@ -995,8 +999,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             args.target = detector() if detector else client_cfg.default_target
     if args.proxy_mode is None:
         args.proxy_mode = client_cfg.default_proxy_mode
-    if args.client == "codexapp" and args.proxy_mode != "forward":
-        tap_parser.error("--tap-client codexapp only supports forward proxy mode")
+    if args.client in {"codexapp", "mcode"} and args.proxy_mode != "forward":
+        tap_parser.error(f"--tap-client {args.client} only supports forward proxy mode")
     if args.trust_ca and (client_cfg.transcript_only or args.proxy_mode != "forward"):
         tap_parser.error("--tap-trust-ca only applies to forward proxy mode")
     if client_cfg.transcript_only and args.export_prompt:
