@@ -380,6 +380,17 @@ def test_capture_only_response_shapes_model_probes_by_provider() -> None:
     assert converse["stopReason"] == "end_turn"
     anthropic_completion = capture_only_response("/v1/complete", {"model": "claude", "prompt": "hello"})
     assert anthropic_completion["completion"] == "captured"
+    mcode_messages = capture_only_response(
+        "/mavis/api/v1/llm/v1/messages",
+        {"model": "MiniMax-M3", "messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert mcode_messages["type"] == "message"
+    assert mcode_messages["content"] == [{"type": "text", "text": "captured"}]
+    non_messages_suffix = capture_only_response(
+        "/tools/messages",
+        {"model": "gpt-5", "input": "hello"},
+    )
+    assert non_messages_suffix["object"] == "response"
     completion = capture_only_response("/v1/completions", {"model": "gpt", "prompt": "hello"})
     assert completion["choices"][0]["text"] == "captured"
     responses = capture_only_response("/v1/responses", {"model": "gpt", "input": "hello"})
@@ -390,6 +401,13 @@ def test_capture_only_stream_bytes_are_provider_shaped() -> None:
     anthropic = capture_only_stream_bytes("/v1/messages", {"model": "claude"})
     assert b"event: message_start" in anthropic
     assert b'"type":"message_start","message"' in anthropic
+    mcode_anthropic = capture_only_stream_bytes(
+        "/mavis/api/v1/llm/v1/messages",
+        {"model": "MiniMax-M3", "messages": [], "stream": True},
+    )
+    assert b"event: message_start" in mcode_anthropic
+    assert b"event: message_stop" in mcode_anthropic
+    assert b"response.completed" not in mcode_anthropic
     assert b"data: [DONE]" in capture_only_stream_bytes("/v1/chat/completions", {"model": "gpt"})
     assert b"response.completed" in capture_only_stream_bytes("/v1/responses", {"model": "gpt"})
     assert b'"object":"text_completion"' in capture_only_stream_bytes("/v1/completions", {"model": "gpt"})
