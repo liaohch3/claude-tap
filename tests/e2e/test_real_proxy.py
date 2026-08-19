@@ -17,9 +17,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.schema_types import JsonObject
+
 
 def _run_claude_tap(
-    env: dict,
+    env: JsonObject,
     trace_dir: str,
     prompt: str,
     proxy_mode: str = "forward",
@@ -52,7 +54,7 @@ def _run_claude_tap(
     return result
 
 
-def _read_trace_records(trace_dir: str) -> list[dict]:
+def _read_trace_records(trace_dir: str) -> list[JsonObject]:
     """Read all trace records from the SQLite database."""
     from claude_tap.trace_store import get_trace_store
 

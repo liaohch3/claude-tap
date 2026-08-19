@@ -7,6 +7,7 @@ import pytest
 
 from claude_tap import parse_args
 from claude_tap.cli import CLIENT_CONFIGS, ClientConfig, run_client
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -81,7 +82,7 @@ def test_parse_args_codex_default_unchanged() -> None:
 
 @pytest.mark.asyncio
 async def test_run_client_hermes_forward_sets_python_ca_env(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     ca_path = Path("/tmp/test-ca.pem")
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -105,7 +106,7 @@ async def test_run_client_hermes_forward_sets_python_ca_env(monkeypatch) -> None
 @pytest.mark.asyncio
 async def test_run_client_codex_forward_still_sets_existing_ca_env(monkeypatch) -> None:
     """Regression: codex still gets SSL_CERT_FILE and CODEX_CA_CERTIFICATE."""
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     ca_path = Path("/tmp/test-ca.pem")
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -132,8 +133,8 @@ async def test_run_client_codex_forward_still_sets_existing_ca_env(monkeypatch) 
 # ---------------------------------------------------------------------------
 
 
-async def _capture_cmd(monkeypatch, which: str = "/tmp/hermes") -> dict[str, object]:
-    captured: dict[str, object] = {}
+async def _capture_cmd(monkeypatch, which: str = "/tmp/hermes") -> Map[str, object]:
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -267,7 +268,7 @@ async def test_run_client_codex_not_affected_by_hermes_rewrite(monkeypatch) -> N
 
 @pytest.mark.asyncio
 async def test_run_client_hermes_reverse_sets_openai_base_url(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -295,7 +296,7 @@ async def test_run_client_hermes_reverse_sets_openai_base_url(monkeypatch) -> No
 
 @pytest.mark.asyncio
 async def test_run_client_hermes_capture_only_reverse_sets_multi_provider_urls(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

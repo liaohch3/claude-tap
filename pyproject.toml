@@ -22,6 +22,7 @@ dependencies = [
     "aiohttp==3.14.1",
     "backports-zstd>=1.0; python_version < '3.14'",
     "cryptography>=42.0",
+    "pydantic>=2.7",
 ]
 
 [project.urls]
@@ -63,8 +64,11 @@ target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "ANN401"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ANN401"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

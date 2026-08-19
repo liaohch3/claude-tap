@@ -20,6 +20,7 @@ from pathlib import Path
 
 import aiohttp
 
+from claude_tap.models import ProviderPayload
 from claude_tap.process_utils import windows_no_console_subprocess_kwargs
 from claude_tap.trace_store import resolve_db_path
 
@@ -110,7 +111,7 @@ async def _dashboard_get_status_and_payload(
     url: str,
     *,
     timeout_seconds: float,
-) -> tuple[int | None, dict | None]:
+) -> tuple[int | None, ProviderPayload | None]:
     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -128,7 +129,7 @@ async def _dashboard_get_status_and_payload(
         return None, None
 
 
-def _dashboard_health_matches_current_instance(payload: dict | None) -> bool:
+def _dashboard_health_matches_current_instance(payload: ProviderPayload | None) -> bool:
     return bool(
         payload
         and payload.get("ok") is True
@@ -410,7 +411,7 @@ def _spawn_dashboard_subprocess(host: str, port: int, output_dir: Path) -> subpr
     if host and host != "127.0.0.1":
         cmd.extend(["--tap-host", host])
 
-    kwargs: dict = {
+    kwargs: ProviderPayload = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,

@@ -8,6 +8,7 @@ import pytest
 
 from claude_tap.usage import normalize_usage
 from claude_tap.viewer import _extract_metadata, _extract_request_messages, _generate_html_viewer
+from tests.schema_types import JsonObject
 
 pw_missing = False
 try:
@@ -16,11 +17,11 @@ except ImportError:
     pw_missing = True
 
 
-def _sse_frame(payload: dict) -> str:
+def _sse_frame(payload: JsonObject) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _gemini_record() -> dict:
+def _gemini_record() -> JsonObject:
     return {
         "timestamp": "2026-05-13T12:00:00+00:00",
         "request_id": "req_gemini",
@@ -207,7 +208,7 @@ def test_extract_metadata_understands_gemini_system_tools_output_and_usage() -> 
     assert meta["cache_read_input_tokens"] == 40
 
 
-def _direct_gemini_native_record() -> dict:
+def _direct_gemini_native_record() -> JsonObject:
     record = json.loads(json.dumps(_gemini_record()))
     record["request"]["path"] = "/v1beta/models/gemini-3.5-flash:generateContent"
     record["request"]["body"] = record["request"]["body"]["request"]

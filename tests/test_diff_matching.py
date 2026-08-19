@@ -14,6 +14,8 @@ messages, then B extends A's conversation thread and they should be diffed toget
 import hashlib
 import json
 
+from tests.schema_types import JsonObject
+
 # ── Test data: real trace from trace_20260218_083822.jsonl ──
 # Simplified to essential fields for testing
 
@@ -133,7 +135,7 @@ NAIVE_SAME_MODEL_PARENT = {
 }
 
 
-def _msg_hash(msg: dict) -> str:
+def _msg_hash(msg: JsonObject) -> str:
     """Hash a message by role + content for comparison."""
     content = msg.get("content", "")
     if isinstance(content, list):
@@ -141,7 +143,7 @@ def _msg_hash(msg: dict) -> str:
     return hashlib.md5(f"{msg.get('role', '')}:{content}".encode()).hexdigest()[:8]
 
 
-def _get_msg_hashes(entry: dict) -> list[str]:
+def _get_msg_hashes(entry: JsonObject) -> list[str]:
     """Get message hashes for an entry."""
     return [_msg_hash(m) for m in entry.get("messages", [])]
 
@@ -153,7 +155,7 @@ def _is_prefix_of(shorter: list[str], longer: list[str]) -> bool:
     return shorter == longer[: len(shorter)]
 
 
-def find_diff_parent_by_prefix(entries: list[dict], idx: int) -> int | None:
+def find_diff_parent_by_prefix(entries: list[JsonObject], idx: int) -> int | None:
     """Find the best diff parent for entry at idx using message prefix matching.
 
     Returns the index of the entry whose messages are the longest prefix
@@ -182,7 +184,7 @@ def find_diff_parent_by_prefix(entries: list[dict], idx: int) -> int | None:
     return best_parent
 
 
-def find_next_by_prefix(entries: list[dict], idx: int) -> int | None:
+def find_next_by_prefix(entries: list[JsonObject], idx: int) -> int | None:
     """Find the next entry whose messages start with entries[idx]'s messages as prefix.
 
     Mirrors the JS findNextSameModel() — picks the closest (smallest) extension.
@@ -205,7 +207,7 @@ def find_next_by_prefix(entries: list[dict], idx: int) -> int | None:
     return best_idx
 
 
-def compute_nav_button_states(entries: list[dict], cur_idx: int) -> tuple[bool, bool]:
+def compute_nav_button_states(entries: list[JsonObject], cur_idx: int) -> tuple[bool, bool]:
     """Compute whether prev/next nav buttons should be enabled for the diff at cur_idx.
 
     Mirrors the JS updateNavButtons() logic after the bug fix.
@@ -231,15 +233,15 @@ def compute_nav_button_states(entries: list[dict], cur_idx: int) -> tuple[bool, 
     return (prev_enabled, next_enabled)
 
 
-def _response_id(entry: dict) -> str:
+def _response_id(entry: JsonObject) -> str:
     return entry.get("response_id", "")
 
 
-def _previous_response_id(entry: dict) -> str:
+def _previous_response_id(entry: JsonObject) -> str:
     return entry.get("previous_response_id", "")
 
 
-def _codex_thread_key(entry: dict) -> str:
+def _codex_thread_key(entry: JsonObject) -> str:
     metadata = entry.get("client_metadata") or {}
     turn_metadata = metadata.get("x-codex-turn-metadata") or {}
     if isinstance(turn_metadata, str):
@@ -247,7 +249,7 @@ def _codex_thread_key(entry: dict) -> str:
     return f"{turn_metadata.get('session_id', '')}:{turn_metadata.get('thread_id', '')}"
 
 
-def find_diff_parent_with_response_context(entries: list[dict], idx: int) -> int | None:
+def find_diff_parent_with_response_context(entries: list[JsonObject], idx: int) -> int | None:
     """Mirror viewer parent matching: response id, Codex thread, then prefix."""
     previous_id = _previous_response_id(entries[idx])
     if previous_id:

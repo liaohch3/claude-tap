@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 from claude_tap.cli_clients import CLIENT_CONFIGS, _codex_selected_provider_base_url_key
+from claude_tap.models import ProviderPayload
 
 _BACKUP_SUFFIX = ".tap-backup"
 
@@ -123,7 +124,7 @@ def enable(
     *,
     claude_port: int | None = None,
     codex_port: int | None = None,
-    processes: list[dict[str, object]] | None = None,
+    processes: list[ProviderPayload] | None = None,
 ) -> None:
     """Inject reverse-proxy base URLs for the given clients.
 
@@ -133,7 +134,7 @@ def enable(
     if is_active():
         disable()
 
-    files: list[dict[str, object]] = []
+    files: list[ProviderPayload] = []
     state_file = _state_file()
     try:
         if claude_port is not None:
@@ -158,7 +159,7 @@ def disable(*, terminate_processes: bool = False) -> None:
     state_file = _state_file()
     if not state_file.exists():
         return
-    state: object = {}
+    state: ProviderPayload = {}
     try:
         state = json.loads(state_file.read_text(encoding="utf-8"))
         entries = state.get("files", []) if isinstance(state, dict) else []
@@ -173,7 +174,7 @@ def disable(*, terminate_processes: bool = False) -> None:
     state_file.unlink(missing_ok=True)
 
 
-def _restore_files(entries: list[object]) -> None:
+def _restore_files(entries: list[ProviderPayload]) -> None:
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -188,7 +189,7 @@ def _restore_files(entries: list[object]) -> None:
             path.unlink()
 
 
-def _record_backup(path: Path, files: list[dict[str, object]]) -> bool:
+def _record_backup(path: Path, files: list[ProviderPayload]) -> bool:
     """Back up ``path`` if it exists, append a restore record, return existed."""
     existed = path.exists()
     backup = path.with_name(path.name + _BACKUP_SUFFIX)
@@ -198,9 +199,9 @@ def _record_backup(path: Path, files: list[dict[str, object]]) -> bool:
     return existed
 
 
-def _inject_claude(path: Path, port: int, files: list[dict[str, object]]) -> None:
+def _inject_claude(path: Path, port: int, files: list[ProviderPayload]) -> None:
     existed = _record_backup(path, files)
-    data: object = {}
+    data: ProviderPayload = {}
     if existed:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -217,7 +218,7 @@ def _inject_claude(path: Path, port: int, files: list[dict[str, object]]) -> Non
     _write_text_atomic(path, json.dumps(data, indent=2) + "\n", mode=_write_mode(path, existed))
 
 
-def _inject_codex(path: Path, port: int, files: list[dict[str, object]]) -> None:
+def _inject_codex(path: Path, port: int, files: list[ProviderPayload]) -> None:
     existed = _record_backup(path, files)
     text = path.read_text(encoding="utf-8") if existed else ""
     new_text = _set_toml_top_level_string(text, "openai_base_url", f"http://127.0.0.1:{port}/v1")
@@ -296,7 +297,7 @@ def _write_text_atomic(path: Path, text: str, *, mode: int) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def _terminate_recorded_processes(processes: list[object]) -> None:
+def _terminate_recorded_processes(processes: list[ProviderPayload]) -> None:
     for entry in processes:
         if not isinstance(entry, dict):
             continue

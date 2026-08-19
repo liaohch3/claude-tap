@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from claude_tap.cli import _reverse_proxy_trace_options, _toml_dotted_key_segment, parse_args, run_client
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -149,7 +150,7 @@ async def test_output_policy_keeps_prompt_export_payload_on_stdout(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_run_client_codex_reverse_forces_builtin_provider_to_http(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -170,7 +171,7 @@ async def test_run_client_codex_reverse_forces_builtin_provider_to_http(monkeypa
 
 @pytest.mark.asyncio
 async def test_run_client_codex_reverse_isolates_legacy_openai_base_override(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -199,7 +200,7 @@ async def test_run_client_codex_reverse_isolates_legacy_openai_base_override(mon
 
 @pytest.mark.asyncio
 async def test_run_client_codex_reverse_replaces_builtin_provider_override(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -223,7 +224,7 @@ async def test_run_client_codex_reverse_replaces_builtin_provider_override(monke
 
 @pytest.mark.asyncio
 async def test_run_client_codex_forward_sets_rust_tls_ca_env(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     ca_path = Path("/tmp/test-ca.pem")
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -449,7 +450,7 @@ def test_parse_args_codex_auto_detects_custom_provider_from_model_provider_overr
 
 @pytest.mark.asyncio
 async def test_run_client_codex_reverse_injects_selected_provider_base_url(monkeypatch, tmp_path) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     (codex_home / "config.toml").write_text(
@@ -484,7 +485,7 @@ async def test_run_client_codex_reverse_injects_selected_provider_base_url(monke
 
 @pytest.mark.asyncio
 async def test_run_client_codex_reverse_injects_profile_provider_base_url(monkeypatch, tmp_path) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     (codex_home / "config.toml").write_text(
@@ -523,7 +524,7 @@ async def test_run_client_codex_reverse_injects_profile_provider_base_url(monkey
 
 @pytest.mark.asyncio
 async def test_run_client_codex_reverse_injects_profile_file_provider_base_url(monkeypatch, tmp_path) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     (codex_home / "config.toml").write_text(
@@ -560,7 +561,7 @@ async def test_run_client_codex_reverse_injects_profile_file_provider_base_url(m
 
 @pytest.mark.asyncio
 async def test_run_client_codex_reverse_injects_provider_from_model_provider_override(monkeypatch, tmp_path) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     (codex_home / "config.toml").write_text(
@@ -607,7 +608,7 @@ async def test_run_client_codex_reverse_injects_provider_from_model_provider_ove
 
 @pytest.mark.asyncio
 async def test_run_client_codex_reverse_quotes_non_ascii_provider_base_url_key(monkeypatch, tmp_path) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     (codex_home / "config.toml").write_text(
@@ -640,7 +641,7 @@ async def test_run_client_codex_reverse_quotes_non_ascii_provider_base_url_key(m
 
 @pytest.mark.asyncio
 async def test_run_client_codex_reverse_replaces_conflicting_provider_overrides(monkeypatch, tmp_path) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     (codex_home / "config.toml").write_text(

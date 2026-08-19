@@ -7,6 +7,7 @@ import pytest
 
 from claude_tap import parse_args
 from claude_tap.cli import CLIENT_CONFIGS, run_client
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -48,7 +49,7 @@ def test_parse_args_mimocode_explicit_reverse_overrides_default() -> None:
 
 @pytest.mark.asyncio
 async def test_run_client_mimocode_forward_sets_node_ca_env(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     ca_path = Path("/tmp/test-ca.pem")
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -71,7 +72,7 @@ async def test_run_client_mimocode_forward_sets_node_ca_env(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_run_client_mimocode_reverse_sets_anthropic_base_url(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     for key in ("OPENAI_BASE_URL", "GOOGLE_GEMINI_BASE_URL"):
         monkeypatch.delenv(key, raising=False)
 
@@ -98,7 +99,7 @@ async def test_run_client_mimocode_reverse_sets_anthropic_base_url(monkeypatch) 
 
 @pytest.mark.asyncio
 async def test_run_client_mimocode_reverse_extends_no_proxy_for_localhost(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:8080")
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:8080")
     monkeypatch.setenv("NO_PROXY", "corp.example")
@@ -125,7 +126,7 @@ async def test_run_client_mimocode_reverse_extends_no_proxy_for_localhost(monkey
 
 @pytest.mark.asyncio
 async def test_run_client_mimocode_capture_only_reverse_sets_multi_provider_urls(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

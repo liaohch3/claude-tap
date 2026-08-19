@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from claude_tap.viewer import _generate_html_viewer
+from tests.schema_types import JsonObject, Map
 
 pw_missing = False
 try:
@@ -39,7 +40,7 @@ _STOPWORDS = {
 }
 
 
-def _load_entries(trace_file: Path) -> list[dict]:
+def _load_entries(trace_file: Path) -> list[JsonObject]:
     lines = trace_file.read_text(encoding="utf-8").splitlines()
     return [json.loads(line) for line in lines if line.strip()]
 
@@ -59,7 +60,7 @@ def _pick_real_trace_file() -> Path:
     return candidates[0]
 
 
-def _normalize_messages_for_diff(body: dict | None) -> list[dict]:
+def _normalize_messages_for_diff(body: JsonObject | None) -> list[JsonObject]:
     if not body:
         return []
     if isinstance(body.get("messages"), list) and body["messages"]:
@@ -93,7 +94,7 @@ def _normalize_content_text(content) -> str:
     return json.dumps(content, ensure_ascii=False)
 
 
-def _msg_hash(msg: dict) -> str:
+def _msg_hash(msg: JsonObject) -> str:
     role = msg.get("role", "")
     text = _normalize_content_text(msg.get("content"))
     return f"{role}:{text[:500]}"
@@ -105,7 +106,7 @@ def _is_prefix_of(shorter: list[str], longer: list[str]) -> bool:
     return all(shorter[i] == longer[i] for i in range(len(shorter)))
 
 
-def _find_prev_same_model(entries: list[dict], idx: int) -> int:
+def _find_prev_same_model(entries: list[JsonObject], idx: int) -> int:
     target = entries[idx]
     target_body = target.get("request", {}).get("body") or {}
     target_hashes = [_msg_hash(msg) for msg in _normalize_messages_for_diff(target_body)]
@@ -131,7 +132,7 @@ def _find_prev_same_model(entries: list[dict], idx: int) -> int:
     return -1
 
 
-def _score_diff_messages(old_msgs: list[dict], new_msgs: list[dict]) -> int:
+def _score_diff_messages(old_msgs: list[JsonObject], new_msgs: list[JsonObject]) -> int:
     prefix = 0
     while prefix < len(old_msgs) and prefix < len(new_msgs):
         if _msg_hash(old_msgs[prefix]) != _msg_hash(new_msgs[prefix]):
@@ -180,7 +181,7 @@ def _pick_real_trace_file_for_diff() -> tuple[Path, int]:
     pytest.skip("No real multi-turn trace file with a message diff target found in .traces/")
 
 
-def _extract_messages(body: dict | None) -> list[str]:
+def _extract_messages(body: JsonObject | None) -> list[str]:
     if not body:
         return []
     texts: list[str] = []
@@ -207,7 +208,7 @@ def _extract_messages(body: dict | None) -> list[str]:
     return texts
 
 
-def _pick_message_term(entries: list[dict]) -> tuple[str, int]:
+def _pick_message_term(entries: list[JsonObject]) -> tuple[str, int]:
     for idx, entry in enumerate(entries):
         texts = _extract_messages(entry.get("request", {}).get("body", {}))
         for text in texts:
@@ -218,10 +219,10 @@ def _pick_message_term(entries: list[dict]) -> tuple[str, int]:
     return "model", 0
 
 
-def _pick_cross_entry_term(entries: list[dict]) -> str:
+def _pick_cross_entry_term(entries: list[JsonObject]) -> str:
     entry_texts = [json.dumps(entry, ensure_ascii=False).lower() for entry in entries]
-    by_entry_count: dict[str, int] = {}
-    total_counts: dict[str, int] = {}
+    by_entry_count: Map[str, int] = {}
+    total_counts: Map[str, int] = {}
 
     for text in entry_texts:
         seen = set()
@@ -249,7 +250,7 @@ def _pick_cross_entry_term(entries: list[dict]) -> str:
 
 
 @pytest.fixture(scope="module")
-def trace_entries() -> tuple[Path, list[dict], str, tuple[str, int]]:
+def trace_entries() -> tuple[Path, list[JsonObject], str, tuple[str, int]]:
     trace_file = _pick_real_trace_file()
     entries = _load_entries(trace_file)
     cross_term = _pick_cross_entry_term(entries)

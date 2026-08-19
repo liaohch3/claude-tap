@@ -6,7 +6,7 @@ import gzip
 import json
 import zlib
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 import pytest
 
@@ -22,7 +22,7 @@ except ImportError:
 
 
 class _UnexpectedSession:
-    async def request(self, **_kwargs: Any) -> None:
+    async def request(self, **_kwargs: object) -> None:
         raise AssertionError("capture-only mode must not contact upstream")
 
 

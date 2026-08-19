@@ -9,6 +9,7 @@ from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
 from claude_tap.compact_trace import COMPACT_TRACE_MARKER, build_compact_trace_bundle, is_compact_trace_bundle
+from claude_tap.models import ProviderPayload
 from claude_tap.sse import SSEReassembler
 from claude_tap.usage import normalize_usage
 
@@ -78,7 +79,7 @@ def _read_viewer_template() -> str:
     return html
 
 
-def _iter_response_events(resp: dict) -> list[dict]:
+def _iter_response_events(resp: ProviderPayload) -> list[ProviderPayload]:
     """Return stream events from SSE or WebSocket traces."""
     if not isinstance(resp, dict):
         return []
@@ -91,7 +92,7 @@ def _iter_response_events(resp: dict) -> list[dict]:
     return []
 
 
-def _iter_request_events(req: dict) -> list[dict]:
+def _iter_request_events(req: ProviderPayload) -> list[ProviderPayload]:
     """Return request-side WebSocket events when a raw trace stores them."""
     if not isinstance(req, dict):
         return []
@@ -101,14 +102,14 @@ def _iter_request_events(req: dict) -> list[dict]:
     return []
 
 
-def _event_type(event: dict) -> str:
+def _event_type(event: ProviderPayload) -> str:
     if not isinstance(event, dict):
         return ""
     value = event.get("event") or event.get("type")
     return value if isinstance(value, str) else ""
 
 
-def _event_payload(event: dict) -> dict | None:
+def _event_payload(event: ProviderPayload) -> ProviderPayload | None:
     if not isinstance(event, dict):
         return None
     payload = event.get("data", event)
@@ -120,14 +121,14 @@ def _event_payload(event: dict) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _first_bool(*values: object) -> bool | None:
+def _first_bool(*values: ProviderPayload) -> bool | None:
     for value in values:
         if isinstance(value, bool):
             return value
     return None
 
 
-def _response_payload_from_event(event: dict) -> dict:
+def _response_payload_from_event(event: ProviderPayload) -> ProviderPayload:
     data = _event_payload(event)
     if not isinstance(data, dict):
         return {}
@@ -137,14 +138,14 @@ def _response_payload_from_event(event: dict) -> dict:
     return data
 
 
-def _last_response_payload_for_event(events: list[dict], event_type: str) -> dict:
+def _last_response_payload_for_event(events: list[ProviderPayload], event_type: str) -> ProviderPayload:
     for event in reversed(events):
         if _event_type(event) == event_type:
             return _response_payload_from_event(event)
     return {}
 
 
-def _response_output_count_from_events(events: list[dict]) -> int:
+def _response_output_count_from_events(events: list[ProviderPayload]) -> int:
     completed = _last_response_payload_for_event(events, "response.completed")
     output = completed.get("output")
     if isinstance(output, list):
@@ -152,7 +153,7 @@ def _response_output_count_from_events(events: list[dict]) -> int:
     return sum(1 for event in events if _event_type(event) == "response.output_item.done")
 
 
-def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
+def _decode_bedrock_eventstream_events(body: ProviderPayload) -> list[ProviderPayload]:
     """Extract normalized stream events from a decoded AWS EventStream body.
 
     Bedrock streaming responses are binary AWS EventStream frames. Legacy
@@ -184,7 +185,7 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
     if not any(f'"{key}"' in body for key in stream_event_keys):
         return []
 
-    def _converse_event_payload(payload: dict) -> tuple[str | None, dict | None]:
+    def _converse_event_payload(payload: ProviderPayload) -> tuple[str | None, ProviderPayload | None]:
         message_start = payload.get("messageStart")
         if isinstance(message_start, dict):
             return "message_start", {
@@ -199,7 +200,7 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
         if isinstance(block_start, dict):
             start = block_start.get("start") if isinstance(block_start.get("start"), dict) else {}
             tool_use = start.get("toolUse") if isinstance(start, dict) else None
-            block: dict = {}
+            block: ProviderPayload = {}
             if isinstance(tool_use, dict):
                 block = {
                     "type": "tool_use",
@@ -215,7 +216,7 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
         block_delta = payload.get("contentBlockDelta")
         if isinstance(block_delta, dict):
             delta = block_delta.get("delta") if isinstance(block_delta.get("delta"), dict) else {}
-            normalized_delta: dict = {}
+            normalized_delta: ProviderPayload = {}
             if isinstance(delta.get("text"), str):
                 normalized_delta = {"type": "text_delta", "text": delta["text"]}
             elif isinstance(delta.get("reasoningContent"), dict):
@@ -253,7 +254,7 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
 
         return None, None
 
-    def _event_payload_from_frame(frame: dict) -> tuple[str | None, dict | None]:
+    def _event_payload_from_frame(frame: ProviderPayload) -> tuple[str | None, ProviderPayload | None]:
         encoded = frame.get("bytes")
         if not isinstance(encoded, str):
             chunk = frame.get("chunk")
@@ -293,7 +294,7 @@ def _decode_bedrock_eventstream_events(body: object) -> list[dict]:
                 return event_type, payload
         return None, None
 
-    events: list[dict] = []
+    events: list[ProviderPayload] = []
     decoder = json.JSONDecoder()
     pos = 0
     while True:
@@ -345,7 +346,7 @@ def _normalize_record_for_viewer(record_json: str) -> str:
     return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
 
 
-def _parse_function_call_arguments(arguments: object) -> object:
+def _parse_function_call_arguments(arguments: ProviderPayload) -> ProviderPayload:
     if isinstance(arguments, str):
         try:
             return json.loads(arguments)
@@ -356,11 +357,11 @@ def _parse_function_call_arguments(arguments: object) -> object:
     return arguments
 
 
-def _parse_sse_data_frames(body: object) -> list[dict]:
+def _parse_sse_data_frames(body: ProviderPayload) -> list[ProviderPayload]:
     if not isinstance(body, str) or "data:" not in body:
         return []
 
-    events: list[dict] = []
+    events: list[ProviderPayload] = []
     data_lines: list[str] = []
     for line in body.splitlines():
         if line.startswith("data:"):
@@ -392,32 +393,32 @@ def _parse_sse_data_frames(body: object) -> list[dict]:
     return events
 
 
-def _looks_like_gemini_request(value: object) -> bool:
+def _looks_like_gemini_request(value: ProviderPayload) -> bool:
     return isinstance(value, dict) and (
         isinstance(value.get("contents"), list) or isinstance(value.get("systemInstruction"), dict)
     )
 
 
-def _gemini_request(body: dict) -> dict:
+def _gemini_request(body: ProviderPayload) -> ProviderPayload:
     req = body.get("request")
     if _looks_like_gemini_request(req):
         return req
     return body if _looks_like_gemini_request(body) else {}
 
 
-def _is_gemini_request_body(body: dict) -> bool:
+def _is_gemini_request_body(body: ProviderPayload) -> bool:
     req = _gemini_request(body)
     return _looks_like_gemini_request(req)
 
 
-def _model_from_path(path: object) -> str:
+def _model_from_path(path: str | None) -> str:
     if not isinstance(path, str):
         return ""
     match = re.search(r"/models?/([^:?/]+)", path)
     return match.group(1) if match else ""
 
 
-def _gemini_text_from_parts(parts: object) -> str:
+def _gemini_text_from_parts(parts: ProviderPayload) -> str:
     if not isinstance(parts, list):
         return ""
     return "\n".join(
@@ -425,14 +426,14 @@ def _gemini_text_from_parts(parts: object) -> str:
     )
 
 
-def _extract_gemini_system(body: dict) -> str:
+def _extract_gemini_system(body: ProviderPayload) -> str:
     instr = _gemini_request(body).get("systemInstruction")
     if not isinstance(instr, dict):
         return ""
     return _gemini_text_from_parts(instr.get("parts")).strip()
 
 
-def _gemini_function_response_content(resp: dict) -> str:
+def _gemini_function_response_content(resp: ProviderPayload) -> str:
     payload = resp.get("response")
     if isinstance(payload, dict) and "output" in payload:
         output = payload["output"]
@@ -443,8 +444,8 @@ def _gemini_function_response_content(resp: dict) -> str:
     return json.dumps(output, ensure_ascii=False)
 
 
-def _gemini_part_blocks(part: dict) -> list[dict]:
-    blocks: list[dict] = []
+def _gemini_part_blocks(part: ProviderPayload) -> list[ProviderPayload]:
+    blocks: list[ProviderPayload] = []
     text = part.get("text")
     if isinstance(text, str) and text.strip():
         if part.get("thought") is True:
@@ -475,22 +476,22 @@ def _gemini_part_blocks(part: dict) -> list[dict]:
     return blocks
 
 
-def _gemini_role(role: object) -> str:
+def _gemini_role(role: str | None) -> str:
     if role == "model":
         return "assistant"
     return role if isinstance(role, str) and role else "user"
 
 
-def _extract_gemini_request_messages(body: dict) -> list[dict]:
+def _extract_gemini_request_messages(body: ProviderPayload) -> list[ProviderPayload]:
     contents = _gemini_request(body).get("contents")
     if not isinstance(contents, list):
         return []
 
-    messages: list[dict] = []
+    messages: list[ProviderPayload] = []
     for content in contents:
         if not isinstance(content, dict):
             continue
-        blocks: list[dict] = []
+        blocks: list[ProviderPayload] = []
         for part in content.get("parts") or []:
             if isinstance(part, dict):
                 blocks.extend(_gemini_part_blocks(part))
@@ -503,12 +504,12 @@ def _extract_gemini_request_messages(body: dict) -> list[dict]:
     return messages
 
 
-def _extract_gemini_tools(body: dict) -> list[dict]:
+def _extract_gemini_tools(body: ProviderPayload) -> list[ProviderPayload]:
     tools = _gemini_request(body).get("tools")
     if not isinstance(tools, list):
         return []
 
-    normalized: list[dict] = []
+    normalized: list[ProviderPayload] = []
     for tool_group in tools:
         if not isinstance(tool_group, dict):
             continue
@@ -528,7 +529,7 @@ def _extract_gemini_tools(body: dict) -> list[dict]:
     return normalized
 
 
-def _gemini_payloads_from_response_body(body: object) -> list[dict]:
+def _gemini_payloads_from_response_body(body: ProviderPayload) -> list[ProviderPayload]:
     if isinstance(body, str):
         return [event["data"] for event in _parse_sse_data_frames(body) if isinstance(event.get("data"), dict)]
     if isinstance(body, dict):
@@ -536,9 +537,9 @@ def _gemini_payloads_from_response_body(body: object) -> list[dict]:
     return []
 
 
-def _extract_gemini_response_output(body: object) -> dict | None:
+def _extract_gemini_response_output(body: ProviderPayload) -> ProviderPayload | None:
     payloads = _gemini_payloads_from_response_body(body)
-    content: list[dict] = []
+    content: list[ProviderPayload] = []
 
     def append_mergeable_block(block: dict[str, str]) -> None:
         previous = content[-1] if content else None
@@ -591,8 +592,8 @@ def _extract_gemini_response_output(body: object) -> dict | None:
     return {"content": content} if content else None
 
 
-def _extract_gemini_response_usage(body: object) -> dict:
-    usage: dict = {}
+def _extract_gemini_response_usage(body: ProviderPayload) -> ProviderPayload:
+    usage: ProviderPayload = {}
     for payload in _gemini_payloads_from_response_body(body):
         response = payload.get("response") if isinstance(payload.get("response"), dict) else payload
         if not isinstance(response, dict):
@@ -603,14 +604,14 @@ def _extract_gemini_response_usage(body: object) -> dict:
     return normalize_usage(usage)
 
 
-def _extract_gemini_response_tool_names(body: object) -> list[str]:
+def _extract_gemini_response_tool_names(body: ProviderPayload) -> list[str]:
     output = _extract_gemini_response_output(body)
     if not output:
         return []
     return [block.get("name", "") for block in output["content"] if block.get("type") == "tool_use"]
 
 
-def _tool_search_output_content(item: dict) -> str:
+def _tool_search_output_content(item: ProviderPayload) -> str:
     names: list[str] = []
     tools = item.get("tools")
     if isinstance(tools, list):
@@ -638,7 +639,7 @@ def _tool_search_output_content(item: dict) -> str:
     return json.dumps(item, ensure_ascii=False)
 
 
-def _response_call_tool_name(item: dict) -> str:
+def _response_call_tool_name(item: ProviderPayload) -> str:
     item_type = item.get("type")
     if item_type == "tool_search_call":
         return "tool_search"
@@ -650,12 +651,12 @@ def _response_call_tool_name(item: dict) -> str:
     return ""
 
 
-def _is_response_call_item(item: dict) -> bool:
+def _is_response_call_item(item: ProviderPayload) -> bool:
     item_type = item.get("type")
     return isinstance(item_type, str) and item_type.endswith("_call")
 
 
-def _response_call_input(item: dict) -> object:
+def _response_call_input(item: ProviderPayload) -> ProviderPayload:
     if "arguments" in item:
         return _parse_function_call_arguments(item.get("arguments"))
     return {
@@ -663,12 +664,12 @@ def _response_call_input(item: dict) -> object:
     }
 
 
-def _is_response_tool_result_item(item: dict) -> bool:
+def _is_response_tool_result_item(item: ProviderPayload) -> bool:
     item_type = item.get("type")
     return item_type == "tool_search_output" or (isinstance(item_type, str) and item_type.endswith("_call_output"))
 
 
-def _response_tool_result_content(item: dict) -> str:
+def _response_tool_result_content(item: ProviderPayload) -> str:
     if item.get("type") == "tool_search_output":
         return _tool_search_output_content(item)
     if "output" in item:
@@ -682,7 +683,7 @@ def _response_tool_result_content(item: dict) -> str:
     )
 
 
-def _extract_request_messages(body: dict) -> list[dict]:
+def _extract_request_messages(body: ProviderPayload) -> list[ProviderPayload]:
     if not isinstance(body, dict):
         return []
     msgs = body.get("messages")
@@ -727,7 +728,7 @@ def _extract_request_messages(body: dict) -> list[dict]:
     return normalized
 
 
-def _extract_response_tool_names(output: list) -> list[str]:
+def _extract_response_tool_names(output: list[ProviderPayload]) -> list[str]:
     names: list[str] = []
     if not isinstance(output, list):
         return names
@@ -743,7 +744,7 @@ def _extract_response_tool_names(output: list) -> list[str]:
     return names
 
 
-def _extract_response_tool_names_from_output_item_events(events: list[dict]) -> list[str]:
+def _extract_response_tool_names_from_output_item_events(events: list[ProviderPayload]) -> list[str]:
     names: list[str] = []
     for ev in events:
         if _event_type(ev) != "response.output_item.done":
@@ -757,11 +758,11 @@ def _extract_response_tool_names_from_output_item_events(events: list[dict]) -> 
     return names
 
 
-def _dict_or_empty(value: object) -> dict:
+def _dict_or_empty(value: ProviderPayload) -> ProviderPayload:
     return value if isinstance(value, dict) else {}
 
 
-def _tool_display_name(tool: dict) -> str:
+def _tool_display_name(tool: ProviderPayload) -> str:
     for value in (
         tool.get("name"),
         (tool.get("function") or {}).get("name") if isinstance(tool.get("function"), dict) else None,
@@ -831,7 +832,7 @@ def _clean_session_user_text(text: str) -> str:
     return re.sub(r"^\[Image #\d+\]\s*", "", value, flags=re.IGNORECASE).strip()
 
 
-def _session_text_from_content(content: object) -> str:
+def _session_text_from_content(content: ProviderPayload) -> str:
     if content is None:
         return ""
     if isinstance(content, str):
@@ -857,7 +858,7 @@ def _session_text_from_content(content: object) -> str:
     return ""
 
 
-def _is_tool_result_only_message(message: dict) -> bool:
+def _is_tool_result_only_message(message: ProviderPayload) -> bool:
     content = message.get("content")
     if not isinstance(content, list) or not content:
         return False
@@ -866,7 +867,7 @@ def _is_tool_result_only_message(message: dict) -> bool:
     )
 
 
-def _first_user_text(messages: list[dict]) -> str:
+def _first_user_text(messages: list[ProviderPayload]) -> str:
     for message in messages:
         if message.get("role") != "user" or _is_tool_result_only_message(message):
             continue
@@ -876,7 +877,7 @@ def _first_user_text(messages: list[dict]) -> str:
     return ""
 
 
-def _latest_user_text(messages: list[dict]) -> str:
+def _latest_user_text(messages: list[ProviderPayload]) -> str:
     for message in reversed(messages):
         if message.get("role") != "user" or _is_tool_result_only_message(message):
             continue
@@ -886,7 +887,7 @@ def _latest_user_text(messages: list[dict]) -> str:
     return ""
 
 
-def _extract_metadata(record_json: str) -> dict | None:
+def _extract_metadata(record_json: str) -> ProviderPayload | None:
     """Extract sidebar-relevant metadata from a raw JSON record string."""
     try:
         r = json.loads(record_json)
@@ -895,7 +896,7 @@ def _extract_metadata(record_json: str) -> dict | None:
     return _extract_metadata_from_record(r)
 
 
-def _extract_metadata_from_record(r: dict) -> dict | None:
+def _extract_metadata_from_record(r: ProviderPayload) -> ProviderPayload | None:
     """Extract sidebar metadata from a raw record without embedding full payloads.
 
     The returned dict contains only fields needed for sidebar rendering,
@@ -1056,7 +1057,7 @@ def _generate_html_viewer(
             )
             return
 
-    records: list[dict] = []
+    records: list[ProviderPayload] = []
     if trace_path.exists():
         with open(trace_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -1077,7 +1078,7 @@ def _generate_html_viewer(
 
 
 def _generate_html_viewer_from_compact_bundle(
-    compact_bundle: dict,
+    compact_bundle: ProviderPayload,
     html_path: Path,
     *,
     display_trace_path: str | Path,
@@ -1112,7 +1113,7 @@ def _generate_html_viewer_from_compact_bundle(
 
 
 def _generate_html_viewer_from_metadata(
-    metadata: list[dict],
+    metadata: list[ProviderPayload],
     html_path: Path,
     *,
     display_trace_path: str | Path,

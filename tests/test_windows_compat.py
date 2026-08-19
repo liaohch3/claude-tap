@@ -16,6 +16,7 @@ import pytest
 
 from claude_tap.cli import run_client
 from claude_tap.history import _rel_posix
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -62,7 +63,7 @@ async def test_run_client_does_not_touch_sigtstp_when_absent(monkeypatch) -> Non
 
 @pytest.mark.asyncio
 async def test_run_client_passes_resolved_path_for_cmd_shim(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -86,7 +87,7 @@ async def test_run_client_passes_resolved_path_for_cmd_shim(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_run_client_prefers_windows_cmd_sibling(monkeypatch, tmp_path: Path) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -156,7 +157,7 @@ async def test_run_client_executes_real_cmd_shim_on_windows(monkeypatch, tmp_pat
 
 @pytest.mark.asyncio
 async def test_run_client_uses_wrapper_provided_claude_binary(monkeypatch, tmp_path: Path) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

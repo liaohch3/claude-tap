@@ -12,6 +12,7 @@ from claude_tap.cli import (
     parse_update_args,
     update_main,
 )
+from tests.schema_types import Map
 
 
 def test_detect_installer_uses_uv_tool_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,7 +92,7 @@ def test_update_main_dry_run_prints_command(
 
 
 def test_update_main_runs_selected_command(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
@@ -106,7 +107,7 @@ def test_update_main_runs_selected_command(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_update_main_hides_windows_console(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     class FakeStartupInfo:
         def __init__(self) -> None:
@@ -151,7 +152,7 @@ def test_update_main_reports_missing_uv(monkeypatch: pytest.MonkeyPatch, capsys:
 
 
 def test_main_entry_routes_update_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
-    called: dict[str, object] = {}
+    called: Map[str, object] = {}
 
     def fake_update_main(argv):
         called["argv"] = argv

@@ -24,6 +24,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from claude_tap.models import ProviderPayload
+
 log = logging.getLogger("claude-tap")
 
 
@@ -68,7 +70,7 @@ def _connect_readonly(path: Path) -> sqlite3.Connection | None:
         return None
 
 
-def _decode_maybe_hex_json(value: object) -> dict | None:
+def _decode_maybe_hex_json(value: ProviderPayload) -> ProviderPayload | None:
     if isinstance(value, bytes):
         try:
             value = value.decode("utf-8")
@@ -168,7 +170,7 @@ def lookup_composer_meta(
     )
 
 
-def _message_text(content: object) -> str:
+def _message_text(content: ProviderPayload) -> str:
     if isinstance(content, str):
         return content.strip()
     if not isinstance(content, list):

@@ -17,9 +17,13 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from claude_tap.models import ProviderPayload
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPO_ROOT / "pyproject.toml"
@@ -410,7 +414,7 @@ def changed_viewer_css_selectors(viewer_css: Path, changed_lines: dict[str, set[
     return selectors
 
 
-def _main_viewer_script(coverage: dict[str, Any], suffix: str) -> dict[str, Any]:
+def _main_viewer_script(coverage: ProviderPayload, suffix: str) -> ProviderPayload:
     scripts = coverage.get("result") or []
     candidates = [
         script for script in scripts if script.get("url", "").endswith(suffix) and len(script.get("functions", [])) > 50
@@ -430,12 +434,12 @@ def _main_viewer_script(coverage: dict[str, Any], suffix: str) -> dict[str, Any]
     return max(candidates, key=lambda script: len(script.get("functions", [])))
 
 
-def _restart_precise_coverage(session: Any) -> None:
+def _restart_precise_coverage(session: ProviderPayload) -> None:
     session.send("Profiler.stopPreciseCoverage")
     session.send("Profiler.startPreciseCoverage", {"callCount": True, "detailed": True})
 
 
-def _is_top_level_wrapper(function: dict[str, Any], script_end: int) -> bool:
+def _is_top_level_wrapper(function: ProviderPayload, script_end: int) -> bool:
     if function.get("functionName"):
         return False
     ranges = function.get("ranges", [])
@@ -445,18 +449,22 @@ def _is_top_level_wrapper(function: dict[str, Any], script_end: int) -> bool:
     return script_end > 0 and widest >= script_end * 0.8
 
 
-def _viewer_script_functions(script: dict[str, Any]) -> list[dict[str, Any]]:
+def _viewer_script_functions(script: ProviderPayload) -> list[ProviderPayload]:
     all_ranges = [item for function in script["functions"] for item in function.get("ranges", [])]
     script_end = max((item.get("endOffset", 0) for item in all_ranges), default=0)
     return [function for function in script["functions"] if not _is_top_level_wrapper(function, script_end)]
 
 
-def _is_function_covered(function: dict[str, Any]) -> bool:
+def _is_function_covered(function: ProviderPayload) -> bool:
     return any(item.get("count", 0) > 0 for item in function.get("ranges", []))
 
 
-def _load_viewer_contract_helpers() -> tuple[Any, Any, Any]:
+def _load_viewer_contract_helpers() -> tuple[
+    Callable[..., ProviderPayload], Callable[..., str], Callable[..., ProviderPayload]
+]:
     contracts_path = REPO_ROOT / "tests" / "test_viewer_contracts.py"
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
     spec = importlib.util.spec_from_file_location("viewer_contracts_for_coverage", contracts_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load viewer contract helpers from {contracts_path}")

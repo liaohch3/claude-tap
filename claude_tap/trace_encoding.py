@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from typing import Any
+
+from claude_tap.models import ProviderPayload
 
 PROTOBUF_CONTENT_TYPE_TOKENS = (
     "application/proto",
@@ -16,7 +16,7 @@ PROTOBUF_CONTENT_TYPE_TOKENS = (
 _ENCODED_BLOB_ENCODINGS = frozenset({"protobuf", "binary"})
 
 
-def content_type_from_headers(headers: Mapping[str, Any] | None) -> str:
+def content_type_from_headers(headers: ProviderPayload | None) -> str:
     if not headers:
         return ""
     return str(headers.get("Content-Type") or headers.get("content-type") or "")
@@ -37,11 +37,11 @@ def looks_like_binary_text(text: str) -> bool:
     return control / max(len(sample), 1) >= 0.1
 
 
-def is_encoded_blob_body(body: Any) -> bool:
+def is_encoded_blob_body(body: ProviderPayload) -> bool:
     return isinstance(body, dict) and body.get("_encoding") in _ENCODED_BLOB_ENCODINGS
 
 
-def parse_request_body_for_trace(body: bytes, headers: Mapping[str, str] | None = None) -> object:
+def parse_request_body_for_trace(body: bytes, headers: dict[str, str] | None = None) -> ProviderPayload:
     """Parse a request body for trace storage without mutating upstream bytes."""
     if not body:
         return None

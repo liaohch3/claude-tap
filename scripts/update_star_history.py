@@ -10,7 +10,11 @@ import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.request import Request, urlopen
+
+if TYPE_CHECKING:
+    from claude_tap.models import ProviderPayload
 
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 STARGAZERS_QUERY = """
@@ -31,7 +35,7 @@ query StarHistory($owner: String!, $name: String!, $cursor: String) {
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
-def _request_json(request: Request) -> object:
+def _request_json(request: Request) -> ProviderPayload:
     with urlopen(request, timeout=30) as response:
         return json.load(response)
 
@@ -39,7 +43,7 @@ def _request_json(request: Request) -> object:
 def fetch_stargazer_timestamps(
     repo: str,
     token: str | None,
-    request_json: Callable[[Request], object] = _request_json,
+    request_json: Callable[[Request], ProviderPayload] = _request_json,
 ) -> list[datetime]:
     """Fetch every stargazer timestamp in chronological order."""
     if not REPO_PATTERN.fullmatch(repo) or any(part in {".", ".."} for part in repo.split("/")):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 
+from claude_tap.models import ProviderPayload
 from claude_tap.usage import normalize_usage
 
 
@@ -14,11 +15,11 @@ class SSEReassembler:
 
     def __init__(self, *, store_events: bool = True):
         self._store_events = store_events
-        self.events: list[dict] = []
+        self.events: list[ProviderPayload] = []
         self._buf = b""
         self._current_event: str | None = None
         self._current_data_lines: list[str] = []
-        self._snapshot: dict | None = None
+        self._snapshot: ProviderPayload | None = None
 
     def feed_bytes(self, chunk: bytes):
         self._buf += chunk
@@ -164,7 +165,7 @@ class SSEReassembler:
         except Exception:
             pass
 
-    def _ensure_responses_output(self) -> list:
+    def _ensure_responses_output(self) -> list[ProviderPayload]:
         """Return the snapshot's OpenAI Responses `output` list, creating the
         snapshot and/or the list if a streaming output item arrives before
         response.created."""
@@ -176,7 +177,7 @@ class SSEReassembler:
             self._snapshot["output"] = output
         return output
 
-    def _accumulate_responses_output_item(self, data: dict) -> None:
+    def _accumulate_responses_output_item(self, data: ProviderPayload) -> None:
         """Place an OpenAI Responses output item into the snapshot at its
         output_index. response.output_item.done carries the complete item and
         is authoritative; response.output_item.added seeds a placeholder that
@@ -192,7 +193,7 @@ class SSEReassembler:
             output.append({})
         output[idx] = copy.deepcopy(item)
 
-    def _accumulate_responses_output_text(self, data: dict) -> None:
+    def _accumulate_responses_output_text(self, data: ProviderPayload) -> None:
         """Append a response.output_text.delta to the in-progress message item
         so partial/truncated streams still retain their text even if the
         terminal response.output_item.done never arrives."""
@@ -218,15 +219,15 @@ class SSEReassembler:
             content.append(part)
         part["text"] = (part.get("text") or "") + delta
 
-    def _accumulate_responses_function_arguments(self, data: dict) -> None:
+    def _accumulate_responses_function_arguments(self, data: ProviderPayload) -> None:
         """Append streamed arguments to an in-progress function call item."""
         self._accumulate_responses_tool_delta(data, item_type="function_call", field="arguments")
 
-    def _accumulate_responses_custom_tool_input(self, data: dict) -> None:
+    def _accumulate_responses_custom_tool_input(self, data: ProviderPayload) -> None:
         """Append streamed input to an in-progress custom tool call item."""
         self._accumulate_responses_tool_delta(data, item_type="custom_tool_call", field="input")
 
-    def _accumulate_responses_tool_delta(self, data: dict, *, item_type: str, field: str) -> None:
+    def _accumulate_responses_tool_delta(self, data: ProviderPayload, *, item_type: str, field: str) -> None:
         delta = data.get("delta")
         if not isinstance(delta, str) or not delta:
             return
@@ -241,7 +242,7 @@ class SSEReassembler:
             return
         item[field] = (item.get(field) or "") + delta
 
-    def _merge_responses_terminal(self, data: dict) -> None:
+    def _merge_responses_terminal(self, data: ProviderPayload) -> None:
         """Apply a terminal response.completed / response.done event.
 
         The terminal `response` object carries the final status and usage but
@@ -258,7 +259,7 @@ class SSEReassembler:
             response["output"] = accumulated
         self._snapshot = response
 
-    def _record_responses_error(self, data: dict) -> None:
+    def _record_responses_error(self, data: ProviderPayload) -> None:
         """Capture a stream-level response.error event. It carries no response
         object, so attach the error to the snapshot without discarding output
         already accumulated from response.output_item.* events."""
@@ -271,7 +272,7 @@ class SSEReassembler:
         if self._snapshot.get("status") in (None, "", "queued", "in_progress"):
             self._snapshot["status"] = "failed"
 
-    def _content_block_for_delta(self, idx: int, delta: dict) -> dict | None:
+    def _content_block_for_delta(self, idx: int, delta: ProviderPayload) -> ProviderPayload | None:
         if not isinstance(idx, int) or idx < 0:
             idx = 0
         if "content" not in self._snapshot:
@@ -290,14 +291,14 @@ class SSEReassembler:
             block.update(self._empty_content_block_for_delta(delta))
         return block
 
-    def _empty_content_block_for_delta(self, delta: dict) -> dict:
+    def _empty_content_block_for_delta(self, delta: ProviderPayload) -> ProviderPayload:
         if delta.get("type") == "thinking_delta":
             return {"type": "thinking", "thinking": ""}
         if delta.get("type") == "input_json_delta":
             return {"type": "tool_use", "id": "", "name": "", "input": {}}
         return {"type": "text", "text": ""}
 
-    def _accumulate_chat_completion_chunk(self, data: dict) -> None:
+    def _accumulate_chat_completion_chunk(self, data: ProviderPayload) -> None:
         choices = data.get("choices") or []
         usage = data.get("usage")
 
@@ -386,7 +387,7 @@ class SSEReassembler:
         if isinstance(choice_usage, dict):
             self._merge_chat_completion_usage(choice_usage)
 
-    def _gemini_chunk_payload(self, data: dict) -> dict | None:
+    def _gemini_chunk_payload(self, data: ProviderPayload) -> ProviderPayload | None:
         if self._is_gemini_chunk(data):
             return data
         response = data.get("response")
@@ -394,10 +395,10 @@ class SSEReassembler:
             return response
         return None
 
-    def _is_gemini_chunk(self, data: dict) -> bool:
+    def _is_gemini_chunk(self, data: ProviderPayload) -> bool:
         return "candidates" in data or "usageMetadata" in data
 
-    def _accumulate_gemini_chunk(self, data: dict) -> None:
+    def _accumulate_gemini_chunk(self, data: ProviderPayload) -> None:
         if self._snapshot is None or not isinstance(self._snapshot.get("candidates"), list):
             self._snapshot = {"candidates": []}
 
@@ -419,7 +420,7 @@ class SSEReassembler:
 
         self._snapshot["content"] = self._gemini_content_blocks()
 
-    def _merge_gemini_candidate(self, position: int, candidate: dict) -> None:
+    def _merge_gemini_candidate(self, position: int, candidate: ProviderPayload) -> None:
         idx = candidate.get("index")
         if not isinstance(idx, int) or idx < 0:
             idx = position
@@ -439,7 +440,7 @@ class SSEReassembler:
             else:
                 target[key] = copy.deepcopy(value)
 
-    def _merge_gemini_candidate_content(self, candidate: dict, incoming: dict) -> None:
+    def _merge_gemini_candidate_content(self, candidate: ProviderPayload, incoming: ProviderPayload) -> None:
         content = candidate.get("content")
         if not isinstance(content, dict):
             content = {}
@@ -459,7 +460,7 @@ class SSEReassembler:
             if isinstance(part, dict):
                 self._append_gemini_part(parts, part)
 
-    def _append_gemini_part(self, parts: list, part: dict) -> None:
+    def _append_gemini_part(self, parts: list[ProviderPayload], part: ProviderPayload) -> None:
         if self._is_mergeable_gemini_text_part(part):
             previous = parts[-1] if parts else None
             if (
@@ -472,13 +473,13 @@ class SSEReassembler:
                 return
         parts.append(copy.deepcopy(part))
 
-    def _is_mergeable_gemini_text_part(self, part: dict) -> bool:
+    def _is_mergeable_gemini_text_part(self, part: ProviderPayload) -> bool:
         if not isinstance(part.get("text"), str):
             return False
         return set(part).issubset({"text", "thought"})
 
-    def _gemini_content_blocks(self) -> list[dict]:
-        content: list[dict] = []
+    def _gemini_content_blocks(self) -> list[ProviderPayload]:
+        content: list[ProviderPayload] = []
         for candidate in self._snapshot.get("candidates") or []:
             if not isinstance(candidate, dict):
                 continue
@@ -505,7 +506,7 @@ class SSEReassembler:
                     )
         return content
 
-    def _append_mergeable_content_block(self, content: list[dict], block: dict) -> None:
+    def _append_mergeable_content_block(self, content: list[ProviderPayload], block: ProviderPayload) -> None:
         previous = content[-1] if content else None
         if isinstance(previous, dict) and previous.get("type") == block.get("type"):
             if block.get("type") == "thinking":
@@ -516,7 +517,7 @@ class SSEReassembler:
                 return
         content.append(block)
 
-    def _mirror_tool_call_to_content(self, idx: int, tc: dict) -> None:
+    def _mirror_tool_call_to_content(self, idx: int, tc: ProviderPayload) -> None:
         """Sync one accumulated tool_call into the `content` array as a
         tool_use block. content always has a text block, and may also have a
         leading thinking block, so tool_use blocks live after those mirrors."""
@@ -540,7 +541,7 @@ class SSEReassembler:
                 # input (or {}) until a complete JSON arrives.
                 pass
 
-    def _chat_completion_text_block(self) -> dict:
+    def _chat_completion_text_block(self) -> ProviderPayload:
         content = self._snapshot["content"]
         for block in content:
             if block.get("type") == "text":
@@ -549,7 +550,7 @@ class SSEReassembler:
         content.append(block)
         return block
 
-    def _chat_completion_thinking_block(self, *, create: bool) -> dict | None:
+    def _chat_completion_thinking_block(self, *, create: bool) -> ProviderPayload | None:
         content = self._snapshot["content"]
         for block in content:
             if block.get("type") == "thinking":
@@ -565,7 +566,7 @@ class SSEReassembler:
         if block is not None:
             block["thinking"] = reasoning
 
-    def _merge_chat_completion_reasoning_details(self, msg: dict, details) -> str:
+    def _merge_chat_completion_reasoning_details(self, msg: ProviderPayload, details) -> str:
         """Merge MiniMax reasoning_details buffers and return display text."""
         if not isinstance(details, list):
             return ""
@@ -591,12 +592,12 @@ class SSEReassembler:
         ]
         return "\n\n".join(texts)
 
-    def _merge_chat_completion_usage(self, usage: dict) -> None:
+    def _merge_chat_completion_usage(self, usage: ProviderPayload) -> None:
         """Merge an OpenAI-shape usage dict into the snapshot, exposing both
         prompt/completion and input/output token names for downstream code."""
         self._snapshot["usage"] = normalize_usage(usage)
 
-    def reconstruct(self) -> dict | None:
+    def reconstruct(self) -> ProviderPayload | None:
         if self._snapshot is None:
             return None
         return self._snapshot

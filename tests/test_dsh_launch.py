@@ -7,6 +7,7 @@ import pytest
 from claude_tap import parse_args
 from claude_tap.cli import CLIENT_CONFIGS, _reverse_proxy_trace_options, run_client
 from claude_tap.cli_clients import _detect_dsh_target, _node_supports_env_proxy
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -50,7 +51,7 @@ def test_parse_args_dsh_defaults_to_forward_mode() -> None:
 async def test_run_client_dsh_forward_enables_node_proxy_and_preserves_args(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -99,7 +100,7 @@ async def test_run_client_dsh_forward_rejects_node_without_env_proxy_support(
 
 
 def test_node_supports_env_proxy_probes_node_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
@@ -118,7 +119,7 @@ def test_node_supports_env_proxy_probes_node_on_path(monkeypatch: pytest.MonkeyP
 async def test_run_client_dsh_reverse_sets_base_url_and_preserves_args(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

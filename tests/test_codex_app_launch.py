@@ -11,6 +11,7 @@ import pytest
 
 from claude_tap import cli_clients
 from claude_tap.cli import run_client
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -45,7 +46,7 @@ def test_codex_app_existing_processes_filters_current_pid_and_legacy_chatgpt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     current_pid = os.getpid()
     chatgpt_app = tmp_path / "ChatGPT.app"
     _write_app_plist(chatgpt_app, "com.openai.codex")
@@ -107,7 +108,7 @@ def test_codex_app_existing_processes_matches_custom_executable(
     tmp_path: Path,
 ) -> None:
     configured = tmp_path / "Codex Dev"
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     def fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
         captured["cmd"] = cmd
@@ -145,7 +146,7 @@ def test_codex_app_existing_processes_handles_unsupported_platform_and_pgrep_fai
 
 
 def test_quit_codex_app_uses_bundle_id_and_reports_failures(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     def fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
         captured["cmd"] = cmd
@@ -391,7 +392,7 @@ async def test_run_client_codexapp_forward_launches_app_with_proxy_env(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     ca_path = Path("/tmp/test-ca.pem")
 
     async def fake_create_subprocess_exec(*cmd: str, **kwargs: object) -> _DummyProc:
@@ -441,7 +442,7 @@ async def test_run_client_codexapp_forward_launches_isolated_instance_when_app_r
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     profile = tmp_path / "tap-profile"
 
     async def fake_create_subprocess_exec(*cmd: str, **kwargs: object) -> _DummyProc:
@@ -478,7 +479,7 @@ async def test_run_client_codexapp_forward_respects_preflighted_isolated_profile
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     profile = tmp_path / "preflight-profile"
     prepare_called = False
 

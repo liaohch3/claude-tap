@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from hashlib import sha256
-from typing import Any
+
+from claude_tap.models import ProviderPayload
 
 COMPACT_TRACE_MARKER = "__claude_tap_compact_trace__"
 COMPACT_RECORD_MARKER = "__claude_tap_compact_record__"
@@ -26,14 +27,14 @@ COMPACT_ITEM_BLOB_PATHS = (
 )
 
 
-def dump_compact_trace(records: list[dict[str, Any]]) -> str:
+def dump_compact_trace(records: list[ProviderPayload]) -> str:
     """Serialize records into a portable compact trace bundle."""
     return json.dumps(build_compact_trace_bundle(records), ensure_ascii=False, separators=(",", ":")) + "\n"
 
 
-def build_compact_trace_bundle(records: list[dict[str, Any]]) -> dict[str, Any]:
+def build_compact_trace_bundle(records: list[ProviderPayload]) -> ProviderPayload:
     """Return a standalone compact trace bundle with inline blob dictionary."""
-    blobs: dict[str, dict[str, Any]] = {}
+    blobs: dict[str, ProviderPayload] = {}
     compact_records = [_encode_compact_record(record, blobs) for record in records]
     return {
         COMPACT_TRACE_MARKER: {
@@ -47,7 +48,7 @@ def build_compact_trace_bundle(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def load_compact_trace(text: str) -> list[dict[str, Any]] | None:
+def load_compact_trace(text: str) -> list[ProviderPayload] | None:
     """Materialize a compact trace bundle, or return None when text is not one."""
     try:
         value = json.loads(text)
@@ -58,14 +59,14 @@ def load_compact_trace(text: str) -> list[dict[str, Any]] | None:
     return materialize_compact_trace_bundle(value)
 
 
-def is_compact_trace_bundle(value: Any) -> bool:
+def is_compact_trace_bundle(value: ProviderPayload) -> bool:
     if not isinstance(value, dict):
         return False
     marker = value.get(COMPACT_TRACE_MARKER)
     return isinstance(marker, dict) and marker.get("version") == COMPACT_TRACE_VERSION
 
 
-def materialize_compact_trace_bundle(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+def materialize_compact_trace_bundle(bundle: ProviderPayload) -> list[ProviderPayload]:
     """Materialize all records from a compact trace bundle."""
     if not is_compact_trace_bundle(bundle):
         raise ValueError("Unsupported compact trace bundle.")
@@ -74,8 +75,8 @@ def materialize_compact_trace_bundle(bundle: dict[str, Any]) -> list[dict[str, A
     if not isinstance(records, list) or not isinstance(blobs, dict):
         raise ValueError("Compact trace bundle must contain records and blobs.")
 
-    materialized: list[dict[str, Any]] = []
-    blob_cache: dict[str, Any] = {}
+    materialized: list[ProviderPayload] = []
+    blob_cache: ProviderPayload = {}
     for payload in records:
         record = decode_compact_record_payload(payload, lambda ref: _load_bundle_blob(ref, blobs, blob_cache))
         if isinstance(record, dict):
@@ -83,7 +84,9 @@ def materialize_compact_trace_bundle(bundle: dict[str, Any]) -> list[dict[str, A
     return materialized
 
 
-def decode_compact_record_payload(payload: Any, load_blob: Any) -> dict[str, Any] | None:
+def decode_compact_record_payload(
+    payload: ProviderPayload, load_blob: Callable[[ProviderPayload], ProviderPayload]
+) -> ProviderPayload | None:
     """Decode one compact record payload using the supplied blob loader."""
     if not isinstance(payload, dict):
         return None
@@ -104,7 +107,7 @@ def decode_compact_record_payload(payload: Any, load_blob: Any) -> dict[str, Any
     return record if isinstance(record, dict) else None
 
 
-def make_blob_ref(hash_value: str, size_bytes: int) -> dict[str, Any]:
+def make_blob_ref(hash_value: str, size_bytes: int) -> ProviderPayload:
     return {
         BLOB_REF_MARKER: {
             "version": COMPACT_RECORD_VERSION,
@@ -115,13 +118,13 @@ def make_blob_ref(hash_value: str, size_bytes: int) -> dict[str, Any]:
     }
 
 
-def json_blob_payload(value: Any) -> tuple[str, int, str]:
+def json_blob_payload(value: ProviderPayload) -> tuple[str, int, str]:
     payload_json = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     payload_bytes = payload_json.encode("utf-8")
     return payload_json, len(payload_bytes), "sha256:" + sha256(payload_bytes).hexdigest()
 
 
-def _encode_compact_record(record: dict[str, Any], blobs: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _encode_compact_record(record: ProviderPayload, blobs: dict[str, ProviderPayload]) -> ProviderPayload:
     compact_record, refs = compact_record_blobs(record, lambda value: _store_bundle_blob(blobs, value))
     if not refs:
         return compact_record
@@ -136,12 +139,12 @@ def _encode_compact_record(record: dict[str, Any], blobs: dict[str, dict[str, An
 
 
 def compact_record_blobs(
-    record: dict[str, Any],
-    store_blob: Callable[[Any], dict[str, Any] | None],
-) -> tuple[dict[str, Any], list[dict[str, object]]]:
+    record: ProviderPayload,
+    store_blob: Callable[[ProviderPayload], ProviderPayload | None],
+) -> tuple[ProviderPayload, list[ProviderPayload]]:
     """Replace large repeated record fields and list items with blob refs."""
     compact_record = record
-    refs: list[dict[str, object]] = []
+    refs: list[ProviderPayload] = []
     for path in COMPACT_BLOB_PATHS:
         value = _get_path(compact_record, path)
         if value is None:
@@ -161,7 +164,7 @@ def compact_record_blobs(
         value = _get_path(compact_record, path)
         if not isinstance(value, list):
             continue
-        compact_items: list[Any] | None = None
+        compact_items: list[ProviderPayload] | None = None
         for index, item in enumerate(value):
             ref = store_blob(item)
             if ref is None:
@@ -181,7 +184,7 @@ def compact_record_blobs(
     return compact_record, refs
 
 
-def _store_bundle_blob(blobs: dict[str, dict[str, Any]], value: Any) -> dict[str, Any] | None:
+def _store_bundle_blob(blobs: dict[str, ProviderPayload], value: ProviderPayload) -> ProviderPayload | None:
     _payload_json, size_bytes, hash_value = json_blob_payload(value)
     if size_bytes < MIN_BLOB_BYTES:
         return None
@@ -189,7 +192,7 @@ def _store_bundle_blob(blobs: dict[str, dict[str, Any]], value: Any) -> dict[str
     return make_blob_ref(hash_value, size_bytes)
 
 
-def _load_bundle_blob(ref: dict[str, Any], blobs: dict[str, Any], blob_cache: dict[str, Any]) -> Any:
+def _load_bundle_blob(ref: ProviderPayload, blobs: ProviderPayload, blob_cache: ProviderPayload) -> ProviderPayload:
     hash_value = ref["hash"]
     if hash_value not in blob_cache:
         blob = blobs.get(hash_value)
@@ -199,13 +202,13 @@ def _load_bundle_blob(ref: dict[str, Any], blobs: dict[str, Any], blob_cache: di
     return blob_cache[hash_value]
 
 
-def _parse_ref_path(path: Any) -> tuple[str, ...] | None:
+def _parse_ref_path(path: str | None) -> tuple[str, ...] | None:
     if not isinstance(path, str) or not path.startswith("/"):
         return None
     return tuple(part.replace("~1", "/").replace("~0", "~") for part in path.removeprefix("/").split("/"))
 
 
-def _ref_paths_from_marker_refs(refs: Any) -> list[tuple[str, ...]]:
+def _ref_paths_from_marker_refs(refs: list[ProviderPayload] | None) -> list[tuple[str, ...]]:
     if not isinstance(refs, list):
         return []
     paths: list[tuple[str, ...]] = []
@@ -218,7 +221,7 @@ def _ref_paths_from_marker_refs(refs: Any) -> list[tuple[str, ...]]:
     return paths
 
 
-def _legacy_compact_ref_paths(record: dict[str, Any]) -> list[tuple[str, ...]]:
+def _legacy_compact_ref_paths(record: ProviderPayload) -> list[tuple[str, ...]]:
     paths: list[tuple[str, ...]] = []
     for path in COMPACT_BLOB_PATHS:
         if is_blob_ref(_get_path(record, path)):
@@ -231,12 +234,20 @@ def _legacy_compact_ref_paths(record: dict[str, Any]) -> list[tuple[str, ...]]:
     return paths
 
 
-def _materialize_blob_ref_path(root: dict[str, Any], path: tuple[str, ...], load_blob: Any) -> dict[str, Any]:
+def _materialize_blob_ref_path(
+    root: ProviderPayload,
+    path: tuple[str, ...],
+    load_blob: Callable[[ProviderPayload], ProviderPayload],
+) -> ProviderPayload:
     value, changed = _replace_blob_ref_at_path(root, path, load_blob)
     return value if changed and isinstance(value, dict) else root
 
 
-def _replace_blob_ref_at_path(value: Any, path: tuple[str, ...], load_blob: Any) -> tuple[Any, bool]:
+def _replace_blob_ref_at_path(
+    value: ProviderPayload,
+    path: tuple[str, ...],
+    load_blob: Callable[[ProviderPayload], ProviderPayload],
+) -> tuple[ProviderPayload, bool]:
     if not path:
         if is_blob_ref(value):
             return load_blob(value[BLOB_REF_MARKER]), True
@@ -270,8 +281,8 @@ def _replace_blob_ref_at_path(value: Any, path: tuple[str, ...], load_blob: Any)
     return value, False
 
 
-def _get_path(root: dict[str, Any], path: tuple[str, ...]) -> Any:
-    node: Any = root
+def _get_path(root: ProviderPayload, path: tuple[str, ...]) -> ProviderPayload:
+    node: ProviderPayload = root
     for key in path:
         if not isinstance(node, dict) or key not in node:
             return None
@@ -279,12 +290,12 @@ def _get_path(root: dict[str, Any], path: tuple[str, ...]) -> Any:
     return node
 
 
-def _replace_path(root: dict[str, Any], path: tuple[str, ...], replacement: Any) -> dict[str, Any]:
+def _replace_path(root: ProviderPayload, path: tuple[str, ...], replacement: ProviderPayload) -> ProviderPayload:
     if not path:
         return root
     new_root = dict(root)
-    old_node: Any = root
-    new_node: dict[str, Any] = new_root
+    old_node: ProviderPayload = root
+    new_node: ProviderPayload = new_root
     for key in path[:-1]:
         child = old_node.get(key) if isinstance(old_node, dict) else None
         if not isinstance(child, dict):
@@ -297,7 +308,7 @@ def _replace_path(root: dict[str, Any], path: tuple[str, ...], replacement: Any)
     return new_root
 
 
-def is_blob_ref(value: Any) -> bool:
+def is_blob_ref(value: ProviderPayload) -> bool:
     if not isinstance(value, dict) or set(value) != {BLOB_REF_MARKER}:
         return False
     ref = value[BLOB_REF_MARKER]

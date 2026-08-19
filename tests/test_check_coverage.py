@@ -8,6 +8,7 @@ from scripts.check_coverage import (
     VIEWER_JS_SOURCES,
     _filter_pure_viewer_asset_split,
     _is_function_covered,
+    _load_viewer_contract_helpers,
     _tag_content,
     _viewer_script_functions,
     changed_lines_from_diff,
@@ -190,6 +191,14 @@ def test_viewer_script_functions_filters_top_level_wrapper_and_detects_coverage(
     assert [function["functionName"] for function in functions] == ["renderEmptyTraceState", "initFileDropZone"]
     assert _is_function_covered(functions[0]) is True
     assert _is_function_covered(functions[1]) is False
+
+
+def test_viewer_contract_helpers_load_from_script_entrypoint() -> None:
+    contract_cases, generate_case_html, compact_contract_records = _load_viewer_contract_helpers()
+
+    assert contract_cases()
+    assert callable(generate_case_html)
+    assert compact_contract_records()
 
 
 def test_check_viewer_css_coverage_enforces_changed_selector_matches() -> None:

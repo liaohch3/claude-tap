@@ -37,9 +37,10 @@ from claude_tap.live import LiveViewerServer, _record_limit_from_request
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
 from claude_tap.trace_store import get_trace_store
+from tests.schema_types import JsonObject
 
 
-def _write_jsonl(path: Path, records: list[dict]) -> None:
+def _write_jsonl(path: Path, records: list[JsonObject]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "\n".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) for record in records) + "\n",
@@ -65,7 +66,7 @@ def test_dashboard_lists_sessions_by_normalized_updated_at(trace_db) -> None:
     assert [session["id"] for session in list_trace_sessions()][:2] == [newer, older]
 
 
-def _anthropic_record(turn: int = 1) -> dict:
+def _anthropic_record(turn: int = 1) -> JsonObject:
     return {
         "timestamp": "2026-05-20T08:00:00+00:00",
         "request_id": "req_claude",
@@ -93,7 +94,7 @@ def _anthropic_record(turn: int = 1) -> dict:
     }
 
 
-def _antigravity_record() -> dict:
+def _antigravity_record() -> JsonObject:
     return {
         "timestamp": "2026-05-20T09:00:00+00:00",
         "request_id": "req_agy",
@@ -120,12 +121,12 @@ def _antigravity_record() -> dict:
     }
 
 
-def _bedrock_frame(payload: dict) -> str:
+def _bedrock_frame(payload: JsonObject) -> str:
     encoded = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
     return "\x00\x00binary-prefix" + json.dumps({"bytes": encoded, "p": "abcdefghijk"}) + "\ufffd"
 
 
-def _bedrock_stream_record() -> dict:
+def _bedrock_stream_record() -> JsonObject:
     body = "".join(
         [
             _bedrock_frame(

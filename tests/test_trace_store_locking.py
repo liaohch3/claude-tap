@@ -19,6 +19,7 @@ from claude_tap.cli import _create_trace_writer
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_store import TraceStore
 from tests.conftest import e2e_env, trace_db_path
+from tests.schema_types import JsonObject
 from tests.test_e2e import PROJECT_ROOT, run_fake_upstream_in_thread
 
 FAKE_LOCKING_CLIENT_SCRIPT = r"""#!/usr/bin/env python3
@@ -56,7 +57,7 @@ finally:
 """
 
 
-def _record(index: int) -> dict:
+def _record(index: int) -> JsonObject:
     return {
         "timestamp": f"2026-07-12T08:00:{index:02d}+00:00",
         "turn": index,

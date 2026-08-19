@@ -13,9 +13,10 @@ from claude_tap.cursor_metadata import (
     lookup_composer_meta,
     resolve_cursor_conversation_meta,
 )
+from tests.schema_types import JsonObject
 
 
-def _write_composer_db(path: Path, conversation_id: str, payload: dict) -> None:
+def _write_composer_db(path: Path, conversation_id: str, payload: JsonObject) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
@@ -27,7 +28,7 @@ def _write_composer_db(path: Path, conversation_id: str, payload: dict) -> None:
     conn.close()
 
 
-def _write_chat_store(path: Path, meta: dict, blobs: list[dict | bytes] | None = None) -> None:
+def _write_chat_store(path: Path, meta: JsonObject, blobs: list[JsonObject | bytes] | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE meta (key TEXT, value TEXT)")

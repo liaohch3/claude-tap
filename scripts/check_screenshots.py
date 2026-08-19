@@ -9,7 +9,10 @@ import zlib
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
+
+if TYPE_CHECKING:
+    pass
 
 MIN_DESKTOP_WIDTH = 1280
 MIN_DIMENSION = 400

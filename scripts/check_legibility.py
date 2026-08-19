@@ -9,6 +9,10 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    pass
 
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 REQUIRED_STANDARDS_KEYS = ("owner", "last_reviewed", "source_of_truth")

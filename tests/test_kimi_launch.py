@@ -6,6 +6,7 @@ import pytest
 
 from claude_tap import parse_args
 from claude_tap.cli import CLIENT_CONFIGS, _reverse_proxy_trace_options, run_client
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -51,7 +52,7 @@ def test_parse_args_accepts_every_registered_client(monkeypatch, tmp_path) -> No
 
 @pytest.mark.asyncio
 async def test_run_client_kimi_reverse_sets_kimi_base_url(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     for key in ("MOONSHOT_BASE_URL", "OPENAI_BASE_URL", "OPENROUTER_BASE_URL"):
         monkeypatch.delenv(key, raising=False)
 
@@ -77,7 +78,7 @@ async def test_run_client_kimi_reverse_sets_kimi_base_url(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_run_client_kimi_capture_only_reverse_sets_multi_provider_urls(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["env"] = kwargs["env"]

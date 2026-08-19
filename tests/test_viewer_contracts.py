@@ -10,19 +10,19 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from claude_tap.compact_trace import build_compact_trace_bundle
 from claude_tap.viewer import _generate_html_viewer, _generate_html_viewer_from_compact_bundle, _read_viewer_template
+from tests.schema_types import JsonObject, Map
 
 pw_missing = False
 try:
     from playwright.sync_api import Page, sync_playwright  # noqa: F401
 except ImportError:
     pw_missing = True
-    Page = Any  # type: ignore[assignment,misc]
+    Page = object
 
 pytestmark = pytest.mark.skipif(pw_missing, reason="playwright not installed")
 
@@ -30,24 +30,24 @@ pytestmark = pytest.mark.skipif(pw_missing, reason="playwright not installed")
 @dataclass(frozen=True)
 class ViewerContractCase:
     name: str
-    records: tuple[dict[str, Any], ...]
+    records: tuple[Map[str, object], ...]
     expected_sections: tuple[str, ...]
     expected_system: str | None
     expected_roles: tuple[str, ...]
     expected_tools: tuple[str, ...]
     expected_output_types: tuple[str, ...]
-    expected_usage: dict[str, int]
+    expected_usage: Map[str, int]
     required_detail_text: tuple[str, ...]
     min_stream_events: int = 0
     entry_index: int = 0
     expected_sidebar_label: str | None = None
 
 
-def _sse_frame(payload: dict[str, Any]) -> str:
+def _sse_frame(payload: Map[str, object]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _anthropic_messages_record() -> dict[str, Any]:
+def _anthropic_messages_record() -> Map[str, object]:
     return {
         "timestamp": "2026-05-13T13:20:00+00:00",
         "request_id": "req_anthropic_contract",
@@ -108,7 +108,7 @@ def _anthropic_messages_record() -> dict[str, Any]:
     }
 
 
-def _responses_record() -> dict[str, Any]:
+def _responses_record() -> Map[str, object]:
     return {
         "timestamp": "2026-05-13T13:21:00+00:00",
         "request_id": "req_responses_contract",
@@ -158,7 +158,7 @@ def _responses_record() -> dict[str, Any]:
     }
 
 
-def _responses_empty_input_record() -> dict[str, Any]:
+def _responses_empty_input_record() -> Map[str, object]:
     record = _responses_record()
     record["request_id"] = "req_responses_empty_input"
     record["request"]["body"]["input"] = []
@@ -166,7 +166,7 @@ def _responses_empty_input_record() -> dict[str, Any]:
     return record
 
 
-def _codex_websocket_record() -> dict[str, Any]:
+def _codex_websocket_record() -> Map[str, object]:
     return {
         "timestamp": "2026-05-13T13:22:00+00:00",
         "request_id": "req_codex_ws_contract",
@@ -233,7 +233,7 @@ def _codex_websocket_record() -> dict[str, Any]:
     }
 
 
-def _content_block_boundary_record() -> dict[str, Any]:
+def _content_block_boundary_record() -> Map[str, object]:
     return {
         "timestamp": "2026-05-24T07:20:00+00:00",
         "request_id": "req_content_block_boundary_contract",
@@ -304,14 +304,14 @@ def _content_block_boundary_record() -> dict[str, Any]:
     }
 
 
-def _codex_reverse_websocket_record() -> dict[str, Any]:
+def _codex_reverse_websocket_record() -> Map[str, object]:
     record = _codex_websocket_record()
     record["request_id"] = "req_codex_reverse_ws_contract"
     record["request"]["path"] = "/v1/responses"
     return record
 
 
-def _chat_completions_record() -> dict[str, Any]:
+def _chat_completions_record() -> Map[str, object]:
     return {
         "timestamp": "2026-05-13T13:23:00+00:00",
         "request_id": "req_chat_contract",
@@ -393,7 +393,7 @@ def _chat_completions_record() -> dict[str, Any]:
     }
 
 
-def _opencode_chat_completions_record() -> dict[str, Any]:
+def _opencode_chat_completions_record() -> Map[str, object]:
     return {
         "timestamp": "2026-05-13T16:11:10+00:00",
         "request_id": "req_opencode_real_shape_contract",
@@ -571,7 +571,7 @@ def _opencode_chat_completions_record() -> dict[str, Any]:
     }
 
 
-def _opencode_openai_oauth_responses_record() -> dict[str, Any]:
+def _opencode_openai_oauth_responses_record() -> Map[str, object]:
     return {
         "timestamp": "2026-05-13T16:45:43+00:00",
         "request_id": "req_opencode_openai_oauth_responses_contract",
@@ -680,7 +680,7 @@ def _opencode_openai_oauth_responses_record() -> dict[str, Any]:
     }
 
 
-def _pi_openai_oauth_websocket_record() -> dict[str, Any]:
+def _pi_openai_oauth_websocket_record() -> Map[str, object]:
     system_prompt = (
         "You are an expert coding assistant operating inside pi, a coding agent harness. "
         "You help users by reading files, executing commands, editing code, and writing new files.\n\n"
@@ -847,7 +847,7 @@ def _pi_openai_oauth_websocket_record() -> dict[str, Any]:
     }
 
 
-def _gemini_record() -> dict[str, Any]:
+def _gemini_record() -> Map[str, object]:
     return {
         "timestamp": "2026-05-13T13:24:00+00:00",
         "request_id": "req_gemini_contract",
@@ -943,7 +943,7 @@ def _gemini_record() -> dict[str, Any]:
     }
 
 
-def _bedrock_converse_record() -> dict[str, Any]:
+def _bedrock_converse_record() -> Map[str, object]:
     return {
         "timestamp": "2026-05-13T13:30:00+00:00",
         "request_id": "req_bedrock_converse_contract",
@@ -1179,7 +1179,7 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
     )
 
 
-def _runtime_smoke_records() -> tuple[dict[str, Any], ...]:
+def _runtime_smoke_records() -> tuple[Map[str, object], ...]:
     return (
         {
             "request_id": "req_empty_body",
@@ -1196,7 +1196,7 @@ def _runtime_smoke_records() -> tuple[dict[str, Any], ...]:
     )
 
 
-def _sidebar_order_records() -> tuple[dict[str, Any], ...]:
+def _sidebar_order_records() -> tuple[Map[str, object], ...]:
     base = {
         "duration_ms": 100,
         "request": {"method": "POST", "path": "/v1/messages", "headers": {}, "body": {}},
@@ -1219,19 +1219,19 @@ def _sidebar_order_records() -> tuple[dict[str, Any], ...]:
     return tuple(records)
 
 
-def _claude_code_session_round_records() -> tuple[dict[str, Any], ...]:
+def _claude_code_session_round_records() -> tuple[Map[str, object], ...]:
     model = "aws.claude-opus-4.6"
 
     def make_record(
         request_id: str,
         turn: int,
-        messages: list[dict[str, Any]],
-        response_content: list[dict[str, Any]],
+        messages: list[Map[str, object]],
+        response_content: list[Map[str, object]],
         *,
         system: str | None = None,
         stop_reason: str = "end_turn",
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": model, "messages": messages}
+    ) -> Map[str, object]:
+        body: Map[str, object] = {"model": model, "messages": messages}
         if system is not None:
             body["system"] = system
         return {
@@ -1333,8 +1333,8 @@ def _claude_code_session_round_records() -> tuple[dict[str, Any], ...]:
     )
 
 
-def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
-    records: list[dict[str, Any]] = []
+def _codex_app_large_session_records() -> tuple[Map[str, object], ...]:
+    records: list[Map[str, object]] = []
     session_id = "codex-session-alpha"
     prompts = [
         "Write Codex App runtime wiki",
@@ -1361,7 +1361,7 @@ def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
                 "content": [{"type": "input_text", "text": "<environment_context>\nskip cwd\n</environment_context>"}],
             },
         ]
-        prior_messages: list[dict[str, Any]] = []
+        prior_messages: list[Map[str, object]] = []
         for prior_prompt in prompts[:prompt_index]:
             prior_messages.extend(
                 [
@@ -1382,7 +1382,7 @@ def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
             "role": "user",
             "content": [{"type": "input_text", "text": prompt}],
         }
-        continuation_messages: list[dict[str, Any]] = []
+        continuation_messages: list[Map[str, object]] = []
         if step:
             continuation_messages = [
                 {
@@ -1442,7 +1442,7 @@ def _codex_app_large_session_records() -> tuple[dict[str, Any], ...]:
     return tuple(records)
 
 
-def _codex_display_turn_records() -> tuple[dict[str, Any], ...]:
+def _codex_display_turn_records() -> tuple[Map[str, object], ...]:
     return (
         {
             "timestamp": "2026-06-01T00:57:34.069390+00:00",
@@ -1585,7 +1585,7 @@ def _codex_display_turn_records() -> tuple[dict[str, Any], ...]:
     )
 
 
-def _codex_lazy_display_turn_records() -> tuple[dict[str, Any], ...]:
+def _codex_lazy_display_turn_records() -> tuple[Map[str, object], ...]:
     records = list(_codex_display_turn_records())
     for idx in range(60):
         records.append(
@@ -1606,7 +1606,7 @@ def _codex_lazy_display_turn_records() -> tuple[dict[str, Any], ...]:
     return tuple(records)
 
 
-def _codex_direct_generate_false_records() -> tuple[dict[str, Any], ...]:
+def _codex_direct_generate_false_records() -> tuple[Map[str, object], ...]:
     visible = json.loads(json.dumps(_responses_record()))
     visible["request_id"] = "req_direct_visible"
     visible["turn"] = 2
@@ -1642,8 +1642,8 @@ def _codex_direct_generate_false_records() -> tuple[dict[str, Any], ...]:
     )
 
 
-def _codex_lazy_event_generate_false_records() -> tuple[dict[str, Any], ...]:
-    records: list[dict[str, Any]] = [
+def _codex_lazy_event_generate_false_records() -> tuple[Map[str, object], ...]:
+    records: list[Map[str, object]] = [
         {
             "timestamp": "2026-06-01T02:10:00.000000+00:00",
             "request_id": "req_event_prefetch",
@@ -1764,14 +1764,14 @@ def _codex_lazy_event_generate_false_records() -> tuple[dict[str, Any], ...]:
     return tuple(records)
 
 
-def _write_trace(trace_path: Path, records: tuple[dict[str, Any], ...]) -> None:
+def _write_trace(trace_path: Path, records: tuple[Map[str, object], ...]) -> None:
     trace_path.write_text(
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
         encoding="utf-8",
     )
 
 
-def _generate_case_html(tmp_path: Path, name: str, records: tuple[dict[str, Any], ...]) -> Path:
+def _generate_case_html(tmp_path: Path, name: str, records: tuple[Map[str, object], ...]) -> Path:
     trace_path = tmp_path / f"{name}.jsonl"
     html_path = tmp_path / f"{name}.html"
     _write_trace(trace_path, records)
@@ -1779,7 +1779,7 @@ def _generate_case_html(tmp_path: Path, name: str, records: tuple[dict[str, Any]
     return html_path
 
 
-def _compact_contract_records() -> tuple[dict[str, Any], ...]:
+def _compact_contract_records() -> tuple[Map[str, object], ...]:
     records = []
     for turn in (1, 2):
         record = json.loads(json.dumps(_responses_record()))
@@ -3116,7 +3116,7 @@ def test_viewer_visual_layout_contracts_cover_css_modes(tmp_path: Path, chromium
             }"""
         )
 
-        def snapshot(width: int, height: int, theme: str, mobile: bool = False) -> dict:
+        def snapshot(width: int, height: int, theme: str, mobile: bool = False) -> JsonObject:
             page.set_viewport_size({"width": width, "height": height})
             page.evaluate("theme => document.documentElement.setAttribute('data-theme', theme)", theme)
             if mobile:
@@ -3205,12 +3205,12 @@ def test_viewer_session_identical_prompts_image_tags_and_early_title_generation(
     def make_record(
         request_id: str,
         turn: int,
-        messages: list[dict[str, Any]],
-        response_content: list[dict[str, Any]],
+        messages: list[Map[str, object]],
+        response_content: list[Map[str, object]],
         *,
         system: str | None = None,
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": model, "messages": messages}
+    ) -> Map[str, object]:
+        body: Map[str, object] = {"model": model, "messages": messages}
         if system is not None:
             body["system"] = system
         return {

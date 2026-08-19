@@ -55,6 +55,18 @@ python scripts/check_pr_policy.py \
 The CI workflow runs this check both as a standalone `pr-policy` job and inside
 the existing required `lint` job.
 
+## `check_schema.py`
+
+Scan the repository for bare `dict`, `Any`, `Mapping`, or `TypedDict`
+annotations, then check changed Python lines for regressions. Existing dynamic
+provider payload code remains valid only when it uses the explicit
+`JsonObject`/`JsonValue` boundaries; application-owned structures must use
+Pydantic models.
+
+```bash
+python scripts/check_schema.py --base origin/main
+```
+
 ## `translate_i18n.py`
 
 Translate missing i18n strings in `claude_tap/viewer_i18n.json` using OpenRouter.

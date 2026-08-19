@@ -7,6 +7,7 @@ import pytest
 
 from claude_tap import parse_args
 from claude_tap.cli import CLIENT_CONFIGS, _reverse_proxy_trace_options, run_client
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -53,7 +54,7 @@ def test_parse_args_gemini_explicit_reverse_overrides_default() -> None:
 
 @pytest.mark.asyncio
 async def test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     ca_path = Path("/tmp/test-ca.pem")
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -81,7 +82,7 @@ async def test_run_client_gemini_forward_sets_proxy_ca_and_skips_base_url_envs(m
 
 @pytest.mark.asyncio
 async def test_run_client_gemini_reverse_sets_both_base_url_envs(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

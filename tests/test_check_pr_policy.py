@@ -6,13 +6,12 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "check_pr_policy.py"
 MODULE_NAME = "check_pr_policy"
 
 
-def _load_module() -> Any:
+def _load_module() -> object:
     spec = importlib.util.spec_from_file_location(MODULE_NAME, SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

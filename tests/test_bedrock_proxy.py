@@ -7,7 +7,6 @@ import json
 import struct
 import zlib
 from pathlib import Path
-from typing import Any
 
 import aiohttp
 import pytest
@@ -24,9 +23,10 @@ from claude_tap.proxy import (
 )
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_store import get_trace_store, reset_trace_store
+from tests.schema_types import Map
 
 
-def _bedrock_frame(payload: dict[str, Any]) -> bytes:
+def _bedrock_frame(payload: Map[str, object]) -> bytes:
     encoded = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
     return ("\x00\x00binary-prefix" + json.dumps({"bytes": encoded, "p": "abcdefghijk"}) + "\ufffd").encode()
 
@@ -58,8 +58,8 @@ def _bedrock_body() -> bytes:
     )
 
 
-def _native_bedrock_eventstream_events(body: bytes) -> list[tuple[dict[str, str], dict[str, Any]]]:
-    events: list[tuple[dict[str, str], dict[str, Any]]] = []
+def _native_bedrock_eventstream_events(body: bytes) -> list[tuple[Map[str, str], Map[str, object]]]:
+    events: list[tuple[Map[str, str], Map[str, object]]] = []
     offset = 0
     while offset < len(body):
         total_len, headers_len = struct.unpack("!II", body[offset : offset + 8])
@@ -79,8 +79,8 @@ def _native_bedrock_eventstream_events(body: bytes) -> list[tuple[dict[str, str]
     return events
 
 
-def _native_bedrock_eventstream_headers(data: bytes) -> dict[str, str]:
-    headers: dict[str, str] = {}
+def _native_bedrock_eventstream_headers(data: bytes) -> Map[str, str]:
+    headers: Map[str, str] = {}
     offset = 0
     while offset < len(data):
         name_len = data[offset]
@@ -97,7 +97,7 @@ def _native_bedrock_eventstream_headers(data: bytes) -> dict[str, str]:
     return headers
 
 
-def _native_bedrock_eventstream_payloads(body: bytes) -> list[dict[str, Any]]:
+def _native_bedrock_eventstream_payloads(body: bytes) -> list[Map[str, object]]:
     return [payload for _headers, payload in _native_bedrock_eventstream_events(body)]
 
 
@@ -149,7 +149,7 @@ def _bedrock_body_with_error() -> bytes:
     )
 
 
-def _make_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, str, TraceWriter]:
+def _make_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[object, str, TraceWriter]:
     monkeypatch.setenv("CLOUDTAP_DB", str(tmp_path / "traces.sqlite3"))
     reset_trace_store()
     store = get_trace_store()
@@ -226,7 +226,7 @@ async def test_reverse_proxy_capture_only_records_without_upstream(tmp_path: Pat
 async def test_reverse_proxy_strips_anthropic_beta_for_bedrock_gateway_models(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    upstream_requests: list[dict[str, Any]] = []
+    upstream_requests: list[Map[str, object]] = []
 
     async def upstream_handler(request: web.Request) -> web.Response:
         body = await request.json()
@@ -608,7 +608,7 @@ class _FakeStreamResponse:
 class _FakeSession:
     def __init__(self, body: bytes) -> None:
         self._body = body
-        self.calls: list[dict[str, Any]] = []
+        self.calls: list[Map[str, object]] = []
 
     async def request(self, **kwargs):
         self.calls.append(kwargs)

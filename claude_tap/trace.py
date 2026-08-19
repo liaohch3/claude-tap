@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from claude_tap.models import ProviderPayload
 from claude_tap.trace_store import TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
 
@@ -46,7 +47,7 @@ class TraceWriter:
         self._startup_storage_error: sqlite3.Error | None = None
         self._storage_warning_emitted = False
 
-    async def write(self, record: dict) -> None:
+    async def write(self, record: ProviderPayload) -> None:
         """Write a record and update statistics."""
         async with self._lock:
             self._write_locked(record)
@@ -54,7 +55,7 @@ class TraceWriter:
         if self._live_server:
             await self._live_server.broadcast(record)
 
-    async def write_next_turn(self, record: dict) -> None:
+    async def write_next_turn(self, record: ProviderPayload) -> None:
         """Assign the next trace turn under the writer lock, then write the record."""
         async with self._lock:
             record["turn"] = self.count + 1
@@ -63,7 +64,7 @@ class TraceWriter:
         if self._live_server:
             await self._live_server.broadcast(record)
 
-    def _write_locked(self, record: dict) -> None:
+    def _write_locked(self, record: ProviderPayload) -> None:
         if self._metadata:
             capture = record.get("capture") if isinstance(record.get("capture"), dict) else {}
             record["capture"] = {**self._metadata, **capture}
@@ -97,7 +98,7 @@ class TraceWriter:
         self._storage_warning_emitted = True
         sys.stderr.write(f"claude-tap: trace storage failed; continuing without blocking proxy ({exc})\n")
 
-    def _update_stats(self, record: dict) -> None:
+    def _update_stats(self, record: ProviderPayload) -> None:
         req_body = record.get("request", {}).get("body", {})
         model = req_body.get("model", "unknown") if isinstance(req_body, dict) else "unknown"
         self.models_used[model] = self.models_used.get(model, 0) + 1
@@ -128,7 +129,7 @@ class TraceWriter:
             if isinstance(response.get("error"), str) and response["error"]:
                 self._has_error = True
 
-    def get_summary(self) -> dict:
+    def get_summary(self) -> ProviderPayload:
         """Return a summary of the trace statistics."""
         has_error = self._has_error or (self._has_auxiliary_status_probe_error and not self._has_primary_success)
         return {
@@ -162,7 +163,7 @@ def create_trace_writer(
     return TraceWriter(session_id, live_server=None, metadata=metadata, store=store)
 
 
-def _is_auxiliary_status_probe(record: dict) -> bool:
+def _is_auxiliary_status_probe(record: ProviderPayload) -> bool:
     request = record.get("request")
     path = request.get("path") if isinstance(request, dict) else ""
     if not isinstance(path, str):

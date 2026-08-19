@@ -24,6 +24,7 @@ from claude_tap.cli_clients import (
     _reverse_proxy_trace_options,
     run_client,
 )
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -281,7 +282,7 @@ max_context_size = 1000
 async def test_run_client_kimi_code_reverse_sets_kimi_code_home(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     home = tmp_path / "source-home"
     home.mkdir()
     (home / "config.toml").write_text(
@@ -323,7 +324,7 @@ api_key = "sk-test"
 async def test_run_client_kimi_code_reverse_rewrites_config_file_arg(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     home = tmp_path / "source-home"
     home.mkdir()
     override_config = tmp_path / "override.toml"
@@ -368,7 +369,7 @@ api_key = "sk-test"
 async def test_run_client_kimi_code_reverse_rewrites_model_env_override(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     home = tmp_path / "source-home"
     home.mkdir()
     monkeypatch.setenv("KIMI_CODE_HOME", str(home))
@@ -395,7 +396,7 @@ async def test_run_client_kimi_code_reverse_rewrites_model_env_override(
 async def test_run_client_kimi_code_reverse_drops_inactive_model_base_url(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     home = tmp_path / "source-home"
     home.mkdir()
     monkeypatch.setenv("KIMI_CODE_HOME", str(home))
@@ -421,7 +422,7 @@ async def test_run_client_kimi_code_reverse_drops_inactive_model_base_url(
 async def test_run_client_kimi_code_reverse_does_not_proxy_non_kimi_model_env_without_base_url(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     home = tmp_path / "source-home"
     home.mkdir()
     monkeypatch.setenv("KIMI_CODE_HOME", str(home))
@@ -449,7 +450,7 @@ async def test_run_client_kimi_code_reverse_does_not_proxy_non_kimi_model_env_wi
 async def test_run_client_kimi_code_model_arg_clears_model_env_override(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     home = tmp_path / "source-home"
     home.mkdir()
     (home / "config.toml").write_text(

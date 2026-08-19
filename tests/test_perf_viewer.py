@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.schema_types import JsonObject
+
 pw_missing = False
 try:
     from playwright.sync_api import sync_playwright  # noqa: F401
@@ -22,7 +24,7 @@ pytestmark = pytest.mark.skipif(pw_missing, reason="playwright not installed")
 LARGE_TRACE = Path(__file__).parent.parent / ".traces" / "trace_20260228_212004.jsonl"
 
 
-def _make_entry(turn: int, messages: list[dict]) -> dict:
+def _make_entry(turn: int, messages: list[JsonObject]) -> JsonObject:
     """Build a trace entry matching the real JSONL format."""
     return {
         "timestamp": f"2026-02-24T20:00:{turn:02d}",

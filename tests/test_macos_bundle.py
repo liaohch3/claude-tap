@@ -11,6 +11,7 @@ import pytest
 from claude_tap import macos_bundle
 from claude_tap.cli import main_entry
 from claude_tap.macos_bundle import build_macos_app_bundle
+from tests.schema_types import Map
 
 
 def test_build_macos_app_bundle_writes_double_clickable_app(tmp_path: Path) -> None:
@@ -43,7 +44,7 @@ def test_build_macos_app_bundle_writes_double_clickable_app(tmp_path: Path) -> N
 
 
 def test_build_macos_app_bundle_uses_native_launcher(tmp_path: Path) -> None:
-    compiled: dict[str, str | Path] = {}
+    compiled: Map[str, str | Path] = {}
 
     def fake_compile(source: str, output_path: Path) -> None:
         compiled["source"] = source
@@ -70,7 +71,7 @@ def test_build_macos_app_bundle_uses_native_launcher(tmp_path: Path) -> None:
 
 
 def test_build_macos_app_bundle_can_embed_pyinstaller_executable(tmp_path: Path) -> None:
-    compiled: dict[str, str] = {}
+    compiled: Map[str, str] = {}
 
     def fake_compile(source: str, output_path: Path) -> None:
         compiled["source"] = source
@@ -101,7 +102,7 @@ def test_build_macos_app_bundle_can_embed_pyinstaller_executable(tmp_path: Path)
 def test_build_macos_app_main_uses_installed_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    built: dict[str, object] = {}
+    built: Map[str, object] = {}
 
     def fake_build(app_path: Path, **kwargs: object) -> Path:
         built["app_path"] = app_path
@@ -119,7 +120,7 @@ def test_build_macos_app_main_uses_installed_mode(
 
 
 def test_build_macos_app_bundle_self_contained_disables_source_root(tmp_path: Path) -> None:
-    compiled: dict[str, str] = {}
+    compiled: Map[str, str] = {}
 
     def fake_compile(source: str, output_path: Path) -> None:
         compiled["source"] = source
@@ -215,7 +216,7 @@ def test_c_string_literal_escapes_quotes_backslashes_and_utf8() -> None:
 
 
 def test_main_entry_routes_build_macos_app_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
-    called: dict[str, object] = {}
+    called: Map[str, object] = {}
 
     def fake_build_main(argv: list[str]) -> int:
         called["argv"] = argv

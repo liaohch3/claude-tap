@@ -9,20 +9,21 @@ import pytest
 
 from claude_tap.cli_clients import _extend_no_proxy
 from claude_tap.trace_store import get_trace_store, reset_trace_store
+from tests.schema_types import JsonObject, Map
 
 
 def trace_db_path(trace_dir: str | Path) -> Path:
     return Path(trace_dir) / "claude-tap-test.sqlite3"
 
 
-def e2e_env(env: dict[str, str], trace_dir: str | Path) -> dict[str, str]:
+def e2e_env(env: Map[str, str], trace_dir: str | Path) -> Map[str, str]:
     updated = dict(env)
     updated["CLOUDTAP_DB"] = str(trace_db_path(trace_dir))
     _extend_no_proxy(updated, ("localhost", "127.0.0.1", "::1"))
     return updated
 
 
-def read_trace_records(trace_dir: str | Path, *, session_index: int = -1) -> list[dict]:
+def read_trace_records(trace_dir: str | Path, *, session_index: int = -1) -> list[JsonObject]:
     db_path = trace_db_path(trace_dir)
     reset_trace_store()
     os.environ["CLOUDTAP_DB"] = str(db_path)

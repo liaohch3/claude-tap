@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from claude_tap.models import ProviderPayload
 
-def _missing_or_zero(value: object) -> bool:
+
+def _missing_or_zero(value: int | float | str | bool | None) -> bool:
     return value is None or value == 0
 
 
-def normalize_usage(usage: object) -> dict:
+def normalize_usage(usage: ProviderPayload) -> ProviderPayload:
     """Return usage with provider-specific token fields mapped to shared names."""
     if not isinstance(usage, dict):
         return {}

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.schema_types import JsonObject
+
 pw_missing = False
 try:
     from playwright.sync_api import sync_playwright  # noqa: F401
@@ -25,7 +27,7 @@ pytestmark = pytest.mark.skipif(pw_missing, reason="playwright not installed")
 # This gives us 3 diff pairs to navigate between.
 
 
-def _make_entry(turn: int, messages: list[dict]) -> dict:
+def _make_entry(turn: int, messages: list[JsonObject]) -> JsonObject:
     """Build a trace entry matching the real JSONL format."""
     return {
         "timestamp": f"2026-02-24T20:00:0{turn}",
@@ -147,7 +149,7 @@ class TestDiffNavInBrowser:
         page.evaluate("document.querySelector('.act-btn:nth-child(3)').click()")
         page.wait_for_selector(".diff-overlay", timeout=3000)
 
-    def _get_nav_state(self, page) -> dict:
+    def _get_nav_state(self, page) -> JsonObject:
         """Get the current state of the diff nav buttons."""
         return page.evaluate("""() => {
             const overlay = document.querySelector('.diff-overlay');

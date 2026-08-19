@@ -62,6 +62,7 @@ from claude_tap.cursor_transcript import CursorTranscriptWatcher, model_from_cur
 from claude_tap.forward_proxy import ForwardProxyServer
 from claude_tap.history import cleanup_trace_sessions, migrate_legacy_traces
 from claude_tap.live import LiveViewerServer
+from claude_tap.models import ProviderPayload
 from claude_tap.proxy import proxy_handler
 from claude_tap.shared_dashboard import (
     DEFAULT_DASHBOARD_PORT,
@@ -130,17 +131,17 @@ class _LazyTraceWriter:
     def count(self) -> int:
         return self._writer.count if self._writer is not None else 0
 
-    async def write(self, record: dict) -> None:
+    async def write(self, record: ProviderPayload) -> None:
         await self._ensure_writer().write(record)
 
-    async def write_next_turn(self, record: dict) -> None:
+    async def write_next_turn(self, record: ProviderPayload) -> None:
         await self._ensure_writer().write_next_turn(record)
 
     def close(self) -> None:
         if self._writer is not None:
             self._writer.close()
 
-    def get_summary(self) -> dict:
+    def get_summary(self) -> ProviderPayload:
         if self._writer is not None:
             return self._writer.get_summary()
         return {
@@ -666,7 +667,7 @@ def _export_prompt_from_session(store, session_id: str, output: str) -> int:
         return 1
 
     if output == "-":
-        _print(text, end="", file=_COMMAND_STDOUT.get())
+        _print(text, end="", file=_COMMAND_STDOUT.get() or sys.stdout)
         return 0
 
     path = Path(output).expanduser()

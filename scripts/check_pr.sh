@@ -165,6 +165,13 @@ if [ "$run_tests" -eq 1 ]; then
     echo '  FAIL uv run ruff format --check .'
   fi
 
+  if python3 scripts/check_schema.py --base origin/main; then
+    echo '  PASS incremental schema check'
+  else
+    gate_failed=1
+    echo '  FAIL incremental schema check'
+  fi
+
   if uv run pytest tests/ -x --timeout=60; then
     echo '  PASS uv run pytest tests/ -x --timeout=60'
   else

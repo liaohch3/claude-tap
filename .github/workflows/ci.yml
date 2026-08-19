@@ -30,6 +30,7 @@ jobs:
       - run: pip install ruff
       - run: ruff check .
       - run: ruff format --check .
+      - run: python scripts/check_schema.py --base "${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD~1' }}"
       - name: Collect changed files for PR policy
         if: github.event_name == 'pull_request'
         env:

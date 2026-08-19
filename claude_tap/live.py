@@ -26,6 +26,7 @@ from claude_tap.dashboard import (
     redact_dashboard_summary,
 )
 from claude_tap.history import delete_trace_history, migrate_legacy_traces
+from claude_tap.models import ProviderPayload
 from claude_tap.shared_dashboard import CLAUDE_TAP_VERSION, dashboard_url
 from claude_tap.trace_store import get_trace_store, resolve_db_path
 from claude_tap.viewer import (
@@ -198,7 +199,7 @@ class LiveViewerServer:
         self.dashboard_mode = dashboard_mode
         self._sse_clients: list[web.StreamResponse] = []
         self._dashboard_clients: list[web.StreamResponse] = []
-        self._records: list[dict] = []
+        self._records: list[ProviderPayload] = []
         self._current_date: str = date.today().isoformat()
         self._lock = asyncio.Lock()
         self._runner: web.AppRunner | None = None
@@ -293,7 +294,7 @@ class LiveViewerServer:
         """Wait until the server shutdown event is set."""
         await self._shutdown_event.wait()
 
-    async def broadcast(self, record: dict) -> None:
+    async def broadcast(self, record: ProviderPayload) -> None:
         """Broadcast a new record to all connected SSE clients."""
         async with self._lock:
             today = date.today().isoformat()
@@ -751,7 +752,7 @@ class LiveViewerServer:
                 self._dashboard_snapshot = snapshot
                 await self._broadcast_dashboard_event({"type": "refresh"})
 
-    async def _broadcast_dashboard_event(self, payload: dict) -> None:
+    async def _broadcast_dashboard_event(self, payload: ProviderPayload) -> None:
         if not self._dashboard_clients:
             return
         disconnected = []
@@ -764,7 +765,7 @@ class LiveViewerServer:
             if client in self._dashboard_clients:
                 self._dashboard_clients.remove(client)
 
-    async def _write_dashboard_event(self, client: web.StreamResponse, payload: dict) -> None:
+    async def _write_dashboard_event(self, client: web.StreamResponse, payload: ProviderPayload) -> None:
         event_name = payload.get("type", "message")
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         await client.write(f"event: {event_name}\ndata: {data}\n\n".encode("utf-8"))

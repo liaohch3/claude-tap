@@ -7,6 +7,7 @@ import pytest
 
 from claude_tap import parse_args
 from claude_tap.cli import CLIENT_CONFIGS, run_client
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -53,7 +54,7 @@ def test_parse_args_pi_explicit_reverse_overrides_default() -> None:
 
 @pytest.mark.asyncio
 async def test_run_client_pi_forward_sets_proxy_ca_and_preserves_args(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     ca_path = Path("/tmp/test-ca.pem")
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -98,7 +99,7 @@ async def test_run_client_pi_forward_sets_proxy_ca_and_preserves_args(monkeypatc
 
 @pytest.mark.asyncio
 async def test_run_client_pi_reverse_sets_openai_base_url_without_codex_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

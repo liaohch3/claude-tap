@@ -11,18 +11,19 @@ from claude_tap.dashboard import (
     _record_response_text,
     _record_usage,
 )
+from tests.schema_types import JsonObject
 
 
-def _bedrock_frame(payload: dict) -> str:
+def _bedrock_frame(payload: JsonObject) -> str:
     encoded = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
     return "\x00\x00binary-prefix" + json.dumps({"bytes": encoded, "p": "abcdefghijk"}) + "�"
 
 
-def _bedrock_body(*payloads: dict) -> str:
+def _bedrock_body(*payloads: JsonObject) -> str:
     return "".join(_bedrock_frame(p) for p in payloads)
 
 
-def _wrapped_bedrock_frame(payload: dict) -> str:
+def _wrapped_bedrock_frame(payload: JsonObject) -> str:
     encoded = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
     return "\x00\x00binary-prefix" + json.dumps({"chunk": {"bytes": encoded}}) + "�"
 

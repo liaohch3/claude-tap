@@ -8,6 +8,7 @@ import pytest
 
 from claude_tap import cli_clients, parse_args
 from claude_tap.cli import CLIENT_CONFIGS, ClientConfig, run_client
+from tests.schema_types import Map
 
 SUPPORTED_CLIENTS = {
     "agy",
@@ -211,7 +212,7 @@ async def test_run_client_reverse_sets_all_base_url_envs_and_settings(
         default_target="https://example.com",
         inject_settings_env=True,
     )
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -267,7 +268,7 @@ async def test_run_client_openclaw_reverse_patches_temp_config(
         ),
         encoding="utf-8",
     )
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -317,7 +318,7 @@ async def test_run_client_openclaw_reverse_patches_model_arg_provider(
         ),
         encoding="utf-8",
     )
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["env"] = kwargs["env"]
@@ -369,7 +370,7 @@ async def test_run_client_openclaw_reverse_cleans_temp_config_on_spawn_error(
         ),
         encoding="utf-8",
     )
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*_cmd, **kwargs):
         captured["config_path"] = Path(kwargs["env"]["OPENCLAW_CONFIG_PATH"])
@@ -533,7 +534,7 @@ async def test_run_client_agy_forward_sets_proxy_ca_and_cloud_code_url(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

@@ -12,6 +12,7 @@ from claude_tap.cli import (
     _reverse_proxy_trace_options,
     run_client,
 )
+from tests.schema_types import Map
 
 
 class _DummyProc:
@@ -58,7 +59,7 @@ def test_parse_args_codebuddy_explicit_forward_overrides_default() -> None:
 
 @pytest.mark.asyncio
 async def test_run_client_codebuddy_reverse_sets_base_url_and_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -88,7 +89,7 @@ async def test_run_client_codebuddy_reverse_sets_base_url_and_settings(monkeypat
 async def test_run_client_codebuddy_reverse_does_not_inject_settings_when_already_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd
@@ -115,7 +116,7 @@ async def test_run_client_codebuddy_reverse_does_not_inject_settings_when_alread
 
 @pytest.mark.asyncio
 async def test_run_client_codebuddy_forward_sets_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
         captured["cmd"] = cmd

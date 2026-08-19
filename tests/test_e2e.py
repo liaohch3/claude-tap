@@ -26,6 +26,7 @@ from yarl import URL
 
 from claude_tap.trace import TraceWriter
 from tests.conftest import e2e_env, read_proxy_log, read_trace_records
+from tests.schema_types import JsonObject, Map
 
 
 def _writer_for_dir(tmpdir: Path):
@@ -1683,7 +1684,7 @@ async def test_async_main_live_viewer_respects_tap_host(monkeypatch, tmp_path):
     """Shared dashboard startup should honor the configured tap host."""
     from claude_tap import async_main, parse_args
 
-    dashboard_calls: list[dict[str, object]] = []
+    dashboard_calls: list[Map[str, object]] = []
 
     async def fake_run_client(*args, **kwargs):
         return 0
@@ -2694,7 +2695,7 @@ def test_kimi_code_client_reverse_proxy():
 
 def test_codex_zstd_request_body():
     """Verify the proxy decompresses zstd-encoded request bodies from Codex CLI."""
-    received_bodies: list[dict] = []
+    received_bodies: list[JsonObject] = []
 
     async def handler(request):
         body = await request.json()
@@ -4438,7 +4439,7 @@ async def test_forward_proxy_flushes_each_codexapp_websocket_response_before_clo
         )
         proxy_port = await server.start()
 
-        async def wait_for_records(expected: int) -> list[dict]:
+        async def wait_for_records(expected: int) -> list[JsonObject]:
             for _ in range(100):
                 records = store.load_records(session_id)
                 if len(records) >= expected:
@@ -4663,7 +4664,7 @@ async def test_forward_proxy_connect_websocket_honors_env_proxy(monkeypatch):
             lambda _url: (URL("http://proxy.local:8080"), aiohttp.BasicAuth("user", "pass")),
         )
 
-        ws_connect_calls: list[dict] = []
+        ws_connect_calls: list[JsonObject] = []
         original_ws_connect = session.ws_connect
 
         async def _spy_ws_connect(*args, **kwargs):

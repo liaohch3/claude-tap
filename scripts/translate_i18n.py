@@ -10,8 +10,12 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+if TYPE_CHECKING:
+    from claude_tap.models import ProviderPayload
 
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "google/gemini-2.5-flash"
@@ -105,7 +109,7 @@ def collect_i18n_data(
     return object_block, lang_blocks, lang_entries
 
 
-def validate_i18n_json(data: object) -> dict[str, dict[str, str]]:
+def validate_i18n_json(data: ProviderPayload) -> dict[str, dict[str, str]]:
     if not isinstance(data, dict):
         raise ValueError("I18N JSON must contain an object.")
 

@@ -26,7 +26,6 @@ import time
 import uuid
 import zlib
 from collections import deque
-from collections.abc import Mapping
 from urllib.parse import urlparse
 
 import aiohttp
@@ -34,6 +33,8 @@ from aiohttp import WSMessage, WSMsgType
 from aiohttp._websocket.reader import WebSocketDataQueue, WebSocketReader
 from aiohttp.http_websocket import WS_KEY, WebSocketWriter
 from yarl import URL
+
+from claude_tap.models import ProviderPayload
 
 try:
     from compression import zstd
@@ -127,7 +128,7 @@ def _matches_path_suffix(path: str, suffixes: tuple[str, ...]) -> bool:
     return any(clean.endswith(suffix.lower()) for suffix in suffixes)
 
 
-def _header_value(headers: Mapping[str, str], name: str) -> str:
+def _header_value(headers: dict[str, str], name: str) -> str:
     if value := headers.get(name):
         return value
     lower_name = name.lower()
@@ -137,7 +138,7 @@ def _header_value(headers: Mapping[str, str], name: str) -> str:
     return ""
 
 
-def _decode_request_body_for_trace(body: bytes, headers: Mapping[str, str]) -> bytes:
+def _decode_request_body_for_trace(body: bytes, headers: dict[str, str]) -> bytes:
     """Decode supported request content encodings without mutating upstream bytes.
 
     Forward proxy reads raw HTTP frames, so unlike the MITM aiohttp path the
@@ -160,7 +161,7 @@ def _decode_request_body_for_trace(body: bytes, headers: Mapping[str, str]) -> b
     return body
 
 
-def _has_package_manager_user_agent(headers: Mapping[str, str] | None) -> bool:
+def _has_package_manager_user_agent(headers: dict[str, str] | None) -> bool:
     if headers is None:
         return False
     user_agent = _header_value(headers, "User-Agent").lower()
@@ -170,8 +171,8 @@ def _has_package_manager_user_agent(headers: Mapping[str, str] | None) -> bool:
 def _should_skip_trace_record(
     upstream_url: str,
     path: str,
-    response_headers: Mapping[str, str],
-    request_headers: Mapping[str, str] | None = None,
+    response_headers: dict[str, str],
+    request_headers: dict[str, str] | None = None,
     method: str = "GET",
 ) -> bool:
     """Return whether a non-model upstream response should be forwarded without persisting."""
@@ -698,7 +699,7 @@ class ForwardProxyServer:
         method: str,
         path: str,
         req_headers: dict[str, str],
-        req_body: dict | None,
+        req_body: ProviderPayload | None,
         log_prefix: str,
         upstream_base_url: str,
     ) -> None:
@@ -789,7 +790,7 @@ class ForwardProxyServer:
         method: str,
         path: str,
         req_headers: dict[str, str],
-        req_body: dict | None,
+        req_body: ProviderPayload | None,
         log_prefix: str,
         upstream_url: str,
         upstream_base_url: str,
@@ -945,7 +946,7 @@ class ForwardProxyServer:
             )
             return
 
-        ws_connect_kwargs: dict[str, object] = {}
+        ws_connect_kwargs: ProviderPayload = {}
         proxy_settings = _get_ws_proxy_settings(upstream_ws_url) if self._session.trust_env else None
         if proxy_settings:
             proxy_url, proxy_auth = proxy_settings

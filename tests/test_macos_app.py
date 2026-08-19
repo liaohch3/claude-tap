@@ -3,7 +3,6 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -16,6 +15,7 @@ from claude_tap.macos_app import (
     build_proxy_command,
     parse_macos_app_args,
 )
+from tests.schema_types import Map
 
 
 @pytest.fixture(autouse=True)
@@ -177,7 +177,7 @@ def test_monitor_controller_reuses_healthy_dashboard_and_starts_proxies(tmp_path
 
 
 def test_monitor_controller_spawns_dashboard_process(tmp_path: Path) -> None:
-    spawned: list[tuple[list[str], dict[str, object]]] = []
+    spawned: list[tuple[list[str], Map[str, object]]] = []
 
     class FakeProcess:
         def poll(self) -> int | None:
@@ -209,7 +209,7 @@ def test_monitor_controller_spawns_dashboard_process(tmp_path: Path) -> None:
 
 def test_monitor_controller_start_spawns_proxies_and_enables_global_injection(tmp_path: Path) -> None:
     spawned: list[list[str]] = []
-    injected: list[tuple[int, int, list[dict[str, object]]]] = []
+    injected: list[tuple[int, int, list[Map[str, object]]]] = []
 
     class FakeProcess:
         def __init__(self, pid: int) -> None:
@@ -258,7 +258,7 @@ def test_monitor_controller_start_spawns_proxies_and_enables_global_injection(tm
 
 def test_monitor_controller_reuses_healthy_proxy_instead_of_spawning_duplicate(tmp_path: Path) -> None:
     spawned: list[list[str]] = []
-    injected: list[tuple[int, int, list[dict[str, object]]]] = []
+    injected: list[tuple[int, int, list[Map[str, object]]]] = []
 
     class FakeProcess:
         def __init__(self, pid: int) -> None:
@@ -806,7 +806,7 @@ def test_menu_app_open_dashboard_active_monitor_after_relaunch_does_not_confirm(
 class FakeObjC:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str, tuple[object, ...]]] = []
-        self.strings: dict[int, str] = {}
+        self.strings: Map[int, str] = {}
         self._next = 100
         self.objc = FakeRuntime(self)
 
@@ -832,8 +832,8 @@ class FakeObjC:
         self,
         receiver: int,
         selector: str,
-        _restype: Any = None,
-        _argtypes: list[Any] | None = None,
+        _restype: object = None,
+        _argtypes: list[object] | None = None,
         *args: object,
     ) -> int:
         self.calls.append((receiver, selector, args))
@@ -1044,7 +1044,7 @@ def test_menu_callbacks_forward_to_active_app(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_main_entry_routes_macos_app_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
-    called: dict[str, object] = {}
+    called: Map[str, object] = {}
 
     def fake_macos_main(argv: list[str]) -> int:
         called["argv"] = argv

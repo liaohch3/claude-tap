@@ -29,6 +29,7 @@ from claude_tap.shared_dashboard import (
     stop_shared_dashboard,
 )
 from claude_tap.trace_store import resolve_db_path
+from tests.schema_types import Map
 
 
 async def _start_test_app(app: web.Application) -> tuple[web.AppRunner, int]:
@@ -141,7 +142,7 @@ def test_dashboard_spawn_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 
 def test_spawn_dashboard_subprocess(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    spawned_args: list[tuple[list[str], dict[str, object]]] = []
+    spawned_args: list[tuple[list[str], Map[str, object]]] = []
 
     class FakePopen:
         def __init__(self, cmd: list[str], **kwargs: object) -> None:
@@ -168,7 +169,7 @@ def test_spawn_dashboard_subprocess_hides_windows_console(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
 
     class FakeStartupInfo:
         def __init__(self) -> None:
@@ -341,7 +342,7 @@ async def test_stop_shared_dashboard_rejects_unhealthy_or_forbidden_server() -> 
 async def test_stop_shared_dashboard_handles_post_client_error(monkeypatch: pytest.MonkeyPatch) -> None:
     import aiohttp
 
-    async def healthy(*_args: object, **_kwargs: object) -> tuple[int, dict[str, str]]:
+    async def healthy(*_args: object, **_kwargs: object) -> tuple[int, Map[str, str]]:
         return 200, {"quit_token": "test-token"}
 
     class FailingSession:

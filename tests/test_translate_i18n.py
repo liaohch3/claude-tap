@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+from tests.schema_types import Map
+
 SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "translate_i18n.py"
 SPEC = importlib.util.spec_from_file_location("translate_i18n", SCRIPT_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -120,7 +122,7 @@ const I18N = {
 
 
 def test_request_openrouter_translation_adds_fullwidth_instruction_for_ja(monkeypatch) -> None:
-    captured_payload: dict[str, object] = {}
+    captured_payload: Map[str, object] = {}
 
     class FakeResponse:
         def __enter__(self) -> "FakeResponse":

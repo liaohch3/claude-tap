@@ -19,6 +19,7 @@ from claude_tap.cursor_transcript import (
     import_cursor_transcripts,
     model_from_cursor_args,
 )
+from tests.schema_types import JsonObject, Map
 
 
 class _DummyProc:
@@ -37,7 +38,7 @@ class _DummyProc:
         self.returncode = -9
 
 
-def _write_transcript(path: Path, rows: list[dict]) -> None:
+def _write_transcript(path: Path, rows: list[JsonObject]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
 
@@ -100,7 +101,7 @@ def test_parse_args_cursor_rejects_proxy_mode_override() -> None:
 
 @pytest.mark.asyncio
 async def test_run_client_cursor_transcript_only_skips_proxy_env(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: Map[str, object] = {}
     ca_path = Path("/tmp/test-ca.pem")
 
     async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -650,7 +651,7 @@ async def test_async_main_cursor_transcript_only_skips_proxy(monkeypatch, tmp_pa
         def close(self) -> None:
             return None
 
-        def get_summary(self) -> dict:
+        def get_summary(self) -> JsonObject:
             return {
                 "api_calls": 3,
                 "input_tokens": 0,
@@ -661,7 +662,7 @@ async def test_async_main_cursor_transcript_only_skips_proxy(monkeypatch, tmp_pa
                 "has_error": False,
             }
 
-    client_calls: list[dict] = []
+    client_calls: list[JsonObject] = []
 
     async def fake_run_client(*args, **kwargs):
         client_calls.append(kwargs)
@@ -721,7 +722,7 @@ async def test_async_main_cursor_no_launch_watch_only(monkeypatch, tmp_path: Pat
         def close(self) -> None:
             return None
 
-        def get_summary(self) -> dict:
+        def get_summary(self) -> JsonObject:
             return {
                 "api_calls": 0,
                 "input_tokens": 0,
@@ -797,8 +798,8 @@ async def test_watcher_skips_user_only_transcript_until_assistant(trace_db, tmp_
     watcher.close()
 
 
-def _legacy_cursor_record(conversation_id: str) -> dict:
-    body: dict = {"messages": [{"role": "user", "content": "inspect"}]}
+def _legacy_cursor_record(conversation_id: str) -> JsonObject:
+    body: JsonObject = {"messages": [{"role": "user", "content": "inspect"}]}
     return {
         "transport": "cursor-transcript",
         "capture": {"cursor_transcript_id": conversation_id, "client": "cursor"},

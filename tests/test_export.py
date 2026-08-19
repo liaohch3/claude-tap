@@ -8,6 +8,7 @@ import json
 import pytest
 
 from claude_tap.export import export_main
+from tests.schema_types import JsonObject
 
 
 def _write_trace(tmp_path):
@@ -194,7 +195,7 @@ def test_export_compact_trace_is_standalone_and_html_renderable(tmp_path, capsys
     assert f"Exported 3 turns to {compact_path}" in capsys.readouterr().out
 
 
-def _bedrock_frame(event: dict) -> str:
+def _bedrock_frame(event: JsonObject) -> str:
     payload = json.dumps(event).encode("utf-8")
     return json.dumps({"bytes": base64.b64encode(payload).decode("ascii")})
 
