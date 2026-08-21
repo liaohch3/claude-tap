@@ -108,6 +108,203 @@ def _anthropic_messages_record() -> dict[str, Any]:
     }
 
 
+def _tool_bloat_records() -> tuple[dict[str, Any], ...]:
+    """Two Anthropic turns: the first ordinary, the second carrying an oversized
+    tool result.
+
+    Both belong to the shared contract corpus so the sidebar badge and the detail
+    banner render during the coverage sweep as well as in the dedicated
+    assertions below.
+    """
+    large_tool_output = "A" * 25000
+    tools = [
+        {
+            "name": "grep",
+            "description": "Search files.",
+            "input_schema": {
+                "type": "object",
+                "properties": {"pattern": {"type": "string"}},
+                "required": ["pattern"],
+            },
+        }
+    ]
+    return (
+        {
+            "timestamp": "2026-08-14T10:00:00+00:00",
+            "request_id": "req_tool_bloat_1",
+            "turn": 1,
+            "duration_ms": 1500,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "headers": {},
+                "body": {
+                    "model": "claude-opus-5",
+                    "system": "Bloat contract system prompt.",
+                    "messages": [{"role": "user", "content": [{"type": "text", "text": "Grep the sources."}]}],
+                    "tools": tools,
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "content": [{"type": "text", "text": "Bloat contract OK."}],
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-08-14T10:00:10+00:00",
+            "request_id": "req_tool_bloat_2",
+            "turn": 2,
+            "duration_ms": 2000,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "headers": {},
+                "body": {
+                    "model": "claude-opus-5",
+                    "system": "Bloat contract system prompt.",
+                    "messages": [
+                        {"role": "user", "content": [{"type": "text", "text": "Grep the sources."}]},
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "tool_use", "id": "toolu_grep", "name": "grep", "input": {"pattern": "x"}}
+                            ],
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "toolu_grep",
+                                    "content": large_tool_output,
+                                }
+                            ],
+                        },
+                    ],
+                    "tools": tools,
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "content": [{"type": "text", "text": "Analyzed grep result."}],
+                    "usage": {"input_tokens": 200, "output_tokens": 100},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-08-14T10:00:20+00:00",
+            "request_id": "req_tool_bloat_3",
+            "turn": 3,
+            "duration_ms": 2500,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "headers": {},
+                "body": {
+                    "model": "claude-opus-5",
+                    "system": "Bloat contract system prompt.",
+                    "messages": [
+                        {"role": "user", "content": [{"type": "text", "text": "Screenshot the page."}]},
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "tool_use", "id": "toolu_shot", "name": "grep", "input": {"pattern": "y"}}
+                            ],
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "toolu_shot",
+                                    # An image is billed by dimension, so its base64 is not
+                                    # result text and must leave the row unbadged however
+                                    # far past the byte threshold it runs.
+                                    "content": [
+                                        {
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": "image/png",
+                                                "data": "B" * 25000,
+                                            },
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                    ],
+                    "tools": tools,
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "content": [{"type": "text", "text": "Described the screenshot."}],
+                    "usage": {"input_tokens": 300, "output_tokens": 120},
+                },
+            },
+        },
+        {
+            "timestamp": "2026-08-14T10:00:30+00:00",
+            "request_id": "req_tool_bloat_4",
+            "turn": 4,
+            "duration_ms": 2600,
+            "request": {
+                "method": "POST",
+                "path": "/v1/responses",
+                "headers": {},
+                "body": {
+                    "model": "gpt-5.4",
+                    "instructions": "Bloat contract system prompt.",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Screenshot the viewport."}],
+                        },
+                        {
+                            "type": "computer_call_output",
+                            "call_id": "call_shot",
+                            # A computer-use call hands its screenshot back as a
+                            # `computer_screenshot` output.  Serializing that would
+                            # show a wall of base64 and count an encoded image as
+                            # result text, so the viewer normalizes it to an image
+                            # block on both sides of the detector.
+                            "output": {
+                                "type": "computer_screenshot",
+                                "image_url": "data:image/png;base64," + "C" * 25000,
+                            },
+                        },
+                    ],
+                    "tools": [{"type": "function", "name": "grep", "description": "Search files."}],
+                },
+            },
+            "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "Read the screenshot."}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 320, "output_tokens": 130},
+                },
+            },
+        },
+    )
+
+
 def _responses_record() -> dict[str, Any]:
     return {
         "timestamp": "2026-05-13T13:21:00+00:00",
@@ -1175,6 +1372,18 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
                 "Tool result two.",
                 "Content block response OK.",
             ),
+        ),
+        ViewerContractCase(
+            name="tool_bloat",
+            records=_tool_bloat_records(),
+            expected_sections=("Tools", "System Prompt", "Messages", "Response"),
+            expected_system="Bloat contract system prompt.",
+            expected_roles=("user", "assistant", "user"),
+            expected_tools=("grep",),
+            expected_output_types=("text",),
+            expected_usage={"input_tokens": 200, "output_tokens": 100},
+            required_detail_text=("Grep the sources.", "Large tool output", "Analyzed grep result."),
+            entry_index=1,
         ),
     )
 
@@ -3482,3 +3691,667 @@ def test_viewer_codex_global_search_skips_non_navigable_and_orders_by_capture_tu
     assert errors == []
     assert search_state["totalMatches"] == 0
     assert sorted_ids == ["req_response_2", "req_mcp_between", "req_response_4"]
+
+
+def test_viewer_tool_bloat_badges_and_banner(tmp_path: Path, chromium_browser) -> None:
+    records = _tool_bloat_records()
+    html_path = _generate_case_html(tmp_path, "tool_bloat", records)
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+
+        # Turn 2 carries a 25 KB tool result, so its sidebar row is badged.
+        bloat_badge = page.locator(".sidebar-item[data-idx='1'] .si-bloat-badge")
+        assert bloat_badge.count() == 1
+        assert "KB" in bloat_badge.text_content()
+
+        page.locator(".sidebar-item[data-idx='1']").click()
+        page.wait_for_selector("#detail .tool-bloat-alert", timeout=5000)
+        assert "Large tool output" in page.locator("#detail .tool-bloat-alert").text_content()
+
+        # Turn 1 has no oversized result, so nothing is flagged in either place.
+        page.locator(".sidebar-item[data-idx='0']").click()
+        page.wait_for_selector("#detail .tok-item", timeout=5000)
+        assert page.locator("#detail .tool-bloat-alert").count() == 0
+        assert page.locator(".sidebar-item[data-idx='0'] .si-bloat-badge").count() == 0
+
+        # Turn 3 returns a 25 KB base64 image.  An image is billed by dimension, so
+        # neither detector may count its encoding as result text.
+        page.locator(".sidebar-item[data-idx='2']").click()
+        page.wait_for_selector("#detail .tok-item", timeout=5000)
+        assert page.locator("#detail .tool-bloat-alert").count() == 0
+        assert page.locator(".sidebar-item[data-idx='2'] .si-bloat-badge").count() == 0
+
+        # Turn 4 is the Responses equivalent: a computer-use screenshot arrives as
+        # a `computer_screenshot` output, and normalizing it to an image block is
+        # what keeps its base64 out of the byte count.
+        page.locator(".sidebar-item[data-idx='3']").click()
+        page.wait_for_selector("#detail .tok-item", timeout=5000)
+        assert page.locator("#detail .tool-bloat-alert").count() == 0
+        assert page.locator(".sidebar-item[data-idx='3'] .si-bloat-badge").count() == 0
+        # The screenshot renders as an image rather than a wall of base64 text.
+        assert page.locator("#detail img").count() >= 1
+    finally:
+        page.close()
+
+    assert errors == []
+
+
+def test_detect_tool_bloat_sizes_by_bytes_and_skips_images() -> None:
+    """The Python detector must agree with the JS one on unit and threshold.
+
+    A CJK result short enough to pass a character-count check still crosses the
+    byte threshold, and an image payload must never be counted as context text.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _detect_tool_bloat
+
+    cjk_chars = TOOL_BLOAT_MIN_BYTES // 3 + 10  # 3 bytes each in UTF-8
+    assert cjk_chars < TOOL_BLOAT_MIN_BYTES
+    cjk = _detect_tool_bloat([{"role": "user", "content": [{"type": "tool_result", "content": "中" * cjk_chars}]}])
+    assert cjk is not None
+    assert cjk["byte_count"] >= TOOL_BLOAT_MIN_BYTES
+
+    assert (
+        _detect_tool_bloat(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "content": [{"type": "image", "source": {"type": "base64", "data": "x" * 50000}}],
+                        }
+                    ],
+                }
+            ]
+        )
+        is None
+    )
+
+    # A non-string `text` must not crash metadata generation for the trace.
+    nonstring = _detect_tool_bloat(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "content": [{"type": "text", "text": None}, {"big": "y" * 25000}]}],
+            }
+        ]
+    )
+    assert nonstring is not None
+
+    # Below threshold yields nothing at all, rather than a zero-sized record.
+    assert _detect_tool_bloat([{"role": "user", "content": [{"type": "tool_result", "content": "short"}]}]) is None
+
+    # OpenAI Chat Completions puts the result straight on a tool-role message.
+    assert _detect_tool_bloat([{"role": "tool", "content": "z" * 25000}]) is not None
+
+    # Bedrock Converse camelCase blocks are matched too.
+    assert (
+        _detect_tool_bloat([{"role": "user", "content": [{"toolResult": {"content": [{"text": "w" * 25000}]}}]}])
+        is not None
+    )
+
+
+def test_tool_result_text_flattens_every_content_shape_seen_on_the_wire() -> None:
+    """The flattener sits in metadata generation for the whole trace.
+
+    A shape it does not expect must degrade to a size estimate, never raise, so
+    the shapes below are the ones traces actually carry: bare strings inside a
+    list, a scalar where a block was expected, a dict content instead of a list,
+    and a stray None.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _detect_tool_bloat, _tool_result_text
+
+    # Anthropic sends a bare string content; a list may also hold bare strings.
+    assert _tool_result_text("plain") == "plain"
+    assert _tool_result_text(["one", "two"]) == "one\ntwo"
+
+    # A scalar where a block belongs is serialized rather than skipped, so its
+    # size still counts toward the turn.  None carries no text at all.
+    assert _tool_result_text([42]) == "42"
+    assert _tool_result_text([None]) == ""
+    assert _tool_result_text(None) == ""
+
+    # A dict content is measured; an image dict is not, on the same reasoning as
+    # an image block inside a list.  The separators match JSON.stringify so the
+    # two detectors size the same payload identically.
+    assert _tool_result_text({"stdout": "ok"}) == '{"stdout":"ok"}'
+    assert _tool_result_text({"type": "image", "source": {"data": "x" * 50000}}) == ""
+    assert _tool_result_text({"image": {"source": {"data": "x" * 50000}}}) == ""
+
+    # A scalar content is stringified rather than dropped.
+    assert _tool_result_text(7) == "7"
+
+    # The shapes above reach the detector intact: a long bare string inside a
+    # list, and a dict content, both cross the threshold.
+    assert _detect_tool_bloat([{"role": "user", "content": [{"type": "tool_result", "content": ["q" * 25000]}]}])
+    dict_content = _detect_tool_bloat(
+        [{"role": "user", "content": [{"type": "tool_result", "content": {"stdout": "q" * 25000}}]}]
+    )
+    assert dict_content is not None
+    assert dict_content["byte_count"] >= TOOL_BLOAT_MIN_BYTES
+
+    # A non-dict message and a non-dict block are skipped without raising.
+    assert _detect_tool_bloat(["not a message"]) is None
+    assert _detect_tool_bloat([{"role": "user", "content": ["not a block"]}]) is None
+
+
+def test_a_text_field_collapses_the_part_only_for_a_real_text_block() -> None:
+    """`text` alone does not stand for the part; `renderContent` needs `type: "text"`.
+
+    A structured result part carrying a string `text` beside other payload fields is
+    displayed whole, because the renderer special-cases only `type === "text"` and
+    dumps every other part. Collapsing to `text` on the string check alone sized
+    `"summary"` for `{"text": "summary", "logs": <25 KB>}` in both detectors, so
+    25 KB of context the reader can see on screen produced no badge and no banner.
+    A text-ish type is not enough either: an `output_text` part is dumped whole too,
+    so whitelisting it would hide the same 25 KB behind a two-byte measurement.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _detect_tool_bloat, _tool_result_text
+
+    # The one type renderContent renders as bare text keeps collapsing.
+    assert _tool_result_text([{"type": "text", "text": "hello"}]) == "hello"
+
+    # Every other part is measured whole, `text` included, because it is shown whole.
+    assert _tool_result_text([{"text": "summary"}]) == '{"text":"summary"}'
+    assert _tool_result_text([{"type": "other", "text": "x"}]) == '{"type":"other","text":"x"}'
+    assert _tool_result_text([{"type": "input_text", "text": "hi"}]) == '{"type":"input_text","text":"hi"}'
+    assert _tool_result_text([{"type": "output_text", "text": "o"}]) == '{"type":"output_text","text":"o"}'
+
+    # So the siblings reach the detector and the payload is flagged.
+    structured = _detect_tool_bloat(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "content": [{"text": "summary", "logs": "L" * 25000}]}],
+            }
+        ]
+    )
+    assert structured is not None
+    assert structured["byte_count"] >= TOOL_BLOAT_MIN_BYTES
+    # A real text block of the same size is still measured by its text alone.
+    assert _tool_result_text([{"type": "text", "text": "s", "logs": "L" * 25000}]) == "s"
+    # A text-ish type is not, since the renderer shows those siblings.
+    for shown_whole in ("input_text", "output_text"):
+        flagged = _detect_tool_bloat(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "content": [{"type": shown_whole, "text": "ok", "logs": "L" * 25000}],
+                        }
+                    ],
+                }
+            ]
+        )
+        assert flagged is not None, shown_whole
+        assert flagged["byte_count"] >= TOOL_BLOAT_MIN_BYTES, shown_whole
+
+
+def test_a_structured_type_field_is_payload_rather_than_an_image_tag() -> None:
+    """A `type` holding a list or dict would make the set test raise.
+
+    `unhashable type` inside the flattener aborts metadata generation for the
+    whole trace, while `Set.has` in the browser simply reports false, so the
+    unguarded membership test turns one crafted result into a viewer that
+    cannot be generated at all.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _detect_tool_bloat, _tool_result_text
+
+    for bad_type in ([], {}, 7, None):
+        part = {"type": bad_type, "logs": "y" * 25000}
+        text = _tool_result_text([part])
+        assert len(text.encode("utf-8")) >= TOOL_BLOAT_MIN_BYTES
+        assert _detect_tool_bloat([{"role": "user", "content": [{"type": "tool_result", "content": [part]}]}])
+
+    # The nested-image predicate reads the same field and needs the same guard.
+    assert _tool_result_text([{"image": {"type": []}, "logs": "y" * 25000}])
+    assert _tool_result_text({"type": [], "stdout": "ok"}) == '{"type":[],"stdout":"ok"}'
+
+
+def test_an_empty_result_part_keeps_its_separator_in_both_detectors() -> None:
+    """Python retains an empty part; a truthiness filter in JS would not.
+
+    At the threshold that one separator is the whole difference, so a result
+    would earn a sidebar badge whose detail view renders no banner.  Parts that
+    are genuinely dropped -- images and nulls -- lose their separator on both
+    sides alike.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _tool_result_text
+
+    below = "x" * (TOOL_BLOAT_MIN_BYTES - 1)
+    assert len(_tool_result_text([below, ""]).encode("utf-8")) == TOOL_BLOAT_MIN_BYTES
+    assert len(_tool_result_text([below, {"type": "text", "text": ""}]).encode("utf-8")) == TOOL_BLOAT_MIN_BYTES
+
+    at = "x" * TOOL_BLOAT_MIN_BYTES
+    assert len(_tool_result_text([at, {"type": "image", "source": {"data": "zz"}}]).encode("utf-8")) == (
+        TOOL_BLOAT_MIN_BYTES
+    )
+    assert len(_tool_result_text([at, None]).encode("utf-8")) == TOOL_BLOAT_MIN_BYTES
+
+
+def test_a_call_output_without_output_sizes_the_same_raw_leftovers() -> None:
+    """The display path pretty-prints the leftover fields; the scan must not.
+
+    Two spaces of indent per level is enough to move a result across the
+    threshold in the detail banner while the sidebar, measuring the compact
+    form, stays below it.
+    """
+    from claude_tap.viewer import _response_tool_result_content, _tool_result_text
+
+    item = {"type": "function_call_output", "call_id": "c1", "status": "completed", "results": ["x"] * 1500}
+    payload = _response_tool_result_content(item, for_bloat=True)
+    assert payload == {"results": item["results"]}
+
+    display = _response_tool_result_content(item)
+    assert isinstance(display, str)
+    assert len(_tool_result_text(payload).encode("utf-8")) < len(display.encode("utf-8")) * 3
+
+
+def test_a_cjk_result_measures_the_same_in_both_detectors() -> None:
+    """Escaping non-ASCII would inflate a structured payload roughly sixfold.
+
+    `JSON.stringify` leaves the character as itself, three UTF-8 bytes; Python's
+    default escapes it to six ASCII ones.  A payload that only crosses the
+    threshold under the escaped measurement gets a sidebar badge whose detail
+    view then renders no warning.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _detect_tool_bloat, _tool_result_text
+
+    payload = {"value": "中" * 1666}  # ~5 KB unescaped, ~10 KB escaped
+    text = _tool_result_text(payload)
+    assert "\\u" not in text
+    assert len(text.encode("utf-8")) < TOOL_BLOAT_MIN_BYTES
+    assert _detect_tool_bloat([{"role": "user", "content": [{"type": "tool_result", "content": payload}]}]) is None
+
+    # A genuinely oversized CJK payload is still caught.
+    assert _detect_tool_bloat(
+        [{"role": "user", "content": [{"type": "tool_result", "content": {"value": "中" * 4000}}]}]
+    )
+
+
+def test_a_gemini_function_response_measures_the_same_in_both_detectors() -> None:
+    """The browser pretty-prints a structured `functionResponse.response`.
+
+    `geminiFunctionResponseContent` calls `JSON.stringify(output, null, 2)`, so a
+    one-line dump here measures a different payload than the detail view does: an
+    array of 1,500 one-character strings is ~7.5 KB compact against ~10.5 KB
+    indented. Only the second crosses the threshold, so the metadata scan would
+    omit a badge the detail view still warns about.
+    """
+    import json
+
+    from claude_tap.viewer import (
+        TOOL_BLOAT_MIN_BYTES,
+        _detect_tool_bloat,
+        _extract_gemini_request_messages,
+        _gemini_function_response_content,
+    )
+
+    output = ["x"] * 1500
+    compact = json.dumps(output, ensure_ascii=False)
+    rendered = _gemini_function_response_content({"response": {"output": output}})
+
+    assert len(compact.encode("utf-8")) < TOOL_BLOAT_MIN_BYTES
+    assert len(rendered.encode("utf-8")) >= TOOL_BLOAT_MIN_BYTES
+    assert rendered == json.dumps(output, ensure_ascii=False, indent=2)
+
+    body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"functionResponse": {"name": "read", "response": {"output": output}}}],
+            }
+        ]
+    }
+    assert _detect_tool_bloat(_extract_gemini_request_messages(body)) is not None
+
+    # A string payload is passed through untouched, and a missing one reads as
+    # empty rather than as the text "null", which JS would never produce.
+    assert _gemini_function_response_content({"response": {"output": "plain"}}) == "plain"
+    assert _gemini_function_response_content({"response": {"output": None}}) == ""
+    assert _gemini_function_response_content({"response": None}) == ""
+    assert _gemini_function_response_content({}) == ""
+
+    # Non-ASCII stays unescaped, matching JSON.stringify, so a CJK result is not
+    # inflated past the threshold on this side alone.
+    assert "\\u" not in _gemini_function_response_content({"response": {"output": {"值": "中"}}})
+
+
+def test_a_gemini_response_keeps_the_fields_beside_output() -> None:
+    """`output` stands for the response only when it is the whole response.
+
+    A sibling field beside it is result data the model was given, and unwrapping
+    dropped it from the display and from the measurement together:
+    `{"output": "ok", "logs": <25 KB>}` showed two bytes and earned no badge.
+    Widening only the bloat payload would trade that for the opposite bug, a badge
+    whose bytes the reader cannot find, so both sides read the same object.
+    """
+    from claude_tap.viewer import (
+        TOOL_BLOAT_MIN_BYTES,
+        _detect_tool_bloat,
+        _extract_gemini_request_messages,
+        _gemini_function_response_content,
+    )
+
+    # A lone `output` is still unwrapped, at every value type.
+    assert _gemini_function_response_content({"response": {"output": "plain"}}) == "plain"
+    assert _gemini_function_response_content({"response": {"output": None}}) == ""
+    assert _gemini_function_response_content({"response": {"output": ["a"]}}) == '[\n  "a"\n]'
+
+    # With a sibling the whole object is kept, so the siblings stay measurable.
+    both = _gemini_function_response_content({"response": {"output": "ok", "logs": "L" * 25000}})
+    assert '"logs"' in both
+    assert len(both.encode("utf-8")) >= TOOL_BLOAT_MIN_BYTES
+    # Even when `output` itself is empty, which the one-key check must not confuse.
+    assert '"err"' in _gemini_function_response_content({"response": {"output": None, "err": "boom"}})
+
+    part = {"functionResponse": {"name": "read", "response": {"output": "ok", "logs": "L" * 25000}}}
+    body = {"contents": [{"role": "user", "parts": [part]}]}
+    bloat = _detect_tool_bloat(_extract_gemini_request_messages(body, for_bloat=True))
+    assert bloat is not None
+    assert bloat["byte_count"] >= TOOL_BLOAT_MIN_BYTES
+    # The badge measures exactly the string the opened entry displays.
+    displayed = _extract_gemini_request_messages(body)[0]["content"][0]["content"]
+    assert displayed == both
+
+
+def test_integral_floats_serialize_like_json_stringify() -> None:
+    """JSON.stringify writes 1.0 as 1; json.dumps does not.
+
+    2,500 such numbers are ~10 KB with the Python default and ~5 KB in the
+    browser, so lazy metadata would badge a turn the opened entry then
+    treats as clean.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _bloat_json, _detect_tool_bloat
+
+    assert _bloat_json({"n": 1.0}) == '{"n":1}'
+    payload = [1.0] * 2500
+    text = _bloat_json(payload)
+    assert "1.0" not in text
+    assert len(text.encode("utf-8")) < TOOL_BLOAT_MIN_BYTES
+    assert _detect_tool_bloat([{"role": "user", "content": [{"type": "tool_result", "content": payload}]}]) is None
+
+
+def test_numbers_outside_pythons_positional_range_match_json_stringify() -> None:
+    """The two runtimes switch to exponent notation at different magnitudes.
+
+    ECMA-262 stays positional out to 21 integer digits and 6 leading zeros;
+    Python's repr switches at 17 and 5. Casting integral floats to int fixed
+    ``1.0`` but inflated the other end: ``int(1e21)`` writes 22 digits where the
+    browser writes five characters, so 500 such values measured 11,501 bytes in
+    the sidebar against 3,001 in the opened entry.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _bloat_json, _detect_tool_bloat
+
+    assert _bloat_json({"n": 1e21}) == '{"n":1e+21}'
+    assert _bloat_json({"n": 1e16}) == '{"n":10000000000000000}'
+    assert _bloat_json({"n": 1e-7}) == '{"n":1e-7}'
+    assert _bloat_json({"n": 1e-6}) == '{"n":0.000001}'
+    assert _bloat_json({"n": -0.0}) == '{"n":0}'
+    # NaN and the infinities are not JSON; JSON.stringify writes null.
+    assert _bloat_json([float("nan"), float("inf"), float("-inf")]) == "[null,null,null]"
+
+    payload = [1e21] * 500
+    assert len(_bloat_json(payload).encode("utf-8")) < TOOL_BLOAT_MIN_BYTES
+    assert _detect_tool_bloat([{"role": "user", "content": [{"type": "tool_result", "content": payload}]}]) is None
+
+
+def test_json_integers_are_measured_as_the_doubles_js_parses() -> None:
+    """`JSON.parse` has only doubles; `json.loads` keeps arbitrary precision.
+
+    So a big literal is written digit for digit here and in exponent form there:
+    500 copies of ``999999999999999999999999`` measured 12,507 bytes in the
+    sidebar against 3,007 in the opened entry, and ``9007199254740993`` kept a
+    digit the browser had already rounded away.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _bloat_json, _detect_tool_bloat
+
+    assert _bloat_json({"n": 999999999999999999999999}) == '{"n":1e+24}'
+    assert _bloat_json({"n": 9007199254740993}) == '{"n":9007199254740992}'
+    # Small integers are exact in a double and stay as they are.
+    assert _bloat_json({"n": 12345}) == '{"n":12345}'
+    assert _bloat_json({"n": -0}) == '{"n":0}'
+    # Past the double range JSON.parse yields Infinity, which stringify nulls.
+    assert _bloat_json({"n": 10**400}) == '{"n":null}'
+    # bool is an int subclass; it must stay true/false, not become 1/0.
+    assert _bloat_json({"t": True, "f": False}) == '{"t":true,"f":false}'
+
+    payload = json.loads("[" + ",".join(["999999999999999999999999"] * 500) + "]")
+    assert len(_bloat_json(payload).encode("utf-8")) < TOOL_BLOAT_MIN_BYTES
+    assert _detect_tool_bloat([{"role": "user", "content": [{"type": "tool_result", "content": payload}]}]) is None
+
+
+def test_lone_surrogates_are_escaped_like_json_stringify() -> None:
+    """`JSON.stringify` has been well-formed since ES2019: a partnerless code
+    unit is escaped as six ASCII characters, not emitted raw.
+
+    Left raw with ``ensure_ascii=False``, each one folds into a 3-byte U+FFFD
+    when the size is measured, so 2,000 of them came to 6,012 bytes here against
+    12,012 in the browser -- the sidebar dropped a badge the opened entry showed.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _bloat_json, _detect_tool_bloat, _text_size_bytes
+
+    assert _bloat_json({"v": "\ud800"}) == '{"v":"\\ud800"}'
+    assert _bloat_json({"v": "\udfff"}) == '{"v":"\\udfff"}'
+    # A well-formed pair is one astral character, which the browser writes as
+    # itself; only unpaired units are escaped.
+    assert _bloat_json({"v": "\U00010000"}) == '{"v":"\U00010000"}'
+    assert _bloat_json({"v": 'a"b\x01'}) == '{"v":"a\\"b\\u0001"}'
+
+    payload = {"value": "\ud800" * 2000}
+    assert _text_size_bytes(_bloat_json(payload)) > TOOL_BLOAT_MIN_BYTES
+    assert _detect_tool_bloat([{"role": "user", "content": [{"type": "tool_result", "content": payload}]}]) is not None
+
+
+def test_gemini_function_responses_are_sized_separately() -> None:
+    """One Gemini content item can carry several functionResponse parts.
+
+    Display renders each as its own block. Measuring the wrapped list as one
+    result would badge two 6 KB replies that the opened entry then shows
+    without a warning.
+    """
+    from claude_tap.viewer import TOOL_BLOAT_MIN_BYTES, _detect_tool_bloat, _extract_request_messages
+
+    mid = "x" * 6000
+    body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"functionResponse": {"name": "a", "response": {"output": mid}}},
+                    {"functionResponse": {"name": "b", "response": {"output": "y" * 6000}}},
+                ],
+            }
+        ]
+    }
+    msgs = _extract_request_messages(body, for_bloat=True)
+    assert msgs[0]["role"] != "tool"
+    assert _detect_tool_bloat(msgs) is None
+
+    bloated = _detect_tool_bloat(
+        _extract_request_messages(
+            {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"functionResponse": {"name": "a", "response": {"output": "z" * TOOL_BLOAT_MIN_BYTES}}},
+                            {"functionResponse": {"name": "b", "response": {"output": mid}}},
+                        ],
+                    }
+                ]
+            },
+            for_bloat=True,
+        )
+    )
+    assert bloated is not None
+    assert bloated["count"] == 1
+
+
+def test_a_function_call_output_is_sized_by_its_output_field() -> None:
+    """`function_call_output` keeps its payload in `output`, not in `content`.
+
+    Reading `content` sizes every one of them as empty, so an oversized
+    Responses-shaped result would never be flagged from either scan.
+    """
+    from claude_tap.viewer import _detect_tool_bloat
+
+    for block_type in ("function_call_output", "computer_call_output", "custom_tool_call_output"):
+        found = _detect_tool_bloat([{"role": "tool", "content": [{"type": block_type, "output": "z" * 25000}]}])
+        assert found is not None, block_type
+        assert found["count"] == 1
+
+    # `content` still works where a trace carries it there instead.
+    assert _detect_tool_bloat([{"role": "tool", "content": [{"type": "function_call_output", "content": "z" * 25000}]}])
+
+
+def test_an_array_valued_tool_role_payload_is_scanned() -> None:
+    """The viewer wraps any tool-role content in a tool_result before rendering.
+
+    For traces past the lazy-loading threshold the badge comes only from this
+    scan, so a list payload that it skipped would show a warning in the detail
+    view with no badge on the row.
+    """
+    from claude_tap.viewer import _detect_tool_bloat, _text_size_bytes, _tool_result_text
+
+    # A list of bare strings and a list of text blocks are both results.
+    assert _detect_tool_bloat([{"role": "tool", "content": ["z" * 25000]}]) is not None
+    assert _detect_tool_bloat([{"role": "tool", "content": [{"type": "text", "text": "z" * 25000}]}]) is not None
+
+    # Display wraps any tool-role list in one outer tool_result, so a pre-wrapped
+    # pair is one combined payload rather than two separately counted results.
+
+    wrapped = [
+        {"type": "tool_result", "content": "z" * 25000},
+        {"type": "tool_result", "content": "y" * 30000},
+    ]
+    combined = _detect_tool_bloat([{"role": "tool", "content": wrapped}])
+    assert combined is not None
+    assert combined["count"] == 1
+    assert combined["byte_count"] == _text_size_bytes(_tool_result_text(wrapped))
+
+    # An image-only list stays unflagged, as its bytes are not context text.
+    assert (
+        _detect_tool_bloat(
+            [
+                {
+                    "role": "tool",
+                    "content": [{"type": "input_image", "image_url": "data:image/png;base64," + "x" * 50000}],
+                }
+            ]
+        )
+        is None
+    )
+
+
+def test_a_normalized_computer_screenshot_is_not_counted_as_text() -> None:
+    """A screenshot handed back from a computer-use call is an image.
+
+    Serializing it to a string would count the base64 as result text, badging
+    the turn for a payload that is billed by dimension instead.
+    """
+    from claude_tap.viewer import _detect_tool_bloat, _extract_request_messages
+
+    data_url = "data:image/png;base64," + "x" * 60000
+    body = {
+        "input": [
+            {
+                "type": "computer_call_output",
+                "call_id": "call_1",
+                "output": {"type": "computer_screenshot", "image_url": data_url},
+            }
+        ]
+    }
+    msgs = _extract_request_messages(body)
+    assert msgs == [{"role": "tool", "content": [{"type": "input_image", "image_url": data_url}]}]
+    assert _detect_tool_bloat(msgs) is None
+
+    # A textual output from the same item shape is still measured.
+    text_body = {"input": [{"type": "computer_call_output", "call_id": "c", "output": "z" * 25000}]}
+    assert _detect_tool_bloat(_extract_request_messages(text_body)) is not None
+
+
+def test_lone_surrogates_match_text_encoder_replacement_bytes() -> None:
+    """TextEncoder turns an unpaired surrogate into U+FFFD (three UTF-8 bytes).
+
+    Python's utf-8 replace would emit a one-byte `?`, so a lazy scan of
+    `\\ud800` * 4000 would stay under the threshold while the opened entry
+    crosses it.
+    """
+    from claude_tap.viewer import _detect_tool_bloat, _text_size_bytes
+
+    lone = "\ud800" * 4000
+    assert _text_size_bytes(lone) == 12000
+    assert _detect_tool_bloat([{"role": "tool", "content": lone}]) is not None
+
+
+def test_a_domain_image_field_is_still_measured_as_text() -> None:
+    """A container tag named `image` is not an image block.
+
+    Skipping any truthy `image` key would hide a textual result that still
+    consumes context tokens.
+    """
+    from claude_tap.viewer import _detect_tool_bloat, _is_image_payload
+
+    payload = {"image": "myorg/app:latest", "logs": "z" * 25000}
+    assert _is_image_payload(payload) is False
+    found = _detect_tool_bloat([{"role": "tool", "content": payload}])
+    assert found is not None
+    assert found["byte_count"] >= 25000
+
+
+def test_tool_search_output_bloat_uses_raw_tool_definitions() -> None:
+    """The display summary keeps only names; the detector must size the schemas.
+
+    A tool_search_output with short names and large input schemas would otherwise
+    look tiny in lazy metadata and in the opened banner.
+    """
+    from claude_tap.viewer import (
+        _detect_tool_bloat,
+        _extract_metadata_from_record,
+        _extract_request_messages,
+        _tool_search_output_content,
+    )
+
+    schema = "z" * 20000
+    tools = [
+        {
+            "type": "namespace",
+            "name": "mcp__codex_apps__figma",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "_use_figma",
+                    "description": schema,
+                    "input_schema": {"type": "object", "properties": {"q": {"description": schema}}},
+                }
+            ],
+        }
+    ]
+    body = {"input": [{"type": "tool_search_output", "call_id": "call_search", "tools": tools}]}
+    display = _extract_request_messages(body)
+    assert "tool_search_output" in display[0]["content"]
+    assert len(_tool_search_output_content(body["input"][0])) < 200
+    assert _detect_tool_bloat(display) is None
+
+    raw = _extract_request_messages(body, for_bloat=True)
+    assert raw[0]["content"] == tools
+    found = _detect_tool_bloat(raw)
+    assert found is not None
+    assert found["count"] == 1
+
+    record = {
+        "turn": 1,
+        "request_id": "req_search",
+        "timestamp": "2026-03-17T00:00:00Z",
+        "duration_ms": 10,
+        "request": {"method": "POST", "path": "/v1/responses", "body": body},
+        "response": {"status": 200, "body": {}},
+    }
+    meta = _extract_metadata_from_record(record)
+    assert meta is not None
+    assert meta["tool_bloat"] is not None
+    assert meta["tool_bloat"]["count"] == 1

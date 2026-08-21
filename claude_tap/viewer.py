@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import base64
 import json
+import json.encoder
+import math
 import re
+from collections.abc import Iterator
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
@@ -701,6 +704,335 @@ def _aggregate_cost_fields(
     }
 
 
+# Size at which a single tool result is worth pointing out, in UTF-8 bytes.
+#
+# Tool result sizes are heavy-tailed: sampling local Claude Code transcripts put
+# the median in the low hundreds of bytes while the largest result ran past
+# 600,000.  10,000 bytes sits far out on that tail, so it flags the few results
+# big enough to dominate a turn's context without touching the ordinary file
+# reads and greps that make up almost all of the distribution.
+#
+# Measured in bytes rather than characters so that CJK and emoji output, which
+# costs two to four bytes per character, is not judged smaller than it is.  The
+# JS detector applies the same threshold to the same unit; the two must agree or
+# a badge appears in one view and not the other.
+TOOL_BLOAT_MIN_BYTES = 10000
+
+
+def _text_size_bytes(text: str) -> int:
+    # Match the browser TextEncoder: unpaired UTF-16 surrogates become U+FFFD
+    # (three UTF-8 bytes). Python's utf-8 "replace" would emit a one-byte "?".
+    return len(text.encode("utf-16", "surrogatepass").decode("utf-16", "replace").encode("utf-8"))
+
+
+def _js_number_text(value: float) -> str:
+    """Return the digits ``JSON.stringify`` would emit for ``value``.
+
+    ECMA-262 Number::toString picks between positional and exponential notation
+    by decimal exponent: positional while the exponent stays within 21 digits on
+    the left and 6 zeros on the right, exponential outside that. Python's repr
+    switches at 17 and 5 instead, so the two disagree in both directions --
+    ``1e16`` prints as ``1e+16`` here and ``10000000000000000`` there, while
+    ``1e-7`` prints as ``1e-07`` here and ``1e-7`` there.
+
+    Casting integral floats to ``int`` fixed the common ``1.0`` case but made
+    large ones worse: ``int(1e21)`` is 22 digits where the browser emits five
+    characters, so 500 such values measured 11,501 bytes in the sidebar and
+    3,001 in the detail view -- a badge on one side only, which is exactly what
+    this shared serializer exists to prevent.
+
+    Both runtimes round-trip a double through its shortest exact decimal, so
+    ``repr`` supplies the digits and only the placement needs redoing.
+    """
+    if value == 0:
+        # Covers -0.0, which JSON.stringify renders as "0".
+        return "0"
+    sign = "-" if value < 0 else ""
+    mantissa, _, exponent = repr(abs(value)).partition("e")
+    e10 = int(exponent) if exponent else 0
+    int_part, _, frac_part = mantissa.partition(".")
+
+    # `digits` holds the significant decimal digits; `n` is the position of the
+    # decimal point relative to their start, as in the spec's k/n/s split.
+    leading = int_part.lstrip("0")
+    if leading:
+        n = len(leading) + e10
+        digits = (leading + frac_part).rstrip("0") or "0"
+    else:
+        after_zeros = frac_part.lstrip("0")
+        n = e10 - (len(frac_part) - len(after_zeros))
+        digits = after_zeros.rstrip("0") or "0"
+
+    k = len(digits)
+    if k <= n <= 21:
+        return sign + digits + "0" * (n - k)
+    if 0 < n <= 21:
+        return sign + digits[:n] + "." + digits[n:]
+    if -6 < n <= 0:
+        return sign + "0." + "0" * -n + digits
+    e = n - 1
+    lead = digits if k == 1 else f"{digits[0]}.{digits[1:]}"
+    return f"{sign}{lead}e{'+' if e >= 0 else '-'}{abs(e)}"
+
+
+_LONE_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
+def _js_string_text(value: str) -> str:
+    """Quote ``value`` the way ``JSON.stringify`` would, surrogates included.
+
+    Since ES2019 ``JSON.stringify`` is well-formed: a UTF-16 code unit with no
+    partner is escaped as six ASCII characters (``\\ud800``) rather than emitted
+    raw. Python's ``encode_basestring`` leaves it alone, and with
+    ``ensure_ascii=False`` it reaches the output as itself, where
+    :func:`_text_size_bytes` folds it into a 3-byte U+FFFD -- half the browser's
+    six. A payload of 2,000 lone surrogates measured 6,012 bytes here against
+    12,012 there, enough to drop a badge from the sidebar that the opened entry
+    still shows.
+
+    Paired surrogates are left to ``encode_basestring``, which writes the astral
+    character itself, exactly as the browser does.
+    """
+    encoded = json.encoder.encode_basestring(value)  # type: ignore[attr-defined]
+    if not _LONE_SURROGATE_RE.search(encoded):
+        return encoded
+    # Only unpaired units are escaped, so pairs have to survive the scan: step
+    # over a low surrogate that follows a high one instead of rewriting it.
+    out: list[str] = []
+    index = 0
+    length = len(encoded)
+    while index < length:
+        char = encoded[index]
+        code = ord(char)
+        if 0xD800 <= code <= 0xDBFF and index + 1 < length and 0xDC00 <= ord(encoded[index + 1]) <= 0xDFFF:
+            out.append(encoded[index : index + 2])
+            index += 2
+            continue
+        out.append(char if not 0xD800 <= code <= 0xDFFF else f"\\u{code:04x}")
+        index += 1
+    return "".join(out)
+
+
+class _JsNumberEncoder(json.JSONEncoder):
+    """A JSON encoder that formats floats the way ``JSON.stringify`` does.
+
+    The C encoder hard-codes ``float.__repr__``, which is why floats are handed
+    to the pure-Python path with :func:`_js_number_text` as the formatter. That
+    path is only reached when ``c_make_encoder`` is unavailable, so it is asked
+    for explicitly rather than left to ``json.dumps``.
+    """
+
+    def iterencode(self, o: object, _one_shot: bool = False) -> Iterator[str]:
+        # json.dumps widens an integer indent to spaces before handing it over;
+        # the pure-Python path concatenates it, so it has to be widened here.
+        indent = " " * self.indent if isinstance(self.indent, int) else self.indent
+        return json.encoder._make_iterencode(  # type: ignore[attr-defined]
+            {} if self.check_circular else None,
+            self.default,
+            _js_string_text,
+            indent,
+            _js_number_text,
+            self.key_separator,
+            self.item_separator,
+            self.sort_keys,
+            self.skipkeys,
+            _one_shot,
+        )(o, 0)
+
+
+def _js_json_value(value: object) -> object:
+    """Coerce numbers to what JavaScript would have parsed them as.
+
+    NaN and the infinities become ``null`` there, while Python's json.dumps
+    writes the bare words ``NaN`` and ``Infinity``, which are not JSON at all.
+
+    Integers need the same treatment for the opposite reason: ``json.loads``
+    keeps them as arbitrary-precision ``int``, so they never reach
+    :func:`_js_number_text` and are written digit for digit. ``JSON.parse`` has
+    only doubles, so ``999999999999999999999999`` comes back as ``1e+24`` and
+    ``9007199254740993`` rounds to ``...992``. 500 of the former measured 12,507
+    bytes here against 3,007 in the browser -- a badge on one side only, which is
+    what this shared serializer exists to prevent. Anything too large for a
+    double parses as Infinity there, hence ``null``.
+    """
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int):
+        try:
+            return _js_json_value(float(value))
+        except OverflowError:
+            # Beyond the double range JSON.parse yields Infinity, which
+            # JSON.stringify then writes as null.
+            return None
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _js_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_js_json_value(item) for item in value]
+    return value
+
+
+def _bloat_json(value: object) -> str:
+    """Serialize a structured payload the way the JS detector does.
+
+    `JSON.stringify` emits no separator padding and leaves non-ASCII characters
+    as themselves; Python's defaults do the opposite on both counts.  A CJK
+    result would otherwise measure roughly six times larger here than in the
+    browser, which is enough to put a sidebar badge on a turn whose detail view
+    then shows no warning.  Integral floats are rewritten so ``1.0`` becomes
+    ``1``, matching JSON.stringify.
+    """
+    encoder = _JsNumberEncoder(ensure_ascii=False, separators=(",", ":"), default=str)
+    return encoder.encode(_js_json_value(value))
+
+
+_BLOAT_IMAGE_TYPES = {"image", "input_image", "computer_screenshot"}
+
+
+def _is_bloat_image_type(value: object) -> bool:
+    # A `type` carrying a list or dict is a domain field, not a block tag, and
+    # testing it against a set would raise `unhashable type` and take metadata
+    # generation down for the whole trace.  `Set.has` in the browser returns
+    # false for the same value, so restricting the test to strings is what
+    # keeps the two detectors agreeing.
+    return isinstance(value, str) and value in _BLOAT_IMAGE_TYPES
+
+
+def _is_recognized_image_object(value: object) -> bool:
+    """True only for an image block or nested image object, not a domain field."""
+    if not isinstance(value, dict):
+        return False
+    if _is_bloat_image_type(value.get("type")):
+        return True
+    return any(key in value for key in ("source", "media_type", "image_url", "data"))
+
+
+def _is_image_payload(part: dict) -> bool:
+    # `computer_screenshot` is the Responses shape for a screenshot handed back
+    # from a computer-use call; it carries the same data URL as an image block.
+    # A truthy domain field named `image` (for example a container tag) is not
+    # an image block and still consumes context as text.
+    if _is_bloat_image_type(part.get("type")):
+        return True
+    return _is_recognized_image_object(part.get("image"))
+
+
+def _tool_result_text(rc: object) -> str:
+    """Flatten a tool result payload to the text that consumes context.
+
+    Image blocks are dropped: they are billed by dimension, not by tokenizing
+    their base64 payload, so counting those characters would report a
+    screenshot as tens of thousands of text tokens.
+    """
+    if isinstance(rc, str):
+        return rc
+    if isinstance(rc, list):
+        parts: list[str] = []
+        for part in rc:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            if not isinstance(part, dict):
+                if part is not None:
+                    parts.append(_bloat_json(part))
+                continue
+            if _is_image_payload(part):
+                continue
+            text = part.get("text")
+            # Collapse to `text` only for `type: "text"`, the one shape
+            # renderContent special-cases; it dumps every other part whole, so
+            # sizing `text` for those hides whatever sits beside it.  A `text`
+            # alone is not enough (`{"text": "summary", "logs": <25 KB>}` has no
+            # `type` at all), and neither is a text-ish type: an `output_text`
+            # part is displayed in full, so 25 KB of siblings read as "summary".
+            # Only a string `text` is usable as-is regardless.  A null, numeric,
+            # or structured value would otherwise reach "".join() and raise,
+            # taking down metadata generation for the whole trace.
+            if isinstance(text, str) and part.get("type") == "text":
+                parts.append(text)
+            else:
+                parts.append(_bloat_json(part))
+        return "\n".join(parts)
+    if isinstance(rc, dict):
+        if _is_image_payload(rc):
+            return ""
+        return _bloat_json(rc)
+    if rc is not None:
+        return _bloat_json(rc)
+    return ""
+
+
+def _bloat_result_payload(b: dict) -> tuple[bool, object]:
+    """Select the field a tool-result block keeps its payload in.
+
+    Returns whether the block is a tool result at all, and if so the value to
+    measure.  A `function_call_output` keeps its payload in `output`, not in
+    `content`, so reading `content` sizes every one of them as empty.
+    """
+    block_type = b.get("type")
+    if block_type == "tool_result":
+        return True, b.get("content")
+    if block_type in {"function_call_output", "computer_call_output", "custom_tool_call_output"}:
+        return True, b.get("output") if "output" in b else b.get("content")
+    if isinstance(b.get("toolResult"), dict):
+        # Bedrock Converse uses camelCase native blocks.
+        return True, b["toolResult"].get("content")
+    return False, None
+
+
+def _detect_tool_bloat(msgs: list) -> dict | None:
+    """Summarize oversized tool results in a request's messages.
+
+    Returns the count of oversized results and the largest one's size, or None
+    when nothing crosses the threshold.  `size_kb` is a float so the viewer can
+    render it without having to trust a string from the trace.
+
+    The badge derives its KB figure from `byte_count`, not from `size_kb`: the two
+    languages round halfway cases in opposite directions, so a pre-rounded value
+    made the sidebar and the opened entry disagree on the same payload.  `size_kb`
+    remains for metadata written before `byte_count` existed.
+    """
+    worst_bytes = 0
+    count = 0
+    for msg in msgs:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        # OpenAI Chat Completions puts the result straight on a tool-role
+        # message instead of in a tool_result block.  The payload is usually a
+        # string, but a normalized Responses item arrives as a block list; the
+        # viewer wraps either shape in a tool_result before rendering, so both
+        # have to be measured or a badge appears without its warning banner.
+        # Display wraps any tool-role payload in one outer tool_result. Measure
+        # that same combined payload so lazy metadata and the opened entry agree.
+        if msg.get("role") == "tool":
+            size = _text_size_bytes(_tool_result_text(content))
+            if size >= TOOL_BLOAT_MIN_BYTES:
+                count += 1
+                worst_bytes = max(worst_bytes, size)
+            continue
+        blocks = content if isinstance(content, list) else [content]
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            matched, rc = _bloat_result_payload(b)
+            if not matched:
+                continue
+            size = _text_size_bytes(_tool_result_text(rc))
+            if size >= TOOL_BLOAT_MIN_BYTES:
+                count += 1
+                worst_bytes = max(worst_bytes, size)
+
+    if count == 0:
+        return None
+    return {
+        "count": count,
+        "byte_count": worst_bytes,
+        "size_kb": round(worst_bytes / 1024, 1),
+    }
+
+
 def _gemini_text_from_parts(parts: object) -> str:
     if not isinstance(parts, list):
         return ""
@@ -717,14 +1049,32 @@ def _extract_gemini_system(body: dict) -> str:
 
 
 def _gemini_function_response_content(resp: dict) -> str:
+    """Mirror of ``geminiFunctionResponseContent`` in renderers.js.
+
+    The serialization has to match byte for byte, not just in meaning: the tool
+    bloat scan measures this string's length, and the browser measures the
+    browser's. A one-line dump of an array of 1,500 short strings is ~7.5 KB
+    against the pretty-printed ~10.5 KB, so a divergence here drops a badge from
+    the sidebar that the detail view still shows. Hence indent=2 to match
+    ``JSON.stringify(output, null, 2)``, and an empty string for a missing
+    payload where JS returns one rather than the text "null".
+    """
     payload = resp.get("response")
-    if isinstance(payload, dict) and "output" in payload:
+    # Unwrap `output` only when it is the whole response.  A sibling field beside
+    # it is real result data the model was given, so unwrapping dropped it from the
+    # display and from this measurement at once: `{"output": "ok", "logs": <25 KB>}`
+    # showed two bytes and earned no badge.  Widening only the bloat payload would
+    # trade that for the opposite bug, a badge whose bytes the reader cannot find.
+    if isinstance(payload, dict) and "output" in payload and len(payload) == 1:
         output = payload["output"]
     else:
         output = payload
     if isinstance(output, str):
         return output
-    return json.dumps(output, ensure_ascii=False)
+    if output is None:
+        return ""
+    encoder = _JsNumberEncoder(ensure_ascii=False, indent=2)
+    return encoder.encode(_js_json_value(output))
 
 
 def _gemini_part_blocks(part: dict) -> list[dict]:
@@ -765,7 +1115,7 @@ def _gemini_role(role: object) -> str:
     return role if isinstance(role, str) and role else "user"
 
 
-def _extract_gemini_request_messages(body: dict) -> list[dict]:
+def _extract_gemini_request_messages(body: dict, *, for_bloat: bool = False) -> list[dict]:
     contents = _gemini_request(body).get("contents")
     if not isinstance(contents, list):
         return []
@@ -781,7 +1131,11 @@ def _extract_gemini_request_messages(body: dict) -> list[dict]:
         if not blocks:
             continue
         role = _gemini_role(content.get("role"))
-        if all(block.get("type") == "tool_result" for block in blocks):
+        # Display already splits functionResponse parts into separate blocks.
+        # Collapsing them to role=tool would make the bloat scan wrap the
+        # whole list as one result, so two 6 KB replies look oversized here
+        # and clean once the entry is opened.
+        if not for_bloat and all(block.get("type") == "tool_result" for block in blocks):
             role = "tool"
         messages.append({"role": role, "content": blocks})
     return messages
@@ -952,21 +1306,48 @@ def _is_response_tool_result_item(item: dict) -> bool:
     return item_type == "tool_search_output" or (isinstance(item_type, str) and item_type.endswith("_call_output"))
 
 
-def _response_tool_result_content(item: dict) -> str:
+def _normalized_screenshot_block(output: object) -> dict | None:
+    """Map a computer-use screenshot result to an ordinary image block.
+
+    A `computer_call_output` carries its screenshot as
+    `{"type": "computer_screenshot", "image_url": "data:image/png;base64,…"}`.
+    Serializing that to a string would hand the base64 to the bloat detector as
+    if it were result text, and an image is billed by dimension rather than by
+    tokenizing its encoding.
+    """
+    if not isinstance(output, dict) or output.get("type") != "computer_screenshot":
+        return None
+    url = output.get("image_url")
+    if not isinstance(url, str) or not url:
+        return None
+    return {"type": "input_image", "image_url": url}
+
+
+def _response_tool_result_content(item: dict, *, for_bloat: bool = False) -> object:
     if item.get("type") == "tool_search_output":
+        if for_bloat:
+            tools = item.get("tools")
+            return tools if isinstance(tools, list) else item
         return _tool_search_output_content(item)
+    leftover = {
+        key: value for key, value in item.items() if key not in {"id", "type", "status", "call_id", "execution"}
+    }
     if "output" in item:
         output = item.get("output")
         if isinstance(output, str):
             return output
+        screenshot = _normalized_screenshot_block(output)
+        if screenshot is not None:
+            return [screenshot]
+        if for_bloat:
+            return output
         return json.dumps(output, ensure_ascii=False)
-    return json.dumps(
-        {key: value for key, value in item.items() if key not in {"id", "type", "status", "call_id", "execution"}},
-        ensure_ascii=False,
-    )
+    if for_bloat:
+        return leftover
+    return json.dumps(leftover, ensure_ascii=False)
 
 
-def _extract_request_messages(body: dict) -> list[dict]:
+def _extract_request_messages(body: dict, *, for_bloat: bool = False) -> list[dict]:
     if not isinstance(body, dict):
         return []
     msgs = body.get("messages")
@@ -974,7 +1355,7 @@ def _extract_request_messages(body: dict) -> list[dict]:
         return [msg for msg in msgs if isinstance(msg, dict)]
 
     if _is_gemini_request_body(body):
-        return _extract_gemini_request_messages(body)
+        return _extract_gemini_request_messages(body, for_bloat=for_bloat)
 
     inp = body.get("input")
     if not isinstance(inp, list):
@@ -1000,7 +1381,7 @@ def _extract_request_messages(body: dict) -> list[dict]:
             )
             continue
         if _is_response_tool_result_item(item):
-            normalized.append({"role": "tool", "content": _response_tool_result_content(item)})
+            normalized.append({"role": "tool", "content": _response_tool_result_content(item, for_bloat=for_bloat)})
             continue
         if item_type not in (None, "message") and "role" not in item:
             continue
@@ -1427,6 +1808,8 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         else _cost_fields(model, usage, body, record=r, search_calls=search_calls)
     )
 
+    tool_bloat = _detect_tool_bloat(_extract_request_messages(body, for_bloat=True))
+
     return {
         "turn": r.get("turn"),
         "request_id": r.get("request_id", ""),
@@ -1455,6 +1838,7 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
         "cache_read_in_input": bool(usage.get("cache_read_in_input")),
         **cost_fields,
+        "tool_bloat": tool_bloat,
         "has_system": bool(sys_text),
         "message_count": len(msgs),
         "session_user_text": _latest_user_text(msgs) or _first_user_text(msgs),

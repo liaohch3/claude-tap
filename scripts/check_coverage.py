@@ -410,7 +410,7 @@ def changed_viewer_css_selectors(viewer_css: Path, changed_lines: dict[str, set[
     return selectors
 
 
-def _main_viewer_script(coverage: dict[str, Any], suffix: str) -> dict[str, Any]:
+def _viewer_script_candidates(coverage: dict[str, Any], suffix: str) -> list[dict[str, Any]]:
     scripts = coverage.get("result") or []
     candidates = [
         script for script in scripts if script.get("url", "").endswith(suffix) and len(script.get("functions", [])) > 50
@@ -427,7 +427,28 @@ def _main_viewer_script(coverage: dict[str, Any], suffix: str) -> dict[str, Any]
         sizes = sorted((len(script.get("functions", [])), script.get("url", "")) for script in scripts)
         top = ", ".join(f"{count}:{url[-60:]}" for count, url in sizes[-5:]) or "none"
         raise RuntimeError(f"Could not find viewer.html main script in V8 coverage output (suffix={suffix}; top={top})")
-    return max(candidates, key=lambda script: len(script.get("functions", [])))
+    return candidates
+
+
+def _main_viewer_script(coverage: dict[str, Any], suffix: str) -> dict[str, Any]:
+    return max(_viewer_script_candidates(coverage, suffix), key=lambda script: len(script.get("functions", [])))
+
+
+def _covered_names_across_scripts(coverage: dict[str, Any], suffix: str) -> set[str]:
+    """Names executed anywhere on an auxiliary page.
+
+    Navigating a page twice makes Chromium report one script per load, and the
+    later load starts from an untouched bundle.  Picking a single script would
+    then drop whatever only ran before the last navigation, so the auxiliary
+    pages -- which contribute names rather than a denominator -- union them all.
+    """
+    names: set[str] = set()
+    for script in _viewer_script_candidates(coverage, suffix):
+        for function in _viewer_script_functions(script):
+            name = function.get("functionName")
+            if name and _is_function_covered(function):
+                names.add(name)
+    return names
 
 
 def _restart_precise_coverage(session: Any) -> None:
@@ -595,8 +616,15 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     request_generate: true,
                     response_output_count: 1,
                     output_tokens: 1,
+                    // Past the lazy threshold the badge comes from this
+                    // server-side scan rather than a client-side walk.
+                    tool_bloat: { size_kb: 24.4, byte_count: 25000, count: 1 },
                   }, 0);
                   normalizeDisplayTurns([stubEntry], true);
+                  detectEntryToolBloat(stubEntry);
+                  clearToolBloatCache();
+                  detectEntryToolBloat({ _isStub: true, request_id: 'coverage_clean_stub' });
+                  detectEntryToolBloat({ request_id: 'coverage_bad_meta', _tool_bloat: { size_kb: 'NaN' } });
                   const cursorStub = buildStubEntry({
                     turn: 1,
                     transport: 'cursor-transcript',
@@ -841,6 +869,11 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
             page.wait_for_selector(".empty-trace-state", timeout=5000)
             page.set_input_files("#file-input", str(compact_bundle_path))
             page.wait_for_selector(".sidebar-item", timeout=5000)
+            # Snapshot the drop before navigating away.  Chromium may report the
+            # reloaded bundle as a second script whose counters start at zero, and
+            # everything the drop executed would then be lost.
+            drop_page_coverage = session.send("Profiler.takePreciseCoverage")
+            _restart_precise_coverage(session)
             page.goto(empty_html_path.resolve().as_uri(), timeout=10000)
             page.wait_for_selector(".empty-trace-state", timeout=5000)
             empty_page_coverage = session.send("Profiler.takePreciseCoverage")
@@ -849,14 +882,12 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
             browser.close()
 
     main_functions = _viewer_script_functions(_main_viewer_script(main_page_coverage, "v8_coverage.html"))
-    empty_functions = _viewer_script_functions(_main_viewer_script(empty_page_coverage, "empty_coverage.html"))
-    compact_functions = _viewer_script_functions(_main_viewer_script(compact_page_coverage, "compact_coverage.html"))
-    remote_functions = _viewer_script_functions(_main_viewer_script(remote_page_coverage, "remote_coverage.html"))
-    auxiliary_covered_names = {
-        function.get("functionName", "")
-        for function in [*empty_functions, *compact_functions, *remote_functions]
-        if function.get("functionName") and _is_function_covered(function)
-    }
+    auxiliary_covered_names = (
+        _covered_names_across_scripts(empty_page_coverage, "empty_coverage.html")
+        | _covered_names_across_scripts(drop_page_coverage, "empty_coverage.html")
+        | _covered_names_across_scripts(compact_page_coverage, "compact_coverage.html")
+        | _covered_names_across_scripts(remote_page_coverage, "remote_coverage.html")
+    )
     covered_functions = [
         function
         for function in main_functions

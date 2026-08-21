@@ -95,7 +95,9 @@
     "diff_sys_new": "Current",
     "diff_fallback_warning": "No exact thread match found — showing closest same-model request",
     "diff_select_target": "Compare against:",
-    "diff_select_auto": "Auto"
+    "diff_select_auto": "Auto",
+    "tool_bloat_warning": "Large tool output",
+    "tool_bloat_hint": "High context consumption tool output"
   },
   "zh-CN": {
     "title": "claude-tap",
@@ -193,7 +195,9 @@
     "diff_sys_new": "本次",
     "diff_fallback_warning": "未找到精确线程匹配 — 显示最近的同模型请求",
     "diff_select_target": "对比对象：",
-    "diff_select_auto": "自动"
+    "diff_select_auto": "自动",
+    "tool_bloat_warning": "工具输出体积过大",
+    "tool_bloat_hint": "高 Context 消耗的工具输出"
   },
   "ja": {
     "title": "claude-tap",
@@ -291,7 +295,9 @@
     "diff_sys_new": "今回",
     "diff_fallback_warning": "正確なスレッド一致が見つかりません — 同モデルの直近のリクエストを表示",
     "diff_select_target": "比較対象：",
-    "diff_select_auto": "自動"
+    "diff_select_auto": "自動",
+    "tool_bloat_warning": "巨大なツール出力",
+    "tool_bloat_hint": "コンテキスト消費が大きいツール出力"
   },
   "ko": {
     "title": "claude-tap",
@@ -389,7 +395,9 @@
     "diff_sys_new": "현재",
     "diff_fallback_warning": "정확한 스레드 일치를 찾을 수 없습니다 — 가장 가까운 동일 모델 요청을 표시",
     "diff_select_target": "비교 대상：",
-    "diff_select_auto": "자동"
+    "diff_select_auto": "자동",
+    "tool_bloat_warning": "대용량 도구 출력",
+    "tool_bloat_hint": "컨텍스트 소비가 많은 도구 출력"
   },
   "fr": {
     "title": "claude-tap",
@@ -487,7 +495,9 @@
     "diff_sys_new": "Actuel",
     "diff_fallback_warning": "Aucune correspondance de fil exacte trouvée — affichage de la requête du même modèle la plus proche",
     "diff_select_target": "Comparer avec :",
-    "diff_select_auto": "Auto"
+    "diff_select_auto": "Auto",
+    "tool_bloat_warning": "Sortie d'outil volumineuse",
+    "tool_bloat_hint": "Sortie d'outil à forte consommation de contexte"
   },
   "ar": {
     "title": "claude-tap",
@@ -585,7 +595,9 @@
     "diff_sys_new": "الحالي",
     "diff_fallback_warning": "لم يتم العثور على تطابق دقيق للخيط — عرض أقرب طلب لنفس النموذج",
     "diff_select_target": "مقارنة مع:",
-    "diff_select_auto": "تلقائي"
+    "diff_select_auto": "تلقائي",
+    "tool_bloat_warning": "مخرجات أداة كبيرة",
+    "tool_bloat_hint": "مخرجات أداة ذات استهلاك عالٍ للسياق"
   },
   "de": {
     "title": "claude-tap",
@@ -683,7 +695,9 @@
     "diff_sys_new": "Aktuelle",
     "diff_fallback_warning": "Keine exakte Thread-Übereinstimmung gefunden — zeige nächste Anfrage desselben Modells",
     "diff_select_target": "Vergleichen mit:",
-    "diff_select_auto": "Auto"
+    "diff_select_auto": "Auto",
+    "tool_bloat_warning": "Große Tool-Ausgabe",
+    "tool_bloat_hint": "Tool-Ausgabe mit hohem Kontextverbrauch"
   },
   "ru": {
     "title": "claude-tap",
@@ -781,6 +795,8 @@
     "diff_sys_new": "Текущий",
     "diff_fallback_warning": "Точное совпадение потока не найдено — показан ближайший запрос той же модели",
     "diff_select_target": "Сравнить с:",
-    "diff_select_auto": "Авто"
+    "diff_select_auto": "Авто",
+    "tool_bloat_warning": "Большой вывод инструмента",
+    "tool_bloat_hint": "Вывод инструмента с высоким расходом контекста"
   }
 }

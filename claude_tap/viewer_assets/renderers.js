@@ -110,9 +110,15 @@ function geminiRole(role) {
 
 function geminiFunctionResponseContent(response) {
   const payload = response?.response;
-  const output = payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'output')
-    ? payload.output
-    : payload;
+  /* Unwrap `output` only when it is the whole response.  A sibling field beside it
+     is real result data the model was given, so unwrapping dropped it from the
+     display and from the bloat measurement at once: {output: 'ok', logs: <25 KB>}
+     showed two bytes and earned no badge.  Widening only the bloat payload would
+     trade that for the opposite bug, a badge whose bytes the reader cannot find. */
+  const unwrap = payload && typeof payload === 'object' && !Array.isArray(payload)
+    && Object.prototype.hasOwnProperty.call(payload, 'output')
+    && Object.keys(payload).length === 1;
+  const output = unwrap ? payload.output : payload;
   if (typeof output === 'string') return output;
   if (output === undefined || output === null) return '';
   return JSON.stringify(output, null, 2);
@@ -145,7 +151,7 @@ function geminiPartContentBlocks(part) {
   return blocks;
 }
 
-function geminiMessages(body) {
+function geminiMessages(body, forBloat) {
   const contents = geminiRequest(body).contents;
   if (!Array.isArray(contents)) return [];
   return contents.map(item => {
@@ -153,7 +159,10 @@ function geminiMessages(body) {
     const blocks = (item.parts || []).flatMap(geminiPartContentBlocks);
     if (!blocks.length) return null;
     let role = geminiRole(item.role);
-    if (blocks.every(block => block.type === 'tool_result')) role = 'tool';
+    /* Display already splits functionResponse parts into separate blocks.
+       Collapsing them to role=tool would make the bloat scan wrap the
+       whole list as one result. */
+    if (!forBloat && blocks.every(block => block.type === 'tool_result')) role = 'tool';
     return { role, content: blocks };
   }).filter(Boolean);
 }
@@ -409,19 +418,25 @@ function getResponsesContinuationInfo(entry) {
 }
 
 // Normalize messages from Chat Completions (body.messages) or Responses API (body.input)
-function getMessages(body) {
+function getMessages(body, options) {
+  const forBloat = !!(options && options.forBloat);
   if (!body) return [];
   if (Array.isArray(body.messages) && body.messages.length > 0) {
+    /* Display wraps tool-role payloads; the bloat scan measures that same
+       raw content once so it does not serialize the wrapper a second time. */
+    if (forBloat) {
+      return body.messages.filter(m => m && typeof m === 'object');
+    }
     return body.messages
       .filter(m => !isChatInstructionRole(m?.role))
       .map(normalizeChatMessageForDisplay)
       .filter(m => hasDisplayContent(m.content));
   }
   if (isGeminiRequestBody(body)) {
-    return geminiMessages(body).filter(m => hasDisplayContent(m.content));
+    return geminiMessages(body, forBloat).filter(m => hasDisplayContent(m.content));
   }
   if (Array.isArray(body.input)) {
-    const normalizedInput = normalizeWebSocketDerivedInput(body.input);
+    const normalizedInput = normalizeWebSocketDerivedInput(body.input, forBloat);
     const messages = normalizedInput.filter(item => {
       if (!item || typeof item !== 'object') return false;
       if (typeof item.role !== 'string' || !item.role) return false;
@@ -907,6 +922,12 @@ function renderImageBlock(block, index = 0, total = 1, options = {}) {
   return inner ? wrapContentBlock(inner, block, index, total, { ...options, extraClass: 'image-block' }) : '';
 }
 
+function toolBloatBanner(block) {
+  const bloat = toolResultBloatInfo(block);
+  if (!bloat) return '';
+  return `<div class="tool-bloat-alert"><span class="tba-icon">&#9888;</span><span>${esc(t('tool_bloat_warning'))}: ${esc(bloat.sizeKB)} KB (~${esc(bloat.estTokens.toLocaleString())} ${esc(t('tok'))})</span></div>`;
+}
+
 function renderContent(content, role, options = {}) {
   const blocks = normalizeDisplayContentBlocks(content);
   const renderedBlocks = blocks.map((block, index) => {
@@ -926,8 +947,9 @@ function renderContent(content, role, options = {}) {
     }
     if (block.type === 'tool_result') {
       const rc = block.content;
+      const bloatBanner = toolBloatBanner(block);
       if (typeof rc === 'string') {
-        return wrapContentBlock(`<span class="tool-use-label">result (${esc(block.tool_use_id || '')})</span><div class="pre-text">${esc(rc)}</div>`, block, index, blocks.length, options);
+        return wrapContentBlock(`${bloatBanner}<span class="tool-use-label">result (${esc(block.tool_use_id || '')})</span><div class="pre-text">${esc(rc)}</div>`, block, index, blocks.length, options);
       }
       if (Array.isArray(rc)) {
         const parts = rc.map(c => {
@@ -938,9 +960,9 @@ function renderContent(content, role, options = {}) {
           }
           return `<pre>${esc(JSON.stringify(c))}</pre>`;
         }).join('');
-        return wrapContentBlock(`<span class="tool-use-label">result</span>${parts}`, block, index, blocks.length, options);
+        return wrapContentBlock(`${bloatBanner}<span class="tool-use-label">result</span>${parts}`, block, index, blocks.length, options);
       }
-      return wrapContentBlock(`<pre>${esc(JSON.stringify(block, null, 2))}</pre>`, block, index, blocks.length, options);
+      return wrapContentBlock(`${bloatBanner}<pre>${esc(JSON.stringify(block, null, 2))}</pre>`, block, index, blocks.length, options);
     }
     if (block.type === 'image' || block.type === 'input_image') {
       const renderedImage = renderImageBlock(block, index, blocks.length, options);
@@ -952,7 +974,10 @@ function renderContent(content, role, options = {}) {
       return wrapContentBlock(`<span class="content-image-placeholder">${esc(label)}</span>`, block, index, blocks.length, options);
     }
     if (block.type === 'raw') return wrapContentBlock(`<pre>${esc(JSON.stringify(block.value, null, 2))}</pre>`, block, index, blocks.length, options);
-    return wrapContentBlock(`<pre>${esc(JSON.stringify(block, null, 2))}</pre>`, block, index, blocks.length, options);
+    /* A native Bedrock `toolResult` and the *_call_output shapes fall through to
+       generic JSON rendering, but the sidebar badges them, so the warning has to
+       reach here too or the badge looks unfounded. */
+    return wrapContentBlock(`${toolBloatBanner(block)}<pre>${esc(JSON.stringify(block, null, 2))}</pre>`, block, index, blocks.length, options);
   }).join('');
   const recovered = role === 'user'
     ? recoveredImagesForContent(content).map((block, index, images) => renderImageBlock(block, index, images.length)).join('')
@@ -1030,6 +1055,204 @@ function renderResponseContent(body, contextOnly = false) {
     return `<em style="color:var(--text-tertiary)">${msg}</em>`;
   }
   return renderContent(body.content, 'assistant');
+}
+
+/* Size at which a single tool result is worth pointing out, in UTF-8 bytes.
+
+   Tool result sizes are heavy-tailed: sampling local Claude Code transcripts put
+   the median in the low hundreds of bytes while the largest result ran past
+   600,000.  10,000 bytes sits far out on that tail, so it flags the few results
+   big enough to dominate a turn's context without touching the ordinary file
+   reads and greps that make up almost all of the distribution.
+
+   Measured in bytes, not `text.length`: that counts UTF-16 code units, so CJK
+   and emoji output would be judged smaller than it is -- 4,000 CJK characters
+   exceed 10 KB while reading as 4,000 "characters".  The Python detector in
+   viewer.py applies the same threshold to the same unit; the two must agree or a
+   badge shows up in one view and not the other. */
+const TOOL_BLOAT_MIN_BYTES = 10000;
+
+/* Bytes per token, for turning a result's size into a rough token cost.
+   Deliberately coarse -- the point is the order of magnitude, and every estimate
+   built on it is labelled as approximate.  Roughly right for ASCII; CJK runs
+   nearer 1.5 bytes per token, so its token count is under-reported even though
+   its byte count is now correct. */
+const BYTES_PER_TOKEN = 4;
+
+function textSizeBytes(text) {
+  if (typeof TextEncoder === 'function') return new TextEncoder().encode(text).length;
+  /* No TextEncoder (very old engines): approximate from code points rather than
+     falling back to a UTF-16 length that under-counts every non-ASCII result. */
+  let bytes = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0);
+    bytes += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+
+/* Both the Anthropic and the Responses shapes arrive here as `tool_result`:
+   `responseInputItemToMessage` rewrites `*_call_output` items before any
+   renderer sees them.  Bedrock Converse `toolResult` blocks reach us unchanged,
+   so they are matched explicitly. */
+/* `computer_screenshot` is the Responses shape for a screenshot handed back by
+   a computer-use call; it carries the same data URL an image block would. */
+const BLOAT_IMAGE_TYPES = new Set(['image', 'input_image', 'computer_screenshot']);
+
+function isRecognizedImageObject(value) {
+  return !!(value && typeof value === 'object' && (
+    BLOAT_IMAGE_TYPES.has(value.type)
+    || 'source' in value
+    || 'media_type' in value
+    || 'image_url' in value
+    || 'data' in value
+  ));
+}
+
+function isBloatImagePayload(value) {
+  /* A domain field named `image` (for example a container tag) is not an
+     image block and still consumes context as text. */
+  return !!(value && typeof value === 'object' && (
+    BLOAT_IMAGE_TYPES.has(value.type) || isRecognizedImageObject(value.image)
+  ));
+}
+
+/* The payload lives in `output` on the *_call_output shapes and in `content`
+   everywhere else; reading `content` for the former sizes them all as empty. */
+const BLOAT_OUTPUT_TYPES = new Set(['function_call_output', 'computer_call_output', 'custom_tool_call_output']);
+
+function toolResultBloatPayload(block) {
+  /* Display may summarize or pretty-print a result; `_bloatPayload` keeps
+     the raw value so the banner measures the same bytes as the sidebar. */
+  if (block._bloatPayload !== undefined) return { matched: true, rc: block._bloatPayload };
+  if (block.type === 'tool_result') return { matched: true, rc: block.content };
+  if (BLOAT_OUTPUT_TYPES.has(block.type)) {
+    return { matched: true, rc: 'output' in block ? block.output : block.content };
+  }
+  if (block.toolResult && typeof block.toolResult === 'object') {
+    return { matched: true, rc: block.toolResult.content };
+  }
+  return { matched: false, rc: null };
+}
+
+function toolResultBloatInfo(block) {
+  if (!block || typeof block !== 'object') return null;
+  const payload = toolResultBloatPayload(block);
+  if (!payload.matched) return null;
+  const rc = payload.rc;
+  let text = '';
+  if (typeof rc === 'string') {
+    text = rc;
+  } else if (Array.isArray(rc)) {
+    /* Python drops an image block and a null part outright, so neither leaves
+       a separator behind, but it keeps an empty string and an empty `text` --
+       and keeps their separators.  Filtering on truthiness erases all four
+       alike, which puts the two detectors one byte apart at the threshold and
+       shows a sidebar badge with no detail banner.  Dropped parts are marked
+       instead, so only they lose their separator. */
+    text = rc.map(c => {
+      if (typeof c === 'string') return c;
+      if (c && typeof c === 'object') {
+        /* Image payloads are billed by dimension, not by tokenizing their
+           base64, so their encoded bytes are not context text. */
+        if (isBloatImagePayload(c)) return null;
+        /* Collapse to `text` only for type 'text', the one shape the array
+           branch above special-cases; it dumps every other part whole, so
+           sizing `text` for those hides whatever sits beside it.  A `text`
+           alone is not enough ({text: 'summary', logs: <25 KB>} has no type at
+           all), and neither is a text-ish type: an 'output_text' part is
+           displayed in full, so 25 KB of siblings read as 'summary'. */
+        if (typeof c.text === 'string' && c.type === 'text') return c.text;
+        return JSON.stringify(c);
+      }
+      return c === null || c === undefined ? null : JSON.stringify(c);
+    }).filter(part => part !== null).join('\n');
+  } else if (rc && typeof rc === 'object') {
+    if (isBloatImagePayload(rc)) return null;
+    text = JSON.stringify(rc);
+  }
+  const byteCount = textSizeBytes(text);
+  if (byteCount < TOOL_BLOAT_MIN_BYTES) return null;
+  return {
+    byteCount,
+    sizeKB: (byteCount / 1024).toFixed(1),
+    estTokens: Math.round(byteCount / BYTES_PER_TOKEN),
+  };
+}
+
+/* Coerce a size that came from trace-supplied metadata.  Returning a number
+   rather than the original value keeps a crafted string out of the badge
+   template, which interpolates this into innerHTML. */
+function bloatSizeKbFromMetadata(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n.toFixed(1) : null;
+}
+
+/* Scanning an entry walks every request message and UTF-8-encodes every tool
+   result in it.  The sidebar rebuilds all of its items on each search keystroke,
+   sort change and locale switch, so without this the scan cost is paid again on
+   every one of those for every visible row. */
+function detectEntryToolBloat(entry) {
+  /* Keyed by stable identity, not by request_id alone: a retried or
+     WebSocket-split request produces several entries sharing one ID, so an ID
+     key would hand the first entry's verdict to all of them and let a clean
+     turn and an oversized one swap badges by render order.
+
+     entryStableKey names an unidentifiable row 'entry', which would merge every
+     such row into one cache slot; those are rescanned instead. */
+  const key = entryStableKey(entry);
+  const cacheable = key && key !== 'entry';
+  if (cacheable && toolBloatCache.has(key)) return toolBloatCache.get(key);
+  const result = computeEntryToolBloat(entry);
+  if (cacheable) toolBloatCache.set(key, result);
+  return result;
+}
+
+function computeEntryToolBloat(entry) {
+  if (entry?._tool_bloat) {
+    const tb = entry._tool_bloat;
+    const byteCount = Number(tb.byte_count);
+    const haveBytes = Number.isFinite(byteCount) && byteCount >= 0;
+    /* Derive KB from the byte count with the same expression the detail
+       detector uses, rather than from the figure Python already rounded.  The
+       two round halfway cases apart -- Python's `round` goes to even while
+       `toFixed` goes up, so 10,496 bytes read 10.2KB in the sidebar and
+       10.3 KB on opening the same entry -- and the whole point of this feature
+       is that both detectors report one size.  `size_kb` is the fallback for
+       metadata that predates `byte_count`. */
+    const sizeKB = haveBytes ? (byteCount / 1024).toFixed(1) : bloatSizeKbFromMetadata(tb.size_kb);
+    if (sizeKB === null) return [];
+    return [{
+      byteCount: haveBytes ? byteCount : 0,
+      sizeKB,
+      estTokens: haveBytes ? Math.round(byteCount / BYTES_PER_TOKEN) : 0,
+      _count: Number(tb.count) || 1,
+    }];
+  }
+  /* A stub with no bloat metadata was already scanned server-side and found
+     clean.  Resolving it here would pull and parse the full record for every
+     visible row, defeating lazy loading on exactly the large traces it exists
+     for. */
+  if (entry?._isStub) return [];
+  const resolved = resolveEntryForDetail(entry);
+  const reqBody = resolved?.request?.body;
+  if (!reqBody) return [];
+  const bloated = [];
+  getMessages(reqBody, { forBloat: true }).forEach(msg => {
+    /* OpenAI Chat Completions puts the result straight on a tool-role message
+       instead of wrapping it in a tool_result block. */
+    if (msg?.role === 'tool') {
+      const info = toolResultBloatInfo({ type: 'tool_result', content: msg.content });
+      if (info) bloated.push(info);
+      return;
+    }
+    const blocks = Array.isArray(msg?.content) ? msg.content : (typeof msg?.content === 'object' && msg?.content ? [msg.content] : []);
+    blocks.forEach(b => {
+      const info = toolResultBloatInfo(b);
+      if (info) bloated.push(info);
+    });
+  });
+  return bloated;
 }
 
 function renderTokenUsage(u) {

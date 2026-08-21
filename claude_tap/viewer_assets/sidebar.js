@@ -568,8 +568,6 @@ const TASK_COLORS = [
   { color: 'var(--red)',    bg: 'var(--red-bg)' },
   { color: 'var(--indigo)', bg: 'var(--purple-bg)' },
 ];
-const taskFingerprintCache = new Map();
-
 function getTaskFingerprint(e) {
   const rid = e.request_id;
   if (taskFingerprintCache.has(rid)) return taskFingerprintCache.get(rid);
@@ -653,11 +651,24 @@ function createSidebarItem(e, i) {
   const taskColor = taskInfo ? getTaskColor(taskInfo.fp) : TASK_COLORS[0];
   item.style.borderLeftColor = failed ? 'var(--red)' : taskColor.color;
   const taskBadgeHtml = taskInfo && taskInfo.label ? `<span class="si-task" style="background:${taskColor.bg};color:${taskColor.color}" title="${esc(taskInfo.label)}">${esc(taskInfo.label)}</span>` : '';
+  /* A turn can carry several oversized results; the badge has room for one
+     number, so show the largest and put the count in the tooltip. */
+  const bloatList = detectEntryToolBloat(e);
+  let bloatBadgeHtml = '';
+  if (bloatList.length > 0) {
+    const worst = bloatList.reduce((a, b) => (b.byteCount > a.byteCount ? b : a));
+    const count = worst._count || bloatList.length;
+    const hint = count > 1
+      ? `${t('tool_bloat_hint')} (${count})`
+      : t('tool_bloat_hint');
+    bloatBadgeHtml = `<span class="si-bloat-badge" title="${esc(hint)}">&#9888; ${esc(worst.sizeKB)}KB</span>`;
+  }
   const errorDot = failed ? `<span class="si-error-dot" title="HTTP ${statusCode}"></span>` : '';
   item.innerHTML = `
     <div class="si-row1">
       <span class="si-turn-wrap"><span class="si-turn">${t('turn')} ${displayTurnLabel(e)}</span>${errorDot}</span>
       ${taskBadgeHtml}
+      ${bloatBadgeHtml}
       <span class="si-model" style="background:${badge.bg};color:${badge.fg}">${esc(shortModel)}</span>
     </div>
     <div class="si-row2">

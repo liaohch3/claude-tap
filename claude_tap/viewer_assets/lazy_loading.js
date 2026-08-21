@@ -5,6 +5,11 @@ let rawLines = null; // array of raw JSON strings, populated on first access
 const entryCache = new Map(); // index -> parsed full entry
 const remoteEntryPromises = new Map(); // index -> pending record fetch
 
+function clearLazyEntryCache() {
+  entryCache.clear();
+  remoteEntryPromises.clear();
+}
+
 function getRawLines() {
   if (rawLines) return rawLines;
   const el = document.getElementById('trace-raw');
@@ -120,6 +125,9 @@ function buildStubEntry(meta, rawIdx) {
   if (typeof meta.saved === 'number') stub.saved = meta.saved;
   if (meta.priced_model) stub.priced_model = meta.priced_model;
   if (typeof meta.long_context === 'boolean') stub.long_context = meta.long_context;
+  /* Carried from the server-side scan so the sidebar can badge a stub without
+     resolving its full record. */
+  if (meta.tool_bloat) stub._tool_bloat = meta.tool_bloat;
   return stub;
 }
 
@@ -232,6 +240,10 @@ const globalSearchState = {
   textCache: new Map(),
   recalcTimer: 0,
 };
+
+function clearGlobalSearchTextCache() {
+  globalSearchState.textCache.clear();
+}
 const TRACE_JSONL_PATH = typeof __TRACE_JSONL_PATH__ !== 'undefined' ? __TRACE_JSONL_PATH__ : '';
 const TRACE_HTML_PATH = typeof __TRACE_HTML_PATH__ !== 'undefined' ? __TRACE_HTML_PATH__ : '';
 const TRACE_RECORDS_API = typeof __TRACE_RECORDS_API__ !== 'undefined' ? __TRACE_RECORDS_API__ : '';

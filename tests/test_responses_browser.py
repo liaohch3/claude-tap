@@ -1439,7 +1439,10 @@ def test_viewer_normalizes_generic_responses_tool_call_items(responses_page) -> 
     assert result["responseInputs"][0] == {"action": {"type": "search", "query": "Responses items"}}
     assert result["roles"] == ["user", "assistant", "tool"]
     assert "web_search" in result["renderedMessages"]
-    assert "computer_screenshot" in result["renderedMessages"]
+    # A computer_screenshot output is rewritten to an ordinary image block, so the
+    # bloat detector never sizes an encoded image as if it were result text.
+    assert "input_image" in result["renderedMessages"]
+    assert "screen.png" in result["renderedMessages"]
 
 
 def test_viewer_marks_codex_message_content_blocks(responses_page) -> None:
