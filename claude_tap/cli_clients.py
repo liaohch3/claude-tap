@@ -302,6 +302,7 @@ class ClientConfig:
     cmd: str
     label: str
     install_url: str
+    # Empty for forward-only clients that have no single provider URL to rewrite.
     base_url_env: str
     base_url_suffix: str  # appended to http://127.0.0.1:{port}
     default_target: str
@@ -331,6 +332,10 @@ class ClientConfig:
     forward_trace_methods: tuple[str, ...] = ()
     forward_trace_path_prefixes: tuple[str, ...] = ()
     forward_trace_path_suffixes: tuple[str, ...] = ()
+    # Require a recognized model request body before persisting a matching HTTP
+    # path. This keeps generic tool/control-plane endpoints with model-like path
+    # suffixes out of trace storage while still relaying them.
+    forward_trace_model_requests_only: bool = False
     # Transcript-only clients are observed from local session logs instead of a
     # spawned process and do not need a reverse or forward proxy.
     transcript_only: bool = False
@@ -357,6 +362,8 @@ class ClientConfig:
         seen: set[str] = set()
         env_keys: list[str] = []
         for env_key in (self.base_url_env, *self.extra_base_url_envs):
+            if not env_key:
+                continue
             if env_key in seen:
                 continue
             seen.add(env_key)
@@ -477,6 +484,29 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         base_url_env="KIMI_CODE_BASE_URL",
         base_url_suffix="",
         default_target="https://api.kimi.com/coding/v1",
+    ),
+    "mcode": ClientConfig(
+        cmd="mcode",
+        label="MiniMax Code",
+        install_url="https://www.npmjs.com/package/@minimax-ai/code",
+        # MCode supports managed MiniMax access, BYOK, custom providers, and
+        # Codex OAuth. It has no single provider base URL to rewrite safely, so
+        # forward proxy capture is the only supported mode.
+        base_url_env="",
+        base_url_suffix="",
+        default_target="https://agent.minimax.io",
+        default_proxy_mode="forward",
+        # Relay all product traffic, but persist model requests only. This keeps
+        # account and control-plane responses out of local trace storage.
+        forward_trace_methods=("POST", "WEBSOCKET"),
+        forward_trace_path_prefixes=("/backend-api/codex/responses",),
+        forward_trace_path_suffixes=(
+            "/messages",
+            "/messages/count_tokens",
+            "/chat/completions",
+            "/responses",
+        ),
+        forward_trace_model_requests_only=True,
     ),
     "gemini": ClientConfig(
         cmd="gemini",
@@ -686,12 +716,17 @@ async def run_client(
     inject_proxy = not cfg.transcript_only
 
     if inject_proxy and proxy_mode == "forward":
-        if client == "dsh" and not _node_supports_env_proxy(env):
+        if client in {"dsh", "mcode"} and not _node_supports_env_proxy(env):
+            fallback = (
+                "or use --tap-proxy-mode reverse when dsh is configured through DEEPSEEK_BASE_URL."
+                if client == "dsh"
+                else "MCode has no single-provider reverse proxy fallback."
+            )
             _print(
-                "\nError: DeepSeek Harness forward capture requires a Node runtime "
+                f"\nError: {cfg.label} forward capture requires a Node runtime "
                 "with --use-env-proxy support.\n"
-                "Upgrade Node until `node --use-env-proxy --version` succeeds, or use "
-                "--tap-proxy-mode reverse when dsh is configured through DEEPSEEK_BASE_URL.\n"
+                "Upgrade Node until `node --use-env-proxy --version` succeeds, "
+                f"{fallback}\n"
             )
             return 1
         proxy_url = f"http://127.0.0.1:{port}"
@@ -707,14 +742,15 @@ async def run_client(
         env["http_proxy"] = proxy_url
         env["https_proxy"] = proxy_url
         env["all_proxy"] = proxy_url
-        if client in {"dsh", "pi"}:
+        if client in {"dsh", "mcode", "pi"}:
             # These clients use Node fetch, which only reads proxy env vars when
             # built-in environment proxy support is enabled.
             env["NODE_USE_ENV_PROXY"] = "1"
-        if client == "dsh":
-            # A dsh model can store any baseURL, including a loopback gateway.
-            # Route every child request through tap; the proxy's own upstream
-            # session still honors the user's original NO_PROXY settings.
+        if client in {"dsh", "mcode"}:
+            # These multi-provider clients can store any base URL, including a
+            # loopback gateway. Route every child request through tap; the
+            # proxy's own upstream session still honors the user's original
+            # NO_PROXY settings.
             env["NO_PROXY"] = ""
             env["no_proxy"] = ""
         else:

@@ -35,6 +35,7 @@ CLIENT_LABELS = {
     "hermes": "Hermes",
     "kimi": "Kimi",
     "kimi-code": "Kimi Code",
+    "mcode": "MiniMax Code",
     "mimo": "MiMo Code",
     "opencode": "OpenCode",
     "pi": "Pi",
