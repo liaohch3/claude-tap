@@ -20,6 +20,13 @@ test-traces/
 *.cast
 timing.txt
 typescript.txt
+.pytest_cache/
+
+# Coverage data written by the CI recipe in .github/workflows/ci.yml
+.coverage
+.coverage.*
+coverage.json
+coverage.xml
 
 # IDE / Editor
 .idea/
