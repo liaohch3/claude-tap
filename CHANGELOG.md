@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.1.146] - 2026-08-22
+
+### Changed
+- fix: preserve wrapped client stdout (#431)
+- feat(viewer): move cost computation into a Python pricing adapter (#445)
+- fix(ci): stop redownloading the playwright browser on every run (#447)
+- feat(viewer): explain prompt cache misses in the turn detail (#437)
 ### Fixed
 
 - Preserve wrapped-client stdout for every mode by always routing claude-tap operational output to stderr.
