@@ -969,6 +969,23 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
                     'beforeend',
                     renderToolInput({ cmd: 'printf "coverage\\n"', yield_time_ms: 1000 })
                   );
+                  document.body.insertAdjacentHTML(
+                    'beforeend',
+                    renderTools([{
+                      type: 'namespace',
+                      name: 'functions',
+                      tools: [{
+                        type: 'function',
+                        name: 'exec',
+                        description: 'Run coverage orchestration.',
+                        parameters: {
+                          type: 'object',
+                          properties: { source: { type: 'string' } },
+                          required: ['source']
+                        }
+                      }]
+                    }])
+                  );
                   document.querySelector('.tool-input-view')?.classList.add('expanded');
                 }"""
             )

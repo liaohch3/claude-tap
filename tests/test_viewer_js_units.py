@@ -278,6 +278,32 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
         assert.equal(context.getRequestTools(cursorStepOne.request.body).length, 0);
         vm.runInContext('entries = []', context);
 
+        const namespaceToolsHtml = context.renderTools([{
+          type: 'namespace',
+          name: 'functions',
+          description: '',
+          tools: [
+            {
+              type: 'function',
+              name: 'exec',
+              description: 'Run JavaScript orchestration.',
+              parameters: {
+                type: 'object',
+                properties: { source: { type: 'string', description: 'JavaScript source.' } },
+                required: ['source'],
+              },
+            },
+            { type: 'function', name: 'wait', description: 'Wait for a yielded cell.' },
+          ],
+        }]);
+        assert.match(namespaceToolsHtml, /tool-namespace/);
+        assert.match(namespaceToolsHtml, /functions/);
+        assert.match(namespaceToolsHtml, /2 badge_tools/);
+        assert.match(namespaceToolsHtml, /tool-block-nested/);
+        assert.match(namespaceToolsHtml, /exec/);
+        assert.match(namespaceToolsHtml, /wait/);
+        assert.match(namespaceToolsHtml, /JavaScript source\./);
+
         const codexPrefetchId = 'resp_prefetch_tools';
         const codexVisibleId = 'resp_visible';
         const codexExpanded = context.expandWebSocketResponseEntries([

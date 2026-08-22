@@ -58,7 +58,7 @@ def test_opencode_prompt_is_labelled_opencode_not_claude_code(tmp_path) -> None:
     _generate_html_viewer(trace_path, html_path)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
         label = page.locator(".sidebar-item .si-task").first.inner_text()

@@ -192,14 +192,28 @@ function responsesInputAdditionalTools(input) {
   return tools;
 }
 
+function mergeToolDefinition(existing, incoming) {
+  const merged = { ...existing, ...incoming };
+  const existingChildren = Array.isArray(existing?.tools) ? existing.tools : [];
+  const incomingChildren = Array.isArray(incoming?.tools) ? incoming.tools : [];
+  if (existingChildren.length || incomingChildren.length) {
+    merged.tools = uniqueToolsByDisplayName([...existingChildren, ...incomingChildren]);
+  }
+  return merged;
+}
+
 function uniqueToolsByDisplayName(tools) {
-  const seen = new Set();
+  const positions = new Map();
   const unique = [];
   for (const tool of tools) {
     const name = toolDisplayName(tool);
     const key = name || JSON.stringify(tool);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (positions.has(key)) {
+      const index = positions.get(key);
+      unique[index] = mergeToolDefinition(unique[index], tool);
+      continue;
+    }
+    positions.set(key, unique.length);
     unique.push(tool);
   }
   return unique;
@@ -208,9 +222,10 @@ function uniqueToolsByDisplayName(tools) {
 function getRequestTools(body) {
   const direct = Array.isArray(body?.tools) ? body.tools : [];
   const responsesAdditional = responsesInputAdditionalTools(body?.input);
+  const responsesDiscovered = toolSearchOutputTools(body?.input);
   const geminiTools = flattenGeminiTools(geminiRequest(body).tools);
   if (geminiTools.length) return geminiTools;
-  return uniqueToolsByDisplayName([...direct, ...responsesAdditional]);
+  return uniqueToolsByDisplayName([...direct, ...responsesAdditional, ...responsesDiscovered]);
 }
 
 function jsonSchemaTypeFromValue(value) {
@@ -1002,26 +1017,39 @@ function renderToolInput(input) {
     + `</div>`;
 }
 
-function renderTools(tools) {
-  return tools.map(td => {
-    const name = toolDisplayName(td) || 'unknown', desc = toolDescription(td);
-    const shortDesc = desc.split('\n')[0].substring(0, 120);
-    const schema = toolSchema(td);
-    const props = schema.properties || {};
-    const required = new Set(schema.required || []);
-    let paramsHtml = '';
-    const keys = Object.keys(props);
-    if (keys.length) {
-      paramsHtml = `<div class="tb-params-title">${t('params')}</div>` + keys.map(k => {
-        const p = props[k], type = p.type || (p.enum ? 'enum' : ''), pdesc = p.description || '';
-        const req = required.has(k) ? `<span class="tb-prequired">${t('required')}</span>` : '';
-        const typeTag = type ? `<span class="tb-ptype">${esc(type)}</span>` : '';
-        const descLine = pdesc ? `<div class="tb-pdesc">${esc(pdesc)}</div>` : '';
-        return `<div class="tb-param"><div class="tb-param-row1"><span class="tb-pname">${esc(k)}</span>${typeTag}${req}</div>${descLine}</div>`;
-      }).join('');
-    }
-    return `<div class="tool-block"><div class="tool-block-header"><span class="tb-arrow">&#9654;</span><span class="tb-name">${esc(name)}</span><span class="tb-desc">${esc(shortDesc)}</span></div><div class="tool-block-body">${desc ? `<div class="tb-full-desc">${esc(desc)}</div>` : ''}${paramsHtml}</div></div>`;
+function renderToolParameters(td) {
+  const schema = toolSchema(td);
+  const props = schema.properties || {};
+  const required = new Set(schema.required || []);
+  const keys = Object.keys(props);
+  if (!keys.length) return '';
+  return `<div class="tb-params-title">${t('params')}</div>` + keys.map(k => {
+    const p = props[k], type = p.type || (p.enum ? 'enum' : ''), pdesc = p.description || '';
+    const req = required.has(k) ? `<span class="tb-prequired">${t('required')}</span>` : '';
+    const typeTag = type ? `<span class="tb-ptype">${esc(type)}</span>` : '';
+    const descLine = pdesc ? `<div class="tb-pdesc">${esc(pdesc)}</div>` : '';
+    return `<div class="tb-param"><div class="tb-param-row1"><span class="tb-pname">${esc(k)}</span>${typeTag}${req}</div>${descLine}</div>`;
   }).join('');
+}
+
+function renderToolBlock(td, nested = false) {
+  const name = toolDisplayName(td) || 'unknown', desc = toolDescription(td);
+  const childTools = Array.isArray(td?.tools) ? td.tools.filter(tool => tool && typeof tool === 'object') : [];
+  const childCount = childTools.length;
+  const countLabel = childCount ? `${childCount} ${t('badge_tools')}` : '';
+  const shortDesc = desc.split('\n')[0].substring(0, 120);
+  const namespaceClass = childCount ? ' tool-namespace' : '';
+  const nestedClass = nested ? ' tool-block-nested' : '';
+  const badge = childCount ? `<span class="tb-count">${esc(countLabel)}</span>` : '';
+  const childrenHtml = childCount
+    ? `<div class="tb-namespace-tools">${childTools.map(tool => renderToolBlock(tool, true)).join('')}</div>`
+    : '';
+  const body = `${desc ? `<div class="tb-full-desc">${esc(desc)}</div>` : ''}${renderToolParameters(td)}${childrenHtml}`;
+  return `<div class="tool-block${namespaceClass}${nestedClass}"><div class="tool-block-header"><span class="tb-arrow">&#9654;</span><span class="tb-name">${esc(name)}</span><span class="tb-desc">${esc(shortDesc)}</span>${badge}</div><div class="tool-block-body">${body}</div></div>`;
+}
+
+function renderTools(tools) {
+  return tools.map(td => renderToolBlock(td)).join('');
 }
 
 function renderResponseContent(body, contextOnly = false) {

@@ -642,10 +642,21 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .tb-arrow.open { transform: rotate(90deg); }
 .tb-name { color: var(--cyan); font-family: var(--mono); font-size: 12px; font-weight: 600; flex-shrink: 0; }
 .tb-desc { color: var(--text-tertiary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tb-count {
+  margin-left: auto; flex-shrink: 0; color: var(--text-tertiary); background: var(--bg);
+  border: 1px solid var(--border-light); border-radius: 999px; padding: 1px 7px;
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+}
 .tool-block-body {
   display: none; padding: 10px 12px 12px; border-top: 1px solid var(--border-light); font-size: 12px;
 }
 .tool-block-body.open { display: block; }
+.tb-namespace-tools {
+  display: grid; gap: 5px; padding-left: 10px; border-left: 2px solid var(--cyan-bg);
+}
+.tool-block-nested { margin-bottom: 0; background: var(--bg); }
+.tool-block-nested > .tool-block-header { padding: 7px 10px; }
+.tool-block-nested > .tool-block-body { background: var(--bg-card); }
 .tb-full-desc {
   color: var(--text-secondary); white-space: pre-wrap; word-break: break-word;
   margin-bottom: 10px; line-height: 1.55; font-size: 12px;

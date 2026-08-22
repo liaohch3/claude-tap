@@ -220,7 +220,7 @@ def test_bedrock_invoke_path_is_primary_filter(tmp_path) -> None:
     _generate_html_viewer(trace_path, html_path)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
         chip_text = page.locator("#path-filter .filter-chip").first.inner_text()
@@ -275,7 +275,7 @@ def test_bedrock_billing_header_does_not_become_task_label(tmp_path) -> None:
     _generate_html_viewer(trace_path, html_path)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
         label = page.locator(".sidebar-item .si-task").first.inner_text()
@@ -343,7 +343,7 @@ def test_bedrock_converse_response_output_and_usage_render(tmp_path) -> None:
     _generate_html_viewer(trace_path, html_path)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
         result = page.evaluate(
