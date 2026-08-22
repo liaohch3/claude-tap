@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Preserve wrapped-client stdout for every mode by always routing claude-tap operational output to stderr.
+- Show the latest user message in dashboard trace records when requests include conversation history.
 
 
 

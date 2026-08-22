@@ -2344,8 +2344,12 @@ function requestText(body) {
   if (typeof body === "string") return body;
   if (!body || typeof body !== "object") return "";
   if (Array.isArray(body.messages)) {
-    const message = body.messages.find(item => item && item.role === "user");
-    if (message) return contentText(message.content);
+    for (let index = body.messages.length - 1; index >= 0; index -= 1) {
+      const message = body.messages[index];
+      if (!message || message.role !== "user") continue;
+      const text = userMessageText(message.content);
+      if (text) return text;
+    }
   }
   const input = contentText(body.input);
   if (input) return input;
@@ -2355,6 +2359,59 @@ function requestText(body) {
     if (content) return partsText(content.parts);
   }
   return typeof body.prompt === "string" ? body.prompt : "";
+}
+
+function userMessageText(content) {
+  const blocks = Array.isArray(content) ? content : [content];
+  const parts = [];
+  for (const block of blocks) {
+    if (["tool_result", "function_call_output"].includes(block?.type)) continue;
+    const rawText = contentText(block);
+    const text = cleanUserPromptText(rawText);
+    if (!text) continue;
+    if (/<USER_REQUEST>\s*[\s\S]*?\s*<\/USER_REQUEST>/i.test(rawText)) return text;
+    parts.push(text);
+  }
+  return parts.join("\n").trim();
+}
+
+function cleanUserPromptText(text) {
+  let value = String(text || "").trim();
+  if (!value) return "";
+  if (value.length >= 2 && value[0] === '"' && value[value.length - 1] === '"') {
+    try {
+      const decoded = JSON.parse(value);
+      if (typeof decoded === "string" && decoded.trim()) value = decoded.trim();
+    } catch (_) {
+      // Keep the original text when it only looks JSON-quoted.
+    }
+  }
+  const userRequest = value.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/i);
+  if (userRequest) return userRequest[1].trim();
+  const session = value.match(/^<session>\s*([\s\S]*?)\s*<\/session>$/i);
+  if (session) return session[1].trim();
+  const firstTag = value.match(/^<([A-Za-z_-]+)(?:\s|>)/);
+  const injectedTags = new Set([
+    "artifacts",
+    "additional_metadata",
+    "codex_internal_context",
+    "environment_context",
+    "local-command-caveat",
+    "session_context",
+    "skills",
+    "slash_commands",
+    "subagents",
+    "system-reminder",
+    "user_information",
+  ]);
+  if (firstTag && injectedTags.has(firstTag[1].toLowerCase())) return "";
+  if (value.startsWith("# AGENTS.md instructions") || value.startsWith("<INSTRUCTIONS>")) return "";
+  if (value.startsWith("# Files mentioned by the user:")) return "";
+  if (/^<\/?image(_input)?(\s+[^>]*)?>$/i.test(value)) return "";
+  if (/^\[SUGGESTION MODE:/i.test(value)) return "";
+  if (/^(web page content|page content|网页内容)\s*[:：]/i.test(value)) return "";
+  if (/^\[Image:\s*source:/i.test(value)) return "";
+  return value.replace(/^\[Image #\d+\]\s*/i, "").trim();
 }
 
 function responseTextFromBody(body) {
