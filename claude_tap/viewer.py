@@ -1057,8 +1057,100 @@ def _tool_display_name(tool: dict) -> str:
     return ""
 
 
+# Wrapper tags a harness opens a user-role message with. Shared by the classifier
+# and the cleaner so the two cannot disagree about which openers are injected: one
+# blanking a message the other calls human prose costs the message its badge and
+# can cost its turn a session title. Mirrors INJECTED_WRAPPER_TAGS in sidebar.js.
+_INJECTED_WRAPPER_TAGS = {
+    "additional_metadata",
+    "artifacts",
+    "codex_internal_context",
+    "environment_context",
+    "local-command-caveat",
+    "session_context",
+    "skills",
+    "slash_commands",
+    "subagents",
+    "system-reminder",
+    "user_information",
+}
+
+# Injected openers that are not tags, kept beside the tag set for the same reason.
+_INJECTED_TEXT_PREFIXES = (
+    "# AGENTS.md instructions",
+    "<INSTRUCTIONS>",
+    "# Files mentioned by the user:",
+)
+
+# Injected forms the cleaner blanks that are neither a wrapper tag nor a fixed
+# prefix. Shared with the classifier so cleaning and provenance cannot disagree:
+# a form the cleaner discards but the classifier calls prose loses both its title
+# and its badge. Mirrors INJECTED_BLANK_PATTERNS in sidebar.js.
+_INJECTED_BLANK_PATTERNS = [
+    re.compile(r"^</?image(_input)?(\s+[^>]*)?>$", re.IGNORECASE),
+    re.compile(r"^\[SUGGESTION MODE:", re.IGNORECASE),
+    re.compile(r"^(web page content|page content|网页内容)\s*[:：]", re.IGNORECASE),
+    re.compile(r"^\[Image:\s*(original|source)", re.IGNORECASE),
+]
+
+
+def _injected_wrapper_tag(value: str) -> str:
+    first_tag = re.match(r"^<([A-Za-z_-]+)(?:\s|>)", value)
+    if first_tag and first_tag.group(1).lower() in _INJECTED_WRAPPER_TAGS:
+        return first_tag.group(1).lower()
+    return ""
+
+
+def _natural_text_from_prompt_payload(payload: object) -> str:
+    """Unwrap a decoded JSON prompt object or array to readable text.
+
+    Mirrors naturalTextFromPromptPayload in sidebar.js. The browser cleaner
+    extracts ``{"prompt":"..."}`` before classifying; without this, lazy
+    metadata titles the group with the raw JSON and calls it human.
+    """
+    if isinstance(payload, str):
+        return _clean_session_user_text(payload)
+    if isinstance(payload, list):
+        # Human-first, the same rule _preferred_user_text_for_message applies across
+        # separate content blocks. A decoded array is the same shape inside one block,
+        # so taking the first readable item let a leading injection title and badge the
+        # whole message while the question after it went unread:
+        # [{"prompt": "Perform a web search for the query: pricing"},
+        #  {"prompt": "What does that cost?"}].
+        first = ""
+        for item in payload:
+            text = _natural_text_from_prompt_payload(item)
+            if not text:
+                continue
+            if _classify_user_input_origin(text) == "human":
+                return text
+            if not first:
+                first = text
+        return first
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("prompt", "request", "instruction", "message", "query", "text", "title"):
+        value = payload.get(key)
+        if not isinstance(value, str):
+            continue
+        text = _clean_session_user_text(value)
+        if text:
+            return text
+    if "content" in payload:
+        text, _origin = _preferred_user_text_for_message({"content": payload.get("content")})
+        return text
+    return ""
+
+
+def _trim_user_text(text: str) -> str:
+    """Match JavaScript String.trim(), including U+FEFF BOM at either end."""
+    return text.strip().strip("\ufeff").strip()
+
+
 def _clean_session_user_text(text: str) -> str:
-    value = text.strip()
+    # JS String.trim() removes U+FEFF; Python strip() does not, so a BOM-prefixed
+    # import would be payload in the browser and human in lazy metadata.
+    value = _trim_user_text(text)
     if not value:
         return ""
     if len(value) >= 2 and value[0] == value[-1] == '"':
@@ -1068,6 +1160,16 @@ def _clean_session_user_text(text: str) -> str:
             decoded = None
         if isinstance(decoded, str) and decoded.strip():
             value = decoded.strip()
+
+    if value[:1] in "{[":
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            decoded = None
+        if decoded is not None:
+            prompt = _natural_text_from_prompt_payload(decoded)
+            if prompt:
+                return prompt
 
     request = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", value, flags=re.DOTALL | re.IGNORECASE)
     if request:
@@ -1083,62 +1185,17 @@ def _clean_session_user_text(text: str) -> str:
 
     session = re.fullmatch(r"<session>\s*(.*?)\s*</session>", value, flags=re.DOTALL | re.IGNORECASE)
     if session:
-        return session.group(1).strip()
+        unquoted = session.group(1).strip()
+        stripped = re.sub(r"^\[Image #\d+\]\s*", "", unquoted, flags=re.IGNORECASE).strip()
+        return stripped or unquoted
 
-    first_tag = re.match(r"^<([A-Za-z_-]+)", value)
-    if first_tag and first_tag.group(1).lower() in {
-        "artifacts",
-        "codex_internal_context",
-        "environment_context",
-        "local-command-caveat",
-        "session_context",
-        "skills",
-        "slash_commands",
-        "subagents",
-        "system-reminder",
-        "user_information",
-    }:
+    if _injected_wrapper_tag(value):
         return ""
-
-    if value.startswith(("# AGENTS.md instructions", "<INSTRUCTIONS>")):
+    if value.startswith(_INJECTED_TEXT_PREFIXES):
         return ""
-    if value.startswith("# Files mentioned by the user:"):
-        return ""
-    if re.match(r"^</?image(_input)?(\s+[^>]*)?>$", value, flags=re.IGNORECASE):
-        return ""
-    if re.match(r"^\[SUGGESTION MODE:", value, flags=re.IGNORECASE):
-        return ""
-    if re.match(r"^(web page content|page content|网页内容)\s*[:：]", value, flags=re.IGNORECASE):
-        return ""
-    if re.match(r"^\[Image:\s*source:", value, flags=re.IGNORECASE):
+    if any(pattern.match(value) for pattern in _INJECTED_BLANK_PATTERNS):
         return ""
     return re.sub(r"^\[Image #\d+\]\s*", "", value, flags=re.IGNORECASE).strip()
-
-
-def _session_text_from_content(content: object) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return _clean_session_user_text(content)
-    if isinstance(content, dict):
-        item_type = content.get("type")
-        if item_type in {"tool_result", "function_call_output"}:
-            return ""
-        for key in ("text", "output"):
-            value = content.get(key)
-            if isinstance(value, str):
-                cleaned = _clean_session_user_text(value)
-                if cleaned:
-                    return cleaned
-        if "content" in content:
-            return _session_text_from_content(content.get("content"))
-        return ""
-    if isinstance(content, list):
-        for item in content:
-            text = _session_text_from_content(item)
-            if text:
-                return text
-    return ""
 
 
 def _websocket_response_groups(events: list[dict]) -> list[list[dict]]:
@@ -1261,24 +1318,214 @@ def _is_tool_result_only_message(message: dict) -> bool:
     )
 
 
-def _first_user_text(messages: list[dict]) -> str:
-    for message in messages:
-        if message.get("role") != "user" or _is_tool_result_only_message(message):
+_HARNESS_PATTERNS = [
+    re.compile(r"^<system-reminder>", re.IGNORECASE),
+    # The lookahead is the boundary _injected_wrapper_tag enforces; without it a
+    # longer user-authored tag such as "<local-command-caveats>" read as harness.
+    re.compile(r"^<(?:local-command-caveat|command-(?:name|message|args))(?=\s|>)", re.IGNORECASE),
+    re.compile(r"^Caveat: The messages below were generated", re.IGNORECASE),
+    re.compile(r"^\[Request interrupted", re.IGNORECASE),
+    re.compile(r"^\[SYSTEM NOTIFICATION - NOT USER INPUT\]", re.IGNORECASE),
+    re.compile(r"^The user stepped away and is coming back", re.IGNORECASE),
+    re.compile(r"^\[SUGGESTION MODE:", re.IGNORECASE),
+    re.compile(r"^CRITICAL: Respond with TEXT ONLY", re.IGNORECASE),
+    re.compile(r"^Briefly inform the user about the task result", re.IGNORECASE),
+    # "^Analyze if this message indicates" used to sit here. Unlike every other
+    # entry it is ordinary English, so a human asking "Analyze if this message
+    # indicates fraud or a billing mistake" was badged as harness-injected and
+    # lost its group title. The other openers earn their place by being
+    # unmistakable template text; this one only matched a template's opening
+    # words, and no installed CLI build carries the full wording to anchor a
+    # longer pattern against. A missed injection costs a badge; a false positive
+    # relabels what the user actually typed, so this stays out until the emitted
+    # text can be quoted from a capture.
+    re.compile(r"^This session is being continued from a previous conversation", re.IGNORECASE),
+    re.compile(r"^Perform a web search for the query:", re.IGNORECASE),
+    re.compile(r"^\[Image(\s*#\d+)?\]|^\[Image:\s*(original|source)", re.IGNORECASE),
+]
+
+# Mirrors PAYLOAD_INPUT_PATTERNS in sidebar.js. Digits are spelled out rather
+# than left to "\d", which is Unicode-aware here and ASCII-only there; the JS
+# mirror likewise writes identifiers as [\p{L}\p{N}_] to match the "\w" below,
+# so that "def 处理():" is payload on both sides. Letting the escapes differ
+# would change a paste's badge, title and grouping as a capture crosses
+# LAZY_THRESHOLD and the browser hands the decision to this module.
+_PAYLOAD_PATTERNS = [
+    re.compile(r"^diff --git "),
+    re.compile(r"^@@ -[0-9]+"),
+    re.compile(r"^#!/usr/bin/env "),
+    # An import is payload only when the statement ends where a source line
+    # would. "import pandas and plot the data" is someone talking, and a
+    # prefix-only match would badge that prose as pasted.
+    re.compile(r"^import\s+[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*[ \t]*(?:\r?\n|$)"),
+    re.compile(
+        r"^from\s+[\w.]+\s+import\s+(?:[(*]|[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)[ \t]*(?:\r?\n|$)"
+    ),
+    # "__future__" is unmistakable, so this one needs no line boundary.
+    re.compile(r"^from __future__ import "),
+    re.compile(r"^:root\s*\{"),
+    re.compile(r"^/\*[\s─=-]"),
+    re.compile(r'^"""'),
+    # "async" is a prefix rather than its own alternative so it covers "async def"
+    # too; spelling out only "async function" left a pasted coroutine reading as
+    # prose while its sync form read as payload.
+    re.compile(r"^\s*(?:async\s+)?(?:function|const|let|var|class|def)\s+[\w$]+\s*[({=]"),
+    # The base-less Python form "class Foo:" needs the colon as a suffix, but a
+    # bare colon after keyword-plus-word also matches English: "class action: can
+    # I join the settlement?" and "function calls: why are they slow?" were badged
+    # as pasted code. So the colon forms are spelled out separately, each with the
+    # syntax a declaration carries and prose does not -- end of line for a class
+    # header, an annotation that goes on to assign or terminate for a binding.
+    re.compile(r"^\s*class\s+[\w$]+\s*:[ \t]*(?:\r?\n|$)"),
+    re.compile(r"^\s*(?:const|let|var)\s+[\w$]+\s*:[^\n]*?[=;]"),
+    re.compile(r"^\s*[0-9]+\t"),
+]
+
+
+def _classify_user_input_origin(text: str) -> str:
+    value = _trim_user_text(text)
+    if not value:
+        return "human"
+    for pattern in _HARNESS_PATTERNS:
+        if pattern.search(value):
+            return "harness"
+    if _injected_wrapper_tag(value) or value.startswith(_INJECTED_TEXT_PREFIXES):
+        return "harness"
+    if any(pattern.match(value) for pattern in _INJECTED_BLANK_PATTERNS):
+        return "harness"
+    for pattern in _PAYLOAD_PATTERNS:
+        if pattern.search(value):
+            return "payload"
+    return "human"
+
+
+def _block_input_text(block: dict) -> str | None:
+    """Text a content block carries as input, or None when it carries neither key.
+
+    ``text`` when it says something and ``output`` otherwise. Stopping at ``text``
+    merely because it is a string of the right type loses the content of the blocks
+    that leave it empty and put the readable text under ``output``, e.g.
+    ``{"type": "input_text", "text": "", "output": "Perform a web search for..."}``.
+    Losing it on one side only would change that message's title, badge and grouping
+    as a capture crosses LAZY_THRESHOLD and the decision moves between the two
+    mirrors. Mirrors blockInputText in sidebar.js.
+    """
+    text = block.get("text")
+    # _trim_user_text, not str.strip: JS String.trim() removes U+FEFF and Python's
+    # does not, so a BOM-only `text` beside a populated `output` stopped here and
+    # returned the BOM, which _eligible_user_text_blocks then dropped without ever
+    # reconsidering `output` -- the browser read the injection, lazy metadata read
+    # an empty human message.
+    if isinstance(text, str) and _trim_user_text(text):
+        return text
+    output = block.get("output")
+    if isinstance(output, str):
+        return output
+    return text if isinstance(text, str) else None
+
+
+def _eligible_user_text_blocks(content: object) -> list[str]:
+    """Raw text of the blocks a user-role message carries as input, in wire order.
+
+    Tool results are excluded: they are output the caller sent back, so counting
+    them makes an injected message read as ordinary prose. Mirrors
+    eligibleUserTextBlocks in sidebar.js.
+    """
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, dict):
+        if content.get("type") in {"tool_result", "function_call_output"}:
+            return []
+        value = _block_input_text(content)
+        if value is not None:
+            return [value]
+        if "content" in content:
+            return _eligible_user_text_blocks(content.get("content"))
+        return []
+    if not isinstance(content, list):
+        return []
+    texts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            texts.append(block)
             continue
-        text = _session_text_from_content(message.get("content"))
-        if text:
-            return text
-    return ""
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") in {"tool_result", "function_call_output"}:
+            continue
+        if block.get("type") == "message":
+            texts.extend(_eligible_user_text_blocks(block.get("content")))
+            continue
+        value = _block_input_text(block)
+        if value is not None:
+            texts.append(value)
+    # _trim_user_text so the surviving blocks are the ones JavaScript keeps: its
+    # filter uses String.trim(), which drops U+FEFF where str.strip() leaves it.
+    return [text for text in texts if _trim_user_text(text)]
 
 
-def _latest_user_text(messages: list[dict]) -> str:
+def _preferred_user_text_for_message(message: dict) -> tuple[str, str]:
+    """Title text and provenance for one user-role message, decided together.
+
+    Blocks are read in wire order and human prose wins, so a pasted diff followed
+    by a question is titled by the question.
+
+    The two halves are deliberately independent: cleaning blanks the injections that
+    carry no readable request, and a blank title is the right answer for those, but
+    provenance is read off the raw text either way. An injection that does say
+    something keeps its text and titles its own group.
+    Mirrors preferredUserTextForMessage in sidebar.js.
+    """
+    fallback: tuple[str, str] | None = None
+    for raw in _eligible_user_text_blocks(message.get("content")):
+        # _trim_user_text, not str.strip: JS String.trim() drops U+FEFF and Python's
+        # does not, so a BOM-only leading block would be skipped in the browser and
+        # here install an empty human fallback that a later pasted diff then inherits.
+        value = _trim_user_text(raw)
+        if not value:
+            continue
+        cleaned = _clean_session_user_text(raw)
+        origin = _classify_user_input_origin(cleaned or value)
+        if cleaned and origin == "human":
+            return cleaned, origin
+        # Keep the first block's provenance, but do not let a badge-only injection
+        # lock in an empty title when a later block survives cleaning: such a turn
+        # would read as untitled and merge into the group before it.
+        if fallback is None:
+            fallback = (cleaned, origin)
+        elif not fallback[0] and cleaned:
+            fallback = (cleaned, fallback[1])
+    return fallback or ("", "human")
+
+
+def _session_user_title(messages: list[dict]) -> tuple[str, str]:
+    """Title text and its provenance for a lazy-metadata session group.
+
+    Scans newest first, so a cumulative request carrying human turn A followed by
+    human turn B is titled by B rather than by the oldest prompt in its history.
+    Messages left with no title -- an injection carrying no readable request -- are
+    passed over, grouping an injected-only follow-up under the query it follows.
+
+    The origin travels with the text because it cannot be recovered from it. A
+    turn whose harness block is blanked by the cleaner and whose title therefore
+    comes from a later pasted block is deliberately kept as ``harness`` by
+    ``_preferred_user_text_for_message``; re-reading that title in the browser
+    would call it ``payload`` and relabel the group as the capture crosses
+    LAZY_THRESHOLD. Consumed by ``buildStubEntry`` in lazy_loading.js.
+    """
     for message in reversed(messages):
         if message.get("role") != "user" or _is_tool_result_only_message(message):
             continue
-        text = _session_text_from_content(message.get("content"))
+        text, origin = _preferred_user_text_for_message(message)
         if text:
-            return text
-    return ""
+            return text, origin
+    return "", "human"
+
+
+def _session_user_text(messages: list[dict]) -> str:
+    return _session_user_title(messages)[0]
 
 
 def _extract_metadata(record_json: str) -> dict | None:
@@ -1427,6 +1674,8 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         else _cost_fields(model, usage, body, record=r, search_calls=search_calls)
     )
 
+    session_user_text, session_user_origin = _session_user_title(msgs)
+
     return {
         "turn": r.get("turn"),
         "request_id": r.get("request_id", ""),
@@ -1457,7 +1706,10 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         **cost_fields,
         "has_system": bool(sys_text),
         "message_count": len(msgs),
-        "session_user_text": _latest_user_text(msgs) or _first_user_text(msgs),
+        "session_user_text": session_user_text,
+        # Only when it differs from the default the browser would infer anyway,
+        # so the common case adds no bytes to every stub in a large capture.
+        **({"session_user_origin": session_user_origin} if session_user_origin != "human" else {}),
         "cursor_turn": body.get("cursor_turn") if isinstance(body.get("cursor_turn"), int) else None,
         "cursor_step": body.get("cursor_step") if isinstance(body.get("cursor_step"), int) else None,
         "codex_app_session_id": codex_app_session_id,

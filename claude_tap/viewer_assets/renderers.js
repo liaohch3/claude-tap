@@ -273,7 +273,15 @@ function hasDisplayContent(content) {
   if (!Array.isArray(content)) return content !== undefined && content !== null;
   return content.some(block => {
     if (!block || typeof block !== 'object') return false;
-    if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') return !!(block.text || '').trim();
+    if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') {
+      /* Some Responses captures store the value under `output`. Reading only
+         `text` makes this helper return false, so `renderMessages` drops the
+         entire user turn -- title in the sidebar, empty pane in the detail.
+         `blockInputText` rather than a local ternary: an empty `text` beside a
+         populated `output` has to yield the same way it does for the sidebar
+         title and the Python mirror. */
+      return !!blockInputText(block).trim();
+    }
     if (block.type === 'image' || block.type === 'input_image') {
       const source = block.source || {};
       return !!(block.image_url || block.file_id || source.data || source.url || source.media_type || source.file_id);
@@ -431,7 +439,27 @@ function getMessages(body) {
       content: Array.isArray(item.content)
         ? item.content.map(c => {
             if (!c || typeof c !== 'object') return c;
-            if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { type: c.type, text: c.text };
+            /* Some captures carry the text under `output` rather than `text`.
+               Rebuilding the block with `text` alone drops it here, before the
+               sidebar's own `output` fallback can ever see it, so a session at or
+               below LAZY_THRESHOLD would lose the title that lazy Python metadata
+               keeps. */
+            if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') {
+              /* Put the `output` fallback on `text` so `hasDisplayContent` and
+                 `renderContent` -- which both read `text` for known types --
+                 keep the turn. `text` wins only when it says something: an empty
+                 string is the shape these captures use to mean "the text is under
+                 `output`", and treating it as authoritative here discarded the
+                 only readable content the block had. `blockInputText` and its
+                 Python mirror both yield on blank text; this has to agree, or the
+                 same turn is titled from `output` above LAZY_THRESHOLD and left
+                 untitled below it. */
+              const blockText = typeof c.text === 'string' && c.text.trim() ? c.text : '';
+              if (blockText) return { type: c.type, text: blockText };
+              return typeof c.output === 'string'
+                ? { type: c.type, text: c.output }
+                : { type: c.type, text: c.text };
+            }
             if (c.type === 'tool_use') return c;
             if (c.type === 'tool_result') return c;
             return c;
@@ -780,9 +808,25 @@ function renderMessages(msgs) {
     const role = m.role || 'unknown';
     const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'tool' ? 'tool_result' : (role === 'developer' || role === 'system') ? 'system' : 'system';
     const blockCount = normalizeDisplayContentBlocks(m.content).length;
-    const rendered = renderContent(m.content, role, { frameBlocks: blockCount > 1 });
+    const messageOrigin = role === 'user' && !isToolResultOnlyMessage(m)
+      ? preferredUserTextForMessage(m)
+      : null;
+    const rendered = renderContent(m.content, role, {
+      frameBlocks: blockCount > 1,
+      blockOrigins: messageOrigin ? disagreeingBlockOrigins(m.content, messageOrigin.origin) : null,
+    });
     if (!rendered.trim()) return '';
-    return `<div class="msg ${cls}"><div class="msg-role">${esc(role)}</div>${rendered}</div>`;
+    /* The wire format has no author field, so a harness recap request and a typed
+       question both arrive as role:"user". Label the ones we can recognize. */
+    let originTag = '';
+    if (role === 'user' && !isToolResultOnlyMessage(m)) {
+      /* Decided on the raw text by the same helper that titles the sidebar group,
+         so a badge here and a title there always agree, and an injection that
+         shares its message with a tool result is still seen. Blocks that disagree
+         with this verdict are badged individually inside renderContent. */
+      originTag = userOriginBadge(messageOrigin.origin, messageOrigin.kind);
+    }
+    return `<div class="msg ${cls}"><div class="msg-role">${esc(role)}${originTag}</div>${rendered}</div>`;
   }).filter(Boolean).join('');
 }
 
@@ -794,6 +838,42 @@ function contentHasImagePlaceholder(content) {
     if (!block || typeof block !== 'object') return false;
     return contentHasImagePlaceholder(block.text || block.output || block.content || '');
   });
+}
+
+/* Per-display-block provenance, but only where it contradicts the badge already on
+   the message header, so the common single-origin message is not labelled twice.
+   Indexed to match normalizeDisplayContentBlocks, which is what renderContent
+   walks -- eligibleUserTextBlocks skips tool results and so numbers differently. */
+function disagreeingBlockOrigins(content, messageOrigin) {
+  const blocks = normalizeDisplayContentBlocks(content);
+  if (blocks.length < 2) return null;
+  let any = false;
+  const origins = blocks.map(block => {
+    if (block.type !== 'text' && block.type !== 'input_text' && block.type !== 'output_text') return null;
+    const raw = blockInputText(block);
+    if (!raw.trim()) return null;
+    /* Cleaned-or-raw, exactly as preferredUserTextForMessage decides it: cleaning
+       unwraps a JSON-quoted injection, and classifying the wrapper instead reads
+       the braces as ordinary prose, so the block came back human and went
+       unbadged. Falling back to raw keeps provenance for an injection that
+       cleaning blanks entirely, where the empty string would classify human. */
+    const { origin, kind } = classifyUserInputOrigin(cleanUserPromptText(raw) || raw);
+    if (origin === messageOrigin) return null;
+    any = true;
+    return [origin, kind];
+  });
+  return any ? origins : null;
+}
+
+/* One badge, built the same way for a whole message and for a single block, so a
+   per-block label cannot drift from the message-level one. Returns '' for human
+   text, which needs no qualifier. */
+function userOriginBadge(origin, kind, extraClass = 'msg-origin') {
+  if (!origin || origin === 'human') return '';
+  const key = origin === 'harness' ? 'origin_harness' : 'origin_payload';
+  const label = kindLabel(kind) ? `${t(key)}·${kindLabel(kind)}` : t(key);
+  const hint = t(origin === 'harness' ? 'origin_harness_hint' : 'origin_payload_hint');
+  return `<span class="${extraClass} origin-${origin}" title="${esc(hint)}">${esc(label)}</span>`;
 }
 
 function wrapContentBlock(inner, block, index, total, options = {}) {
@@ -911,9 +991,16 @@ function renderContent(content, role, options = {}) {
   const blocks = normalizeDisplayContentBlocks(content);
   const renderedBlocks = blocks.map((block, index) => {
     if (block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') {
-      const txt = block.text || '';
+      const txt = blockInputText(block);
       if (!txt.trim()) return '';
-      return wrapContentBlock(`<div class="content-block-text">${esc(txt)}</div>`, block, index, blocks.length, options);
+      /* A CLI can put an injected block and the user's own prose in one message.
+         The message-level badge names only the block the sidebar took its title
+         from, so an injection sharing a message with human prose would otherwise
+         render under a bare "user" label. Badge the blocks that disagree with the
+         message verdict; a message whose blocks all agree keeps one badge. */
+      const blockOrigin = options.blockOrigins ? options.blockOrigins[index] : null;
+      const blockTag = blockOrigin ? userOriginBadge(blockOrigin[0], blockOrigin[1], 'block-origin') : '';
+      return wrapContentBlock(`${blockTag}<div class="content-block-text">${esc(txt)}</div>`, block, index, blocks.length, options);
     }
     if (block.type === 'thinking') {
       const thinking = block.thinking || '';

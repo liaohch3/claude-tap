@@ -82,6 +82,7 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           'i18n_ui.js',
           'live_bootstrap.js',
           'filters_search.js',
+          'sidebar.js',
           'renderers.js',
           'diff.js',
           'utilities_mobile.js',
@@ -886,8 +887,745 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           const subTitle = _statEls['stat-cost-group'].title;
           assert.ok(subTitle.indexOf('subscription') >= 0 || subTitle.indexOf('ChatGPT') >= 0,
             'tooltip must name the subscription reason');
+
+          /* ── User input provenance ──
+             Samples are verbatim openers taken from real local Claude sessions,
+             since the whole point of the classifier is to recognize the exact
+             templates a harness emits. TQ is a triple double-quote, built here
+             so it does not terminate the Python string wrapping this script. */
+          const TQ = '"'.repeat(3);
+          const harnessSamples = [
+            ['The user stepped away and is coming back. Recap in under 40 words.', 'recap'],
+            ['[SYSTEM NOTIFICATION - NOT USER INPUT]\\nAutomated background event.', 'notification'],
+            ['This session is being continued from a previous conversation that ran out of context.', 'compaction'],
+            ['Perform a web search for the query: Anthropic pricing per million tokens', 'websearch'],
+            ['CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.', 'subagent'],
+            ['Briefly inform the user about the task result and perform any follow-up.', 'subagent'],
+            ['[SUGGESTION MODE: Suggest what the user might naturally type next.]', 'suggestion'],
+            ['<system-reminder>\\nAs you answer the user\\'s questions...', 'reminder'],
+            ['[Request interrupted by user for tool use]', 'interrupt'],
+            ['[Image: original 2880x1800, displayed at 2000x1250.]', 'attachment'],
+          ];
+          for (const [text, kind] of harnessSamples) {
+            const got = classifyUserInputOrigin(text);
+            assert.equal(got.origin, 'harness', 'expected harness for: ' + text.slice(0, 40));
+            assert.equal(got.kind, kind, 'wrong kind for: ' + text.slice(0, 40));
+          }
+
+          const payloadSamples = [
+            'diff --git a/a.js b/a.js\\nindex 000..111',
+            '@@ -1,4 +1,9 @@\\n context',
+            ':root {\\n  --bg: #f4f5f7;\\n}',
+            'from __future__ import annotations\\n\\nimport json',
+            '#!/usr/bin/env python3\\n' + TQ + 'Enforce coverage.' + TQ,
+            TQ + 'Cross-client contract tests for the viewer.' + TQ,
+            '/* ─── Renderers ─── */\\nfunction chatMessageContentToText(content) {',
+            'function getPath(e) { return e.request?.path; }',
+          ];
+          for (const text of payloadSamples) {
+            assert.equal(classifyUserInputOrigin(text).origin, 'payload',
+              'expected payload for: ' + text.slice(0, 32));
+          }
+
+          /* Real human turns, including ones that talk *about* code. Prose that
+             merely mentions a diff or a function must not be called payload. */
+          const humanSamples = [
+            '看一下PR 436是干什么的。',
+            '读代码',
+            '说中文',
+            'Thanks, that is all.',
+            '必要性很弱。必要性很弱是指这个需求没有意义？',
+            'the diff --git output looked wrong, can you check?',
+            'why does function getPath return undefined here?',
+            'Perform the refactor we discussed.',
+          ];
+          for (const text of humanSamples) {
+            assert.equal(classifyUserInputOrigin(text).origin, 'human',
+              'expected human for: ' + text.slice(0, 32));
+          }
+          assert.equal(classifyUserInputOrigin('').origin, 'human');
+          assert.equal(classifyUserInputOrigin(null).origin, 'human');
+
+          /* Group titles name the human ask even when a harness injection sits
+             earlier in the message list. */
+          const mixedEntry = {
+            request: {
+              body: {
+                messages: [
+                  { role: 'user', content: [{ type: 'text', text: 'The user stepped away and is coming back. Recap.' }] },
+                  { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+                  { role: 'user', content: [{ type: 'text', text: '把这个PR拆一下' }] },
+                ],
+              },
+            },
+          };
+          const firstInfo = firstUserInputInfo(mixedEntry);
+          assert.equal(firstInfo.userText, '把这个PR拆一下');
+          assert.equal(firstInfo.origin, 'human');
+
+          /* With nothing but injected text, the group still gets a title rather
+             than going blank, and the origin says where it came from. */
+          const injectedOnly = {
+            request: {
+              body: {
+                messages: [
+                  { role: 'user', content: [{ type: 'text', text: 'Perform a web search for the query: pricing' }] },
+                ],
+              },
+            },
+          };
+          const injectedInfo = firstUserInputInfo(injectedOnly);
+          assert.ok(injectedInfo.userText.startsWith('Perform a web search'));
+          assert.equal(injectedInfo.origin, 'harness');
+
+          /* latestUserInputInfo stops at the newest turn rather than falling
+             back to older human messages in cumulative request history. */
+          const cumulativeTurn2 = {
+            request: {
+              body: {
+                messages: [
+                  { role: 'user', content: [{ type: 'text', text: 'Human turn 1 prompt' }] },
+                  { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+                  { role: 'user', content: [{ type: 'text', text: 'diff --git a/a.js b/a.js\\nindex 000..111' }] },
+                ],
+              },
+            },
+          };
+          const latestInfo = latestUserInputInfo(cumulativeTurn2);
+          assert.ok(latestInfo.userText.startsWith('diff --git'));
+          assert.equal(latestInfo.origin, 'payload');
+          assert.equal(latestInfo.userIndex, 2);
+
+          /* Wrapped image placeholder with trailing human prompt */
+          const imageWrapped = '<session>\\n[Image #1] what does this screenshot show?\\n</session>';
+          const cleanedImg = cleanUserPromptText(imageWrapped);
+          assert.equal(cleanedImg, 'what does this screenshot show?');
+          assert.equal(classifyUserInputOrigin(cleanedImg).origin, 'human');
+
+          /* Openers the cleaner blanks must classify as injected too. When the two
+             disagree, the cleaner wins the title and the classifier wins the badge,
+             so a message ends up blanked and labelled human prose. */
+          const injectedOpeners = [
+            '<environment_context>\\nrepo: claude-tap\\n</environment_context>',
+            '<skills>\\nartifact-design\\n</skills>',
+            '<user_information>\\nname: someone\\n</user_information>',
+            '<additional_metadata>\\nrepo: claude-tap\\n</additional_metadata>',
+            '# AGENTS.md instructions\\nRun ruff before committing.',
+            '<INSTRUCTIONS>\\nBe concise.\\n</INSTRUCTIONS>',
+            '# Files mentioned by the user:\\n- viewer.py',
+          ];
+          for (const opener of injectedOpeners) {
+            assert.equal(cleanUserPromptText(opener), '', opener.slice(0, 24));
+            assert.equal(classifyUserInputOrigin(opener).origin, 'harness', opener.slice(0, 24));
+          }
+
+          /* A tag that merely looks like a wrapper is still human prose: the set is
+             matched on the whole tag name, not on a prefix of it. */
+          assert.equal(classifyUserInputOrigin('<skillsets> are what I need').origin, 'human');
+
+          /* An import is payload only when the statement ends where a source line
+             would. A prefix-only match would badge prose about importing as pasted. */
+          const pastedImports = [
+            'import json\\nimport sys\\n',
+            'import os.path as p\\n',
+            'import json, sys\\n',
+            'from collections import defaultdict\\n',
+            'from typing import (\\n    Any,\\n)',
+            'from claude_tap.viewer import *\\n',
+          ];
+          for (const text of pastedImports) {
+            assert.equal(classifyUserInputOrigin(text).origin, 'payload', text.slice(0, 32));
+          }
+          const importProse = [
+            'import pandas and plot the data',
+            'from the import list, drop numpy',
+            'import the trace into the viewer for me',
+          ];
+          for (const text of importProse) {
+            assert.equal(classifyUserInputOrigin(text).origin, 'human', text.slice(0, 32));
+          }
+
+          /* async is a prefix, so a coroutine reads the same as its sync form.
+             Spelling out only "async function" left a pasted "async def" winning
+             a title over the question beside it. */
+          for (const text of ['async def fetch_data():\\n    return 1\\n',
+                              'def fetch_data():\\n    return 1\\n',
+                              'async function fetchData() {\\n  return 1;\\n}\\n',
+                              'function fetchData() {\\n  return 1;\\n}\\n']) {
+            assert.equal(classifyUserInputOrigin(text).origin, 'payload', text.slice(0, 28));
+          }
+
+          /* Forms the cleaner blanks by pattern rather than by tag or prefix. Both
+             sides read one shared list, so a blanked message still carries a badge
+             instead of rendering as an empty human turn. */
+          const blankedInjections = [
+            ['Web page content:\\n\\nLorem ipsum from a fetched page.', 'context'],
+            ['Page content: the rest of a scraped article', 'context'],
+            ['网页内容：抓取到的正文', 'context'],
+            ['[Image: source: /tmp/shot.png]', 'attachment'],
+            ['[Image: original 2880x1800, displayed at 2000x1250.]', 'attachment'],
+            ['<image_input>', 'attachment'],
+          ];
+          for (const [text, kind] of blankedInjections) {
+            assert.equal(cleanUserPromptText(text), '', text.slice(0, 24));
+            const got = classifyUserInputOrigin(text);
+            assert.equal(got.origin, 'harness', text.slice(0, 24));
+            assert.equal(got.kind, kind, text.slice(0, 24));
+          }
+
+          /* A known text type still falls through to the output key: the Python
+             mirror accepts that shape, so reading only the text key here would
+             change a session's grouping once it crosses LAZY_THRESHOLD. */
+          assert.deepEqual(eligibleUserTextBlocks([{ type: 'input_text', output: 'from output key' }]),
+            ['from output key']);
+
+          /* ── An empty text field yields to output ── */
+          const emptyTextBlock = { type: 'input_text', text: '',
+            output: 'Perform a web search for the query: pricing' };
+          assert.deepEqual(eligibleUserTextBlocks([emptyTextBlock]),
+            ['Perform a web search for the query: pricing'],
+            'an empty text field must not shadow the output that carries the text');
+          assert.deepEqual(eligibleUserTextBlocks(emptyTextBlock),
+            ['Perform a web search for the query: pricing'],
+            'the same holds for a lone block outside a list');
+          const emptyTextTitled = preferredUserTextForMessage({ role: 'user', content: [emptyTextBlock] });
+          assert.equal(emptyTextTitled.origin, 'harness',
+            'the extracted text is what gets classified');
+          assert.deepEqual(eligibleUserTextBlocks([{ type: 'input_text', text: 'what I typed', output: 'ignored' }]),
+            ['what I typed'], 'output is the fallback, not an override');
+
+          /* The Responses rebuild in getMessages has to yield on blank text too.
+             It rebuilds each block with the text key alone, so keeping the empty
+             string there discarded the output before eligibleUserTextBlocks could
+             reach it: below LAZY_THRESHOLD the turn lost the title that the Python
+             metadata above it kept. */
+          const rebuiltEmptyText = getMessages({
+            input: [{ role: 'user', content: [{ type: 'input_text', text: '',
+              output: 'Perform a web search for the query: pricing' }] }],
+          });
+          assert.deepEqual(eligibleUserTextBlocks(rebuiltEmptyText[0].content),
+            ['Perform a web search for the query: pricing'],
+            'the rebuilt block must carry the output text, not the empty string');
+          const rebuiltRealText = getMessages({
+            input: [{ role: 'user', content: [{ type: 'input_text', text: 'what I typed', output: 'ignored' }] }],
+          });
+          assert.deepEqual(eligibleUserTextBlocks(rebuiltRealText[0].content),
+            ['what I typed'], 'a non-empty text still wins after the rebuild');
+
+          /* ── Ordinary prose beginning with "Analyze" is human ── */
+          /* A harness opener has to be unmistakable template text. This one was a
+             plain English stem, so a human question matched it and was badged as
+             harness-injected, yielding no group title and merging into the query
+             before it. */
+          const analyzeQuestion = 'Analyze if this message indicates fraud or a billing mistake';
+          assert.equal(classifyUserInputOrigin(analyzeQuestion).origin, 'human',
+            'a normal question must not be claimed by a template stem');
+          assert.equal(preferredUserTextForMessage({
+            role: 'user', content: [{ type: 'text', text: analyzeQuestion }],
+          }).text, analyzeQuestion, 'and it still titles its own group');
+
+          /* ── A base-less class declaration is payload ── */
+          const pastedClass = 'class Foo:\\n    def run(self):\\n        return 1\\n';
+          assert.equal(classifyUserInputOrigin(pastedClass).origin, 'payload',
+            'class Foo: has no parenthesis, so the suffix set has to accept the colon');
+          const classThenQuestion = preferredUserTextForMessage({
+            role: 'user',
+            content: [{ type: 'text', text: pastedClass }, { type: 'text', text: 'Why is this slow?' }],
+          });
+          assert.equal(classThenQuestion.text, 'Why is this slow?',
+            'a pasted class must not out-title the question beside it');
+
+          /* ── Prose with a colon after a keyword is not a declaration ──
+             Mirror of test_prose_with_a_colon_after_a_keyword_is_not_a_declaration.
+             A bare colon in the general suffix set matched English too, so plain
+             questions were badged as pasted code and lost their title. */
+          for (const typed of ['class action: can I join the settlement?',
+                               'function calls: why are they slow?',
+                               'def parse: what is this?',
+                               'let me know: does the retry back off?',
+                               'const rate: is that per request or per minute?']) {
+            assert.equal(classifyUserInputOrigin(typed).origin, 'human', typed.slice(0, 32));
+          }
+          for (const pasted of ['class Foo:\\n    pass\\n',
+                                'class Foo(Base):\\n    pass\\n',
+                                'const value: string = "a";\\n',
+                                'let count: number;\\n']) {
+            assert.equal(classifyUserInputOrigin(pasted).origin, 'payload', pasted.slice(0, 32));
+          }
+
+          /* ── A JSON prompt array prefers the human item ──
+             Mirror of test_a_json_prompt_array_prefers_the_human_item. Taking the
+             first readable item let a leading injection title and badge the whole
+             message while the question after it went unread. */
+          const websearchItem = 'Perform a web search for the query: pricing';
+          const arrayBoth = '[{"prompt":"' + websearchItem + '"},{"prompt":"What does that cost?"}]';
+          assert.equal(cleanUserPromptText(arrayBoth), 'What does that cost?',
+            'the human item wins over a leading injection');
+          assert.equal(preferredUserTextForMessage({
+            role: 'user', content: [{ type: 'text', text: arrayBoth }],
+          }).origin, 'human', 'so the message is not filed under the harness');
+          const arrayInjectionOnly = '[{"prompt":"' + websearchItem + '"}]';
+          assert.equal(cleanUserPromptText(arrayInjectionOnly), websearchItem,
+            'an array with no human item still yields its injection');
+          assert.equal(classifyUserInputOrigin(cleanUserPromptText(arrayInjectionOnly)).origin, 'harness',
+            'and still reads harness');
+          assert.equal(cleanUserPromptText('[{"prompt":""},{"prompt":"Only one speaks"}]'), 'Only one speaks',
+            'an item that cleans to nothing is skipped, not the end of the search');
+
+          /* ── Command wrapper tags need a tag boundary ── */
+          assert.equal(classifyUserInputOrigin('<local-command-caveats> are my own notes').origin, 'human',
+            'a longer tag that starts the same way is the user\\'s own');
+          assert.equal(classifyUserInputOrigin('<command-nameplate>Deploy</command-nameplate>').origin, 'human',
+            'so is this one');
+          assert.equal(classifyUserInputOrigin('<local-command-caveat>\\nOutput below\\n').origin, 'harness',
+            'the real wrapper is still harness');
+          assert.equal(classifyUserInputOrigin('<command-name status="ok">/cost</command-name>').origin, 'harness',
+            'attributes on the real wrapper are fine');
+
+          /* Provenance is read per block off the raw text, so an injection sharing
+             its message with a tool result is still seen -- the joined message text
+             would have started with the tool output and read as human prose. */
+          const injectionBesideResult = {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 'toolu_1', content: 'file contents here, ordinary prose' },
+              { type: 'text', text: '<system-reminder>\\nBackground context.\\n</system-reminder>' },
+            ],
+          };
+          const besideResult = preferredUserTextForMessage(injectionBesideResult);
+          assert.equal(besideResult.origin, 'harness');
+          assert.equal(besideResult.kind, 'reminder');
+          /* Blank title on purpose: a group headed '[SUGGESTION MODE:' reads as
+             noise, so the badge is kept while the title is left to an older turn. */
+          assert.equal(besideResult.text, '');
+
+          /* Human prose still wins over a payload block earlier in the same
+             message, tool results notwithstanding. */
+          const pastedThenProse = preferredUserTextForMessage({
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 'toolu_1', content: 'tool output' },
+              { type: 'text', text: 'diff --git a/x b/x\\n+line' },
+              { type: 'text', text: 'Does this look right?' },
+            ],
+          });
+          assert.equal(pastedThenProse.text, 'Does this look right?');
+          assert.equal(pastedThenProse.origin, 'human');
+
+          /* An injected-only newest turn contributes no title, so the group keeps
+             the human question it follows instead of being headed by the injection. */
+          const injectedNewest = {
+            request: {
+              body: {
+                messages: [
+                  { role: 'user', content: [{ type: 'text', text: 'Split the pull request into two.' }] },
+                  { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+                  { role: 'user', content: [{ type: 'text', text: '<system-reminder>\\nBackground.\\n</system-reminder>' }] },
+                ],
+              },
+            },
+          };
+          const injectedNewestInfo = latestUserInputInfo(injectedNewest);
+          assert.equal(injectedNewestInfo.userText, 'Split the pull request into two.');
+          assert.equal(injectedNewestInfo.userIndex, 0);
+
+          /* Serializing the origin is not enough on its own: buildStubEntry puts
+             the title into body.messages, so both input scans find a message and
+             return a fresh verdict on the bare title before ever reaching the
+             stub fallback. A harness turn titled from a later pasted block came
+             back as payload, which is the badge flip this key exists to stop. */
+          const originStub = buildStubEntry({
+            turn: 1,
+            session_user_text: 'diff --git a/a b/a',
+            session_user_origin: 'harness',
+          }, 0);
+          assert.equal(latestUserInputInfo(originStub).origin, 'harness',
+            'a stub must keep the origin Python chose, not reclassify its title');
+          assert.equal(firstUserInputInfo(originStub).origin, 'harness',
+            'both scans read the stub the same way');
+
+          /* Absent means human, so a stub without the key still classifies. */
+          const unmarkedStub = buildStubEntry({
+            turn: 2,
+            session_user_text: 'diff --git a/a b/a',
+          }, 1);
+          assert.equal(latestUserInputInfo(unmarkedStub).origin, 'payload',
+            'without a stored origin the title is all there is to read');
+
+          /* ── Titles hidden by the CSS clamp, not by the snippet ── */
+
+          function fakeHeader(nameMetrics) {
+            const name = Object.assign(element(), nameMetrics);
+            const header = element();
+            header.querySelector = sel => (sel === '.group-name' ? name : null);
+            header.getBoundingClientRect = () => ({ top: 0, right: 300 });
+            return header;
+          }
+
+          /* Two truncation mechanisms disagree: sessionTextSnippet leaves a
+             48-character title whole, while the two-line CSS clamp with
+             overflow-wrap anywhere still cuts it once the badge and counters
+             take their share of the sidebar. Binding on the snippet's "..."
+             therefore left exactly the clipped titles with no way to read them. */
+          const clampedText = 'src/very/long/unbroken/path/name/module_alpha.py';
+          const clampedLabel = sessionTextSnippet(clampedText, 48);
+          assert.ok(!clampedLabel.endsWith('...'),
+            'a 48-character title earns no snippet ellipsis');
+
+          const roomy = fakeHeader({ scrollHeight: 36, clientHeight: 36, scrollWidth: 200, clientWidth: 200 });
+          bindSessionInputTooltip(roomy, clampedText, clampedLabel);
+          sessionTooltip().textContent = '';
+          showSessionTooltip(roomy);
+          assert.equal(sessionTooltip().textContent, '',
+            'a fully visible title must not raise a tooltip over itself');
+
+          const clipped = fakeHeader({ scrollHeight: 54, clientHeight: 36, scrollWidth: 200, clientWidth: 200 });
+          bindSessionInputTooltip(clipped, clampedText, clampedLabel);
+          assert.equal(clipped.dataset.fullUserInput, clampedText,
+            'the full text is attached whatever the snippet did');
+          assert.equal(clipped.tabIndex, 0, 'a clipped title stays keyboard reachable');
+          showSessionTooltip(clipped);
+          assert.equal(sessionTooltip().textContent, clampedText,
+            'a title cut by the clamp must still reveal its full text');
+
+          /* A title the snippet did shorten keeps working even where the header
+             cannot be measured, which is how the tooltip behaved before. */
+          const ellipsised = element();
+          ellipsised.getBoundingClientRect = () => ({ top: 0, right: 300 });
+          bindSessionInputTooltip(ellipsised, 'a'.repeat(80), sessionTextSnippet('a'.repeat(80), 48));
+          sessionTooltip().textContent = '';
+          showSessionTooltip(ellipsised);
+          assert.equal(sessionTooltip().textContent, 'a'.repeat(80),
+            'a snippet-truncated title needs no layout measurement');
+
+          /* Kind slugs go through the i18n table, and an unknown slug passes
+             through rather than rendering as a missing-key string. */
+          assert.equal(kindLabel('recap'), 'recap');
+          assert.equal(kindLabel(''), '');
+          assert.equal(kindLabel('not-a-kind'), 'not-a-kind');
+
+          /* ── Mirror parity: the same input must classify the same way here and
+                in viewer.py, or a paste changes its badge, title and grouping as
+                the capture crosses LAZY_THRESHOLD. ── */
+
+          /* A non-ASCII identifier is still an identifier. The JS word-class
+             escape is ASCII-only while Python's is Unicode-aware, so the patterns
+             spell the class out; reverting either side makes this read as prose. */
+          const unicodePayload = [
+            'def 处理():\\n    pass',
+            'function 计算(x) {\\n  return x;\\n}',
+            'const λ = 1',
+            'let Ünïcode = {',
+            'import 模块\\n',
+            'from 包 import 东西\\n',
+            'import 包.子模块 as 别名\\n',
+          ];
+          for (const text of unicodePayload) {
+            assert.equal(classifyUserInputOrigin(text).origin, 'payload',
+              'non-ASCII identifier must still be payload: ' + text.slice(0, 24));
+          }
+
+          /* Prose that merely mentions such code stays human: the payload
+             patterns still require a real declaration head. */
+          assert.equal(classifyUserInputOrigin('def 处理 should be renamed?').origin, 'human');
+          assert.equal(classifyUserInputOrigin('把 import 模块 改成绝对导入').origin, 'human');
+
+          /* Non-ASCII digits are the same trap in reverse: the Python digit
+             escape matches them and the JS one does not, so both sides pin
+             ASCII digits explicitly. */
+          assert.equal(classifyUserInputOrigin('@@ -12,3 +12,4 @@\\n ctx').origin, 'payload');
+          assert.equal(classifyUserInputOrigin('   1\\tfirst line').origin, 'payload');
+          assert.equal(classifyUserInputOrigin('@@ -١٢ لا يوجد').origin, 'human');
+          assert.equal(classifyUserInputOrigin('  ١\\tArabic-Indic digit prose').origin, 'human');
+
+          /* A badge-only first block must not lock in an empty title. The turn
+             would otherwise render untitled and merge into the group before it,
+             hiding a pasted diff or a readable harness request. */
+          const emptyThenPayload = preferredUserTextForMessage({
+            role: 'user',
+            content: [
+              { type: 'text', text: '<system-reminder>\\nBackground.\\n</system-reminder>' },
+              { type: 'text', text: 'diff --git a/x b/x\\n+line' },
+            ],
+          });
+          assert.equal(emptyThenPayload.text, 'diff --git a/x b/x\\n+line',
+            'a later nonempty block must supply the title');
+          assert.equal(emptyThenPayload.origin, 'harness',
+            'the first block still owns the provenance');
+          assert.equal(emptyThenPayload.kind, 'reminder');
+
+          /* That provenance has to travel with the title rather than be derived
+             again from it. This is the same turn: its first block is a blanked
+             harness reminder and its title comes from the later pasted diff, so
+             classifying the title alone reads the diff as payload and the group
+             header contradicts the detail badge above the very same turn. */
+          const originCarryEntry = {
+            request_id: 'req_origin_carry',
+            request: { path: '/v1/messages', method: 'POST', body: { messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: '<system-reminder>\\nBackground.\\n</system-reminder>' },
+                { type: 'text', text: 'diff --git a/x b/x\\n+line' },
+              ],
+            }] } },
+          };
+          const carriedKey = sessionKeyForEntry(originCarryEntry, null);
+          assert.equal(carriedKey.userText, 'diff --git a/x b/x\\n+line');
+          assert.equal(carriedKey.origin, 'harness',
+            'sessionKeyForEntry must carry the origin the detail badge shows');
+          assert.equal(classifyUserInputOrigin(carriedKey.userText).origin, 'payload',
+            'deriving the origin from the title alone is the disagreement being guarded');
+          const carriedGroups = buildSessionGroups([{ entry: originCarryEntry }]);
+          assert.equal(carriedGroups.length, 1);
+          assert.equal(carriedGroups[0].origin, 'harness',
+            'the group carries the origin through to the header');
+
+          /* Human prose and a plain pasted turn keep classifying as before, so
+             the threading did not pin every group to one origin. */
+          for (const [text, expected] of [
+            ['please fix the parser', 'human'],
+            ['diff --git a/y b/y\\n+one', 'payload'],
+          ]) {
+            const entry = {
+              request_id: 'req_origin_' + expected,
+              request: { path: '/v1/messages', method: 'POST', body: { messages: [{
+                role: 'user',
+                content: [{ type: 'text', text }],
+              }] } },
+            };
+            assert.equal(sessionKeyForEntry(entry, null).origin, expected, text);
+            assert.equal(buildSessionGroups([{ entry }])[0].origin, expected, text);
+          }
+
+          /* An untitled entry opening a group must not fix the group's origin:
+             the title and its provenance arrive together from whichever entry
+             supplies the title. */
+          const untitledFirst = {
+            request_id: 'req_origin_untitled',
+            request: { path: '/v1/messages', method: 'POST', body: { messages: [{
+              role: 'user',
+              content: [{ type: 'text', text: '<image_input>' }],
+            }] } },
+          };
+          const lateTitled = {
+            request_id: 'req_origin_late',
+            request: { path: '/v1/messages', method: 'POST', body: { messages: [{
+              role: 'user',
+              content: [{ type: 'text', text: 'diff --git a/z b/z\\n+late' }],
+            }] } },
+          };
+          const lateGroups = buildSessionGroups([{ entry: untitledFirst }, { entry: lateTitled }]);
+          const titledGroup = lateGroups.find(group => group.userText);
+          assert.ok(titledGroup, 'one group must carry the later title');
+          assert.equal(titledGroup.origin, 'payload',
+            'the origin follows the entry that supplied the title');
+
+          /* Both blocks blank leaves the title blank, as before. */
+          const bothBlank = preferredUserTextForMessage({
+            role: 'user',
+            content: [
+              { type: 'text', text: '<system-reminder>\\nOne.\\n</system-reminder>' },
+              { type: 'text', text: '<image_input>' },
+            ],
+          });
+          assert.equal(bothBlank.text, '');
+          assert.equal(bothBlank.origin, 'harness');
+          assert.equal(bothBlank.kind, 'reminder');
+
+          /* A nonempty first block is not displaced by a later one. */
+          const firstWins = preferredUserTextForMessage({
+            role: 'user',
+            content: [
+              { type: 'text', text: 'diff --git a/a b/a\\n+one' },
+              { type: 'text', text: 'diff --git a/b b/b\\n+two' },
+            ],
+          });
+          assert.equal(firstWins.text, 'diff --git a/a b/a\\n+one');
+          assert.equal(firstWins.origin, 'payload');
+
+          /* Responses normalization copies the output fallback onto text.
+             Keeping output as a separate key titled the sidebar but left
+             hasDisplayContent / renderContent empty, so renderMessages dropped
+             the whole user turn. */
+          const outputOnly = getMessages({
+            input: [{ role: 'user', content: [{ type: 'input_text', output: 'Reconstruct me.' }] }],
+          });
+          assert.equal(outputOnly.length, 1);
+          assert.deepEqual(eligibleUserTextBlocks(outputOnly[0].content), ['Reconstruct me.'],
+            'output-keyed text must survive normalization');
+          assert.equal(hasDisplayContent(outputOnly[0].content), true,
+            'normalized output-backed text must count as display content');
+          const outputRendered = renderMessages(outputOnly);
+          assert.ok(outputRendered.includes('Reconstruct me.'),
+            'renderMessages must keep an output-backed user turn');
+
+          /* Raw blocks that never went through getMessages still have to render:
+             hasDisplayContent and renderContent read output when text is
+             absent, matching eligibleUserTextBlocks. */
+          const rawOutput = [{ type: 'input_text', output: 'Perform a web search for the query: token pricing' }];
+          assert.equal(hasDisplayContent(rawOutput), true);
+          const rawRendered = renderMessages([{ role: 'user', content: rawOutput }]);
+          assert.ok(rawRendered.includes('Perform a web search for the query: token pricing'));
+          assert.ok(rawRendered.includes('origin-harness'),
+            'output-backed harness text must keep its provenance badge');
+
+          /* The text key still wins when it says something. An empty one does
+             not: these captures write text as an empty string to mean the
+             readable text sits under output, so both mirrors yield on blank
+             text and the rebuild has to agree. This block used to assert the
+             opposite, which is how the rebuild came to drop the only readable
+             content an injected turn had. */
+          const bothKeys = getMessages({
+            input: [{
+              role: 'user',
+              content: [
+                { type: 'input_text', text: 'From text.', output: 'From output.' },
+                { type: 'input_text', text: '', output: 'From the empty one.' },
+              ],
+            }],
+          });
+          assert.deepEqual(eligibleUserTextBlocks(bothKeys[0].content),
+            ['From text.', 'From the empty one.'],
+            'a real text wins, a blank one yields to output');
+
+          /* The render path has to yield on blank text the same way. It read
+             text first merely because it was a string, so a raw block that
+             never went through getMessages rendered as an empty frame while the
+             sidebar titled the turn from output. */
+          const blankText = [{ type: 'input_text', text: '', output: 'Perform a web search for pricing' }];
+          assert.equal(hasDisplayContent(blankText), true,
+            'blank text beside a populated output is still displayable');
+          const blankRendered = renderMessages([{ role: 'user', content: blankText }]);
+          assert.ok(blankRendered.includes('Perform a web search for pricing'),
+            'renderContent must yield on blank text like the sidebar does');
+
+          /* A CLI can put an injected block and the user's own prose in one
+             message. The header badge names the block the sidebar titled from --
+             the human prose -- so the injection needs its own badge or it renders
+             under a bare "user" label. */
+          const mixed = [{
+            role: 'user',
+            content: [
+              { type: 'text', text: '<system-reminder>Background.</system-reminder>' },
+              { type: 'text', text: 'Fix the parser' },
+            ],
+          }];
+          assert.equal(preferredUserTextForMessage(mixed[0]).origin, 'human',
+            'the human block still titles the group');
+          const mixedRendered = renderMessages(mixed);
+          assert.equal((mixedRendered.match(/block-origin/g) || []).length, 1,
+            'exactly the disagreeing block carries a badge');
+          assert.ok(mixedRendered.includes('block-origin origin-harness'),
+            'the injected block is named as harness');
+          assert.equal((mixedRendered.match(/msg-origin/g) || []).length, 0,
+            'a human-titled message keeps its header unqualified');
+
+          /* When every block agrees, one header badge is enough. */
+          const allHarness = [{
+            role: 'user',
+            content: [
+              { type: 'text', text: '<system-reminder>One.</system-reminder>' },
+              { type: 'text', text: '<system-reminder>Two.</system-reminder>' },
+            ],
+          }];
+          const harnessRendered = renderMessages(allHarness);
+          assert.equal((harnessRendered.match(/block-origin/g) || []).length, 0,
+            'agreeing blocks must not be labelled twice');
+          assert.ok(harnessRendered.includes('msg-origin origin-harness'));
+
+          /* The per-block pass has to clean before classifying, exactly as the
+             message-level verdict does. A JSON-wrapped injection classified raw
+             reads as ordinary prose -- the braces are not a known prefix -- so
+             the block came back human, matched the header, and the injection
+             rendered under a bare "user" label. */
+          const wrappedMixed = [{
+            role: 'user',
+            content: [
+              { type: 'text', text: '{"prompt":"Perform a web search for the query: pricing"}' },
+              { type: 'text', text: 'What does that cost?' },
+            ],
+          }];
+          assert.equal(preferredUserTextForMessage(wrappedMixed[0]).origin, 'human',
+            'the prose still titles the turn');
+          const wrappedRendered = renderMessages(wrappedMixed);
+          assert.equal((wrappedRendered.match(/block-origin/g) || []).length, 1,
+            'the JSON-wrapped injection carries its own badge');
+          assert.ok(wrappedRendered.includes('block-origin origin-harness'),
+            'unwrapping reveals the harness template the raw braces hid');
+
+          /* Cleaning that blanks a block must not cost it its provenance: the
+             empty string classifies human, so fall back to the raw text. */
+          const blankedMixed = [{
+            role: 'user',
+            content: [
+              { type: 'text', text: '<system-reminder>Background.</system-reminder>' },
+              { type: 'text', text: 'Fix the parser' },
+            ],
+          }];
+          assert.ok(renderMessages(blankedMixed).includes('block-origin origin-harness'),
+            'an injection cleaning empties keeps its badge');
+
+          /* Mirror of test_a_bom_only_block_is_skipped_like_javascript_skips_it.
+             String.trim() drops U+FEFF and Python's strip() does not, so this is
+             the shape where the two mirrors silently parted: the browser skipped
+             the block, Python kept it as an empty human fallback, and the diff
+             behind it inherited that origin above LAZY_THRESHOLD. */
+          const bomLead = {
+            role: 'user',
+            content: [
+              { type: 'text', text: '\uFEFF' },
+              { type: 'text', text: 'diff --git a/a b/a\\n+line' },
+            ],
+          };
+          assert.deepEqual(eligibleUserTextBlocks(bomLead.content), ['diff --git a/a b/a\\n+line'],
+            'a BOM-only block is not an eligible block');
+          assert.equal(preferredUserTextForMessage(bomLead).origin, 'payload',
+            'the diff decides the origin, unblocked by the BOM');
+
+          /* Mirror of test_a_bom_only_text_field_still_yields_to_output. A
+             Responses block puts its readable text under output when text is
+             blank, and a BOM counts as blank only where trim removes it: Python
+             returned the BOM, dropped the block, and lost the injection. */
+          const bomOverOutput = { type: 'input_text', text: '\uFEFF', output: 'Perform a web search for the query: pricing' };
+          assert.equal(blockInputText(bomOverOutput), 'Perform a web search for the query: pricing',
+            'a BOM-only text field yields to the output beside it');
+          assert.equal(preferredUserTextForMessage({ role: 'user', content: [bomOverOutput] }).origin, 'harness',
+            'the output decides the origin, unblocked by the BOM');
+
+          /* JSON prompt wrappers unwrap before classification, so a lazy
+             Python title and the browser title stay the same prompt. */
+          const jsonPrompt = '{"prompt":"Perform a web search for the query: token pricing"}';
+          assert.equal(cleanUserPromptText(jsonPrompt),
+            'Perform a web search for the query: token pricing');
+          assert.equal(classifyUserInputOrigin(cleanUserPromptText(jsonPrompt)).origin, 'harness');
+          const jsonArray = '[{"prompt":"Perform a web search for the query: token pricing"}]';
+          assert.equal(cleanUserPromptText(jsonArray),
+            'Perform a web search for the query: token pricing');
+
+          /* A JSON wrapper whose known-type block stores the prompt in
+             output must unwrap the same way the Python mirror does. */
+          const wrappedOutput = {
+            content: [{ type: 'input_text', output: 'Perform a web search for the query: pricing' }],
+          };
+          assert.equal(
+            naturalTextForSessionContent(wrappedOutput.content),
+            'Perform a web search for the query: pricing',
+          );
+          assert.equal(
+            naturalTextFromPromptPayload(wrappedOutput),
+            'Perform a web search for the query: pricing',
+          );
+
+          const bomImport = '\uFEFFimport os';
+          assert.equal(classifyUserInputOrigin(bomImport).origin, 'payload',
+            'a BOM must not hide a pasted import from classification');
+          assert.equal(cleanUserPromptText(bomImport), 'import os');
+
         `, context);
         """
     )
 
-    subprocess.run(["node", "-e", script, str(REPO_ROOT)], check=True, capture_output=True, text=True)
+    try:
+        subprocess.run(["node", "-e", script, str(REPO_ROOT)], check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as err:
+        raise AssertionError(f"Node test script failed:\nSTDOUT:\n{err.stdout}\nSTDERR:\n{err.stderr}") from err

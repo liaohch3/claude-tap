@@ -14,6 +14,14 @@ function t(key) {
   const en = I18N.en || {};
   return (I18N[currentLang] || en)[key] || en[key] || key;
 }
+/* Provenance kinds come from the classifier as bare English slugs. Translate them
+   here so a badge does not read half in the reader's language and half in ours;
+   an unknown slug falls back to itself rather than to a missing-key string. */
+function kindLabel(kind) {
+  if (!kind) return '';
+  const key = `origin_kind_${kind}`;
+  return (I18N.en || {})[key] ? t(key) : kind;
+}
 function formatText(key, values = {}) {
   return Object.entries(values).reduce((text, [name, value]) => {
     return text.replaceAll(`{${name}}`, String(value));

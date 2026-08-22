@@ -1002,6 +1002,111 @@ def _bedrock_converse_record() -> dict[str, Any]:
     }
 
 
+def _user_input_provenance_records() -> tuple[dict[str, Any], ...]:
+    """One turn whose message list mixes a harness recap request, a pasted diff,
+    and the sentence the human actually typed."""
+
+    def _record(request_id: str, turn: int, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "request_id": request_id,
+            "turn": turn,
+            "timestamp": f"2026-08-15T09:0{turn}:00+00:00",
+            "duration_ms": 120,
+            "request": {
+                "method": "POST",
+                "path": "/v1/messages",
+                "headers": {},
+                "body": {"model": "claude-opus-5", "messages": messages},
+            },
+            "response": {"status": 200, "headers": {}, "body": {"content": [{"type": "text", "text": "OK"}]}},
+        }
+
+    human_ask = "Split the pull request so each feature lands on its own branch."
+    return (
+        _record(
+            "req_provenance_mixed",
+            1,
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "The user stepped away and is coming back. Recap in under 40 words."}
+                    ],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": "Recap delivered."}]},
+                {"role": "user", "content": [{"type": "text", "text": human_ask}]},
+            ],
+        ),
+        _record(
+            "req_provenance_injected_only",
+            2,
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "The user stepped away and is coming back. Recap in under 40 words."}
+                    ],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": "Recap delivered."}]},
+                {"role": "user", "content": [{"type": "text", "text": human_ask}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "On it."}]},
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Perform a web search for the query: token pricing"}],
+                },
+            ],
+        ),
+        # A pasted diff header is one unbroken token once uppercased, which is
+        # exactly the title that used to overflow into the badges beside it.
+        _record(
+            "req_provenance_pasted_path",
+            3,
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "The user stepped away and is coming back. Recap in under 40 words."}
+                    ],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": "Recap delivered."}]},
+                {"role": "user", "content": [{"type": "text", "text": human_ask}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "On it."}]},
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Perform a web search for the query: token pricing"}],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": "Search results."}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "diff --git a/.agents/docs/plans/2026-08-14-token-cost-profiler.md b/x.md",
+                        }
+                    ],
+                },
+            ],
+        ),
+        # One message whose blocks disagree with the verdict the message as a whole
+        # earns: the prose titles the turn, so the injection and the pasted diff
+        # beside it are the only place a reader can see where they came from.
+        _record(
+            "req_provenance_mixed_blocks",
+            4,
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": human_ask},
+                        {"type": "text", "text": "<system-reminder>Budget is nearly spent.</system-reminder>"},
+                        {"type": "text", "text": "diff --git a/claude_tap/viewer.py b/claude_tap/viewer.py"},
+                    ],
+                },
+            ],
+        ),
+    )
+
+
 def _contract_cases() -> tuple[ViewerContractCase, ...]:
     return (
         ViewerContractCase(
@@ -1174,6 +1279,23 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
                 "Assistant text block.",
                 "Tool result two.",
                 "Content block response OK.",
+            ),
+        ),
+        # Registered here as well as in its own test so the shared coverage page
+        # renders provenance badges and session group headers.
+        ViewerContractCase(
+            name="user_input_provenance",
+            records=_user_input_provenance_records(),
+            expected_sections=("Messages", "Response"),
+            expected_system=None,
+            expected_roles=("user", "assistant", "user"),
+            expected_tools=(),
+            expected_output_types=("text",),
+            expected_usage={},
+            required_detail_text=(
+                "The user stepped away",
+                "Split the pull request",
+                "Recap delivered.",
             ),
         ),
     )
@@ -2352,6 +2474,51 @@ def test_viewer_session_order_groups_large_codex_app_sessions_in_virtual_mode(tm
     assert state["visualCount"] == 60
 
 
+def test_viewer_virtual_group_title_stays_inside_its_fixed_row(tmp_path: Path, chromium_browser) -> None:
+    """A wrapped group title must not spill into the next virtual row.
+
+    The virtualizer pins every row to VS_ITEM_HEIGHT, so a long unbroken path
+    plus the provenance badge can need more than the row allows. Overflow stays
+    visible, which would paint the title over the following row.
+    """
+    records = _codex_app_large_session_records()
+    long_title = "src/very/deeply/nested/package/module/submodule/implementation_details_handler.py"
+    for record in records:
+        body = record.get("request_body") or {}
+        for message in body.get("input", []) or body.get("messages", []) or []:
+            if message.get("role") == "user":
+                message["content"] = [{"type": "input_text", "text": long_title}]
+                break
+        break
+
+    html_path = _generate_case_html(tmp_path, "virtual_group_title_clamp", records)
+
+    page = chromium_browser.new_page()
+    page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'session')")
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        overflowing = page.evaluate(
+            """() => Array.from(document.querySelectorAll('.sidebar-group-header')).map(header => {
+              const name = header.querySelector('.group-name');
+              return {
+                rowHeight: header.getBoundingClientRect().height,
+                titleHeight: name ? name.scrollHeight : 0,
+                clipped: name ? getComputedStyle(name).overflow : '',
+              };
+            })"""
+        )
+    finally:
+        page.close()
+
+    assert errors == []
+    assert overflowing
+    for header in overflowing:
+        assert header["clipped"] == "hidden", "the title must clip rather than paint past its row"
+        assert header["titleHeight"] <= header["rowHeight"], (
+            f"title needs {header['titleHeight']}px inside a {header['rowHeight']}px row"
+        )
+
+
 def test_viewer_codex_display_turns_skip_capture_control_records(tmp_path: Path, chromium_browser) -> None:
     html_path = _generate_case_html(tmp_path, "codex_display_turns", _codex_display_turn_records())
 
@@ -2697,6 +2864,60 @@ def test_viewer_session_group_hover_shows_full_truncated_user_input(tmp_path: Pa
 
     assert errors == []
     assert tooltip_text == long_prompt
+
+
+def test_viewer_session_group_hover_shows_titles_cut_by_the_line_clamp(tmp_path: Path, chromium_browser) -> None:
+    """A title short enough to keep its snippet whole can still be clamped away.
+
+    ``sessionTextSnippet`` appends no ellipsis at 48 characters or fewer, while
+    ``.group-name`` clamps to two lines with ``overflow-wrap: anywhere``. An
+    unbroken path fits the snippet and not the box, so the tooltip has to be
+    decided from layout rather than from the snippet's trailing dots.
+    """
+    unbroken = "src/very/long/unbroken/path/module_alpha_beta.py"
+    assert len(unbroken) <= 48
+    record = {
+        "request_id": "req_clamped_title",
+        "turn": 1,
+        "timestamp": "2026-05-13T13:21:00+00:00",
+        "duration_ms": 100,
+        "request": {
+            "method": "POST",
+            "path": "/v1/messages",
+            "headers": {},
+            "body": {
+                "model": "aws.claude-sonnet-4.6",
+                "messages": [{"role": "user", "content": [{"type": "text", "text": unbroken}]}],
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {"content": [{"type": "text", "text": "OK"}]},
+        },
+    }
+    html_path = _generate_case_html(tmp_path, "session_clamped_title", (record,))
+
+    page = chromium_browser.new_page()
+    page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'session')")
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        header = page.locator(".sidebar-group-header").nth(0)
+        label = header.locator(".group-name").inner_text()
+        assert not label.endswith("..."), "the snippet must leave this title whole"
+        clipped = header.locator(".group-name").evaluate(
+            "el => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1"
+        )
+        assert clipped, "the clamp must actually be hiding part of this title"
+
+        header.hover()
+        page.wait_for_selector(".session-hover-tooltip.visible", timeout=5000)
+        tooltip_text = page.locator(".session-hover-tooltip.visible").inner_text()
+    finally:
+        page.close()
+
+    assert errors == []
+    assert tooltip_text == unbroken
 
 
 def test_viewer_recovers_session_title_image_placeholders(tmp_path: Path, chromium_browser) -> None:
@@ -3482,3 +3703,92 @@ def test_viewer_codex_global_search_skips_non_navigable_and_orders_by_capture_tu
     assert errors == []
     assert search_state["totalMatches"] == 0
     assert sorted_ids == ["req_response_2", "req_mcp_between", "req_response_4"]
+
+
+def test_viewer_labels_user_input_provenance_and_titles_groups_by_human_prose(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "user_input_provenance", _user_input_provenance_records())
+    page = chromium_browser.new_page()
+    page.add_init_script("localStorage.setItem('claude-tap-sidebar-order', 'session')")
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+
+        # The group is named after the sentence the human typed, not the recap
+        # request that happens to sit first in the message list.
+        first_group = page.locator(".sidebar-group-header").nth(0)
+        # The header uppercases its text in CSS, so compare case-insensitively.
+        group_name = first_group.locator(".group-name").inner_text().lower()
+        assert "split the pull request" in group_name
+        assert "stepped away" not in group_name
+        # Human-authored titles carry no provenance badge.
+        assert first_group.locator(".group-origin").count() == 0
+
+        # A turn with nothing but injected text still gets a title, and says so.
+        second_group = page.locator(".sidebar-group-header").nth(1)
+        assert "perform a web search" in second_group.locator(".group-name").inner_text().lower()
+        assert second_group.locator(".group-origin.origin-harness").count() == 1
+
+        # In the detail pane every user message that was not typed by the human
+        # carries a badge naming where it came from.
+        page.locator(".sidebar-item[data-idx='2']").click()
+        page.wait_for_selector("#detail .msg.user", timeout=5000)
+        badges = page.locator("#detail .msg.user .msg-origin")
+        assert badges.count() == 3
+        badge_text = " ".join(badges.nth(i).inner_text() for i in range(badges.count()))
+        assert "recap" in badge_text
+        assert page.locator("#detail .msg.user .msg-origin.origin-harness").count() == 2
+        assert page.locator("#detail .msg.user .msg-origin.origin-payload").count() == 1
+        # The human turn is left unlabeled, so the badge marks the exception.
+        assert page.locator("#detail .msg.user").count() == 4
+
+        # A pasted-path title is one unbroken token, so it has to wrap inside its
+        # flex item rather than spill sideways under the badges beside it.
+        third_group = page.locator(".sidebar-group-header").nth(2)
+        assert third_group.locator(".group-origin.origin-payload").count() == 1
+        overflow = page.evaluate(
+            """() => {
+              const name = document.querySelectorAll('.sidebar-group-header')[2].querySelector('.group-name');
+              return name.scrollWidth - name.clientWidth;
+            }"""
+        )
+        assert overflow <= 1, f"pasted-path title overflows its box by {overflow}px"
+
+        # A single message can hold blocks of three different origins. The prose
+        # decides the message-level verdict, which leaves the message badge silent,
+        # so the per-block badges are the only record of the other two.
+        page.locator(".sidebar-item[data-idx='3']").click()
+        page.wait_for_selector("#detail .msg.user", timeout=5000)
+        assert page.locator("#detail .msg.user .msg-origin").count() == 0
+        block_badges = page.locator("#detail .msg.user .block-origin")
+        assert block_badges.count() == 2
+        assert page.locator("#detail .msg.user .block-origin.origin-harness").count() == 1
+        assert page.locator("#detail .msg.user .block-origin.origin-payload").count() == 1
+    finally:
+        page.close()
+
+    assert errors == []
+
+
+def test_viewer_translates_provenance_kind_in_badges(tmp_path: Path, chromium_browser) -> None:
+    """The kind suffix comes from the classifier as an English slug.
+
+    Untranslated it produces a badge reading half in the reader's language and half
+    in ours, e.g. `工具注入·recap`.
+    """
+    html_path = _generate_case_html(tmp_path, "user_input_provenance", _user_input_provenance_records())
+    page = chromium_browser.new_page()
+    page.add_init_script(
+        "localStorage.setItem('claude-tap-sidebar-order', 'session');localStorage.setItem('claude-tap-lang', 'zh-CN')"
+    )
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+
+        page.locator(".sidebar-item[data-idx='2']").click()
+        page.wait_for_selector("#detail .msg.user", timeout=5000)
+        badges = page.locator("#detail .msg.user .msg-origin")
+        badge_text = " ".join(badges.nth(i).inner_text() for i in range(badges.count()))
+        assert "工具注入·回顾" in badge_text
+        assert "recap" not in badge_text
+    finally:
+        page.close()
+
+    assert errors == []

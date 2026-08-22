@@ -968,6 +968,10 @@ def collect_viewer_css_coverage() -> tuple[float, set[str], int, int, int]:
             merge(page.evaluate(collect_css_script))
             page.evaluate("setSidebarOrderMode('turn')")
             merge(page.evaluate(collect_css_script))
+            # Session order is the only mode that renders group headers, so its
+            # selectors are unreachable from the default sidebar.
+            page.evaluate("setSidebarOrderMode('session')")
+            merge(page.evaluate(collect_css_script))
             page.evaluate("setSidebarOrderMode('model')")
             merge(page.evaluate(collect_css_script))
             page.evaluate(

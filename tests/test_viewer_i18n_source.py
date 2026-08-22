@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from claude_tap.viewer import VIEWER_JS_PATHS, _generate_html_viewer, _load_viewer_i18n, _read_viewer_template
@@ -28,6 +29,26 @@ def test_viewer_i18n_json_has_complete_language_key_sets() -> None:
         assert set(entries[lang]) == source_keys
         for key in CRITICAL_KEYS:
             assert entries[lang][key]
+
+
+def test_viewer_i18n_translates_every_provenance_kind_the_classifier_emits() -> None:
+    """A kind slug with no key renders untranslated, e.g. the badge `工具注入·recap`.
+
+    Read from the JS source rather than a hand-written list so adding a pattern
+    without its translation fails here instead of shipping a half-English badge.
+    """
+    sidebar = (Path(__file__).resolve().parents[1] / "claude_tap/viewer_assets/sidebar.js").read_text(encoding="utf-8")
+    kinds = {kind for kind in re.findall(r"kind:\s*'([a-z]+)'", sidebar) if kind}
+    assert {"recap", "websearch", "compaction", "reminder", "context"} <= kinds
+
+    entries = _load_viewer_i18n()
+    for lang in EXPECTED_LANGUAGES:
+        for kind in kinds:
+            key = f"origin_kind_{kind}"
+            assert entries[lang].get(key), f"{lang} missing {key}"
+
+    # Translated, not copied through from English.
+    assert entries["zh-CN"]["origin_kind_recap"] != entries["en"]["origin_kind_recap"]
 
 
 def test_viewer_session_sort_label_uses_query_language() -> None:

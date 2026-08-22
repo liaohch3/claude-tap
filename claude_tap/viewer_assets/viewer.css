@@ -255,12 +255,25 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   background: var(--bg); border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 1;
   text-transform: uppercase; letter-spacing: .5px;
+  overflow: hidden;
 }
 .sidebar-group-header:hover { background: var(--bg-hover); }
 .sidebar-group-header .group-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
-.sidebar-group-header .group-name { flex: 1; min-width: 0; }
+/* Titles can be a single unbroken token (a pasted path or diff header), which
+   overflows the flex item and runs under the badges to its right. */
+/* Virtual rows are a fixed 68px. Wrapping a long path plus the provenance
+   badge must not spill into the next slot; clamp instead of growing. */
+.sidebar-group-header .group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
 .sidebar-group-header .group-count {
   font-size: 10px; font-weight: 500; color: var(--text-tertiary);
   background: var(--bg-hover); padding: 1px 6px; border-radius: 8px;
@@ -586,6 +599,25 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.assistant .msg-role { background: var(--green); color: #fff; }
 .msg.system .msg-role { background: var(--amber); color: #fff; }
 .msg.tool_result .msg-role { background: var(--purple); color: #fff; }
+/* Provenance tags. Muted on purpose: they qualify the role badge rather than
+   compete with it, and most turns carry none. */
+.msg-origin, .group-origin, .block-origin {
+  display: inline-block; font-size: 9px; font-weight: 600; text-transform: none;
+  letter-spacing: .2px; padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+}
+.msg-origin { margin-left: 6px; vertical-align: middle; }
+.group-origin { margin-left: 6px; flex-shrink: 0; }
+/* Above the block it qualifies rather than beside it: a mixed message carries this
+   only on the blocks that disagree with the header badge. */
+.block-origin { margin-bottom: 4px; }
+.msg-origin.origin-harness, .group-origin.origin-harness, .block-origin.origin-harness {
+  background: color-mix(in srgb, var(--amber) 16%, transparent);
+  color: var(--amber); border: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
+}
+.msg-origin.origin-payload, .group-origin.origin-payload, .block-origin.origin-payload {
+  background: color-mix(in srgb, var(--text-tertiary) 12%, transparent);
+  color: var(--text-tertiary); border: 1px solid color-mix(in srgb, var(--text-tertiary) 28%, transparent);
+}
 .msg pre, .msg .pre-text {
   white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
   font-size: 12px; background: rgba(0,0,0,0.04); padding: 10px 12px;

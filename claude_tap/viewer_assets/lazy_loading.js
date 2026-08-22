@@ -98,6 +98,12 @@ function buildStubEntry(meta, rawIdx) {
     duration_ms: meta.duration_ms || 0,
     transport: meta.transport || '',
     _session_user_text: meta.session_user_text || '',
+    /* Provenance chosen by `_session_user_title` in viewer.py. `body.messages`
+       above is a bare string, so classifying it again here cannot see which block
+       the title came from: a harness turn titled from a later pasted block would
+       come back as `payload` and the group would change its badge above
+       LAZY_THRESHOLD. Absent means `human`, the classifier's own default. */
+    _session_user_origin: meta.session_user_origin || '',
     request: {
       method: meta.method || '',
       path: meta.path || '',
