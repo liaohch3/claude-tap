@@ -265,6 +265,114 @@ def test_dashboard_summarizes_null_usage_token_fields(trace_db, tmp_path: Path) 
     assert summary["total_tokens"] == 51
 
 
+def _codex_responses_record(turn: int = 1) -> dict:
+    """Return a Codex/OpenAI Responses record whose cached tokens sit in input."""
+    return {
+        "timestamp": "2026-05-20T08:10:00+00:00",
+        "request_id": f"req_codex_{turn}",
+        "turn": turn,
+        "duration_ms": 800,
+        "capture": {"client": "codex", "proxy_mode": "reverse"},
+        "request": {
+            "method": "POST",
+            "path": "/backend-api/codex/responses",
+            "headers": {"Host": "chatgpt.com"},
+            "body": {"model": "gpt-5.1-codex", "input": "Summarize the repo"},
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {
+                "model": "gpt-5.1-codex",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "Done."}]}],
+                "usage": {
+                    "input_tokens": 11767,
+                    "input_tokens_details": {"cached_tokens": 11648},
+                    "output_tokens": 6,
+                    "total_tokens": 11773,
+                },
+            },
+        },
+    }
+
+
+def test_dashboard_summarizes_codex_cached_tokens_without_double_counting(trace_db, tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_083000.jsonl"
+    _write_jsonl(trace_path, [_codex_responses_record()])
+    _seed_legacy(tmp_path)
+
+    summary = list_trace_sessions()[0]
+
+    assert summary["input_tokens"] == 11767
+    assert summary["output_tokens"] == 6
+    assert summary["cache_read_tokens"] == 11648
+    # cached_tokens already sits inside input_tokens, so the provider total is
+    # input + output; adding cache_read on top would report 23421 instead.
+    assert summary["total_tokens"] == 11773
+
+
+def test_dashboard_summarizes_mixed_cache_shapes_across_records(trace_db, tmp_path: Path) -> None:
+    trace_path = tmp_path / "2026-05-20" / "trace_084000.jsonl"
+    anthropic = _anthropic_record()
+    anthropic["response"]["body"]["usage"] = {
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 50,
+        "cache_creation_input_tokens": 20,
+    }
+    _write_jsonl(trace_path, [anthropic, _codex_responses_record(turn=2)])
+    _seed_legacy(tmp_path)
+
+    summary = list_trace_sessions()[0]
+
+    assert summary["input_tokens"] == 11867
+    assert summary["output_tokens"] == 16
+    assert summary["cache_read_tokens"] == 11698
+    assert summary["cache_create_tokens"] == 20
+    # Anthropic turn adds every bucket (100+10+50+20=180) because its cache
+    # read is a separate bucket; the Codex turn adds input+output only
+    # (11767+6=11773) because its cached tokens are embedded in input.
+    assert summary["total_tokens"] == 11953
+
+
+def test_append_records_do_not_double_count_embedded_cache_read(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(session_id, _codex_responses_record(turn=1))
+    store.append_record(session_id, _codex_responses_record(turn=2))
+
+    sessions = list_trace_sessions()
+    summary = next(item for item in sessions if item["id"] == session_id)
+
+    assert summary["input_tokens"] == 2 * 11767
+    assert summary["cache_read_tokens"] == 2 * 11648
+    assert summary["total_tokens"] == 2 * 11773
+
+
+def test_summary_repair_migrates_legacy_double_counted_totals(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(session_id, _codex_responses_record(turn=1))
+
+    conn = store._connect()
+    cached = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
+    # Simulate a pre-cache_read_in_input_tokens summary: no embedded split and
+    # a total computed with cached input counted twice.
+    cached.pop("cache_read_in_input_tokens", None)
+    cached["summary_version"] = 3
+    cached["total_tokens"] = 11767 + 6 + 11648
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (json.dumps(cached, ensure_ascii=False, separators=(",", ":")), session_id),
+    )
+    conn.commit()
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+
+    assert summary["total_tokens"] == 11773
+    assert summary["cache_read_tokens"] == 11648
+
+
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])

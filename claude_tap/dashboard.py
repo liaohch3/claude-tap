@@ -40,7 +40,7 @@ CLIENT_LABELS = {
     "pi": "Pi",
     "qoder": "Qoder",
 }
-DASHBOARD_SUMMARY_VERSION = 3
+DASHBOARD_SUMMARY_VERSION = 4
 VALID_SESSION_STATUSES = {"active", "complete", "error", "empty"}
 _REDACTED_VALUE = "REDACTED"
 _SENSITIVE_KEY_NAMES = {
@@ -223,6 +223,27 @@ def redact_dashboard_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return _redact_sensitive_value(summary)
 
 
+def _recompute_total_tokens(summary: dict[str, Any]) -> int:
+    """Recompute session total_tokens from the per-bucket summary fields.
+
+    Anthropic-style usage reports cache-read tokens as a bucket separate from
+    input_tokens, so all four buckets are additive. OpenAI/Codex/Gemini-style
+    usage already counts cached tokens inside input_tokens
+    (``cache_read_in_input=True``), so only the cache-read amount that is NOT
+    embedded in input_tokens may be added on top; otherwise cached input gets
+    counted twice in the session total.
+    """
+    cache_read = int(summary.get("cache_read_tokens") or 0)
+    embedded_cache_read = min(cache_read, int(summary.get("cache_read_in_input_tokens") or 0))
+    return (
+        int(summary.get("input_tokens") or 0)
+        + int(summary.get("output_tokens") or 0)
+        + cache_read
+        - embedded_cache_read
+        + int(summary.get("cache_create_tokens") or 0)
+    )
+
+
 def merge_record_into_summary(
     summary: dict[str, Any] | None,
     *,
@@ -263,15 +284,14 @@ def merge_record_into_summary(
     summary["cache_read_tokens"] = int(summary.get("cache_read_tokens") or 0) + (
         usage.get("cache_read_input_tokens") or 0
     )
+    if usage.get("cache_read_in_input") is True:
+        summary["cache_read_in_input_tokens"] = int(summary.get("cache_read_in_input_tokens") or 0) + (
+            usage.get("cache_read_input_tokens") or 0
+        )
     summary["cache_create_tokens"] = int(summary.get("cache_create_tokens") or 0) + (
         usage.get("cache_creation_input_tokens") or 0
     )
-    summary["total_tokens"] = (
-        summary["input_tokens"]
-        + summary["output_tokens"]
-        + summary["cache_read_tokens"]
-        + summary["cache_create_tokens"]
-    )
+    summary["total_tokens"] = _recompute_total_tokens(summary)
     summary["duration_ms"] = int(summary.get("duration_ms") or 0) + _duration_ms(record)
     model = _record_model(record)
     if model:
@@ -464,12 +484,25 @@ def _summary_from_boundary_records(
     cached: dict[str, Any],
 ) -> dict[str, Any]:
     summary = build_stored_session_summary(row, records)
+    if "cache_read_in_input_tokens" not in cached:
+        # Legacy cached summaries predate the embedded-cache-read split, so
+        # their buckets cannot say how much cache read already sits inside
+        # input_tokens. Boundary records sample the session shape: when every
+        # sampled cache read is embedded (Codex/OpenAI shape), treat the whole
+        # cached cache-read bucket as embedded so migration does not keep
+        # counting cached input twice.
+        boundary_cache_read = int(summary.get("cache_read_tokens") or 0)
+        boundary_embedded = int(summary.get("cache_read_in_input_tokens") or 0)
+        cached = dict(cached)
+        cached["cache_read_in_input_tokens"] = (
+            int(cached.get("cache_read_tokens") or 0) if boundary_embedded == boundary_cache_read else 0
+        )
     for key in (
         "input_tokens",
         "output_tokens",
         "cache_read_tokens",
+        "cache_read_in_input_tokens",
         "cache_create_tokens",
-        "total_tokens",
         "duration_ms",
         "turn_count",
         "model",
@@ -477,6 +510,16 @@ def _summary_from_boundary_records(
     ):
         if cached.get(key):
             summary[key] = cached[key]
+    # The truthy-only pass above skips a zero embedded split, which would let
+    # the boundary-sample value leak into the migrated summary; overwrite it
+    # unconditionally because the cached split is authoritative when present.
+    if "cache_read_in_input_tokens" in cached:
+        summary["cache_read_in_input_tokens"] = int(cached["cache_read_in_input_tokens"] or 0)
+    token_total = _recompute_total_tokens(summary)
+    if token_total:
+        summary["total_tokens"] = token_total
+    elif cached.get("total_tokens"):
+        summary["total_tokens"] = cached["total_tokens"]
     summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
     summary["record_count"] = int(row["record_count"] or summary.get("record_count") or 0)
     summary["turn_count"] = max(int(summary.get("turn_count") or 0), summary["record_count"])
@@ -509,12 +552,7 @@ def _normalize_cached_session_summary(row: sqlite3.Row, cached: dict[str, Any]) 
     if not summary.get("agent"):
         summary["agent"] = _infer_agent([], {"client": row["client"] or "", "proxy_mode": row["proxy_mode"] or ""})
     summary["agent_key"] = _agent_key(str(summary.get("agent") or ""))
-    token_total = (
-        int(summary.get("input_tokens") or 0)
-        + int(summary.get("output_tokens") or 0)
-        + int(summary.get("cache_read_tokens") or 0)
-        + int(summary.get("cache_create_tokens") or 0)
-    )
+    token_total = _recompute_total_tokens(summary)
     summary["total_tokens"] = token_total if token_total else int(cached.get("total_tokens") or 0)
     return redact_dashboard_summary(summary)
 
@@ -559,6 +597,7 @@ def _summarize_session(
     updated_at = _timestamp_from_record(last_record) or updated_at or started_at
     agent = _infer_agent(records, manifest_entry)
     input_tokens = output_tokens = cache_read_tokens = cache_create_tokens = 0
+    cache_read_in_input_tokens = 0
     models: dict[str, int] = {}
     duration_ms = 0
     turns: set[int] = set()
@@ -568,6 +607,11 @@ def _summarize_session(
         input_tokens += usage.get("input_tokens") or 0
         output_tokens += usage.get("output_tokens") or 0
         cache_read_tokens += usage.get("cache_read_input_tokens") or 0
+        if usage.get("cache_read_in_input") is True:
+            # OpenAI/Codex/Gemini-shaped usage already counts these cached
+            # tokens inside input_tokens; track them so the session total
+            # does not add them a second time.
+            cache_read_in_input_tokens += usage.get("cache_read_input_tokens") or 0
         cache_create_tokens += usage.get("cache_creation_input_tokens") or 0
         model = _record_model(record)
         if model:
@@ -613,8 +657,13 @@ def _summarize_session(
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cache_read_tokens": cache_read_tokens,
+            "cache_read_in_input_tokens": cache_read_in_input_tokens,
             "cache_create_tokens": cache_create_tokens,
-            "total_tokens": input_tokens + output_tokens + cache_read_tokens + cache_create_tokens,
+            "total_tokens": input_tokens
+            + output_tokens
+            + cache_read_tokens
+            - cache_read_in_input_tokens
+            + cache_create_tokens,
             "model": _top_key(models) or _record_model(last_record) or "unknown",
             "first_user": _first_user_preview(preview_records),
             "last_response": _last_response_preview(preview_records),
