@@ -2304,7 +2304,8 @@ function updateDetailI18n(session) {
 function renderRecord(record, index) {
   const request = record.request || {};
   const response = record.response || {};
-  const userText = requestText(request.body) || t("request_empty");
+  const hasServerUserText = Object.prototype.hasOwnProperty.call(record, "_latest_user_text");
+  const userText = (hasServerUserText ? record._latest_user_text : requestText(request.body)) || t("request_empty");
   const responseText = responseTextFromRecord(record) || response.error || t("response_empty");
   const status = response.status ?? "";
   const path = request.path || "";
@@ -2341,20 +2342,14 @@ function emptyRecord() {
 }
 
 function requestText(body) {
-  if (typeof body === "string") return body;
   if (!body || typeof body !== "object") return "";
-  if (Array.isArray(body.messages)) {
-    const message = body.messages.find(item => item && item.role === "user");
-    if (message) return contentText(message.content);
+  if (!Array.isArray(body.messages)) return "";
+  for (let index = body.messages.length - 1; index >= 0; index -= 1) {
+    const message = body.messages[index];
+    if (String(message?.role || "").toLowerCase() !== "user") continue;
+    if (typeof message.content === "string") return message.content;
   }
-  const input = contentText(body.input);
-  if (input) return input;
-  const request = body.request && typeof body.request === "object" ? body.request : body;
-  if (Array.isArray(request.contents)) {
-    const content = request.contents.find(item => item && (!item.role || item.role.toLowerCase() === "user"));
-    if (content) return partsText(content.parts);
-  }
-  return typeof body.prompt === "string" ? body.prompt : "";
+  return "";
 }
 
 function responseTextFromBody(body) {

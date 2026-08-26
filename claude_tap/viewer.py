@@ -1156,7 +1156,7 @@ def _clean_session_user_text(text: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] == '"':
         try:
             decoded = json.loads(value)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             decoded = None
         if isinstance(decoded, str) and decoded.strip():
             value = decoded.strip()
@@ -1164,10 +1164,16 @@ def _clean_session_user_text(text: str) -> str:
     if value[:1] in "{[":
         try:
             decoded = json.loads(value)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             decoded = None
         if decoded is not None:
-            prompt = _natural_text_from_prompt_payload(decoded)
+            try:
+                prompt = _natural_text_from_prompt_payload(decoded)
+            except RecursionError:
+                # A user-controlled JSON prompt can exceed Python's recursion
+                # limit while unwrapping. Keep the original readable text
+                # instead of aborting trace persistence or dashboard loading.
+                prompt = ""
             if prompt:
                 return prompt
 

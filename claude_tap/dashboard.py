@@ -19,7 +19,13 @@ from claude_tap.trace_encoding import (
 )
 from claude_tap.trace_store import SessionQuery, TraceStore, get_trace_store
 from claude_tap.usage import normalize_usage
-from claude_tap.viewer import _decode_bedrock_eventstream_events
+from claude_tap.viewer import (
+    _clean_session_user_text as _clean_user_prompt_text,
+)
+from claude_tap.viewer import (
+    _decode_bedrock_eventstream_events,
+    _trim_user_text,
+)
 
 DASHBOARD_TEMPLATE_PATH = Path(__file__).parent / "dashboard.html"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -40,7 +46,7 @@ CLIENT_LABELS = {
     "pi": "Pi",
     "qoder": "Qoder",
 }
-DASHBOARD_SUMMARY_VERSION = 4
+DASHBOARD_SUMMARY_VERSION = 5
 VALID_SESSION_STATUSES = {"active", "complete", "error", "empty"}
 _REDACTED_VALUE = "REDACTED"
 _SENSITIVE_KEY_NAMES = {
@@ -215,7 +221,24 @@ def load_trace_session(
 
 def redact_dashboard_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return records safe for dashboard rendering without mutating stored traces."""
-    return [_redact_sensitive_value(record) for record in records]
+    safe_records = []
+    for record in records:
+        safe_record = _redact_sensitive_value(record)
+        request = safe_record.get("request") if isinstance(safe_record, dict) else None
+        body = request.get("body") if isinstance(request, dict) else None
+        headers = request.get("headers") if isinstance(request, dict) else None
+        latest_user_text = _latest_request_user_text(body, headers=headers)
+        if not latest_user_text and isinstance(request, dict):
+            events = request.get("ws_events")
+            if isinstance(events, list):
+                for event in reversed(events):
+                    payload = _event_payload(event) if isinstance(event, dict) else {}
+                    latest_user_text = _latest_request_user_text(payload, headers=headers)
+                    if latest_user_text:
+                        break
+        safe_record["_latest_user_text"] = latest_user_text
+        safe_records.append(safe_record)
+    return safe_records
 
 
 def redact_dashboard_summary(summary: dict[str, Any]) -> dict[str, Any]:
@@ -386,9 +409,19 @@ def _session_summary_from_row(
                 and row["status"] != "active"
                 and (not is_dashboard_summary_current(cached, row["id"]) or needs_error_repair)
             ):
-                boundary_records = store.load_boundary_records(row["id"])
-                if boundary_records:
-                    summary = _summary_from_boundary_records(row, boundary_records, cached)
+                # Every stale summary version predates the current shared
+                # prompt cleaner. Its cached preview may already be truncated
+                # inside a JSON wrapper, so neither the cache nor boundary
+                # records can recover a middle human prompt reliably. Pay the
+                # full scan once for summary migration; current summaries that
+                # only need error repair can still use the boundary records.
+                repair_records = (
+                    store.load_records(row["id"])
+                    if not is_dashboard_summary_current(cached, row["id"])
+                    else store.load_boundary_records(row["id"])
+                )
+                if repair_records:
+                    summary = _summary_from_boundary_records(row, repair_records, cached)
                     store.store_summary(row["id"], summary)
                     return summary
             return _normalize_cached_session_summary(row, cached)
@@ -515,6 +548,15 @@ def _summary_from_boundary_records(
     # unconditionally because the cached split is authoritative when present.
     if "cache_read_in_input_tokens" in cached:
         summary["cache_read_in_input_tokens"] = int(cached["cache_read_in_input_tokens"] or 0)
+    cached_first_user = cached.get("first_user")
+    if not summary.get("first_user") and isinstance(cached_first_user, str):
+        # The boundary sample can contain only auxiliary/tool-result records
+        # even though a human prompt exists in the middle of the session. Keep
+        # the cached preview rather than permanently migrating it to empty, but
+        # still apply the cleaner whose change triggered this migration.
+        cleaned_first_user = _clean_user_prompt_text(cached_first_user)
+        if cleaned_first_user:
+            summary["first_user"] = cleaned_first_user
     token_total = _recompute_total_tokens(summary)
     if token_total:
         summary["total_tokens"] = token_total
@@ -1211,6 +1253,14 @@ def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _request_user_text(body: Any, *, headers: Any = None) -> str:
+    return _request_user_text_in_order(body, headers=headers, newest_first=False)
+
+
+def _latest_request_user_text(body: Any, *, headers: Any = None) -> str:
+    return _request_user_text_in_order(body, headers=headers, newest_first=True)
+
+
+def _request_user_text_in_order(body: Any, *, headers: Any = None, newest_first: bool) -> str:
     header_map = headers if isinstance(headers, dict) else None
     if is_protobuf_content_type(content_type_from_headers(header_map)):
         return ""
@@ -1223,14 +1273,14 @@ def _request_user_text(body: Any, *, headers: Any = None) -> str:
 
     messages = body.get("messages")
     if isinstance(messages, list):
-        for message in messages:
+        for message in _ordered_user_items(messages, newest_first=newest_first):
             role = str(message.get("role") or "").lower() if isinstance(message, dict) else ""
             if isinstance(message, dict) and role == "user":
                 prompt = _clean_user_content_text(message.get("content"))
                 if prompt:
                     return prompt
 
-    text = _input_user_text(body.get("input"))
+    text = _input_user_text(body.get("input"), newest_first=newest_first)
     if text:
         return text
 
@@ -1240,7 +1290,7 @@ def _request_user_text(body: Any, *, headers: Any = None) -> str:
     else:
         contents = body.get("contents")
     if isinstance(contents, list):
-        for content in contents:
+        for content in _ordered_user_items(contents, newest_first=newest_first):
             if not isinstance(content, dict):
                 continue
             role = str(content.get("role") or "user").lower()
@@ -1254,27 +1304,48 @@ def _request_user_text(body: Any, *, headers: Any = None) -> str:
     return _clean_user_prompt_text(prompt) if isinstance(prompt, str) else ""
 
 
-def _input_user_text(value: Any) -> str:
+def _ordered_user_items(value: list[Any], *, newest_first: bool):
+    return reversed(value) if newest_first else iter(value)
+
+
+def _input_user_text(value: Any, *, newest_first: bool = False) -> str:
     if isinstance(value, str):
         return _clean_user_prompt_text(value)
     if isinstance(value, dict):
         role = str(value.get("role") or "").lower()
         if role == "user":
-            return _clean_user_content_text(value.get("content") or value.get("text"))
+            return _clean_user_content_text(_input_user_content(value))
         return ""
     if not isinstance(value, list):
         return ""
 
-    for item in value:
+    if newest_first:
+        for item in reversed(value):
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").lower()
+            item_type = str(item.get("type") or "").lower()
+            if role and role != "user":
+                continue
+            if not role and item_type in ("function_call_output", "tool_result", "reasoning"):
+                continue
+            if not role and item_type not in ("message", "input_text") and "content" not in item:
+                continue
+            prompt = _clean_user_content_text(_input_user_content(item))
+            if prompt:
+                return prompt
+        return ""
+
+    for item in _ordered_user_items(value, newest_first=newest_first):
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "").lower()
         if role == "user":
-            prompt = _clean_user_content_text(item.get("content") or item.get("text"))
+            prompt = _clean_user_content_text(_input_user_content(item))
             if prompt:
                 return prompt
 
-    for item in value:
+    for item in _ordered_user_items(value, newest_first=newest_first):
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "").lower()
@@ -1282,10 +1353,23 @@ def _input_user_text(value: Any) -> str:
         if role or item_type in ("function_call_output", "tool_result", "reasoning"):
             continue
         if item_type in ("message", "input_text") or "content" in item:
-            prompt = _clean_user_content_text(item.get("content") or item.get("text"))
+            prompt = _clean_user_content_text(_input_user_content(item))
             if prompt:
                 return prompt
     return ""
+
+
+def _input_user_content(item: dict[str, Any]) -> Any:
+    content = item.get("content")
+    if content:
+        return content
+    text = item.get("text")
+    if isinstance(text, str) and _trim_user_text(text):
+        return text
+    output = item.get("output")
+    if isinstance(output, str):
+        return output
+    return text if isinstance(text, str) else content
 
 
 def _clean_user_content_text(value: Any) -> str:
@@ -1294,7 +1378,7 @@ def _clean_user_content_text(value: Any) -> str:
         for item in value:
             if _is_auxiliary_user_content_block(item):
                 continue
-            text = _content_text(item)
+            text = _input_content_block_text(item)
             prompt = _clean_user_prompt_text(text)
             if prompt:
                 if re.search(r"<USER_REQUEST>\s*.*?\s*</USER_REQUEST>", text, flags=re.DOTALL | re.IGNORECASE):
@@ -1303,7 +1387,17 @@ def _clean_user_content_text(value: Any) -> str:
         return "\n".join(parts).strip()
     if _is_auxiliary_user_content_block(value):
         return ""
-    return _clean_user_prompt_text(_content_text(value))
+    text = _input_content_block_text(value)
+    return _clean_user_prompt_text(text)
+
+
+def _input_content_block_text(value: Any) -> str:
+    text = _content_text(value)
+    if _trim_user_text(text):
+        return text
+    if isinstance(value, dict) and isinstance(value.get("output"), str):
+        return value["output"]
+    return text
 
 
 def _is_auxiliary_user_content_block(value: Any) -> bool:
@@ -1311,46 +1405,6 @@ def _is_auxiliary_user_content_block(value: Any) -> bool:
         return False
     block_type = str(value.get("type") or "").lower()
     return block_type in {"function_call_output", "tool_result"}
-
-
-def _clean_user_prompt_text(text: str) -> str:
-    text = text.strip()
-    if not text:
-        return ""
-    if len(text) >= 2 and text[0] == text[-1] == '"':
-        try:
-            decoded = json.loads(text)
-        except json.JSONDecodeError:
-            decoded = None
-        if isinstance(decoded, str) and decoded:
-            text = decoded.strip()
-
-    request = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", text, flags=re.DOTALL | re.IGNORECASE)
-    if request:
-        return request.group(1).strip()
-
-    session = re.fullmatch(r"<session>\s*(.*?)\s*</session>", text, flags=re.DOTALL | re.IGNORECASE)
-    if session:
-        return session.group(1).strip()
-
-    first_tag = re.match(r"^<([A-Za-z_-]+)>", text)
-    if first_tag and first_tag.group(1).lower() in {
-        "artifacts",
-        "additional_metadata",
-        "environment_context",
-        "session_context",
-        "skills",
-        "slash_commands",
-        "subagents",
-        "system-reminder",
-        "user_information",
-    }:
-        return ""
-
-    if text.startswith("# AGENTS.md instructions") or text.startswith("<INSTRUCTIONS>"):
-        return ""
-
-    return text
 
 
 def _response_text(body: Any) -> str:
