@@ -17,6 +17,7 @@ from claude_tap.dashboard import (
     _first_error,
     _infer_agent,
     _input_user_text,
+    _latest_request_user_text,
     _parts_text,
     _preview,
     _record_host,
@@ -31,6 +32,7 @@ from claude_tap.dashboard import (
     list_trace_sessions,
     load_trace_session,
     read_dashboard_template,
+    redact_dashboard_records,
 )
 from claude_tap.history import migrate_legacy_traces
 from claude_tap.live import LiveViewerServer, _record_limit_from_request
@@ -373,6 +375,115 @@ def test_summary_repair_migrates_legacy_double_counted_totals(trace_db) -> None:
     assert summary["cache_read_tokens"] == 11648
 
 
+def test_summary_repair_migrates_version_4_prompt_cleaner_output(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    record = _anthropic_record()
+    record["request"]["body"]["messages"] = [
+        {"role": "user", "content": [{"type": "text", "text": "[Image #2] describe this screenshot"}]}
+    ]
+    store.append_record(session_id, record)
+    store.finalize_session(session_id, {"api_calls": 1})
+
+    conn = store._connect()
+    cached = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
+    cached["summary_version"] = 4
+    cached["first_user"] = "[Image #2] describe this screenshot"
+    conn.execute(
+        "UPDATE sessions SET summary_json = ? WHERE id = ?",
+        (json.dumps(cached, ensure_ascii=False, separators=(",", ":")), session_id),
+    )
+    conn.commit()
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+    repaired = json.loads(store.load_session_row(session_id)["summary_json"])
+
+    assert summary["first_user"] == "describe this screenshot"
+    assert repaired["first_user"] == "describe this screenshot"
+    assert repaired["summary_version"] == DASHBOARD_SUMMARY_VERSION
+
+
+def test_summary_repair_preserves_cached_prompt_missing_from_boundary_records(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    auxiliary = _codex_responses_record(turn=1)
+    auxiliary["request"]["body"]["input"] = [
+        {"type": "function_call_output", "call_id": "call_1", "output": "tool output"}
+    ]
+    human = _codex_responses_record(turn=2)
+    human["request"]["body"]["input"] = [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Middle prompt"}]}
+    ]
+    final_auxiliary = _codex_responses_record(turn=3)
+    final_auxiliary["request"]["body"]["input"] = [
+        {"type": "function_call_output", "call_id": "call_2", "output": "final tool output"}
+    ]
+    for record in (auxiliary, human, final_auxiliary):
+        store.append_record(session_id, record)
+    store.finalize_session(session_id, {"api_calls": 3})
+
+    conn = store._connect()
+    cached = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
+    assert cached["first_user"] == "Middle prompt"
+    cached["summary_version"] = 4
+    cached["first_user"] = "[Image #2] Middle prompt"
+    conn.execute(
+        "UPDATE sessions SET summary_json = ? WHERE id = ?",
+        (json.dumps(cached, ensure_ascii=False, separators=(",", ":")), session_id),
+    )
+    conn.commit()
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+    repaired = json.loads(store.load_session_row(session_id)["summary_json"])
+
+    assert summary["first_user"] == "Middle prompt"
+    assert repaired["first_user"] == "Middle prompt"
+    assert repaired["summary_version"] == DASHBOARD_SUMMARY_VERSION
+
+
+@pytest.mark.parametrize("summary_version", [3, 4])
+def test_summary_repair_rebuilds_truncated_json_prompt_from_middle_record(trace_db, summary_version: int) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    auxiliary = _codex_responses_record(turn=1)
+    auxiliary["request"]["body"]["input"] = [
+        {"type": "function_call_output", "call_id": "call_1", "output": "tool output"}
+    ]
+    human_prompt = "Explain this migration " + ("carefully " * 30)
+    wrapped_prompt = json.dumps({"prompt": human_prompt})
+    human = _codex_responses_record(turn=2)
+    human["request"]["body"]["input"] = [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": wrapped_prompt}]}
+    ]
+    final_auxiliary = _codex_responses_record(turn=3)
+    final_auxiliary["request"]["body"]["input"] = [
+        {"type": "function_call_output", "call_id": "call_2", "output": "final tool output"}
+    ]
+    for record in (auxiliary, human, final_auxiliary):
+        store.append_record(session_id, record)
+    store.finalize_session(session_id, {"api_calls": 3})
+
+    conn = store._connect()
+    cached = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
+    cached["summary_version"] = summary_version
+    cached["first_user"] = _preview(wrapped_prompt, 220)
+    assert cached["first_user"].startswith('{"prompt"')
+    assert not cached["first_user"].endswith("}")
+    conn.execute(
+        "UPDATE sessions SET summary_json = ? WHERE id = ?",
+        (json.dumps(cached, ensure_ascii=False, separators=(",", ":")), session_id),
+    )
+    conn.commit()
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+    repaired = json.loads(store.load_session_row(session_id)["summary_json"])
+    expected = _preview(human_prompt, 220)
+
+    assert summary["first_user"] == expected
+    assert repaired["first_user"] == expected
+    assert repaired["summary_version"] == DASHBOARD_SUMMARY_VERSION
+
+
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])
@@ -564,6 +675,7 @@ def test_dashboard_detail_reads_from_sqlite(trace_db, tmp_path: Path) -> None:
 
     assert payload is not None
     assert payload["records"][0]["request_id"] == "req_claude"
+    assert payload["records"][0]["_latest_user_text"] == "Explain this repository"
 
 
 def test_dashboard_first_message_uses_first_user_prompt(trace_db, tmp_path: Path) -> None:
@@ -975,6 +1087,125 @@ def test_dashboard_parses_provider_fallbacks(trace_db, tmp_path: Path) -> None:
     assert _record_host({"upstream_base_url": "https://upstream.example/path"}) == "upstream.example"
 
 
+def test_dashboard_latest_request_user_text_prefers_latest_human_prompt() -> None:
+    messages = []
+    for index in range(1, 11):
+        messages.append({"role": "user", "content": [{"type": "text", "text": f"request {index}"}]})
+        if index < 10:
+            messages.append({"role": "assistant", "content": f"response {index}"})
+
+    assert _request_user_text({"messages": messages}) == "request 1"
+    assert _latest_request_user_text({"messages": messages}) == "request 10"
+    assert (
+        _latest_request_user_text(
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "human request"}]},
+                    {"role": "assistant", "content": [{"type": "tool_use", "name": "read"}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "tool_result", "content": "large tool output"},
+                            {"type": "function_call_output", "output": "function output"},
+                            {"type": "text", "text": "<system-reminder>injected context</system-reminder>"},
+                        ],
+                    },
+                ]
+            }
+        )
+        == "human request"
+    )
+    for injected_text in (
+        '<codex_internal_context source="desktop">injected context</codex_internal_context>',
+        "<local-command-caveat>injected command output</local-command-caveat>",
+        "# Files mentioned by the user:\n- secret.txt",
+        '<image_input source="clipboard">',
+        "[SUGGESTION MODE: predict the next user input]",
+    ):
+        assert (
+            _latest_request_user_text(
+                {
+                    "messages": [
+                        {"role": "user", "content": "human request before injected context"},
+                        {"role": "user", "content": injected_text},
+                    ]
+                }
+            )
+            == "human request before injected context"
+        )
+    assert (
+        _latest_request_user_text(
+            {"messages": [{"role": "user", "content": "## My request for Codex:\nfix the dashboard"}]}
+        )
+        == "fix the dashboard"
+    )
+    assert (
+        _latest_request_user_text(
+            {
+                "input": [
+                    {"role": "user", "content": [{"type": "input_text", "text": "Responses first"}]},
+                    {"role": "assistant", "content": [{"type": "output_text", "text": "Responses reply"}]},
+                    {"type": "function_call_output", "output": "tool output"},
+                    {"role": "user", "content": [{"type": "input_text", "text": "Responses latest"}]},
+                ]
+            }
+        )
+        == "Responses latest"
+    )
+    implicit_latest = {
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Responses explicit first"}]},
+            {"type": "message", "content": [{"type": "input_text", "text": "Responses implicit latest"}]},
+        ]
+    }
+    assert _request_user_text(implicit_latest) == "Responses explicit first"
+    assert _latest_request_user_text(implicit_latest) == "Responses implicit latest"
+    assert (
+        _latest_request_user_text(
+            {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "\ufeff", "output": "Responses output fallback"}],
+                    }
+                ]
+            }
+        )
+        == "Responses output fallback"
+    )
+    assert (
+        _latest_request_user_text(
+            {"input": [{"type": "input_text", "text": "   ", "output": "Bare Responses output fallback"}]}
+        )
+        == "Bare Responses output fallback"
+    )
+    assert (
+        _latest_request_user_text(
+            {
+                "request": {
+                    "contents": [
+                        {"role": "user", "parts": [{"text": "Gemini first"}]},
+                        {"role": "model", "parts": [{"text": "Gemini reply"}]},
+                        {"role": "user", "parts": [{"functionResponse": {"name": "tool"}}]},
+                        {"role": "user", "parts": [{"text": "Gemini latest"}]},
+                    ]
+                }
+            }
+        )
+        == "Gemini latest"
+    )
+
+
+def test_dashboard_latest_user_text_scans_request_websocket_events() -> None:
+    trace_path = Path(__file__).parent / "fixtures" / "codex_ws_multi_response_trace.jsonl"
+    record = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
+
+    [redacted] = redact_dashboard_records([record])
+
+    assert redacted["_latest_user_text"] == "你好，调用一个工具，然后结束"
+
+
 def test_dashboard_extracts_usage_models_errors_and_text() -> None:
     assert _record_usage({"response": {"body": {"usageMetadata": {"promptTokenCount": 3}}}})["input_tokens"] == 3
     assert (
@@ -1152,6 +1383,8 @@ def test_dashboard_extracts_usage_models_errors_and_text() -> None:
     assert _input_user_text([{"role": "developer", "content": "dev"}, {"content": "implicit user"}]) == "implicit user"
     assert _clean_user_prompt_text('"quoted prompt"') == "quoted prompt"
     assert _clean_user_prompt_text("<system-reminder>\nskip\n</system-reminder>") == ""
+    assert _clean_user_prompt_text('<additional_metadata source="capture">skip</additional_metadata>') == ""
+    assert _clean_user_prompt_text("[Image #2] describe this screenshot") == "describe this screenshot"
     assert _parts_text("not-list") == ""
     assert _preview(" a \n b ", 20) == "a b"
     assert _preview("abcdef", 4) == "abc..."
@@ -1443,6 +1676,8 @@ async def test_dashboard_session_detail_redacts_sensitive_display_records(trace_
                 assert "refresh_token=REDACTED" in record["request"]["body"]
                 assert "nested-secret" not in record["request"]["body"]
                 assert "access_token%3DREDACTED" in record["request"]["body"]
+                assert "client-secret" not in record["_latest_user_text"]
+                assert "client_secret=REDACTED" in record["_latest_user_text"]
                 assert record["response"]["body"]["access_token"] == "REDACTED"
                 assert record["response"]["body"]["usage"]["input_tokens"] == 3
 
@@ -1902,6 +2137,124 @@ async def test_dashboard_session_route_serves_standalone_viewer(trace_db, tmp_pa
                 assert "EMBEDDED_TRACE_COMPACT_DATA" in exported_html
                 assert "const EMBEDDED_TRACE_DATA =" not in exported_html
                 assert "req_claude" in exported_html
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_trace_tab_renders_latest_user_message(trace_db) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    if _pw_skip is not None:
+        pytest.skip(_pw_skip)
+    store = get_trace_store()
+    session_id = store.create_session(client="pi", proxy_mode="forward")
+    record = _anthropic_record(turn=6)
+    record["request"]["path"] = "/v1/chat/completions"
+    messages = []
+    for index in range(1, 11):
+        messages.append({"role": "user", "content": [{"type": "text", "text": f"request {index}"}]})
+        if index < 10:
+            messages.append({"role": "assistant", "content": f"response {index}"})
+    record["request"]["body"]["messages"] = messages
+    store.append_record(session_id, record)
+    tool_record = _anthropic_record(turn=7)
+    tool_record["request"]["body"]["messages"] = [
+        {"role": "user", "content": [{"type": "text", "text": "human request"}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "tool-1", "name": "read", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "tool-1", "content": "large tool output"},
+                {"type": "text", "text": "<system-reminder>injected context</system-reminder>"},
+                {
+                    "type": "text",
+                    "text": "<codex_internal_context>injected context</codex_internal_context>",
+                },
+            ],
+        },
+    ]
+    store.append_record(session_id, tool_record)
+    responses_record = _anthropic_record(turn=8)
+    responses_record["request"]["path"] = "/v1/responses"
+    responses_record["request"]["body"] = {
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Responses first"}]},
+            {"role": "assistant", "content": [{"type": "output_text", "text": "Responses reply"}]},
+            {"type": "function_call_output", "output": "tool output"},
+            {"role": "user", "content": [{"type": "input_text", "text": "Responses latest"}]},
+        ]
+    }
+    store.append_record(session_id, responses_record)
+    gemini_record = _anthropic_record(turn=9)
+    gemini_record["request"]["path"] = "/v1/models/gemini:generateContent"
+    gemini_record["request"]["body"] = {
+        "request": {
+            "contents": [
+                {"role": "user", "parts": [{"text": "Gemini first"}]},
+                {"role": "model", "parts": [{"text": "Gemini reply"}]},
+                {"role": "user", "parts": [{"functionResponse": {"name": "tool", "response": {}}}]},
+                {"role": "user", "parts": [{"text": "Gemini latest"}]},
+            ]
+        }
+    }
+    store.append_record(session_id, gemini_record)
+    store.finalize_session(session_id, {"api_calls": 2})
+
+    payload = load_trace_session(session_id)
+    assert payload is not None
+    assert [record["_latest_user_text"] for record in payload["records"]] == [
+        "request 10",
+        "human request",
+        "Responses latest",
+        "Gemini latest",
+    ]
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport={"width": 1440, "height": 900})
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard/session/{session_id}",
+                    wait_until="domcontentloaded",
+                )
+                request_text = page.locator("#raw-tab .section .msg.user .content-block")
+                await request_text.last.wait_for(timeout=5000)
+
+                assert await request_text.all_inner_texts() == [
+                    "request 10",
+                    "human request",
+                    "Responses latest",
+                    "Gemini latest",
+                ]
+                fallback_result = await page.evaluate(
+                    """() => {
+                      const textFor = record => {
+                        const host = document.createElement("div");
+                        host.innerHTML = renderRecord(record, 99);
+                        return host.querySelector(".msg.user .content-block").textContent;
+                      };
+                      const request = {body: {messages: [
+                        {role: "user", content: "legacy first"},
+                        {role: "assistant", content: "legacy reply"},
+                        {role: "user", content: "legacy latest"},
+                      ]}};
+                      return {
+                        legacy: textFor({request, response: {}}),
+                        presentButEmpty: textFor({_latest_user_text: "", request, response: {}}),
+                        emptyLabel: t("request_empty"),
+                      };
+                    }"""
+                )
+                assert fallback_result["legacy"] == "legacy latest"
+                assert fallback_result["presentButEmpty"] == fallback_result["emptyLabel"]
             finally:
                 await browser.close()
     finally:

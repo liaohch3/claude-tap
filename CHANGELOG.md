@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Preserve wrapped-client stdout for every mode by always routing claude-tap operational output to stderr.
 - fix(dsh): also capture Anthropic-protocol requests (`/v1/messages`) so trace sessions are not empty when dsh is configured with an Anthropic provider.
+- Show the latest user message in dashboard trace records when requests include conversation history.
 
 
 
