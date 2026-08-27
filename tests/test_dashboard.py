@@ -602,6 +602,66 @@ def test_zero_record_migration_preserves_empty_totals(trace_db) -> None:
     assert summary["active"] is False
 
 
+def test_stale_summary_repair_cannot_overwrite_reactivated_session(trace_db, monkeypatch) -> None:
+    """Repair must not clobber a session a writer re-activated mid-flight."""
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(session_id, _anthropic_record(turn=1))
+    store.append_record(session_id, _anthropic_record(turn=2))
+    conn = store._connect()
+    # Reader snapshot: complete with a stale pre-migration cached shape.
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (
+            json.dumps(
+                {
+                    "id": session_id,
+                    "summary_version": DASHBOARD_SUMMARY_VERSION - 1,
+                    "cache_read_tokens": 0,
+                    "total_tokens": 1,
+                }
+            ),
+            session_id,
+        ),
+    )
+    conn.commit()
+
+    original_load_records = TraceStore.load_records
+    injected: list[bool] = []
+
+    def racing_load_records(self, scan_session_id):
+        records = original_load_records(self, scan_session_id)
+        if scan_session_id == session_id and not injected:
+            injected.append(True)
+            # A concurrent append lands after the snapshot was loaded but
+            # before the repair persists, flipping the row back to active.
+            self.append_record(session_id, _anthropic_record(turn=3))
+        return records
+
+    monkeypatch.setattr(TraceStore, "load_records", racing_load_records)
+
+    list_trace_sessions()
+
+    row = conn.execute(
+        "SELECT status, record_count FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    assert row["status"] == "active"
+    assert row["record_count"] == 3
+    stored_summary = json.loads(
+        conn.execute(
+            "SELECT summary_json FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()[0]
+    )
+    # The CAS-guarded repair skipped its write, so the last writer was the
+    # racing append's own in-transaction refresh: an accurate aggregation of
+    # all three records (each contributes input_tokens 42 + output_tokens 9).
+    # A torn two-record repair payload would instead persist 102 tokens with
+    # the row downgraded back to 'complete'.
+    assert stored_summary["total_tokens"] == 153
+
+
 @pytest.mark.asyncio
 async def test_session_totals_reflect_lazy_summary_repairs(trace_db) -> None:
     """Header aggregates must be computed after in-request summary repairs."""

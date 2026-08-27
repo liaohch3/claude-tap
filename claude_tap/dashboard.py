@@ -411,7 +411,7 @@ def _session_summary_from_row(
                 # empty loads would rescan the same session on every listing.
                 if _is_complete_record_load(records, record_count):
                     summary = build_stored_session_summary(row, records)
-                    store.store_summary(row["id"], summary)
+                    store.store_summary(row["id"], summary, expected_status=row["status"])
                     return redact_dashboard_summary(summary)
             return _normalize_cached_session_summary(row, cached)
 
@@ -434,7 +434,7 @@ def _session_summary_from_row(
         )
         summary["active"] = row["status"] == "active"
         if row["status"] != "active":
-            store.store_summary(row["id"], summary)
+            store.store_summary(row["id"], summary, expected_status=row["status"])
         return redact_dashboard_summary(summary)
 
     if not allow_record_scan:
@@ -454,7 +454,7 @@ def _session_summary_from_row(
                     record_count=record_count,
                 )
                 if _is_complete_record_load(records, record_count):
-                    store.store_summary(row["id"], summary)
+                    store.store_summary(row["id"], summary, expected_status=row["status"])
                 return summary
         return _minimal_session_summary_from_row(row)
 
@@ -473,7 +473,7 @@ def _session_summary_from_row(
     )
     summary["active"] = row["status"] == "active"
     if row["status"] != "active" and _is_complete_record_load(records, record_count):
-        store.store_summary(row["id"], summary)
+        store.store_summary(row["id"], summary, expected_status=row["status"])
     return redact_dashboard_summary(summary)
 
 

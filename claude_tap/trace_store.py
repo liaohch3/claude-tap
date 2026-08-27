@@ -612,22 +612,39 @@ class TraceStore:
                 lines.append(message)
         return "\n".join(lines) + ("\n" if lines else "")
 
-    def store_summary(self, session_id: str, summary: dict[str, Any]) -> None:
+    def store_summary(
+        self,
+        session_id: str,
+        summary: dict[str, Any],
+        *,
+        expected_status: str | None = None,
+    ) -> bool:
+        """Persist a session summary, returning whether a row was updated.
+
+        Callers that built the summary from a row snapshot should pass the
+        snapshot's status as ``expected_status``: a reader-to-write race with
+        ``append_record`` flips the row back to 'active', and persisting a
+        stale snapshot then would both lose the new record count and clear
+        the live-session marker.
+        """
         with self._write_access() as conn:
-            conn.execute(
-                """
+            statement = """
                 UPDATE sessions
                 SET summary_json = ?, updated_at = ?, status = ?
                 WHERE id = ?
-                """,
-                (
-                    json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
-                    summary.get("updated_at") or datetime.now(timezone.utc).isoformat(),
-                    summary.get("status") or "complete",
-                    session_id,
-                ),
-            )
+            """
+            params = [
+                json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
+                summary.get("updated_at") or datetime.now(timezone.utc).isoformat(),
+                summary.get("status") or "complete",
+                session_id,
+            ]
+            if expected_status is not None:
+                statement += " AND status = ?"
+                params.append(expected_status)
+            cursor = conn.execute(statement, tuple(params))
             conn.commit()
+            return bool(cursor.rowcount)
 
     def dashboard_snapshot(self) -> dict[str, tuple[int, str]]:
         """Return session_id -> (record_count, status) for dashboard refresh detection.
