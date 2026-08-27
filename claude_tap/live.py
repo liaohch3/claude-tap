@@ -510,13 +510,22 @@ class LiveViewerServer:
 
     async def _handle_agents(self, request: web.Request) -> web.Response:
         """Return trace history agent buckets."""
-        self._finalize_stale_active_sessions()
+        # Finalization waits on the store write lock and lists agents from a
+        # full SQLite scan; both must stay off the loop or heartbeats stall.
+        await asyncio.to_thread(self._finalize_stale_active_sessions)
         live_count = await self._current_live_record_count()
-        return web.json_response({"agents": list_trace_agents(self.session_id, live_record_count=live_count)})
+        agents = await asyncio.to_thread(
+            list_trace_agents,
+            self.session_id,
+            live_record_count=live_count,
+        )
+        return web.json_response({"agents": agents})
 
     async def _handle_sessions(self, request: web.Request) -> web.Response:
         """Return trace history sessions."""
-        self._finalize_stale_active_sessions()
+        # Stale-row finalization takes the cross-process write lock and can
+        # busy-wait for it; keep that off the event loop.
+        await asyncio.to_thread(self._finalize_stale_active_sessions)
         live_count = await self._current_live_record_count()
         offset = _session_offset_from_request(request)
         limit = _session_limit_from_request(request)
@@ -535,7 +544,8 @@ class LiveViewerServer:
         # Listing lazily repairs stale summaries on disk, so aggregates must
         # be computed afterwards: otherwise a migrated page pairs corrected
         # per-session values with pre-repair totals in the same response.
-        aggregates = get_trace_store().get_session_aggregates(query)
+        # Aggregation walks every session row, so it also runs off the loop.
+        aggregates = await asyncio.to_thread(get_trace_store().get_session_aggregates, query)
         total = aggregates["total_sessions"]
         total_records = aggregates["total_records"]
         total_tokens = aggregates["total_tokens"]

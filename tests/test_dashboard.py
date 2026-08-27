@@ -712,6 +712,128 @@ async def test_session_listing_does_not_block_the_event_loop(trace_db, monkeypat
     assert listing_threads and listing_threads[0] != main_thread_id
 
 
+@pytest.mark.asyncio
+async def test_session_and_agent_handlers_run_blocking_steps_off_the_event_loop(trace_db, monkeypatch) -> None:
+    """Finalize, aggregation, and agent-listing steps must not park the loop."""
+    main_thread_id = threading.get_ident()
+    current_target = {"name": ""}
+    entered_events = {
+        name: threading.Event()
+        for name in ("sessions-finalize", "sessions-aggregates", "agents-finalize", "agents-listing")
+    }
+    release = threading.Event()
+    parked_threads: dict[str, int] = {}
+    ticks = [0]
+
+    def park(name: str) -> None:
+        parked_threads[name] = threading.get_ident()
+        entered_events[name].set()
+        release.wait(timeout=1)
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    original_finalize = server._finalize_stale_active_sessions
+
+    def slow_finalize() -> None:
+        if current_target["name"] in ("sessions-finalize", "agents-finalize"):
+            park(current_target["name"])
+        else:
+            original_finalize()
+
+    monkeypatch.setattr(server, "_finalize_stale_active_sessions", slow_finalize)
+
+    store_factory = live_module.get_trace_store
+
+    class _ParkingStoreProxy:
+        """Delegates everything except aggregation, which parks when targeted."""
+
+        def __init__(self, inner) -> None:
+            self._inner = inner
+
+        def __getattr__(self, item):
+            return getattr(self._inner, item)
+
+        def get_session_aggregates(self, query):
+            if current_target["name"] == "sessions-aggregates":
+                park("sessions-aggregates")
+            return self._inner.get_session_aggregates(query)
+
+    def parking_get_trace_store():
+        store = store_factory()
+        if current_target["name"] == "sessions-aggregates":
+            return _ParkingStoreProxy(store)
+        return store
+
+    monkeypatch.setattr(live_module, "get_trace_store", parking_get_trace_store)
+
+    original_agents_listing = live_module.list_trace_agents
+
+    def slow_agents_listing(*args, **kwargs):
+        if current_target["name"] == "agents-listing":
+            park("agents-listing")
+        return original_agents_listing(*args, **kwargs)
+
+    monkeypatch.setattr(live_module, "list_trace_agents", slow_agents_listing)
+
+    scenarios = [
+        ("/api/sessions", "sessions-finalize"),
+        ("/api/sessions", "sessions-aggregates"),
+        ("/api/agents", "agents-finalize"),
+        ("/api/agents", "agents-listing"),
+    ]
+
+    async def ticker_main(stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            ticks[0] += 1
+            await asyncio.sleep(0.005)
+
+    port: int | None = None
+    pending_requests: list[asyncio.Task] = []
+    ticker_stop = asyncio.Event()
+    ticker_task: asyncio.Task | None = None
+    try:
+        port = await server.start()
+        ticker_task = asyncio.create_task(ticker_main(ticker_stop))
+
+        async with aiohttp.ClientSession() as session:
+
+            async def fetch(path: str) -> int:
+                async with session.get(f"http://127.0.0.1:{port}{path}") as resp:
+                    return resp.status
+
+            for path, name in scenarios:
+                current_target["name"] = name
+                entered_events[name].clear()
+                release.clear()
+                request_task = asyncio.create_task(fetch(path))
+                pending_requests.append(request_task)
+                # Poll cooperatively: awaiting the threading.Event directly
+                # would park the loop before the request gets scheduled.
+                deadline = datetime.now(timezone.utc) + timedelta(seconds=3)
+                while not entered_events[name].is_set() and datetime.now(timezone.utc) < deadline:
+                    await asyncio.sleep(0.01)
+                assert entered_events[name].is_set(), f"{name} never started"
+                # A step that finished synchronously means it ran on the loop.
+                assert not request_task.done(), f"{name} ran synchronously"
+                before_ticks = ticks[0]
+                await asyncio.sleep(0.05)
+                assert ticks[0] - before_ticks >= 3, f"{name} stalled loop ticks"
+                assert parked_threads[name] != main_thread_id, f"{name} stayed on the loop thread"
+                release.set()
+                assert await asyncio.wait_for(request_task, timeout=5) == 200
+                current_target["name"] = ""
+    finally:
+        release.set()
+        for task in pending_requests:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending_requests, return_exceptions=True)
+        ticker_stop.set()
+        if ticker_task is not None:
+            await asyncio.gather(ticker_task, return_exceptions=True)
+        if port is not None:
+            await server.stop()
+
+
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])
