@@ -521,11 +521,6 @@ class LiveViewerServer:
         offset = _session_offset_from_request(request)
         limit = _session_limit_from_request(request)
         query = _session_query_from_request(request)
-        aggregates = get_trace_store().get_session_aggregates(query)
-        total = aggregates["total_sessions"]
-        total_records = aggregates["total_records"]
-        total_tokens = aggregates["total_tokens"]
-        total_errors = aggregates["total_errors"]
         sessions = list_trace_sessions(
             self.session_id,
             live_record_count=live_count,
@@ -533,6 +528,14 @@ class LiveViewerServer:
             offset=offset,
             query=query,
         )
+        # Listing lazily repairs stale summaries on disk, so aggregates must
+        # be computed afterwards: otherwise a migrated page pairs corrected
+        # per-session values with pre-repair totals in the same response.
+        aggregates = get_trace_store().get_session_aggregates(query)
+        total = aggregates["total_sessions"]
+        total_records = aggregates["total_records"]
+        total_tokens = aggregates["total_tokens"]
+        total_errors = aggregates["total_errors"]
         dates, has_legacy = get_trace_store().list_dates()
         return web.json_response(
             {

@@ -600,6 +600,54 @@ def test_zero_record_migration_preserves_empty_totals(trace_db) -> None:
     assert summary["active"] is False
 
 
+@pytest.mark.asyncio
+async def test_session_totals_reflect_lazy_summary_repairs(trace_db) -> None:
+    """Header aggregates must be computed after in-request summary repairs."""
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    record = _anthropic_record(turn=1)
+    record["response"]["body"]["usage"] = {
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 5000,
+    }
+    store.append_record(session_id, record)
+    # The parent release persisted this exact stale shape as current (issue
+    # #453): separate cache reads folded away plus a distorted token total.
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (
+            json.dumps(
+                {
+                    "id": session_id,
+                    "summary_version": DASHBOARD_SUMMARY_VERSION - 1,
+                    "cache_read_tokens": 0,
+                    "total_tokens": 1,
+                }
+            ),
+            session_id,
+        ),
+    )
+    conn.commit()
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+
+        item = next(entry for entry in payload["sessions"] if entry["id"] == session_id)
+        # Aggregating before the listing's lazy repair would freeze the stale
+        # header (total 1) alongside already-corrected per-session values.
+        assert payload["total_tokens"] == item["total_tokens"] == 5110
+        assert item["cache_read_tokens"] == 5000
+    finally:
+        await server.stop()
+
+
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])
