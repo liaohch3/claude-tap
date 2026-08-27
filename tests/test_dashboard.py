@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -902,6 +903,80 @@ async def test_session_and_agent_handlers_run_blocking_steps_off_the_event_loop(
         ticker_stop.set()
         if ticker_task is not None:
             await asyncio.gather(ticker_task, return_exceptions=True)
+        if port is not None:
+            await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_delete_handlers_finalize_off_loop_and_tolerate_lock_contention(trace_db, monkeypatch) -> None:
+    """Delete endpoints must keep stale finalization off-loop and never 500 on busy locks."""
+    main_thread_id = threading.get_ident()
+    finalize_threads: list[int] = []
+    fail_finalization = [False]
+
+    server = LiveViewerServer(port=0)
+    original_finalize = server._finalize_stale_active_sessions
+
+    def instrumented_finalize() -> None:
+        # Lock contention surfaces as OperationalError from the store write path.
+        if fail_finalization[0]:
+            raise sqlite3.OperationalError("database is locked")
+        finalize_threads.append(threading.get_ident())
+        original_finalize()
+
+    monkeypatch.setattr(server, "_finalize_stale_active_sessions", instrumented_finalize)
+
+    store = get_trace_store()
+    conn = store._connect()
+
+    async def create_completable_session() -> str:
+        session_id = store.create_session(client="codex", proxy_mode="reverse")
+        conn.execute("UPDATE sessions SET status = 'complete' WHERE id = ?", (session_id,))
+        conn.commit()
+        return session_id
+
+    port: int | None = None
+    try:
+        port = await server.start()
+        single_delete_id = await create_completable_session()
+        batch_delete_id = await create_completable_session()
+        contended_single_id = await create_completable_session()
+
+        async with aiohttp.ClientSession() as session:
+            # A synchronous call here would record the loop thread itself.
+            resp = await session.delete(f"http://127.0.0.1:{port}/api/sessions/{single_delete_id}")
+            assert resp.status == 200
+            await resp.read()
+            assert finalize_threads, "stale finalization never ran"
+            assert all(thread != main_thread_id for thread in finalize_threads), (
+                "single delete finalized on the loop thread"
+            )
+
+            # Contention inside best-effort hygiene must degrade, never surface as 500.
+            fail_finalization[0] = True
+            resp = await session.delete(
+                f"http://127.0.0.1:{port}/api/sessions",
+                json={"session_ids": [batch_delete_id]},
+            )
+            assert resp.status == 200, "batch delete 500ed on lock contention"
+            await resp.read()
+            resp = await session.delete(f"http://127.0.0.1:{port}/api/sessions/{contended_single_id}")
+            assert resp.status == 200, "single delete 500ed on lock contention"
+            await resp.read()
+            date_key = datetime.now(timezone.utc).date().isoformat()
+            resp = await session.delete(f"http://127.0.0.1:{port}/api/traces/{date_key}")
+            assert resp.status == 200, "date-scoped delete 500ed on lock contention"
+            await resp.read()
+
+            # The listing handlers share the same finalize step; contention
+            # there must also degrade instead of failing the whole request.
+            resp = await session.get(f"http://127.0.0.1:{port}/api/sessions")
+            assert resp.status == 200, "sessions listing 500ed on lock contention"
+            await resp.read()
+            resp = await session.get(f"http://127.0.0.1:{port}/api/agents")
+            assert resp.status == 200, "agents listing 500ed on lock contention"
+            await resp.read()
+    finally:
         if port is not None:
             await server.stop()
 

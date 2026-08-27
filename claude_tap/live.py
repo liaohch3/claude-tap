@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import logging
 import re
 import secrets
+import sqlite3
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -329,6 +331,24 @@ class LiveViewerServer:
         protected = {self.session_id} if self.session_id else set()
         ensure_trace_store().finalize_stale_active_sessions(protected_session_ids=protected)
 
+    async def _finalize_stale_active_sessions_safely(self) -> None:
+        """Finalize abandoned sessions off-loop, skipping pass on lock contention.
+
+        Finalization is best-effort hygiene. It takes the cross-process write
+        lock and can busy-wait for it, so it must run on a worker thread; when
+        another writer holds that lock past busy_timeout, a skipped pass beats
+        stalling heartbeats or answering unrelated requests with HTTP 500.
+        """
+        try:
+            await asyncio.to_thread(self._finalize_stale_active_sessions)
+        except sqlite3.OperationalError as exc:
+            # Keep the skip observable without disturbing request handling.
+            logging.getLogger("claude-tap").debug(
+                "stale-session finalization skipped: %s",
+                exc,
+            )
+            return None
+
     async def _handle_dashboard_index(self, request: web.Request) -> web.Response:
         """Serve the session-first dashboard."""
         if session_id := request.query.get("session_id"):
@@ -512,7 +532,7 @@ class LiveViewerServer:
         """Return trace history agent buckets."""
         # Finalization waits on the store write lock and lists agents from a
         # full SQLite scan; both must stay off the loop or heartbeats stall.
-        await asyncio.to_thread(self._finalize_stale_active_sessions)
+        await self._finalize_stale_active_sessions_safely()
         live_count = await self._current_live_record_count()
         agents = await asyncio.to_thread(
             list_trace_agents,
@@ -525,7 +545,7 @@ class LiveViewerServer:
         """Return trace history sessions."""
         # Stale-row finalization takes the cross-process write lock and can
         # busy-wait for it; keep that off the event loop.
-        await asyncio.to_thread(self._finalize_stale_active_sessions)
+        await self._finalize_stale_active_sessions_safely()
         live_count = await self._current_live_record_count()
         offset = _session_offset_from_request(request)
         limit = _session_limit_from_request(request)
@@ -668,7 +688,7 @@ class LiveViewerServer:
     async def _handle_delete_session(self, request: web.Request) -> web.Response:
         """Delete one stored trace session."""
         session_id = request.match_info["session_id"]
-        self._finalize_stale_active_sessions()
+        await self._finalize_stale_active_sessions_safely()
         store = ensure_trace_store()
         row = store.load_session_row(session_id)
         if row is None:
@@ -694,7 +714,7 @@ class LiveViewerServer:
         if not session_ids:
             return web.json_response({"error": "No sessions selected"}, status=400)
 
-        self._finalize_stale_active_sessions()
+        await self._finalize_stale_active_sessions_safely()
         store = ensure_trace_store()
         deletable_ids = []
         skipped_active = []
@@ -798,7 +818,7 @@ class LiveViewerServer:
         date_key = request.match_info["date"]
         if date_key != "legacy" and not _DATE_RE.match(date_key):
             return web.json_response({"error": "Invalid date format"}, status=400)
-        self._finalize_stale_active_sessions()
+        await self._finalize_stale_active_sessions_safely()
         protected: set[str] = set()
         force = request.query.get("force", "").lower() in {"1", "true", "yes"}
         if self.session_id:
