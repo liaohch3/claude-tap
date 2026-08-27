@@ -406,7 +406,10 @@ def _session_summary_from_row(
                 # append-time aggregation; the scan runs at most once per stale
                 # session because the repaired summary persists as current.
                 records = store.load_records(row["id"])
-                if records and _is_complete_record_load(records, record_count):
+                # A zero-record manifest legitimately loads as an empty list,
+                # so completeness must not depend on truthiness: rejecting
+                # empty loads would rescan the same session on every listing.
+                if _is_complete_record_load(records, record_count):
                     summary = build_stored_session_summary(row, records)
                     store.store_summary(row["id"], summary)
                     return redact_dashboard_summary(summary)

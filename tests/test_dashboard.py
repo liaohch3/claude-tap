@@ -547,6 +547,59 @@ def test_full_recount_skips_persistence_when_records_do_not_match_manifest(trace
     assert stored_row[0] is None
 
 
+def _seed_stale_zero_record_session() -> str:
+    """Create a completed zero-record session holding a pre-bump cached summary."""
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (json.dumps({"id": session_id, "summary_version": DASHBOARD_SUMMARY_VERSION - 1}), session_id),
+    )
+    conn.commit()
+    return session_id
+
+
+def test_empty_session_summary_migrates_exactly_once(trace_db, monkeypatch) -> None:
+    """A completed zero-record session must migrate once instead of rescanning forever."""
+    session_id = _seed_stale_zero_record_session()
+    store = get_trace_store()
+
+    original_load_records = TraceStore.load_records
+    scanned_ids = []
+
+    def counting_load_records(self, scan_session_id):
+        scanned_ids.append(scan_session_id)
+        return original_load_records(self, scan_session_id)
+
+    monkeypatch.setattr(TraceStore, "load_records", counting_load_records)
+
+    list_trace_sessions()
+
+    conn = store._connect()
+    stored = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
+    # Listing normalizes the returned copy regardless, so currency can only be
+    # verified against what the listing persisted for future requests.
+    assert stored["summary_version"] == DASHBOARD_SUMMARY_VERSION
+
+    list_trace_sessions()
+    # One scan discovers the (legitimately empty) record set; the persisted
+    # summary must then short-circuit later listings. An un-migrated empty
+    # session rescans on every request forever.
+    assert scanned_ids == [session_id]
+
+
+def test_zero_record_migration_preserves_empty_totals(trace_db) -> None:
+    """The migrated empty summary keeps truthful zero buckets."""
+    session_id = _seed_stale_zero_record_session()
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+
+    assert summary["record_count"] == 0
+    assert summary["total_tokens"] == 0
+    assert summary["active"] is False
+
+
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])
