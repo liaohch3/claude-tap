@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import aiohttp
 import pytest
 from aiohttp.test_utils import make_mocked_request
 
+from claude_tap import live as live_module
 from claude_tap.dashboard import (
     DASHBOARD_SUMMARY_VERSION,
     _clean_user_prompt_text,
@@ -646,6 +648,68 @@ async def test_session_totals_reflect_lazy_summary_repairs(trace_db) -> None:
         assert item["cache_read_tokens"] == 5000
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_session_listing_does_not_block_the_event_loop(trace_db, monkeypatch) -> None:
+    """A slow full recount must not park the request event loop."""
+    main_thread_id = threading.get_ident()
+    entered = threading.Event()
+    release_listing = threading.Event()
+    listing_threads = []
+
+    def slow_listing(*args, **kwargs):
+        listing_threads.append(threading.get_ident())
+        entered.set()
+        release_listing.wait(timeout=5)
+        return []
+
+    monkeypatch.setattr(live_module, "list_trace_sessions", slow_listing)
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+
+    ticks = 0
+
+    async def count_loop_ticks() -> None:
+        nonlocal ticks
+        while not release_listing.is_set() and ticks < 10000:
+            ticks += 1
+            await asyncio.sleep(0.005)
+
+    ticker = asyncio.create_task(count_loop_ticks())
+    try:
+        async with aiohttp.ClientSession() as session:
+
+            async def fetch_sessions() -> int:
+                async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                    return resp.status
+
+            request_task = asyncio.create_task(fetch_sessions())
+            # Poll cooperatively: waiting on the threading.Event directly would
+            # park the loop thread before the request task ever gets scheduled.
+            deadline = datetime.now(timezone.utc) + timedelta(seconds=5)
+            while not entered.is_set() and datetime.now(timezone.utc) < deadline:
+                await asyncio.sleep(0.01)
+            assert entered.is_set()
+            # While the listing is parked, the loop must keep serving ticks;
+            # a synchronous recount runs on the loop thread and stalls them.
+            await asyncio.sleep(0.05)
+            release_listing.set()
+            assert await asyncio.wait_for(request_task, timeout=2) == 200
+    finally:
+        release_listing.set()
+        ticker.cancel()
+        try:
+            await ticker
+        except asyncio.CancelledError:
+            pass
+        await server.stop()
+
+    # The parked window alone yields multiple loop ticks, and the listing ran
+    # on a worker thread rather than the loop thread.
+    assert ticks >= 3
+    assert listing_threads and listing_threads[0] != main_thread_id
 
 
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:

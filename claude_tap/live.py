@@ -521,7 +521,11 @@ class LiveViewerServer:
         offset = _session_offset_from_request(request)
         limit = _session_limit_from_request(request)
         query = _session_query_from_request(request)
-        sessions = list_trace_sessions(
+        # Stale rows trigger a full record recount with blob decoding, which
+        # can stall for an entire page of sessions; run it on a worker thread
+        # so SSE heartbeats and sibling handlers keep making progress.
+        sessions = await asyncio.to_thread(
+            list_trace_sessions,
             self.session_id,
             live_record_count=live_count,
             limit=limit,
