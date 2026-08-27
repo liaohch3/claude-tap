@@ -1,0 +1,1 @@
+uv run claude-tap dashboard --tap-live-port 19599 --tap-no-open against an isolated CLOUDTAP_DB seeded with the issue #453 legacy v3 session
