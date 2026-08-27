@@ -26,6 +26,7 @@ from claude_tap.dashboard import (
     _request_user_text,
     _response_events,
     _response_text,
+    _session_summary_from_row,
     dashboard_trace_snapshot,
     list_trace_agents,
     list_trace_sessions,
@@ -482,6 +483,68 @@ def test_migration_repairs_summaries_left_by_parent_release(trace_db) -> None:
     # bump lets those databases self-heal on the next listing.
     assert summary["cache_read_tokens"] == 5000
     assert summary["total_tokens"] == 5480
+
+
+def _seed_middle_turn_cache_session() -> tuple[TraceStore, str]:
+    """Create an Anthropic session whose cache read lives only in turn two."""
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    turns = ((100, 10, 0), (200, 10, 5000), (150, 10, 0))
+    for turn, (input_tokens, output_tokens, cache_read) in enumerate(turns, start=1):
+        record = _anthropic_record(turn=turn)
+        usage: dict = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        if cache_read:
+            usage["cache_read_input_tokens"] = cache_read
+        record["response"]["body"]["usage"] = usage
+        store.append_record(session_id, record)
+    return store, session_id
+
+
+def test_repair_does_not_persist_recount_from_partial_record_load(trace_db, monkeypatch) -> None:
+    store, session_id = _seed_middle_turn_cache_session()
+    _downgrade_summary_to_v3(store, session_id)
+
+    original_rows_to_records = TraceStore._rows_to_records
+
+    def flaky_rows_to_records(self, conn, rows):
+        # Simulate silent decode failures dropping the final record payload.
+        return original_rows_to_records(self, conn, rows)[:-1]
+
+    monkeypatch.setattr(TraceStore, "_rows_to_records", flaky_rows_to_records)
+
+    list_trace_sessions()
+
+    conn = store._connect()
+    stored = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
+    # A partial load must not overwrite the stale summary: persisting an
+    # under-counted recount would mark it current and block future retries.
+    assert stored["summary_version"] == 3
+
+
+def test_full_recount_skips_persistence_when_records_do_not_match_manifest(trace_db, monkeypatch) -> None:
+    """A full record-scan recount must not persist rows from a partial decode."""
+    store, session_id = _seed_middle_turn_cache_session()
+    # Active sessions carry a write-through live summary; clear it and mark
+    # the session complete so the recount path actually runs.
+    conn = store._connect()
+    conn.execute("UPDATE sessions SET status = 'complete', summary_json = NULL WHERE id = ?", (session_id,))
+    conn.commit()
+
+    original_rows_to_records = TraceStore._rows_to_records
+
+    def flaky_rows_to_records(self, conn2, rows):
+        # Simulate silent decode failures dropping the final record payload.
+        return original_rows_to_records(self, conn2, rows)[:-1]
+
+    monkeypatch.setattr(TraceStore, "_rows_to_records", flaky_rows_to_records)
+
+    summary_row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    _session_summary_from_row(store, summary_row, allow_record_scan=True)
+
+    stored_row = conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    # Persisting here would freeze a two-record recount as current and leave
+    # the dropped third turn unaccounted forever.
+    assert stored_row[0] is None
 
 
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:

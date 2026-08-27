@@ -330,6 +330,14 @@ def is_dashboard_summary_current(summary: Any, session_id: str) -> bool:
     )
 
 
+def _is_complete_record_load(records: list[dict[str, Any]], record_count: int) -> bool:
+    """The store silently skips rows whose payload fails to decode, so a
+    recount may only be persisted when every manifest row was loaded;
+    otherwise an under-counted snapshot would be marked current and never
+    recomputed again."""
+    return len(records) == max(record_count, 0)
+
+
 def build_stored_session_summary(row: sqlite3.Row, records: list[dict[str, Any]]) -> dict[str, Any]:
     manifest_entry = {
         "client": row["client"] or "",
@@ -376,6 +384,7 @@ def _session_summary_from_row(
     allow_record_scan: bool = False,
     repair_stale_summary: bool = True,
 ) -> dict[str, Any]:
+    record_count = int(row["record_count"] or 0)
     summary_json = row["summary_json"]
     if summary_json:
         try:
@@ -397,13 +406,12 @@ def _session_summary_from_row(
                 # append-time aggregation; the scan runs at most once per stale
                 # session because the repaired summary persists as current.
                 records = store.load_records(row["id"])
-                if records:
+                if records and _is_complete_record_load(records, record_count):
                     summary = build_stored_session_summary(row, records)
                     store.store_summary(row["id"], summary)
                     return redact_dashboard_summary(summary)
             return _normalize_cached_session_summary(row, cached)
 
-    record_count = int(row["record_count"] or 0)
     manifest_entry = {
         "client": row["client"] or "",
         "proxy_mode": row["proxy_mode"] or "",
@@ -442,7 +450,8 @@ def _session_summary_from_row(
                     is_current=False,
                     record_count=record_count,
                 )
-                store.store_summary(row["id"], summary)
+                if _is_complete_record_load(records, record_count):
+                    store.store_summary(row["id"], summary)
                 return summary
         return _minimal_session_summary_from_row(row)
 
@@ -460,7 +469,7 @@ def _session_summary_from_row(
         record_count=record_count,
     )
     summary["active"] = row["status"] == "active"
-    if row["status"] != "active":
+    if row["status"] != "active" and _is_complete_record_load(records, record_count):
         store.store_summary(row["id"], summary)
     return redact_dashboard_summary(summary)
 
