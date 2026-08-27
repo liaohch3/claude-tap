@@ -440,6 +440,50 @@ def test_migration_survives_coinciding_nonzero_boundaries(trace_db) -> None:
     assert summary["cache_read_in_input_tokens"] == 120
 
 
+def _simulate_parent_release_v4_migration(store: TraceStore, session_id: str) -> None:
+    """Rewrite the stored summary into the shape the parent release persisted.
+
+    The parent release migrated stale summaries with the removed boundary
+    heuristic, which re-bucketed every separate cache read as embedded and
+    persisted the result under summary_version 4. Such rows satisfy any
+    currency check written against version 4 and were never revisited.
+    """
+    conn = store._connect()
+    cached = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
+    cached["cache_read_in_input_tokens"] = int(cached.get("cache_read_in_input_tokens") or 0) + int(
+        cached.get("cache_read_tokens") or 0
+    )
+    cached["cache_read_tokens"] = 0
+    cached["summary_version"] = 4
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (json.dumps(cached, ensure_ascii=False, separators=(",", ":")), session_id),
+    )
+    conn.commit()
+
+
+def test_migration_repairs_summaries_left_by_parent_release(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    turns = ((100, 10, 0), (200, 10, 5000), (150, 10, 0))
+    for turn, (input_tokens, output_tokens, cache_read) in enumerate(turns, start=1):
+        record = _anthropic_record(turn=turn)
+        usage: dict = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        if cache_read:
+            usage["cache_read_input_tokens"] = cache_read
+        record["response"]["body"]["usage"] = usage
+        store.append_record(session_id, record)
+    _simulate_parent_release_v4_migration(store, session_id)
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+
+    # The parent release persisted this exact shape as current version 4 (all
+    # separate cache reads folded into embedded, issue #453); only a version
+    # bump lets those databases self-heal on the next listing.
+    assert summary["cache_read_tokens"] == 5000
+    assert summary["total_tokens"] == 5480
+
+
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
     trace_path = tmp_path / "2026-05-20" / "trace_080000.jsonl"
     _write_jsonl(trace_path, [_anthropic_record(), _anthropic_record(turn=2), _anthropic_record(turn=3)])

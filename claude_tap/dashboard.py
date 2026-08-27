@@ -40,7 +40,10 @@ CLIENT_LABELS = {
     "pi": "Pi",
     "qoder": "Qoder",
 }
-DASHBOARD_SUMMARY_VERSION = 4
+# Version 5 rebuilds summaries that version 4 persisted from a stale-v3
+# migration performed by the removed boundary heuristic (issue #453), so
+# already-corrupted databases self-heal on their next listing.
+DASHBOARD_SUMMARY_VERSION = 5
 VALID_SESSION_STATUSES = {"active", "complete", "error", "empty"}
 _REDACTED_VALUE = "REDACTED"
 _SENSITIVE_KEY_NAMES = {
