@@ -579,10 +579,22 @@ def test_empty_session_summary_migrates_exactly_once(trace_db, monkeypatch) -> N
     list_trace_sessions()
 
     conn = store._connect()
-    stored = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
+    stored = json.loads(
+        conn.execute(
+            "SELECT summary_json FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()[0]
+    )
     # Listing normalizes the returned copy regardless, so currency can only be
     # verified against what the listing persisted for future requests.
     assert stored["summary_version"] == DASHBOARD_SUMMARY_VERSION
+    # Currency alone would let a degenerate stub pass while freezing junk for
+    # every later listing, so pin the persisted shape too: zero records must
+    # stay terminal ('empty', inactive) with truthful zero-bucket totals.
+    assert stored["status"] == "empty"
+    assert stored["active"] is False
+    assert stored["record_count"] == 0
+    assert stored["total_tokens"] == 0
 
     list_trace_sessions()
     # One scan discovers the (legitimately empty) record set; the persisted
