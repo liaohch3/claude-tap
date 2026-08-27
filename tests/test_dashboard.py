@@ -36,7 +36,7 @@ from claude_tap.history import migrate_legacy_traces
 from claude_tap.live import LiveViewerServer, _record_limit_from_request
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
-from claude_tap.trace_store import get_trace_store
+from claude_tap.trace_store import TraceStore, get_trace_store
 from tests.conftest import playwright_skip_reason
 
 # The browser tests below launch chromium, which installs separately from the
@@ -349,28 +349,95 @@ def test_append_records_do_not_double_count_embedded_cache_read(trace_db) -> Non
     assert summary["total_tokens"] == 2 * 11773
 
 
-def test_summary_repair_migrates_legacy_double_counted_totals(trace_db) -> None:
-    store = get_trace_store()
-    session_id = store.create_session(client="codex", proxy_mode="reverse")
-    store.append_record(session_id, _codex_responses_record(turn=1))
-
+def _downgrade_summary_to_v3(store: TraceStore, session_id: str) -> None:
+    """Rewrite a stored summary into its pre-v4 legacy shape for migration tests."""
     conn = store._connect()
     cached = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
-    # Simulate a pre-cache_read_in_input_tokens summary: no embedded split and
-    # a total computed with cached input counted twice.
     cached.pop("cache_read_in_input_tokens", None)
     cached["summary_version"] = 3
-    cached["total_tokens"] = 11767 + 6 + 11648
+    # Legacy totals summed every bucket, double-counting embedded cache reads.
+    cached["total_tokens"] = (
+        int(cached.get("input_tokens") or 0)
+        + int(cached.get("output_tokens") or 0)
+        + int(cached.get("cache_read_tokens") or 0)
+        + int(cached.get("cache_create_tokens") or 0)
+    )
     conn.execute(
         "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
         (json.dumps(cached, ensure_ascii=False, separators=(",", ":")), session_id),
     )
     conn.commit()
 
+
+def test_summary_repair_migrates_legacy_double_counted_totals(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(session_id, _codex_responses_record(turn=1))
+    _downgrade_summary_to_v3(store, session_id)
+
     summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
 
     assert summary["total_tokens"] == 11773
     assert summary["cache_read_tokens"] == 11648
+
+
+def test_migration_recounts_middle_turn_only_anthropic_cache_exactly(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    turns = ((100, 10, 0), (200, 10, 5000), (150, 10, 0))
+    for turn, (input_tokens, output_tokens, cache_read) in enumerate(turns, start=1):
+        record = _anthropic_record(turn=turn)
+        usage: dict = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        if cache_read:
+            usage["cache_read_input_tokens"] = cache_read
+        record["response"]["body"]["usage"] = usage
+        store.append_record(session_id, record)
+    _downgrade_summary_to_v3(store, session_id)
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+
+    # Cache reads live only in the middle turn, so both boundary samples carry
+    # zero cache usage; the boundary heuristic re-bucketed the whole 5000-token
+    # bucket as embedded and reported 480 instead of 5480 (issue #453).
+    assert summary["total_tokens"] == 5480
+
+
+def test_migration_survives_coinciding_nonzero_boundaries(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="mixed", proxy_mode="reverse")
+    codex_open = _codex_responses_record(turn=1)
+    codex_open["response"]["body"]["usage"] = {
+        "input_tokens": 100,
+        "input_tokens_details": {"cached_tokens": 50},
+        "output_tokens": 1,
+        "total_tokens": 101,
+    }
+    anthropic_middle = _anthropic_record(turn=2)
+    anthropic_middle["response"]["body"]["usage"] = {
+        "input_tokens": 200,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 300,
+    }
+    codex_close = _codex_responses_record(turn=3)
+    codex_close["response"]["body"]["usage"] = {
+        "input_tokens": 100,
+        "input_tokens_details": {"cached_tokens": 70},
+        "output_tokens": 1,
+        "total_tokens": 101,
+    }
+    for record in (codex_open, anthropic_middle, codex_close):
+        store.append_record(session_id, record)
+    _downgrade_summary_to_v3(store, session_id)
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+
+    # Both boundary samples are Codex-shaped with coinciding non-zero buckets
+    # (embedded 120 == cache-read 120 across records 1 and 3), so the old
+    # equality check fired on coincidence and dropped the middle turn's 300
+    # separate cache reads: 412 instead of 712 (issue #453).
+    assert summary["total_tokens"] == 712
+    assert summary["cache_read_tokens"] == 420
+    assert summary["cache_read_in_input_tokens"] == 120
 
 
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:

@@ -543,35 +543,6 @@ class TraceStore:
         ).fetchall()
         return self._rows_to_records(conn, rows)
 
-    def load_boundary_records(self, session_id: str) -> list[dict[str, Any]]:
-        """Load the first and last records for a session without reading everything."""
-        with self._read_connect() as conn:
-            first = conn.execute(
-                """
-                SELECT session_id, payload_json
-                FROM records
-                WHERE session_id = ?
-                ORDER BY record_index
-                LIMIT 1
-                """,
-                (session_id,),
-            ).fetchone()
-            last = conn.execute(
-                """
-                SELECT session_id, payload_json
-                FROM records
-                WHERE session_id = ?
-                ORDER BY record_index DESC
-                LIMIT 1
-                """,
-                (session_id,),
-            ).fetchone()
-            if first is None:
-                return []
-            if last is None or first["payload_json"] == last["payload_json"]:
-                return self._rows_to_records(conn, [first])
-            return self._rows_to_records(conn, [first, last])
-
     def load_records_for_date(self, date_key: str) -> list[dict[str, Any]]:
         """Load all records for sessions on a given date in one query."""
         with self._read_connect() as conn:

@@ -386,11 +386,18 @@ def _session_summary_from_row(
                 and row["status"] != "active"
                 and (not is_dashboard_summary_current(cached, row["id"]) or needs_error_repair)
             ):
-                boundary_records = store.load_boundary_records(row["id"])
-                if boundary_records:
-                    summary = _summary_from_boundary_records(row, boundary_records, cached)
+                # Legacy cached summaries predate the embedded-cache-read split,
+                # and boundary records cannot classify how their cache reads
+                # were shaped: first/last samples range from zero usage to
+                # coinciding non-zero buckets on genuinely mixed sessions.
+                # Rebuild from the full record set so migrated buckets match
+                # append-time aggregation; the scan runs at most once per stale
+                # session because the repaired summary persists as current.
+                records = store.load_records(row["id"])
+                if records:
+                    summary = build_stored_session_summary(row, records)
                     store.store_summary(row["id"], summary)
-                    return summary
+                    return redact_dashboard_summary(summary)
             return _normalize_cached_session_summary(row, cached)
 
     record_count = int(row["record_count"] or 0)
@@ -475,54 +482,6 @@ def _minimal_session_summary_from_row(row: sqlite3.Row) -> dict[str, Any]:
     )
     if record_count > 0 and summary["status"] == "empty":
         summary["status"] = row["status"] if row["status"] in {"active", "complete", "error"} else "complete"
-    return redact_dashboard_summary(summary)
-
-
-def _summary_from_boundary_records(
-    row: sqlite3.Row,
-    records: list[dict[str, Any]],
-    cached: dict[str, Any],
-) -> dict[str, Any]:
-    summary = build_stored_session_summary(row, records)
-    if "cache_read_in_input_tokens" not in cached:
-        # Legacy cached summaries predate the embedded-cache-read split, so
-        # their buckets cannot say how much cache read already sits inside
-        # input_tokens. Boundary records sample the session shape: when every
-        # sampled cache read is embedded (Codex/OpenAI shape), treat the whole
-        # cached cache-read bucket as embedded so migration does not keep
-        # counting cached input twice.
-        boundary_cache_read = int(summary.get("cache_read_tokens") or 0)
-        boundary_embedded = int(summary.get("cache_read_in_input_tokens") or 0)
-        cached = dict(cached)
-        cached["cache_read_in_input_tokens"] = (
-            int(cached.get("cache_read_tokens") or 0) if boundary_embedded == boundary_cache_read else 0
-        )
-    for key in (
-        "input_tokens",
-        "output_tokens",
-        "cache_read_tokens",
-        "cache_read_in_input_tokens",
-        "cache_create_tokens",
-        "duration_ms",
-        "turn_count",
-        "model",
-        "error",
-    ):
-        if cached.get(key):
-            summary[key] = cached[key]
-    # The truthy-only pass above skips a zero embedded split, which would let
-    # the boundary-sample value leak into the migrated summary; overwrite it
-    # unconditionally because the cached split is authoritative when present.
-    if "cache_read_in_input_tokens" in cached:
-        summary["cache_read_in_input_tokens"] = int(cached["cache_read_in_input_tokens"] or 0)
-    token_total = _recompute_total_tokens(summary)
-    if token_total:
-        summary["total_tokens"] = token_total
-    elif cached.get("total_tokens"):
-        summary["total_tokens"] = cached["total_tokens"]
-    summary["summary_version"] = DASHBOARD_SUMMARY_VERSION
-    summary["record_count"] = int(row["record_count"] or summary.get("record_count") or 0)
-    summary["turn_count"] = max(int(summary.get("turn_count") or 0), summary["record_count"])
     return redact_dashboard_summary(summary)
 
 
