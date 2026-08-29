@@ -581,7 +581,13 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         label="OpenClaw",
         install_url="https://github.com/openclaw/openclaw",
         base_url_env="OPENAI_BASE_URL",
-        extra_base_url_envs=("ANTHROPIC_BASE_URL", "GOOGLE_GEMINI_BASE_URL", "OPENROUTER_BASE_URL", "CUSTOM_BASE_URL"),
+        extra_base_url_envs=(
+            "ANTHROPIC_BASE_URL",
+            "GOOGLE_GEMINI_BASE_URL",
+            "OPENROUTER_BASE_URL",
+            "ORCAROUTER_BASE_URL",
+            "CUSTOM_BASE_URL",
+        ),
         base_url_suffix="/v1",
         default_target="https://api.openai.com",
     ),
@@ -2225,6 +2231,8 @@ def _openclaw_fallback_reverse_env(proxy_url: str, cmd_args: Sequence[str] = ())
         return {"GOOGLE_GEMINI_BASE_URL": proxy_url}
     if provider == "openrouter":
         return {"OPENROUTER_BASE_URL": proxy_url}
+    if provider == "orcarouter":
+        return {"ORCAROUTER_BASE_URL": proxy_url}
     return {"OPENAI_BASE_URL": f"{proxy_url}/v1"}
 
 
@@ -2238,6 +2246,7 @@ def _openclaw_fallback_provider(cmd_args: Sequence[str] = ()) -> str:
         ("GEMINI_API_KEY", "gemini"),
         ("GOOGLE_API_KEY", "gemini"),
         ("OPENROUTER_API_KEY", "openrouter"),
+        ("ORCAROUTER_API_KEY", "orcarouter"),
     ):
         if os.environ.get(env_key):
             return provider
@@ -2262,6 +2271,7 @@ def _multi_provider_reverse_env(port: int) -> dict[str, str]:
         "ANTHROPIC_BASE_URL": proxy_url,
         "GOOGLE_GEMINI_BASE_URL": proxy_url,
         "OPENROUTER_BASE_URL": f"{proxy_url}/v1",
+        "ORCAROUTER_BASE_URL": f"{proxy_url}/v1",
         "CUSTOM_BASE_URL": f"{proxy_url}/v1",
     }
 
@@ -2285,6 +2295,7 @@ def _detect_openclaw_target(cmd_args: Sequence[str] = ()) -> str:
         ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com"),
         ("GOOGLE_API_KEY", "https://generativelanguage.googleapis.com"),
         ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+        ("ORCAROUTER_API_KEY", "https://api.orcarouter.ai/v1"),
     ):
         if os.environ.get(env_key):
             return target

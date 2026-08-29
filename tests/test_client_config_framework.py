@@ -174,6 +174,7 @@ def test_openclaw_declares_multi_provider_reverse_envs() -> None:
         "ANTHROPIC_BASE_URL",
         "GOOGLE_GEMINI_BASE_URL",
         "OPENROUTER_BASE_URL",
+        "ORCAROUTER_BASE_URL",
         "CUSTOM_BASE_URL",
     )
 
@@ -461,6 +462,15 @@ def test_openclaw_reverse_env_falls_back_without_patchable_config(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(tmp_path / "missing.json"))
+    for key in (
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "ORCAROUTER_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
     env = cli_clients._openclaw_reverse_env(43123)
 
@@ -500,6 +510,11 @@ def test_detect_openclaw_target_uses_config_then_env(
     monkeypatch.setenv("OPENROUTER_API_KEY", "token")
 
     assert cli_clients._detect_openclaw_target() == "https://openrouter.ai/api/v1"
+
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "token")
+
+    assert cli_clients._detect_openclaw_target() == "https://api.orcarouter.ai/v1"
 
 
 def test_detect_openclaw_target_uses_model_arg_provider(

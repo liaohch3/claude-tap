@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Preserve wrapped-client stdout for every mode by always routing claude-tap operational output to stderr.
 
+### Added
+
+- Add OrcaRouter as a named Claude Code gateway: recognize `api.orcarouter.ai` in the pricing namespace, wire `ORCAROUTER_BASE_URL` / `ORCAROUTER_API_KEY` into the multi-provider reverse env, and document the setup in a bilingual guide.
+
 
 
 

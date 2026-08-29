@@ -208,6 +208,31 @@ claude-tap -- --permission-mode bypassPermissions
 </details>
 
 <details>
+<summary>Claude Code with OrcaRouter</summary>
+
+Full English guide: [Claude Code with OrcaRouter](docs/guides/orcarouter-claude-code.md). Simplified Chinese version: [Claude Code 搭配 OrcaRouter](docs/guides/orcarouter-claude-code.zh.md).
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="<your OrcaRouter API key>"
+unset ANTHROPIC_API_KEY
+
+export ANTHROPIC_MODEL="orcarouter/auto"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="orcarouter/auto"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="orcarouter/auto"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="orcarouter/fusion-flash"
+export CLAUDE_CODE_SUBAGENT_MODEL="orcarouter/fusion-flash"
+export ANTHROPIC_BASE_URL=https://api.orcarouter.ai
+```
+
+```bash
+claude-tap -- --permission-mode bypassPermissions
+```
+
+`claude-tap` reads the OrcaRouter upstream from `ANTHROPIC_BASE_URL`, then launches Claude Code against the local proxy. OrcaRouter is an OpenAI- and Anthropic-compatible AI gateway; its own routes are named under an `orcarouter/` namespace and are priced at the concrete underlying vendor model's rate. Use `--tap-target https://api.orcarouter.ai` only as a manual override.
+
+</details>
+
+<details>
 <summary>Claude Code with AWS Bedrock</summary>
 
 `claude-tap` supports three Bedrock scenarios and auto-detects which applies:
@@ -475,6 +500,7 @@ claude-tap --tap-client cursor --tap-no-launch
 
 - [OpenClaw setup guide](docs/guides/OPENCLAW_README.md) for integrating `claude-tap` with OpenClaw. Simplified Chinese version: [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md).
 - [Claude Code with DeepSeek API](docs/guides/deepseek-claude-code.md) for routing Claude Code through DeepSeek's Anthropic-compatible API. Simplified Chinese version: [Claude Code 搭配 DeepSeek API](docs/guides/deepseek-claude-code.zh.md).
+- [Claude Code with OrcaRouter](docs/guides/orcarouter-claude-code.md) for routing Claude Code through OrcaRouter's Anthropic-compatible API. Simplified Chinese version: [Claude Code 搭配 OrcaRouter](docs/guides/orcarouter-claude-code.zh.md).
 - [Client support matrix](docs/support-matrix.md) for exact environment variables, proxy modes, and URL rewrite rules.
 
 <details>

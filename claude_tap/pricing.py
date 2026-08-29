@@ -42,7 +42,7 @@ MAX_TOKEN_COUNT = 1_000_000_000_000
 _MODEL_FROM_PATH_RE = re.compile(r"/models?/([^:?/]+)")
 # Bedrock and Vertex prefix the region or publisher onto the model id.
 _STRIP_PREFIX_RE = re.compile(
-    r"^(?:bedrock/|openrouter/|azure_ai/|azure/|vertex_ai/|gemini/|"
+    r"^(?:bedrock/|openrouter/|orcarouter/|azure_ai/|azure/|vertex_ai/|gemini/|"
     r"(?:us|eu|apac|au|jp|ca|global)\.)+",
     re.IGNORECASE,
 )
@@ -57,6 +57,13 @@ _STRIP_PREFIX_RE = re.compile(
 # matrix lists as reachable belongs here.
 _PROVIDER_HOSTS = (
     ("openrouter.ai", "openrouter"),
+    # OrcaRouter is an OpenAI- and Anthropic-compatible gateway that names its
+    # own routes under an ``orcarouter/`` namespace (``orcarouter/auto``,
+    # ``orcarouter/fusion``, ...) while passing vendor ids through unchanged.
+    # Its own SKUs are zero-markup, so pricing falls through to the concrete
+    # underlying model, but the namespace must be recognized for the ``/v1``
+    # base URL to resolve like OpenRouter does.
+    ("api.orcarouter.ai", "orcarouter"),
     ("generativelanguage.googleapis.com", "gemini"),
     ("aiplatform.googleapis.com", "vertex_ai"),
     ("vertexai.googleapis.com", "vertex_ai"),

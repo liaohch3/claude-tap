@@ -206,6 +206,31 @@ claude-tap -- --permission-mode bypassPermissions
 </details>
 
 <details>
+<summary>Claude Code + OrcaRouter</summary>
+
+完整中文指南见 [Claude Code 搭配 OrcaRouter](docs/guides/orcarouter-claude-code.zh.md)，英文版见 [Claude Code with OrcaRouter](docs/guides/orcarouter-claude-code.md)。
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="<你的 OrcaRouter API key>"
+unset ANTHROPIC_API_KEY
+
+export ANTHROPIC_MODEL="orcarouter/auto"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="orcarouter/auto"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="orcarouter/auto"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="orcarouter/fusion-flash"
+export CLAUDE_CODE_SUBAGENT_MODEL="orcarouter/fusion-flash"
+export ANTHROPIC_BASE_URL=https://api.orcarouter.ai
+```
+
+```bash
+claude-tap -- --permission-mode bypassPermissions
+```
+
+`claude-tap` 会从 `ANTHROPIC_BASE_URL` 读取 OrcaRouter 上游，再把 Claude Code 指向本地代理。OrcaRouter 是兼容 OpenAI 与 Anthropic 的 AI 网关，其自有路由使用 `orcarouter/` 命名空间，并按底层厂商模型的实际费率计价。只有手动覆盖时才需要 `--tap-target https://api.orcarouter.ai`。
+
+</details>
+
+<details>
 <summary>Claude Code + AWS Bedrock</summary>
 
 `claude-tap` 支持三种 Bedrock 场景，并自动检测适用哪种：
@@ -467,6 +492,7 @@ claude-tap --tap-client cursor --tap-no-launch
 
 - [OpenClaw 设置指南](docs/guides/OPENCLAW_README.zh.md)：在 OpenClaw 中集成 `claude-tap`。英文版见 [OpenClaw setup guide](docs/guides/OPENCLAW_README.md)。
 - [Claude Code 搭配 DeepSeek API](docs/guides/deepseek-claude-code.zh.md)：让 Claude Code 走 DeepSeek 的 Anthropic 兼容 API。英文版见 [Claude Code with DeepSeek API](docs/guides/deepseek-claude-code.md)。
+- [Claude Code 搭配 OrcaRouter](docs/guides/orcarouter-claude-code.zh.md)：让 Claude Code 走 OrcaRouter 的 Anthropic 兼容 API。英文版见 [Claude Code with OrcaRouter](docs/guides/orcarouter-claude-code.md)。
 - [客户端支持矩阵](docs/support-matrix.md)：查看各客户端对应的环境变量、代理模式和 URL 改写规则。
 
 <details>

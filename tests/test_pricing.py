@@ -74,6 +74,7 @@ def test_bedrock_and_gateway_prefixes_resolve_to_the_same_rates() -> None:
         "us.anthropic.claude-sonnet-4-20250514-v1:0",
         "bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
         "openrouter/anthropic/claude-sonnet-4-20250514",
+        "orcarouter/anthropic/claude-sonnet-4-20250514",
     ):
         rates = resolve_rates(alias)
         assert rates is not None, alias
@@ -660,6 +661,7 @@ def test_gemini_thinking_tokens_are_billed_as_output() -> None:
 
 def test_provider_namespace_reads_the_captured_host() -> None:
     assert pricing.provider_namespace("https://openrouter.ai/api/v1") == "openrouter"
+    assert pricing.provider_namespace("https://api.orcarouter.ai/v1") == "orcarouter"
     assert pricing.provider_namespace("generativelanguage.googleapis.com") == "gemini"
     assert pricing.provider_namespace("https://us-central1-aiplatform.googleapis.com") == "vertex_ai"
     assert pricing.provider_namespace("https://api.anthropic.com") == ""
@@ -722,6 +724,26 @@ def test_openrouter_namespace_beats_the_direct_provider_entry() -> None:
     assert priced is not None
     assert priced.cost == pytest.approx(100 * 1.4e-07)
     assert priced.model == "openrouter/deepseek/deepseek-chat"
+
+
+def test_orcarouter_namespace_falls_through_to_the_underlying_model_rate() -> None:
+    # OrcaRouter names its own zero-markup routes under ``orcarouter/`` but the
+    # vendored table carries no ``orcarouter/`` keys; the namespace must still be
+    # recognized so the ``/v1`` base URL resolves like OpenRouter, and pricing
+    # falls through to the concrete underlying vendor model.
+    assert pricing.provider_namespace("https://api.orcarouter.ai/v1") == "orcarouter"
+
+    # A route-qualified id resolves to the vendor model, not an orcarouter key.
+    routed = resolve_rates("orcarouter/deepseek/deepseek-chat", provider="orcarouter")
+    assert routed is not None
+    assert routed.model == "deepseek/deepseek-chat"
+
+    # The bare id under the OrcaRouter namespace is priced at the vendor rate.
+    bare = resolve_rates("deepseek/deepseek-chat")
+    via_orca = resolve_rates("deepseek/deepseek-chat", provider="orcarouter")
+    assert bare is not None and via_orca is not None
+    assert via_orca.input == bare.input == pytest.approx(2.8e-07)
+    assert pricing.is_priced_model("deepseek/deepseek-chat", provider="orcarouter") is True
 
 
 def test_gemini_namespace_beats_the_bare_vertex_entry() -> None:
