@@ -657,6 +657,9 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     fwd_headers["Accept-Encoding"] = "identity"
 
     try:
+        # TTFT reference point: immediately before the upstream request, so
+        # local request parsing/normalization stays out of ttft_ms.
+        t_upstream = time.monotonic()
         upstream_resp = await session.request(
             method=request.method,
             url=upstream_url,
@@ -685,6 +688,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             upstream_base_url=target,
             store_stream_events=bool(ctx.get("store_stream_events", False)),
             should_trace=should_trace,
+            t_upstream=t_upstream,
         )
         return resp_body
 
@@ -714,7 +718,21 @@ async def _handle_streaming(
     upstream_base_url: str,
     store_stream_events: bool,
     should_trace: bool,
+    t_upstream: float,
 ) -> web.StreamResponse:
+    # Prefetch the first upstream chunk before touching the downstream
+    # response so ttft_ms measures upstream latency alone: no downstream
+    # header prep or client backpressure in between.
+    ttft_ms: int | None = None
+    first_chunk = b""
+    try:
+        first_chunk = await upstream_resp.content.readany()
+        if first_chunk:
+            # First upstream byte ~= time-to-first-token for streams.
+            ttft_ms = int((time.monotonic() - t_upstream) * 1000)
+    except (ConnectionError, asyncio.CancelledError):
+        first_chunk = b""
+
     resp = web.StreamResponse(
         status=upstream_resp.status,
         headers={k: v for k, v in upstream_resp.headers.items() if k.lower() not in HOP_BY_HOP},
@@ -725,12 +743,14 @@ async def _handle_streaming(
     reassembler = SSEReassembler(store_events=store_stream_events)
     raw_chunks: list[bytes] = []
 
-    ttft_ms: int | None = None
     try:
+        if first_chunk:
+            await resp.write(first_chunk)
+            if is_bedrock_stream:
+                raw_chunks.append(first_chunk)
+            else:
+                reassembler.feed_bytes(first_chunk)
         async for chunk in upstream_resp.content.iter_any():
-            if ttft_ms is None:
-                # First upstream byte ~= time-to-first-token for streams.
-                ttft_ms = int((time.monotonic() - t0) * 1000)
             await resp.write(chunk)
             if is_bedrock_stream:
                 raw_chunks.append(chunk)

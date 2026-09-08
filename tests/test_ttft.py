@@ -170,12 +170,28 @@ async def test_reverse_proxy_non_streaming_record_has_no_ttft(
 
 
 class _FakeStreamContent:
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, events: list[str] | None = None, readany_delay_s: float = 0.0) -> None:
         self._body = body
+        self._offset = 0
+        self._events = events
+        self._readany_delay_s = readany_delay_s
+
+    async def readany(self) -> bytes:
+        if self._readany_delay_s:
+            await asyncio.sleep(self._readany_delay_s)
+        if self._events is not None:
+            self._events.append("readany")
+        if self._offset >= len(self._body):
+            return b""
+        chunk = self._body[self._offset : self._offset + len(self._body) // 2]
+        self._offset += len(chunk)
+        return chunk
 
     async def iter_any(self):
-        yield self._body[: len(self._body) // 2]
-        yield self._body[len(self._body) // 2 :]
+        while self._offset < len(self._body):
+            chunk = self._body[self._offset : self._offset + 64]
+            self._offset += len(chunk)
+            yield chunk
 
 
 class _FakeStreamResponse:
@@ -183,25 +199,30 @@ class _FakeStreamResponse:
     reason = "OK"
     headers = {"Content-Type": "text/event-stream"}
 
-    def __init__(self, body: bytes) -> None:
-        self.content = _FakeStreamContent(body)
+    def __init__(self, body: bytes, events: list[str] | None = None, readany_delay_s: float = 0.0) -> None:
+        self.content = _FakeStreamContent(body, events=events, readany_delay_s=readany_delay_s)
 
 
 class _FakeSession:
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, events: list[str] | None = None, readany_delay_s: float = 0.0) -> None:
         self._body = body
+        self._events = events
+        self._readany_delay_s = readany_delay_s
         self.calls: list[dict[str, Any]] = []
 
     async def request(self, **kwargs):
         self.calls.append(kwargs)
-        return _FakeStreamResponse(self._body)
+        return _FakeStreamResponse(self._body, events=self._events, readany_delay_s=self._readany_delay_s)
 
 
 class _MemoryWriter:
-    def __init__(self) -> None:
+    def __init__(self, events: list[str] | None = None) -> None:
         self.data = bytearray()
+        self._events = events
 
     def write(self, data: bytes) -> None:
+        if self._events is not None:
+            self._events.append("first_write" if "first_write" not in self._events else "write")
         self.data.extend(data)
 
     async def drain(self) -> None:
@@ -248,6 +269,58 @@ async def test_forward_proxy_streaming_record_contains_ttft(
     record = records[0]
     assert "ttft_ms" in record
     assert record["ttft_ms"] >= 0
+    assert record["ttft_ms"] <= record["duration_ms"]
+    reset_trace_store()
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_ttft_prefetches_first_chunk_before_downstream_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TTFT is measured at the upstream I/O boundary.
+
+    The first upstream chunk is prefetched (and timed) before any downstream
+    write, so downstream header prep and client backpressure cannot inflate
+    ttft_ms. The fake upstream delays readany by 50ms: the event log must show
+    readany completing before the first downstream write, and ttft_ms must
+    include that delay.
+    """
+    events: list[str] = []
+    frames = _anthropic_stream_frames()
+    store, session_id, writer = _make_writer(tmp_path, monkeypatch)
+    fake_session = _FakeSession(frames, events=events, readany_delay_s=0.05)
+    client_writer = _MemoryWriter(events=events)
+    server = ForwardProxyServer(
+        host="127.0.0.1",
+        port=0,
+        ca=object(),
+        writer=writer,
+        session=fake_session,
+        store_stream_events=True,
+    )
+
+    await server._forward_and_record(
+        "POST",
+        "/v1/messages",
+        {"Host": "api.anthropic.com", "Authorization": "Bearer test"},
+        json.dumps(
+            {
+                "model": "claude-sonnet-4-6",
+                "stream": True,
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            }
+        ).encode(),
+        "https://api.anthropic.com/v1/messages",
+        client_writer,
+    )
+
+    writer.close()
+    records = store.load_records(session_id)
+    assert len(records) == 1
+    record = records[0]
+    assert events[:2] == ["readany", "first_write"]
+    assert record["ttft_ms"] >= 40
     assert record["ttft_ms"] <= record["duration_ms"]
     reset_trace_store()
 

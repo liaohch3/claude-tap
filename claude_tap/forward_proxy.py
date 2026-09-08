@@ -617,6 +617,9 @@ class ForwardProxyServer:
         fwd_headers["Accept-Encoding"] = "identity"
 
         try:
+            # TTFT reference point: immediately before the upstream request,
+            # so local request parsing/normalization stays out of ttft_ms.
+            t_upstream = time.monotonic()
             upstream_resp = await self._session.request(
                 method=method,
                 url=upstream_url,
@@ -671,6 +674,7 @@ class ForwardProxyServer:
                 req_body,
                 log_prefix,
                 upstream_base_url,
+                t_upstream=t_upstream,
             )
         else:
             await self._handle_non_streaming(
@@ -701,8 +705,22 @@ class ForwardProxyServer:
         req_body: dict | None,
         log_prefix: str,
         upstream_base_url: str,
+        t_upstream: float,
     ) -> None:
         """Handle a streaming response: forward chunks while recording SSE."""
+        # Prefetch the first upstream chunk before writing anything downstream
+        # so ttft_ms measures upstream latency alone: no downstream header
+        # drain or client backpressure in between.
+        ttft_ms: int | None = None
+        first_chunk = b""
+        try:
+            first_chunk = await upstream_resp.content.readany()
+            if first_chunk:
+                # First upstream byte ~= time-to-first-token for streams.
+                ttft_ms = int((time.monotonic() - t_upstream) * 1000)
+        except (ConnectionError, asyncio.CancelledError):
+            first_chunk = b""
+
         # Send response status line
         status_line = f"HTTP/1.1 {upstream_resp.status} {upstream_resp.reason}\r\n"
         client_writer.write(status_line.encode())
@@ -719,12 +737,17 @@ class ForwardProxyServer:
         reassembler = SSEReassembler(store_events=self._store_stream_events)
         raw_chunks: list[bytes] = []
 
-        ttft_ms: int | None = None
         try:
+            if first_chunk:
+                # Send as HTTP chunked encoding
+                chunk_header = f"{len(first_chunk):x}\r\n".encode()
+                client_writer.write(chunk_header + first_chunk + b"\r\n")
+                await client_writer.drain()
+                if is_bedrock_stream:
+                    raw_chunks.append(first_chunk)
+                else:
+                    reassembler.feed_bytes(first_chunk)
             async for chunk in upstream_resp.content.iter_any():
-                if ttft_ms is None:
-                    # First upstream byte ~= time-to-first-token for streams.
-                    ttft_ms = int((time.monotonic() - t0) * 1000)
                 # Send as HTTP chunked encoding
                 chunk_header = f"{len(chunk):x}\r\n".encode()
                 client_writer.write(chunk_header + chunk + b"\r\n")
