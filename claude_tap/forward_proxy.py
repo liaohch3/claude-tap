@@ -719,8 +719,12 @@ class ForwardProxyServer:
         reassembler = SSEReassembler(store_events=self._store_stream_events)
         raw_chunks: list[bytes] = []
 
+        ttft_ms: int | None = None
         try:
             async for chunk in upstream_resp.content.iter_any():
+                if ttft_ms is None:
+                    # First upstream byte ~= time-to-first-token for streams.
+                    ttft_ms = int((time.monotonic() - t0) * 1000)
                 # Send as HTTP chunked encoding
                 chunk_header = f"{len(chunk):x}\r\n".encode()
                 client_writer.write(chunk_header + chunk + b"\r\n")
@@ -776,6 +780,7 @@ class ForwardProxyServer:
             reconstructed,
             sse_events=reassembler.events,
             upstream_base_url=upstream_base_url,
+            ttft_ms=ttft_ms,
         )
         await self._writer.write(record)
 

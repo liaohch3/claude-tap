@@ -725,8 +725,12 @@ async def _handle_streaming(
     reassembler = SSEReassembler(store_events=store_stream_events)
     raw_chunks: list[bytes] = []
 
+    ttft_ms: int | None = None
     try:
         async for chunk in upstream_resp.content.iter_any():
+            if ttft_ms is None:
+                # First upstream byte ~= time-to-first-token for streams.
+                ttft_ms = int((time.monotonic() - t0) * 1000)
             await resp.write(chunk)
             if is_bedrock_stream:
                 raw_chunks.append(chunk)
@@ -778,6 +782,7 @@ async def _handle_streaming(
             reconstructed,
             sse_events=reassembler.events,
             upstream_base_url=upstream_base_url,
+            ttft_ms=ttft_ms,
         )
         await writer.write(record)
 
@@ -854,6 +859,7 @@ def _build_record(
     resp_body: dict | None,
     sse_events: list[dict] | None = None,
     upstream_base_url: str | None = None,
+    ttft_ms: int | None = None,
 ) -> dict:
     """Build a trace record for a single API call."""
     record: dict = {
@@ -877,4 +883,6 @@ def _build_record(
         record["response"]["sse_events"] = sse_events
     if upstream_base_url:
         record["upstream_base_url"] = upstream_base_url
+    if ttft_ms is not None:
+        record["ttft_ms"] = ttft_ms
     return record
