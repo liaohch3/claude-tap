@@ -720,31 +720,27 @@ async def _handle_streaming(
     should_trace: bool,
     t_upstream: float,
 ) -> web.StreamResponse:
-    # Prefetch the first upstream chunk before touching the downstream
-    # response so ttft_ms measures upstream latency alone: no downstream
-    # header prep or client backpressure in between.
+    # Start the first upstream read concurrently with forwarding the status
+    # and headers downstream: ttft_ms is stamped when that read completes,
+    # before any body write, but header forwarding no longer waits for the
+    # first upstream byte.
+    first_chunk_task = asyncio.create_task(upstream_resp.content.readany())
     ttft_ms: int | None = None
-    first_chunk = b""
-    try:
-        first_chunk = await upstream_resp.content.readany()
-        if first_chunk:
-            # First upstream byte ~= time-to-first-token for streams.
-            ttft_ms = int((time.monotonic() - t_upstream) * 1000)
-    except (ConnectionError, asyncio.CancelledError):
-        first_chunk = b""
-
     resp = web.StreamResponse(
         status=upstream_resp.status,
         headers={k: v for k, v in upstream_resp.headers.items() if k.lower() not in HOP_BY_HOP},
     )
-    await resp.prepare(request)
-
     is_bedrock_stream = is_bedrock_eventstream_path(request.raw_path)
     reassembler = SSEReassembler(store_events=store_stream_events)
     raw_chunks: list[bytes] = []
 
     try:
+        await resp.prepare(request)
+
+        first_chunk = await first_chunk_task
         if first_chunk:
+            # First upstream byte ~= time-to-first-token for streams.
+            ttft_ms = int((time.monotonic() - t_upstream) * 1000)
             await resp.write(first_chunk)
             if is_bedrock_stream:
                 raw_chunks.append(first_chunk)
@@ -758,6 +754,9 @@ async def _handle_streaming(
                 reassembler.feed_bytes(chunk)
     except (ConnectionError, asyncio.CancelledError):
         pass
+    finally:
+        if not first_chunk_task.done():
+            first_chunk_task.cancel()
 
     try:
         await resp.write_eof()

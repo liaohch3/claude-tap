@@ -708,37 +708,33 @@ class ForwardProxyServer:
         t_upstream: float,
     ) -> None:
         """Handle a streaming response: forward chunks while recording SSE."""
-        # Prefetch the first upstream chunk before writing anything downstream
-        # so ttft_ms measures upstream latency alone: no downstream header
-        # drain or client backpressure in between.
+        # Start the first upstream read concurrently with forwarding the
+        # status and headers downstream: ttft_ms is stamped when that read
+        # completes, before any body write, but header forwarding no longer
+        # waits for the first upstream byte.
+        first_chunk_task = asyncio.create_task(upstream_resp.content.readany())
         ttft_ms: int | None = None
-        first_chunk = b""
-        try:
-            first_chunk = await upstream_resp.content.readany()
-            if first_chunk:
-                # First upstream byte ~= time-to-first-token for streams.
-                ttft_ms = int((time.monotonic() - t_upstream) * 1000)
-        except (ConnectionError, asyncio.CancelledError):
-            first_chunk = b""
-
-        # Send response status line
-        status_line = f"HTTP/1.1 {upstream_resp.status} {upstream_resp.reason}\r\n"
-        client_writer.write(status_line.encode())
-
-        # Send response headers (filter hop-by-hop, use chunked transfer)
-        for key, value in upstream_resp.headers.items():
-            if key.lower() not in HOP_BY_HOP:
-                client_writer.write(f"{key}: {value}\r\n".encode())
-        client_writer.write(b"Transfer-Encoding: chunked\r\n")
-        client_writer.write(b"\r\n")
-        await client_writer.drain()
-
         is_bedrock_stream = is_bedrock_eventstream_path(path)
         reassembler = SSEReassembler(store_events=self._store_stream_events)
         raw_chunks: list[bytes] = []
 
         try:
+            # Send response status line
+            status_line = f"HTTP/1.1 {upstream_resp.status} {upstream_resp.reason}\r\n"
+            client_writer.write(status_line.encode())
+
+            # Send response headers (filter hop-by-hop, use chunked transfer)
+            for key, value in upstream_resp.headers.items():
+                if key.lower() not in HOP_BY_HOP:
+                    client_writer.write(f"{key}: {value}\r\n".encode())
+            client_writer.write(b"Transfer-Encoding: chunked\r\n")
+            client_writer.write(b"\r\n")
+            await client_writer.drain()
+
+            first_chunk = await first_chunk_task
             if first_chunk:
+                # First upstream byte ~= time-to-first-token for streams.
+                ttft_ms = int((time.monotonic() - t_upstream) * 1000)
                 # Send as HTTP chunked encoding
                 chunk_header = f"{len(first_chunk):x}\r\n".encode()
                 client_writer.write(chunk_header + first_chunk + b"\r\n")
@@ -758,6 +754,9 @@ class ForwardProxyServer:
                     reassembler.feed_bytes(chunk)
         except (ConnectionError, asyncio.CancelledError):
             pass
+        finally:
+            if not first_chunk_task.done():
+                first_chunk_task.cancel()
 
         # Send final chunk
         try:

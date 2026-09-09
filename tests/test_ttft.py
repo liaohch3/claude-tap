@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +130,49 @@ async def test_reverse_proxy_streaming_record_contains_ttft(
 
 
 @pytest.mark.asyncio
+async def test_reverse_proxy_forwards_headers_before_first_upstream_byte(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow first token must not delay the upstream status and headers.
+
+    The upstream sends its 200 headers immediately but stalls before the first
+    body byte. The client must receive the response headers right away (so
+    short response-header timeouts survive), while the record's ttft_ms still
+    measures the full first-byte latency.
+    """
+    all_frames = _anthropic_stream_frames()
+    upstream_runner, upstream_port = await _start_streaming_upstream(b"", all_frames, STREAM_DELAY_S)
+
+    store, session_id, writer = _make_writer(tmp_path, monkeypatch)
+    proxy_runner, proxy_port, proxy_session = await _start_reverse_proxy(f"http://127.0.0.1:{upstream_port}", writer)
+
+    try:
+        async with aiohttp.ClientSession(auto_decompress=False) as client:
+            request_start = time.monotonic()
+            async with client.post(
+                f"http://127.0.0.1:{proxy_port}/v1/messages",
+                json={"model": "claude-sonnet-4-6", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+            ) as response:
+                header_wait_ms = (time.monotonic() - request_start) * 1000
+                assert response.status == 200
+                assert await response.read() == all_frames
+
+        writer.close()
+        records = store.load_records(session_id)
+        assert len(records) == 1
+        record = records[0]
+        assert header_wait_ms < STREAM_DELAY_S * 500
+        assert record["ttft_ms"] >= STREAM_DELAY_S * 1000 * 0.8
+        assert record["ttft_ms"] <= record["duration_ms"]
+    finally:
+        await proxy_session.close()
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+        reset_trace_store()
+
+
+@pytest.mark.asyncio
 async def test_reverse_proxy_non_streaming_record_has_no_ttft(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -170,7 +214,9 @@ async def test_reverse_proxy_non_streaming_record_has_no_ttft(
 
 
 class _FakeStreamContent:
-    def __init__(self, body: bytes, events: list[str] | None = None, readany_delay_s: float = 0.0) -> None:
+    def __init__(
+        self, body: bytes, events: list[tuple[str, bytes]] | None = None, readany_delay_s: float = 0.0
+    ) -> None:
         self._body = body
         self._offset = 0
         self._events = events
@@ -180,7 +226,7 @@ class _FakeStreamContent:
         if self._readany_delay_s:
             await asyncio.sleep(self._readany_delay_s)
         if self._events is not None:
-            self._events.append("readany")
+            self._events.append(("readany", b""))
         if self._offset >= len(self._body):
             return b""
         chunk = self._body[self._offset : self._offset + len(self._body) // 2]
@@ -199,12 +245,16 @@ class _FakeStreamResponse:
     reason = "OK"
     headers = {"Content-Type": "text/event-stream"}
 
-    def __init__(self, body: bytes, events: list[str] | None = None, readany_delay_s: float = 0.0) -> None:
+    def __init__(
+        self, body: bytes, events: list[tuple[str, bytes]] | None = None, readany_delay_s: float = 0.0
+    ) -> None:
         self.content = _FakeStreamContent(body, events=events, readany_delay_s=readany_delay_s)
 
 
 class _FakeSession:
-    def __init__(self, body: bytes, events: list[str] | None = None, readany_delay_s: float = 0.0) -> None:
+    def __init__(
+        self, body: bytes, events: list[tuple[str, bytes]] | None = None, readany_delay_s: float = 0.0
+    ) -> None:
         self._body = body
         self._events = events
         self._readany_delay_s = readany_delay_s
@@ -216,13 +266,13 @@ class _FakeSession:
 
 
 class _MemoryWriter:
-    def __init__(self, events: list[str] | None = None) -> None:
+    def __init__(self, events: list[tuple[str, bytes]] | None = None) -> None:
         self.data = bytearray()
         self._events = events
 
     def write(self, data: bytes) -> None:
         if self._events is not None:
-            self._events.append("first_write" if "first_write" not in self._events else "write")
+            self._events.append(("write", bytes(data)))
         self.data.extend(data)
 
     async def drain(self) -> None:
@@ -274,19 +324,19 @@ async def test_forward_proxy_streaming_record_contains_ttft(
 
 
 @pytest.mark.asyncio
-async def test_forward_proxy_ttft_prefetches_first_chunk_before_downstream_writes(
+async def test_forward_proxy_ttft_timestamped_before_first_body_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """TTFT is measured at the upstream I/O boundary.
+    """TTFT is measured at the upstream I/O boundary without withholding headers.
 
-    The first upstream chunk is prefetched (and timed) before any downstream
-    write, so downstream header prep and client backpressure cannot inflate
-    ttft_ms. The fake upstream delays readany by 50ms: the event log must show
-    readany completing before the first downstream write, and ttft_ms must
-    include that delay.
+    The status line and response headers are forwarded while the first upstream
+    read is still in flight, and ttft_ms is stamped when that read completes,
+    before the first body write. The fake upstream delays readany by 50ms: the
+    event log must show header writes before readany completes, and the first
+    body write only after it, with ttft_ms including the 50ms delay.
     """
-    events: list[str] = []
+    events: list[tuple[str, bytes]] = []
     frames = _anthropic_stream_frames()
     store, session_id, writer = _make_writer(tmp_path, monkeypatch)
     fake_session = _FakeSession(frames, events=events, readany_delay_s=0.05)
@@ -319,7 +369,14 @@ async def test_forward_proxy_ttft_prefetches_first_chunk_before_downstream_write
     records = store.load_records(session_id)
     assert len(records) == 1
     record = records[0]
-    assert events[:2] == ["readany", "first_write"]
+
+    first_body_idx = next(i for i, (_, data) in enumerate(events) if b"message_start" in data)
+    readany_idx = next(i for i, (kind, _) in enumerate(events) if kind == "readany")
+    # Headers go out while the first upstream read is still in flight...
+    assert all(kind == "write" for kind, _ in events[:readany_idx])
+    assert events[0][1].startswith(b"HTTP/1.1 200 OK\r\n")
+    # ...and the first body write happens only after ttft_ms was stamped.
+    assert readany_idx < first_body_idx
     assert record["ttft_ms"] >= 40
     assert record["ttft_ms"] <= record["duration_ms"]
     reset_trace_store()
