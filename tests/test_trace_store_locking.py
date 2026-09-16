@@ -259,6 +259,30 @@ async def test_startup_lock_creates_non_blocking_writer(tmp_path: Path, capsys) 
     assert capsys.readouterr().err.count("continuing without blocking proxy") == 1
 
 
+def test_store_summary_expected_status_blocks_stale_overwrite(tmp_path: Path) -> None:
+    """A guarded summary write is skipped once the row status has moved on."""
+    db_path = tmp_path / "expected-status.sqlite3"
+    store = TraceStore(db_path)
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(session_id, _record(1))
+    conn = store._connect()
+    conn.execute("UPDATE sessions SET status = 'complete' WHERE id = ?", (session_id,))
+    conn.commit()
+
+    summary = {"id": session_id, "status": "complete", "updated_at": "2026-07-12T08:00:01+00:00"}
+    assert store.store_summary(session_id, summary, expected_status="complete") is True
+
+    # The writer lands an append between the reader's snapshot and the write:
+    # only an expectation matching the pre-append status may persist.
+    store.append_record(session_id, _record(2))
+    assert store.store_summary(session_id, summary, expected_status="complete") is False
+
+    row = conn.execute("SELECT status, record_count FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    assert row[0] == "active"
+    assert row[1] == 2
+    store.close()
+
+
 def test_real_proxy_continues_when_database_is_locked_at_startup(tmp_path: Path) -> None:
     stop_upstream, upstream_port = run_fake_upstream_in_thread()
     trace_dir = tmp_path / "traces"

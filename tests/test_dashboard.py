@@ -2,6 +2,8 @@ import asyncio
 import base64
 import json
 import logging
+import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -9,6 +11,7 @@ import aiohttp
 import pytest
 from aiohttp.test_utils import make_mocked_request
 
+from claude_tap import live as live_module
 from claude_tap.dashboard import (
     DASHBOARD_SUMMARY_VERSION,
     _clean_user_prompt_text,
@@ -26,6 +29,7 @@ from claude_tap.dashboard import (
     _request_user_text,
     _response_events,
     _response_text,
+    _session_summary_from_row,
     dashboard_trace_snapshot,
     list_trace_agents,
     list_trace_sessions,
@@ -36,7 +40,7 @@ from claude_tap.history import migrate_legacy_traces
 from claude_tap.live import LiveViewerServer, _record_limit_from_request
 from claude_tap.trace import TraceWriter
 from claude_tap.trace_log_handler import SQLiteLogHandler
-from claude_tap.trace_store import get_trace_store
+from claude_tap.trace_store import TraceStore, get_trace_store
 from tests.conftest import playwright_skip_reason
 
 # The browser tests below launch chromium, which installs separately from the
@@ -349,28 +353,632 @@ def test_append_records_do_not_double_count_embedded_cache_read(trace_db) -> Non
     assert summary["total_tokens"] == 2 * 11773
 
 
-def test_summary_repair_migrates_legacy_double_counted_totals(trace_db) -> None:
-    store = get_trace_store()
-    session_id = store.create_session(client="codex", proxy_mode="reverse")
-    store.append_record(session_id, _codex_responses_record(turn=1))
-
+def _downgrade_summary_to_v3(store: TraceStore, session_id: str) -> None:
+    """Rewrite a stored summary into its pre-v4 legacy shape for migration tests."""
     conn = store._connect()
     cached = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
-    # Simulate a pre-cache_read_in_input_tokens summary: no embedded split and
-    # a total computed with cached input counted twice.
     cached.pop("cache_read_in_input_tokens", None)
     cached["summary_version"] = 3
-    cached["total_tokens"] = 11767 + 6 + 11648
+    # Legacy totals summed every bucket, double-counting embedded cache reads.
+    cached["total_tokens"] = (
+        int(cached.get("input_tokens") or 0)
+        + int(cached.get("output_tokens") or 0)
+        + int(cached.get("cache_read_tokens") or 0)
+        + int(cached.get("cache_create_tokens") or 0)
+    )
     conn.execute(
         "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
         (json.dumps(cached, ensure_ascii=False, separators=(",", ":")), session_id),
     )
     conn.commit()
 
+
+def test_summary_repair_migrates_legacy_double_counted_totals(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="codex", proxy_mode="reverse")
+    store.append_record(session_id, _codex_responses_record(turn=1))
+    _downgrade_summary_to_v3(store, session_id)
+
     summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
 
     assert summary["total_tokens"] == 11773
     assert summary["cache_read_tokens"] == 11648
+
+
+def test_migration_recounts_middle_turn_only_anthropic_cache_exactly(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    turns = ((100, 10, 0), (200, 10, 5000), (150, 10, 0))
+    for turn, (input_tokens, output_tokens, cache_read) in enumerate(turns, start=1):
+        record = _anthropic_record(turn=turn)
+        usage: dict = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        if cache_read:
+            usage["cache_read_input_tokens"] = cache_read
+        record["response"]["body"]["usage"] = usage
+        store.append_record(session_id, record)
+    _downgrade_summary_to_v3(store, session_id)
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+
+    # Cache reads live only in the middle turn, so both boundary samples carry
+    # zero cache usage; the boundary heuristic re-bucketed the whole 5000-token
+    # bucket as embedded and reported 480 instead of 5480 (issue #453).
+    assert summary["total_tokens"] == 5480
+
+
+def test_migration_survives_coinciding_nonzero_boundaries(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="mixed", proxy_mode="reverse")
+    codex_open = _codex_responses_record(turn=1)
+    codex_open["response"]["body"]["usage"] = {
+        "input_tokens": 100,
+        "input_tokens_details": {"cached_tokens": 50},
+        "output_tokens": 1,
+        "total_tokens": 101,
+    }
+    anthropic_middle = _anthropic_record(turn=2)
+    anthropic_middle["response"]["body"]["usage"] = {
+        "input_tokens": 200,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 300,
+    }
+    codex_close = _codex_responses_record(turn=3)
+    codex_close["response"]["body"]["usage"] = {
+        "input_tokens": 100,
+        "input_tokens_details": {"cached_tokens": 70},
+        "output_tokens": 1,
+        "total_tokens": 101,
+    }
+    for record in (codex_open, anthropic_middle, codex_close):
+        store.append_record(session_id, record)
+    _downgrade_summary_to_v3(store, session_id)
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+
+    # Both boundary samples are Codex-shaped with coinciding non-zero buckets
+    # (embedded 120 == cache-read 120 across records 1 and 3), so the old
+    # equality check fired on coincidence and dropped the middle turn's 300
+    # separate cache reads: 412 instead of 712 (issue #453).
+    assert summary["total_tokens"] == 712
+    assert summary["cache_read_tokens"] == 420
+    assert summary["cache_read_in_input_tokens"] == 120
+
+
+def _simulate_parent_release_v4_migration(store: TraceStore, session_id: str) -> None:
+    """Rewrite the stored summary into the shape the parent release persisted.
+
+    The parent release migrated stale summaries with the removed boundary
+    heuristic, which re-bucketed every separate cache read as embedded and
+    persisted the result under summary_version 4. Such rows satisfy any
+    currency check written against version 4 and were never revisited.
+    """
+    conn = store._connect()
+    cached = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
+    cached["cache_read_in_input_tokens"] = int(cached.get("cache_read_in_input_tokens") or 0) + int(
+        cached.get("cache_read_tokens") or 0
+    )
+    cached["cache_read_tokens"] = 0
+    cached["summary_version"] = 4
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (json.dumps(cached, ensure_ascii=False, separators=(",", ":")), session_id),
+    )
+    conn.commit()
+
+
+def test_migration_repairs_summaries_left_by_parent_release(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    turns = ((100, 10, 0), (200, 10, 5000), (150, 10, 0))
+    for turn, (input_tokens, output_tokens, cache_read) in enumerate(turns, start=1):
+        record = _anthropic_record(turn=turn)
+        usage: dict = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        if cache_read:
+            usage["cache_read_input_tokens"] = cache_read
+        record["response"]["body"]["usage"] = usage
+        store.append_record(session_id, record)
+    _simulate_parent_release_v4_migration(store, session_id)
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+
+    # The parent release persisted this exact shape as current version 4 (all
+    # separate cache reads folded into embedded, issue #453); only a version
+    # bump lets those databases self-heal on the next listing.
+    assert summary["cache_read_tokens"] == 5000
+    assert summary["total_tokens"] == 5480
+
+
+def _seed_middle_turn_cache_session() -> tuple[TraceStore, str]:
+    """Create an Anthropic session whose cache read lives only in turn two."""
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    turns = ((100, 10, 0), (200, 10, 5000), (150, 10, 0))
+    for turn, (input_tokens, output_tokens, cache_read) in enumerate(turns, start=1):
+        record = _anthropic_record(turn=turn)
+        usage: dict = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        if cache_read:
+            usage["cache_read_input_tokens"] = cache_read
+        record["response"]["body"]["usage"] = usage
+        store.append_record(session_id, record)
+    return store, session_id
+
+
+def test_repair_does_not_persist_recount_from_partial_record_load(trace_db, monkeypatch) -> None:
+    store, session_id = _seed_middle_turn_cache_session()
+    _downgrade_summary_to_v3(store, session_id)
+
+    original_rows_to_records = TraceStore._rows_to_records
+
+    def flaky_rows_to_records(self, conn, rows):
+        # Simulate silent decode failures dropping the final record payload.
+        return original_rows_to_records(self, conn, rows)[:-1]
+
+    monkeypatch.setattr(TraceStore, "_rows_to_records", flaky_rows_to_records)
+
+    list_trace_sessions()
+
+    conn = store._connect()
+    stored = json.loads(conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()[0])
+    # A partial load must not overwrite the stale summary: persisting an
+    # under-counted recount would mark it current and block future retries.
+    assert stored["summary_version"] == 3
+
+
+def test_full_recount_skips_persistence_when_records_do_not_match_manifest(trace_db, monkeypatch) -> None:
+    """A full record-scan recount must not persist rows from a partial decode."""
+    store, session_id = _seed_middle_turn_cache_session()
+    # Active sessions carry a write-through live summary; clear it and mark
+    # the session complete so the recount path actually runs.
+    conn = store._connect()
+    conn.execute("UPDATE sessions SET status = 'complete', summary_json = NULL WHERE id = ?", (session_id,))
+    conn.commit()
+
+    original_rows_to_records = TraceStore._rows_to_records
+
+    def flaky_rows_to_records(self, conn2, rows):
+        # Simulate silent decode failures dropping the final record payload.
+        return original_rows_to_records(self, conn2, rows)[:-1]
+
+    monkeypatch.setattr(TraceStore, "_rows_to_records", flaky_rows_to_records)
+
+    summary_row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    _session_summary_from_row(store, summary_row, allow_record_scan=True)
+
+    stored_row = conn.execute("SELECT summary_json FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    # Persisting here would freeze a two-record recount as current and leave
+    # the dropped third turn unaccounted forever.
+    assert stored_row[0] is None
+
+
+def _seed_stale_zero_record_session() -> str:
+    """Create a completed zero-record session holding a pre-bump cached summary."""
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (json.dumps({"id": session_id, "summary_version": DASHBOARD_SUMMARY_VERSION - 1}), session_id),
+    )
+    conn.commit()
+    return session_id
+
+
+def test_empty_session_summary_migrates_exactly_once(trace_db, monkeypatch) -> None:
+    """A completed zero-record session must migrate once instead of rescanning forever."""
+    session_id = _seed_stale_zero_record_session()
+    store = get_trace_store()
+
+    original_load_records = TraceStore.load_records
+    scanned_ids = []
+
+    def counting_load_records(self, scan_session_id):
+        scanned_ids.append(scan_session_id)
+        return original_load_records(self, scan_session_id)
+
+    monkeypatch.setattr(TraceStore, "load_records", counting_load_records)
+
+    list_trace_sessions()
+
+    conn = store._connect()
+    stored = json.loads(
+        conn.execute(
+            "SELECT summary_json FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()[0]
+    )
+    # Listing normalizes the returned copy regardless, so currency can only be
+    # verified against what the listing persisted for future requests.
+    assert stored["summary_version"] == DASHBOARD_SUMMARY_VERSION
+    # Currency alone would let a degenerate stub pass while freezing junk for
+    # every later listing, so pin the persisted shape too: zero records must
+    # stay terminal ('empty', inactive) with truthful zero-bucket totals.
+    assert stored["status"] == "empty"
+    assert stored["active"] is False
+    assert stored["record_count"] == 0
+    assert stored["total_tokens"] == 0
+
+    list_trace_sessions()
+    # One scan discovers the (legitimately empty) record set; the persisted
+    # summary must then short-circuit later listings. An un-migrated empty
+    # session rescans on every request forever.
+    assert scanned_ids == [session_id]
+
+
+def test_zero_record_migration_preserves_empty_totals(trace_db) -> None:
+    """The migrated empty summary keeps truthful zero buckets."""
+    session_id = _seed_stale_zero_record_session()
+
+    summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+
+    assert summary["record_count"] == 0
+    assert summary["total_tokens"] == 0
+    assert summary["active"] is False
+
+
+def test_stale_summary_repair_cannot_overwrite_reactivated_session(trace_db, monkeypatch) -> None:
+    """Repair must not clobber a session a writer re-activated mid-flight."""
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    store.append_record(session_id, _anthropic_record(turn=1))
+    store.append_record(session_id, _anthropic_record(turn=2))
+    conn = store._connect()
+    # Reader snapshot: complete with a stale pre-migration cached shape.
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (
+            json.dumps(
+                {
+                    "id": session_id,
+                    "summary_version": DASHBOARD_SUMMARY_VERSION - 1,
+                    "cache_read_tokens": 0,
+                    "total_tokens": 1,
+                }
+            ),
+            session_id,
+        ),
+    )
+    conn.commit()
+
+    original_load_records = TraceStore.load_records
+    injected: list[bool] = []
+
+    def racing_load_records(self, scan_session_id):
+        records = original_load_records(self, scan_session_id)
+        if scan_session_id == session_id and not injected:
+            injected.append(True)
+            # A concurrent append lands after the snapshot was loaded but
+            # before the repair persists, flipping the row back to active.
+            self.append_record(session_id, _anthropic_record(turn=3))
+        return records
+
+    monkeypatch.setattr(TraceStore, "load_records", racing_load_records)
+
+    list_trace_sessions()
+
+    row = conn.execute(
+        "SELECT status, record_count FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
+    assert row["status"] == "active"
+    assert row["record_count"] == 3
+    stored_summary = json.loads(
+        conn.execute(
+            "SELECT summary_json FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()[0]
+    )
+    # The CAS-guarded repair skipped its write, so the last writer was the
+    # racing append's own in-transaction refresh: an accurate aggregation of
+    # all three records (each contributes input_tokens 42 + output_tokens 9).
+    # A torn two-record repair payload would instead persist 102 tokens with
+    # the row downgraded back to 'complete'.
+    assert stored_summary["total_tokens"] == 153
+
+
+@pytest.mark.asyncio
+async def test_session_totals_reflect_lazy_summary_repairs(trace_db) -> None:
+    """Header aggregates must be computed after in-request summary repairs."""
+    store = get_trace_store()
+    session_id = store.create_session(client="claude", proxy_mode="reverse")
+    record = _anthropic_record(turn=1)
+    record["response"]["body"]["usage"] = {
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 5000,
+    }
+    store.append_record(session_id, record)
+    # The parent release persisted this exact stale shape as current (issue
+    # #453): separate cache reads folded away plus a distorted token total.
+    conn = store._connect()
+    conn.execute(
+        "UPDATE sessions SET status = 'complete', summary_json = ? WHERE id = ?",
+        (
+            json.dumps(
+                {
+                    "id": session_id,
+                    "summary_version": DASHBOARD_SUMMARY_VERSION - 1,
+                    "cache_read_tokens": 0,
+                    "total_tokens": 1,
+                }
+            ),
+            session_id,
+        ),
+    )
+    conn.commit()
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+
+        item = next(entry for entry in payload["sessions"] if entry["id"] == session_id)
+        # Aggregating before the listing's lazy repair would freeze the stale
+        # header (total 1) alongside already-corrected per-session values.
+        assert payload["total_tokens"] == item["total_tokens"] == 5110
+        assert item["cache_read_tokens"] == 5000
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_session_listing_does_not_block_the_event_loop(trace_db, monkeypatch) -> None:
+    """A slow full recount must not park the request event loop."""
+    main_thread_id = threading.get_ident()
+    entered = threading.Event()
+    release_listing = threading.Event()
+    listing_threads = []
+
+    def slow_listing(*args, **kwargs):
+        listing_threads.append(threading.get_ident())
+        entered.set()
+        release_listing.wait(timeout=5)
+        return []
+
+    monkeypatch.setattr(live_module, "list_trace_sessions", slow_listing)
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+
+    ticks = 0
+
+    async def count_loop_ticks() -> None:
+        nonlocal ticks
+        while not release_listing.is_set() and ticks < 10000:
+            ticks += 1
+            await asyncio.sleep(0.005)
+
+    ticker = asyncio.create_task(count_loop_ticks())
+    try:
+        async with aiohttp.ClientSession() as session:
+
+            async def fetch_sessions() -> int:
+                async with session.get(f"http://127.0.0.1:{port}/api/sessions") as resp:
+                    return resp.status
+
+            request_task = asyncio.create_task(fetch_sessions())
+            # Poll cooperatively: waiting on the threading.Event directly would
+            # park the loop thread before the request task ever gets scheduled.
+            deadline = datetime.now(timezone.utc) + timedelta(seconds=5)
+            while not entered.is_set() and datetime.now(timezone.utc) < deadline:
+                await asyncio.sleep(0.01)
+            assert entered.is_set()
+            # While the listing is parked, the loop must keep serving ticks;
+            # a synchronous recount runs on the loop thread and stalls them.
+            await asyncio.sleep(0.05)
+            release_listing.set()
+            assert await asyncio.wait_for(request_task, timeout=2) == 200
+    finally:
+        release_listing.set()
+        ticker.cancel()
+        try:
+            await ticker
+        except asyncio.CancelledError:
+            pass
+        await server.stop()
+
+    # The parked window alone yields multiple loop ticks, and the listing ran
+    # on a worker thread rather than the loop thread.
+    assert ticks >= 3
+    assert listing_threads and listing_threads[0] != main_thread_id
+
+
+@pytest.mark.asyncio
+async def test_session_and_agent_handlers_run_blocking_steps_off_the_event_loop(trace_db, monkeypatch) -> None:
+    """Finalize, aggregation, and agent-listing steps must not park the loop."""
+    main_thread_id = threading.get_ident()
+    current_target = {"name": ""}
+    entered_events = {
+        name: threading.Event()
+        for name in ("sessions-finalize", "sessions-aggregates", "agents-finalize", "agents-listing")
+    }
+    release = threading.Event()
+    parked_threads: dict[str, int] = {}
+    ticks = [0]
+
+    def park(name: str) -> None:
+        parked_threads[name] = threading.get_ident()
+        entered_events[name].set()
+        release.wait(timeout=1)
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    original_finalize = server._finalize_stale_active_sessions
+
+    def slow_finalize() -> None:
+        if current_target["name"] in ("sessions-finalize", "agents-finalize"):
+            park(current_target["name"])
+        else:
+            original_finalize()
+
+    monkeypatch.setattr(server, "_finalize_stale_active_sessions", slow_finalize)
+
+    store_factory = live_module.get_trace_store
+
+    class _ParkingStoreProxy:
+        """Delegates everything except aggregation, which parks when targeted."""
+
+        def __init__(self, inner) -> None:
+            self._inner = inner
+
+        def __getattr__(self, item):
+            return getattr(self._inner, item)
+
+        def get_session_aggregates(self, query):
+            if current_target["name"] == "sessions-aggregates":
+                park("sessions-aggregates")
+            return self._inner.get_session_aggregates(query)
+
+    def parking_get_trace_store():
+        store = store_factory()
+        if current_target["name"] == "sessions-aggregates":
+            return _ParkingStoreProxy(store)
+        return store
+
+    monkeypatch.setattr(live_module, "get_trace_store", parking_get_trace_store)
+
+    original_agents_listing = live_module.list_trace_agents
+
+    def slow_agents_listing(*args, **kwargs):
+        if current_target["name"] == "agents-listing":
+            park("agents-listing")
+        return original_agents_listing(*args, **kwargs)
+
+    monkeypatch.setattr(live_module, "list_trace_agents", slow_agents_listing)
+
+    scenarios = [
+        ("/api/sessions", "sessions-finalize"),
+        ("/api/sessions", "sessions-aggregates"),
+        ("/api/agents", "agents-finalize"),
+        ("/api/agents", "agents-listing"),
+    ]
+
+    async def ticker_main(stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            ticks[0] += 1
+            await asyncio.sleep(0.005)
+
+    port: int | None = None
+    pending_requests: list[asyncio.Task] = []
+    ticker_stop = asyncio.Event()
+    ticker_task: asyncio.Task | None = None
+    try:
+        port = await server.start()
+        ticker_task = asyncio.create_task(ticker_main(ticker_stop))
+
+        async with aiohttp.ClientSession() as session:
+
+            async def fetch(path: str) -> int:
+                async with session.get(f"http://127.0.0.1:{port}{path}") as resp:
+                    return resp.status
+
+            for path, name in scenarios:
+                current_target["name"] = name
+                entered_events[name].clear()
+                release.clear()
+                request_task = asyncio.create_task(fetch(path))
+                pending_requests.append(request_task)
+                # Poll cooperatively: awaiting the threading.Event directly
+                # would park the loop before the request gets scheduled.
+                deadline = datetime.now(timezone.utc) + timedelta(seconds=3)
+                while not entered_events[name].is_set() and datetime.now(timezone.utc) < deadline:
+                    await asyncio.sleep(0.01)
+                assert entered_events[name].is_set(), f"{name} never started"
+                # A step that finished synchronously means it ran on the loop.
+                assert not request_task.done(), f"{name} ran synchronously"
+                before_ticks = ticks[0]
+                await asyncio.sleep(0.05)
+                assert ticks[0] - before_ticks >= 3, f"{name} stalled loop ticks"
+                assert parked_threads[name] != main_thread_id, f"{name} stayed on the loop thread"
+                release.set()
+                assert await asyncio.wait_for(request_task, timeout=5) == 200
+                current_target["name"] = ""
+    finally:
+        release.set()
+        for task in pending_requests:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending_requests, return_exceptions=True)
+        ticker_stop.set()
+        if ticker_task is not None:
+            await asyncio.gather(ticker_task, return_exceptions=True)
+        if port is not None:
+            await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_delete_handlers_finalize_off_loop_and_tolerate_lock_contention(trace_db, monkeypatch) -> None:
+    """Delete endpoints must keep stale finalization off-loop and never 500 on busy locks."""
+    main_thread_id = threading.get_ident()
+    finalize_threads: list[int] = []
+    fail_finalization = [False]
+
+    server = LiveViewerServer(port=0)
+    original_finalize = server._finalize_stale_active_sessions
+
+    def instrumented_finalize() -> None:
+        # Lock contention surfaces as OperationalError from the store write path.
+        if fail_finalization[0]:
+            raise sqlite3.OperationalError("database is locked")
+        finalize_threads.append(threading.get_ident())
+        original_finalize()
+
+    monkeypatch.setattr(server, "_finalize_stale_active_sessions", instrumented_finalize)
+
+    store = get_trace_store()
+    conn = store._connect()
+
+    async def create_completable_session() -> str:
+        session_id = store.create_session(client="codex", proxy_mode="reverse")
+        conn.execute("UPDATE sessions SET status = 'complete' WHERE id = ?", (session_id,))
+        conn.commit()
+        return session_id
+
+    port: int | None = None
+    try:
+        port = await server.start()
+        single_delete_id = await create_completable_session()
+        batch_delete_id = await create_completable_session()
+        contended_single_id = await create_completable_session()
+
+        async with aiohttp.ClientSession() as session:
+            # A synchronous call here would record the loop thread itself.
+            resp = await session.delete(f"http://127.0.0.1:{port}/api/sessions/{single_delete_id}")
+            assert resp.status == 200
+            await resp.read()
+            assert finalize_threads, "stale finalization never ran"
+            assert all(thread != main_thread_id for thread in finalize_threads), (
+                "single delete finalized on the loop thread"
+            )
+
+            # Contention inside best-effort hygiene must degrade, never surface as 500.
+            fail_finalization[0] = True
+            resp = await session.delete(
+                f"http://127.0.0.1:{port}/api/sessions",
+                json={"session_ids": [batch_delete_id]},
+            )
+            assert resp.status == 200, "batch delete 500ed on lock contention"
+            await resp.read()
+            resp = await session.delete(f"http://127.0.0.1:{port}/api/sessions/{contended_single_id}")
+            assert resp.status == 200, "single delete 500ed on lock contention"
+            await resp.read()
+            date_key = datetime.now(timezone.utc).date().isoformat()
+            resp = await session.delete(f"http://127.0.0.1:{port}/api/traces/{date_key}")
+            assert resp.status == 200, "date-scoped delete 500ed on lock contention"
+            await resp.read()
+
+            # The listing handlers share the same finalize step; contention
+            # there must also degrade instead of failing the whole request.
+            resp = await session.get(f"http://127.0.0.1:{port}/api/sessions")
+            assert resp.status == 200, "sessions listing 500ed on lock contention"
+            await resp.read()
+            resp = await session.get(f"http://127.0.0.1:{port}/api/agents")
+            assert resp.status == 200, "agents listing 500ed on lock contention"
+            await resp.read()
+    finally:
+        if port is not None:
+            await server.stop()
 
 
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
