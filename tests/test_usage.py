@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from claude_tap.trace import TraceWriter
-from claude_tap.usage import normalize_usage
+from claude_tap.usage import normalize_usage, usage_total_tokens
 
 
 def test_normalize_usage_maps_responses_cached_tokens() -> None:
@@ -20,6 +20,47 @@ def test_normalize_usage_maps_responses_cached_tokens() -> None:
     assert usage["input_tokens"] == 11767
     assert usage["output_tokens"] == 6
     assert usage["cache_read_input_tokens"] == 11648
+
+
+def test_usage_total_tokens_prefers_responses_reported_total() -> None:
+    usage = normalize_usage(
+        {
+            "input_tokens": 219921,
+            "input_tokens_details": {"cached_tokens": 170496},
+            "output_tokens": 3562,
+            "total_tokens": 223483,
+        }
+    )
+
+    assert usage_total_tokens(usage) == 223483
+
+
+def test_usage_total_tokens_adds_anthropic_cache_buckets_without_reported_total() -> None:
+    usage = normalize_usage(
+        {
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "cache_read_input_tokens": 4,
+            "cache_creation_input_tokens": 3,
+        }
+    )
+
+    assert usage_total_tokens(usage) == 19
+
+
+def test_usage_total_tokens_does_not_double_count_embedded_cache_without_reported_total() -> None:
+    usage = normalize_usage(
+        {
+            "input_tokens": 11767,
+            "input_tokens_details": {"cached_tokens": 11648},
+            "output_tokens": 6,
+        }
+    )
+
+    assert usage["cache_read_in_input"] is True
+    # 11767 already includes the 11648 cached tokens; adding cache_read again
+    # would report 23421 instead of the provider-compatible 11773.
+    assert usage_total_tokens(usage) == 11773
 
 
 def test_normalize_usage_maps_chat_completion_cached_tokens() -> None:
@@ -153,6 +194,7 @@ async def test_trace_writer_counts_responses_cached_tokens(trace_db) -> None:
                             "input_tokens": 11767,
                             "input_tokens_details": {"cached_tokens": 11648},
                             "output_tokens": 6,
+                            "total_tokens": 11773,
                         }
                     }
                 },
@@ -163,5 +205,6 @@ async def test_trace_writer_counts_responses_cached_tokens(trace_db) -> None:
         assert summary["input_tokens"] == 11767
         assert summary["output_tokens"] == 6
         assert summary["cache_read_tokens"] == 11648
+        assert summary["total_tokens"] == 11773
     finally:
         writer.close()

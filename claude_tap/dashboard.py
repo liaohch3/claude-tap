@@ -149,6 +149,13 @@ def sum_trace_session_records(query: SessionQuery | None = None) -> int:
         return 0
 
 
+def repair_stale_session_summaries(query: SessionQuery | None = None) -> None:
+    """Rebuild all outdated completed summaries before aggregate queries."""
+    store = ensure_trace_store()
+    for row in store.list_stale_summary_rows(DASHBOARD_SUMMARY_VERSION, query):
+        _session_summary_from_row(store, row, repair_stale_summary=True)
+
+
 def list_trace_agents(
     current_session_id: str | None = None,
     *,
@@ -380,12 +387,15 @@ def _session_summary_from_row(
         except json.JSONDecodeError:
             cached = None
         if isinstance(cached, dict) and (not cached.get("id") or cached.get("id") == row["id"]):
+            needs_version_repair = not is_dashboard_summary_current(cached, row["id"])
             needs_error_repair = row["status"] == "error" and not cached.get("error")
-            if (
-                repair_stale_summary
-                and row["status"] != "active"
-                and (not is_dashboard_summary_current(cached, row["id"]) or needs_error_repair)
-            ):
+            if repair_stale_summary and row["status"] != "active" and needs_version_repair:
+                records = store.load_records(row["id"])
+                if records:
+                    summary = build_stored_session_summary(row, records)
+                    store.store_summary(row["id"], summary)
+                    return summary
+            if repair_stale_summary and row["status"] != "active" and needs_error_repair:
                 boundary_records = store.load_boundary_records(row["id"])
                 if boundary_records:
                     summary = _summary_from_boundary_records(row, boundary_records, cached)
