@@ -657,6 +657,9 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
     fwd_headers["Accept-Encoding"] = "identity"
 
     try:
+        # TTFT reference point: immediately before the upstream request, so
+        # local request parsing/normalization stays out of ttft_ms.
+        t_upstream = time.monotonic()
         upstream_resp = await session.request(
             method=request.method,
             url=upstream_url,
@@ -685,6 +688,7 @@ async def proxy_handler(request: web.Request) -> web.StreamResponse:
             upstream_base_url=target,
             store_stream_events=bool(ctx.get("store_stream_events", False)),
             should_trace=should_trace,
+            t_upstream=t_upstream,
         )
         return resp_body
 
@@ -714,18 +718,34 @@ async def _handle_streaming(
     upstream_base_url: str,
     store_stream_events: bool,
     should_trace: bool,
+    t_upstream: float,
 ) -> web.StreamResponse:
+    # Start the first upstream read concurrently with forwarding the status
+    # and headers downstream: ttft_ms is stamped when that read completes,
+    # before any body write, but header forwarding no longer waits for the
+    # first upstream byte.
+    first_chunk_task = asyncio.create_task(upstream_resp.content.readany())
+    ttft_ms: int | None = None
     resp = web.StreamResponse(
         status=upstream_resp.status,
         headers={k: v for k, v in upstream_resp.headers.items() if k.lower() not in HOP_BY_HOP},
     )
-    await resp.prepare(request)
-
     is_bedrock_stream = is_bedrock_eventstream_path(request.raw_path)
     reassembler = SSEReassembler(store_events=store_stream_events)
     raw_chunks: list[bytes] = []
 
     try:
+        await resp.prepare(request)
+
+        first_chunk = await first_chunk_task
+        if first_chunk:
+            # First upstream byte ~= time-to-first-token for streams.
+            ttft_ms = int((time.monotonic() - t_upstream) * 1000)
+            await resp.write(first_chunk)
+            if is_bedrock_stream:
+                raw_chunks.append(first_chunk)
+            else:
+                reassembler.feed_bytes(first_chunk)
         async for chunk in upstream_resp.content.iter_any():
             await resp.write(chunk)
             if is_bedrock_stream:
@@ -734,6 +754,9 @@ async def _handle_streaming(
                 reassembler.feed_bytes(chunk)
     except (ConnectionError, asyncio.CancelledError):
         pass
+    finally:
+        if not first_chunk_task.done():
+            first_chunk_task.cancel()
 
     try:
         await resp.write_eof()
@@ -778,6 +801,7 @@ async def _handle_streaming(
             reconstructed,
             sse_events=reassembler.events,
             upstream_base_url=upstream_base_url,
+            ttft_ms=ttft_ms,
         )
         await writer.write(record)
 
@@ -854,6 +878,7 @@ def _build_record(
     resp_body: dict | None,
     sse_events: list[dict] | None = None,
     upstream_base_url: str | None = None,
+    ttft_ms: int | None = None,
 ) -> dict:
     """Build a trace record for a single API call."""
     record: dict = {
@@ -877,4 +902,6 @@ def _build_record(
         record["response"]["sse_events"] = sse_events
     if upstream_base_url:
         record["upstream_base_url"] = upstream_base_url
+    if ttft_ms is not None:
+        record["ttft_ms"] = ttft_ms
     return record
