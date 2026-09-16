@@ -142,6 +142,68 @@ def test_viewer_renders_codex_responses_messages_usage_and_response(responses_pa
     assert "unknown" not in tools_text.lower()
 
 
+def test_viewer_expands_codex_tool_namespaces_with_child_tools(responses_page) -> None:
+    responses_page.evaluate(
+        """() => {
+          renderDetail({
+            request_id: 'req_namespace_tools',
+            turn: 1,
+            request: {
+              method: 'POST',
+              path: '/v1/responses',
+              body: { model: 'gpt-5.6-sol', input: [] }
+            },
+            response: {
+              status: 200,
+              body: {
+                tools: [
+                  {
+                    type: 'namespace',
+                    name: 'functions',
+                    description: '',
+                    tools: [
+                      {
+                        type: 'function',
+                        name: 'exec',
+                        description: 'Run JavaScript orchestration.',
+                        parameters: {
+                          type: 'object',
+                          properties: { source: { type: 'string', description: 'JavaScript source.' } },
+                          required: ['source']
+                        }
+                      },
+                      { type: 'function', name: 'wait', description: 'Wait for a yielded cell.' }
+                    ]
+                  }
+                ],
+                output: [],
+                usage: { input_tokens: 10, output_tokens: 2 }
+              }
+            }
+          });
+        }"""
+    )
+
+    tools_section = responses_page.locator(".section", has_text="Tools").first
+    tools_section.locator(".section-header").click()
+    namespace = tools_section.locator(".tool-namespace")
+    assert namespace.locator(":scope > .tool-block-header .tb-name").inner_text() == "functions"
+    assert namespace.locator(":scope > .tool-block-header .tb-count").inner_text() == "2 tools"
+    assert namespace.locator(".tool-block-nested").count() == 2
+    assert namespace.locator(":scope > .tool-block-body").is_hidden()
+
+    namespace.locator(":scope > .tool-block-header").click()
+    assert namespace.locator(":scope > .tool-block-body").is_visible()
+    assert namespace.locator(".tool-block-nested .tb-name").all_inner_texts() == ["exec", "wait"]
+
+    exec_tool = namespace.locator(".tool-block-nested").first
+    exec_tool.locator(":scope > .tool-block-header").click()
+    assert exec_tool.locator(":scope > .tool-block-body").is_visible()
+    assert "Run JavaScript orchestration." in exec_tool.inner_text()
+    assert "source" in exec_tool.inner_text()
+    assert "required" in exec_tool.inner_text()
+
+
 def test_viewer_json_tree_toggle_collapses_and_expands(responses_page) -> None:
     responses_page.locator(".sidebar-item").first.click()
     responses_page.wait_for_selector("#detail .section", timeout=5000)
@@ -1777,7 +1839,18 @@ def test_viewer_renders_codex_tool_search_call_and_output(responses_page) -> Non
                           type: 'namespace',
                           name: 'mcp__codex_apps__figma',
                           tools: [
-                            { type: 'function', name: '_use_figma' },
+                            {
+                              type: 'function',
+                              name: '_use_figma',
+                              description: 'Use the discovered Figma API.',
+                              parameters: {
+                                type: 'object',
+                                properties: {
+                                  intent: { type: 'string', description: 'Describe the Figma operation.' }
+                                },
+                                required: ['intent']
+                              }
+                            },
                             { type: 'function', name: '_generate_figma_design' }
                           ]
                         }
@@ -1857,7 +1930,22 @@ def test_viewer_renders_codex_tool_search_call_and_output(responses_page) -> Non
           renderDetail(expanded[0]);
           const firstDetail = document.querySelector('#detail').innerText;
           renderDetail(expanded[1]);
+          const toolsSection = [...document.querySelectorAll('#detail .section')]
+            .find(section => section.querySelector('.title')?.textContent === t('section_tools'));
+          toolsSection?.querySelector(':scope > .section-header')?.click();
+          const namespaceHeader = [...document.querySelectorAll('.tool-namespace > .tool-block-header')]
+            .find(header => header.querySelector('.tb-name')?.textContent === 'mcp__codex_apps__figma');
+          namespaceHeader?.click();
+          const childHeader = [...document.querySelectorAll('.tool-block-nested > .tool-block-header')]
+            .find(header => header.querySelector('.tb-name')?.textContent === '_use_figma');
+          childHeader?.click();
           const secondDetail = document.querySelector('#detail').innerText;
+          const secondTools = getDetailTools(
+            expanded[1],
+            expanded[1].request.body,
+            getResponsePayload(expanded[1])
+          );
+          const figmaNamespace = secondTools.find(tool => tool.name === 'mcp__codex_apps__figma');
           const responseToolNames = expanded.flatMap(e =>
             (getResponseOutput(e)?.content || [])
               .filter(block => block.type === 'tool_use')
@@ -1868,6 +1956,11 @@ def test_viewer_renders_codex_tool_search_call_and_output(responses_page) -> Non
             firstDetail,
             secondDetail,
             secondRoles: getMessages(expanded[1].request.body).map(message => message.role),
+            namespaceChildren: (figmaNamespace?.tools || []).map(tool => ({
+              name: tool.name,
+              description: tool.description || '',
+              parameterNames: Object.keys(tool.parameters?.properties || {})
+            })),
             responseToolNames
           };
         }"""
@@ -1880,7 +1973,17 @@ def test_viewer_renders_codex_tool_search_call_and_output(responses_page) -> Non
     assert "tool_search_output" in result["secondDetail"]
     assert "mcp__codex_apps__figma" in result["secondDetail"]
     assert "mcp__codex_apps__figma._use_figma" in result["secondDetail"]
+    assert "Use the discovered Figma API." in result["secondDetail"]
+    assert "Describe the Figma operation." in result["secondDetail"]
     assert result["secondRoles"] == ["user", "assistant", "tool"]
+    assert result["namespaceChildren"] == [
+        {
+            "name": "_use_figma",
+            "description": "Use the discovered Figma API.",
+            "parameterNames": ["intent"],
+        },
+        {"name": "_generate_figma_design", "description": "", "parameterNames": []},
+    ]
     assert result["responseToolNames"] == ["tool_search"]
 
 

@@ -350,6 +350,120 @@ def _write_search_trace(path: Path, count: int = 1) -> None:
     )
 
 
+def _write_nested_tool_search_trace(path: Path) -> None:
+    record = {
+        "timestamp": "2026-08-14T08:00:00+00:00",
+        "request_id": "req_nested_tool_search",
+        "turn": 1,
+        "duration_ms": 800,
+        "request": {
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": {},
+            "body": {
+                "model": "gpt-5.6-sol",
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Use the available tools."}],
+                    }
+                ],
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "functions",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "request_user_input",
+                                "description": "Ask the user a structured question.",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {
+                                        "questions": {
+                                            "type": "array",
+                                            "description": "Nested orchestration source marker.",
+                                        }
+                                    },
+                                    "required": ["questions"],
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+        "response": {
+            "status": 200,
+            "headers": {},
+            "body": {
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Done."}],
+                    }
+                ],
+                "usage": {"input_tokens": 20, "output_tokens": 2},
+            },
+        },
+    }
+    path.write_text(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+
+
+def test_sidebar_search_matches_nested_tool_name_and_description(tmp_path):
+    trace_path = tmp_path / "nested_tool_search.jsonl"
+    html_path = tmp_path / "nested_tool_search.html"
+    _write_nested_tool_search_trace(trace_path)
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 760})
+            page.goto(f"file://{html_path}")
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+
+            page.fill("#search-input", "request_user_input")
+            assert page.locator(".sidebar-item").count() == 1
+            page.fill("#search-input", "structured question")
+            assert page.locator(".sidebar-item").count() == 1
+            page.fill("#search-input", "missing nested tool")
+            assert page.locator(".sidebar-item").count() == 0
+        finally:
+            browser.close()
+
+
+def test_global_search_opens_nested_tool_and_namespace_ancestors(tmp_path):
+    trace_path = tmp_path / "nested_tool_global_search.jsonl"
+    html_path = tmp_path / "nested_tool_global_search.html"
+    _write_nested_tool_search_trace(trace_path)
+    _generate_html_viewer(trace_path, html_path)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 760})
+            page.goto(f"file://{html_path}")
+            page.wait_for_selector(".sidebar-item", timeout=5000)
+
+            _dispatch_find_shortcut(page, meta=False, ctrl=True)
+            page.fill("#global-search-input", "nested orchestration source marker")
+            page.wait_for_function(
+                "() => [...document.querySelectorAll('mark.global-search-hit')].some(mark => mark.textContent.toLowerCase().includes('nested orchestration'))"
+            )
+
+            namespace_body = page.locator(".tool-namespace > .tool-block-body")
+            child_body = page.locator(".tool-block-nested > .tool-block-body")
+            assert namespace_body.is_visible()
+            assert child_body.is_visible()
+            assert namespace_body.evaluate("element => element.classList.contains('open')") is True
+            assert child_body.evaluate("element => element.classList.contains('open')") is True
+        finally:
+            browser.close()
+
+
 def _write_duplicate_request_id_tool_trace(path: Path) -> str:
     call_id = "call_kL48GiOmxdX2R6uxH6DqTz0o"
     records = [

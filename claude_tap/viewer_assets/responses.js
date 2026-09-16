@@ -86,6 +86,14 @@ function parseResponseToolArguments(args) {
   try { return JSON.parse(args); } catch(e) { return args; }
 }
 
+function toolSearchOutputTools(input) {
+  if (!Array.isArray(input)) return [];
+  return input.flatMap(item => {
+    if (item?.type !== 'tool_search_output' || !Array.isArray(item.tools)) return [];
+    return item.tools.filter(tool => tool && typeof tool === 'object');
+  });
+}
+
 function toolSearchOutputContent(item) {
   const names = [];
   if (Array.isArray(item?.tools)) {
@@ -376,6 +384,7 @@ function buildWebSocketResponseEntry(entry, groups, idx, priorHistoryInput = [])
   const priorRequestBodies = priorGroups.map((_, priorIdx) => requestBodyForWebSocketGroup(entry, groups, priorIdx));
   const requestSource = requestSourceForWebSocketResponseEntry(entry, groups, idx, priorHistoryInput);
   const requestBody = cloneJson(requestSource || {}) || {};
+  const discoveredTools = toolSearchOutputTools(requestBody.input);
   const source = Object.keys(completed).length ? completed : created;
   for (const key of ['model', 'instructions', 'tools', 'previous_response_id', 'prompt_cache_key', 'tool_choice', 'parallel_tool_calls', 'text', 'reasoning']) {
     if (source[key] !== undefined && source[key] !== null) requestBody[key] = source[key];
@@ -385,6 +394,10 @@ function buildWebSocketResponseEntry(entry, groups, idx, priorHistoryInput = [])
     requestBody.input = uniqueMessages([...priorHistoryInput, ...currentInput]);
   } else {
     requestBody.input = buildWebSocketHistoryInput(requestBody.input, priorGroups, priorRequestBodies);
+  }
+  if (discoveredTools.length) {
+    const directTools = Array.isArray(requestBody.tools) ? requestBody.tools : [];
+    requestBody.tools = uniqueToolsByDisplayName([...directTools, ...discoveredTools]);
   }
   const createdAt = completed.created_at || created.created_at;
   const completedAt = completed.completed_at;
@@ -471,6 +484,7 @@ function stitchDirectResponsesEntry(entry, historyByResponseId) {
   }
   let nextEntry = entry;
   let requestBody = body;
+  const discoveredTools = toolSearchOutputTools(body.input);
   if (previousId) {
     const priorHistoryInput = webSocketHistoryInputForResponse(historyByResponseId, previousId);
     if (Array.isArray(priorHistoryInput) && priorHistoryInput.length) {
@@ -485,6 +499,18 @@ function stitchDirectResponsesEntry(entry, historyByResponseId) {
         },
       };
     }
+  }
+  if (discoveredTools.length) {
+    if (requestBody === body) requestBody = cloneJson(body) || {};
+    const directTools = Array.isArray(requestBody.tools) ? requestBody.tools : [];
+    requestBody.tools = uniqueToolsByDisplayName([...directTools, ...discoveredTools]);
+    nextEntry = {
+      ...cloneJson(entry),
+      request: {
+        ...(cloneJson(entry.request) || {}),
+        body: requestBody,
+      },
+    };
   }
   const responseId = payload.id || '';
   if (responseId) {
