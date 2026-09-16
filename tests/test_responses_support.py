@@ -530,7 +530,9 @@ def test_extract_request_messages_normalizes_responses_function_call_input_items
         ],
     }
     assert messages[6]["role"] == "tool"
-    assert "computer_screenshot" in messages[6]["content"]
+    # A computer_screenshot output is rewritten to an ordinary image block so the
+    # bloat detector never sizes an encoded image as if it were result text.
+    assert messages[6]["content"] == [{"type": "input_image", "image_url": "https://example.test/screen.png"}]
 
 
 def test_extract_request_messages_normalizes_responses_tool_search_output_input_items() -> None:

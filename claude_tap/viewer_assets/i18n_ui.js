@@ -170,7 +170,7 @@ function initFileDropZone() {
 }
 
 function renderEmptyTraceState() {
-  entries = [];
+  replaceEntries([]);
   filtered = [];
   activeIdx = -1;
   $('#sidebar-wrap').style.display = 'none';

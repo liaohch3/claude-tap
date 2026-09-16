@@ -86,7 +86,12 @@ function parseResponseToolArguments(args) {
   try { return JSON.parse(args); } catch(e) { return args; }
 }
 
-function toolSearchOutputContent(item) {
+function toolSearchOutputRaw(item) {
+  return Array.isArray(item?.tools) ? item.tools : item;
+}
+
+function toolSearchOutputContent(item, forBloat) {
+  if (forBloat) return toolSearchOutputRaw(item);
   const names = [];
   if (Array.isArray(item?.tools)) {
     for (const namespace of item.tools) {
@@ -132,20 +137,57 @@ function isResponseToolResultItem(item) {
   return item.type === 'tool_search_output' || item.type.endsWith('_call_output');
 }
 
-function responseToolResultContent(item) {
-  if (item?.type === 'tool_search_output') return toolSearchOutputContent(item);
+/* A computer-use call hands its screenshot back as
+   `{type: 'computer_screenshot', image_url: 'data:image/png;base64,…'}`.
+   Serializing that to a string would show the reader a wall of base64 and hand
+   the bloat detector an encoded image as if it were result text. */
+function normalizedScreenshotBlock(output) {
+  if (!output || typeof output !== 'object' || output.type !== 'computer_screenshot') return null;
+  const url = output.image_url;
+  if (typeof url !== 'string' || !url) return null;
+  return { type: 'input_image', image_url: url };
+}
+
+function responseToolResultContent(item, forBloat) {
+  if (item?.type === 'tool_search_output') return toolSearchOutputContent(item, forBloat);
   if (Object.prototype.hasOwnProperty.call(item || {}, 'output')) {
-    return typeof item.output === 'string' ? item.output : JSON.stringify(item.output, null, 2);
+    if (typeof item.output === 'string') return item.output;
+    const screenshot = normalizedScreenshotBlock(item.output);
+    if (screenshot) return [screenshot];
+    if (forBloat) return item.output;
+    return JSON.stringify(item.output, null, 2);
   }
+  const content = responseResultLeftoverContent(item);
+  if (forBloat) return content;
+  return JSON.stringify(content, null, 2);
+}
+
+/* A `*_call_output` that omits `output` keeps its result in whatever other
+   fields it carries, so the payload is everything left after the envelope
+   keys.  Both detectors have to derive it the same way. */
+function responseResultLeftoverContent(item) {
   const content = {};
   for (const [key, value] of Object.entries(item || {})) {
     if (['id', 'type', 'status', 'call_id', 'execution'].includes(key)) continue;
     content[key] = value;
   }
-  return JSON.stringify(content, null, 2);
+  return content;
 }
 
-function responseInputItemToMessage(item) {
+function responseResultBloatPayload(item) {
+  if (!item || typeof item !== 'object') return undefined;
+  if (item.type === 'tool_search_output') return toolSearchOutputRaw(item);
+  /* Display pretty-prints the leftover object and the sidebar measures it raw,
+     so this path needs the override just as much as a structured `output`
+     does: two spaces of indent per level is enough to move a result across the
+     threshold in the banner but not in the badge. */
+  if (!Object.prototype.hasOwnProperty.call(item, 'output')) return responseResultLeftoverContent(item);
+  if (typeof item.output === 'string') return undefined;
+  if (normalizedScreenshotBlock(item.output)) return undefined;
+  return item.output;
+}
+
+function responseInputItemToMessage(item, forBloat) {
   if (!item || typeof item !== 'object') return item;
   if (isResponseCallItem(item)) {
     return {
@@ -160,18 +202,25 @@ function responseInputItemToMessage(item) {
     };
   }
   if (isResponseToolResultItem(item)) {
-    return {
-      type: 'message',
-      role: 'tool',
-      content: [{ type: 'tool_result', tool_use_id: item.call_id || '', content: responseToolResultContent(item) }]
+    /* The bloat scan wraps a tool-role payload once, matching Python. */
+    if (forBloat) {
+      return { type: 'message', role: 'tool', content: responseToolResultContent(item, true) };
+    }
+    const block = {
+      type: 'tool_result',
+      tool_use_id: item.call_id || '',
+      content: responseToolResultContent(item),
     };
+    const raw = responseResultBloatPayload(item);
+    if (raw !== undefined) block._bloatPayload = raw;
+    return { type: 'message', role: 'tool', content: [block] };
   }
   return item;
 }
 
-function normalizeWebSocketDerivedInput(input) {
+function normalizeWebSocketDerivedInput(input, forBloat) {
   if (!Array.isArray(input)) return input;
-  return input.map(responseInputItemToMessage);
+  return input.map(item => responseInputItemToMessage(item, forBloat));
 }
 
 function webSocketOutputMessages(events) {

@@ -2,6 +2,33 @@ const $ = s => document.querySelector(s);
 const EMBED_QUERY_OPTIONS = parseEmbedQueryOptions();
 let entries = [], filtered = [], activeIdx = -1, activePaths = new Set(), searchQuery = '', activeTools = null;
 let sessionImageRegistryCache = null, sessionImageRegistrySize = -1;
+/* Sidebar bloat scans are keyed by entry identity. That identity only
+   distinguishes rows inside the current `entries` table, so every full
+   replacement has to drop this map together with the other derived caches. */
+const toolBloatCache = new Map();
+const taskFingerprintCache = new Map();
+
+function clearToolBloatCache() {
+  toolBloatCache.clear();
+}
+
+function clearTaskFingerprintCache() {
+  taskFingerprintCache.clear();
+}
+
+function resetDerivedEntryCaches() {
+  clearToolBloatCache();
+  sessionImageRegistryCache = null;
+  sessionImageRegistrySize = -1;
+  if (typeof clearLazyEntryCache === 'function') clearLazyEntryCache();
+  if (typeof clearTaskFingerprintCache === 'function') clearTaskFingerprintCache();
+  if (typeof clearGlobalSearchTextCache === 'function') clearGlobalSearchTextCache();
+}
+
+function replaceEntries(next) {
+  resetDerivedEntryCaches();
+  entries = Array.isArray(next) ? next : [];
+}
 let visualOrder = []; // filtered indices in sidebar visual (DOM) order, excludes collapsed items
 const SIDEBAR_ORDER_MODES = ['model', 'turn', 'session'];
 function safeLocalStorageGet(key) {
