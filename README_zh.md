@@ -584,6 +584,9 @@ claude-tap build-macos-app --self-contained
 # 如果菜单栏 App 在监控中被强制退出，用它恢复 Claude/Codex 配置
 claude-tap monitor-restore
 
+# 打印会话简报 JSON（费用、缓存断点、最大的工具结果）
+claude-tap summary .traces/2026-02-28/trace_141557.jsonl
+
 # 从已有 JSONL 或紧凑 trace 重新生成自包含 HTML 查看器
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
@@ -646,6 +649,7 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 - **路径过滤** — 按 API 端点筛选（如仅显示 `/v1/messages`）
 - **模型分组** — 侧边栏按模型分组，并对 Claude 系列模型做优先排序
 - **Token 用量分析** — 输入 / 输出 / 缓存读取 / 缓存创建
+- **会话简报** — 顶栏给出估算费用、第一次缓存断点，以及最大的工具结果；`claude-tap summary` 打印同一份 JSON
 - **工具检查器** — 可展开的卡片，显示工具名称、描述和参数 schema
 - **全文搜索** — 搜索消息、工具、prompt 和响应
 - **暗色模式** — 切换亮色/暗色主题（跟随系统偏好）

@@ -187,6 +187,38 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   color: var(--blue);
   background: var(--blue-bg);
 }
+.session-briefing {
+  display: none;
+  padding: 10px 20px 12px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--amber);
+  flex-shrink: 0;
+}
+.session-briefing.is-visible { display: block; }
+.session-briefing-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  margin-bottom: 6px;
+}
+.session-briefing-title { font-size: 12px; font-weight: 600; color: var(--text); }
+.session-briefing-meta { font-size: 11px; color: var(--text-tertiary); }
+.session-briefing-line {
+  font-size: 13px; color: var(--text-secondary); line-height: 1.45; margin: 2px 0;
+}
+.session-briefing-line .briefing-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 8px; vertical-align: middle;
+}
+.session-briefing-line .briefing-dot.cost { background: var(--blue); }
+.session-briefing-line .briefing-dot.cache { background: var(--amber); }
+.session-briefing-line .briefing-dot.tools { background: var(--orange); }
+.briefing-turn {
+  border: none; background: none; padding: 0; margin: 0;
+  color: var(--blue); cursor: pointer; font: inherit;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.briefing-turn:hover { color: var(--text); }
+body.embed-mode.embed-hide-header .session-briefing { display: none !important; }
 .trace-path-bar {
   display: none; align-items: center; gap: 6px; padding: 4px 12px;
   background: var(--bg); border-bottom: 1px solid var(--border);

@@ -68,8 +68,14 @@ claude-tap --tap-client gemini -- -p "hello"
 Open the local dashboard or export a standalone HTML file with embedded compact trace data:
 
 ```bash
+claude-tap summary trace.jsonl
 claude-tap export trace.jsonl --format html
 ```
+
+The viewer header also shows a session briefing computed from existing
+metadata: estimated cost, the first cache-break turn, and the largest
+tool results. Click a turn to jump there. `claude-tap summary` prints
+the same JSON.
 
 ## What to inspect first
 

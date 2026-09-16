@@ -100,6 +100,7 @@ def test_split_viewer_js_assets_use_semantic_filenames() -> None:
         "responses.js",
         "lazy_loading.js",
         "i18n_ui.js",
+        "session_briefing.js",
         "live_bootstrap.js",
         "filters_search.js",
         "sidebar.js",

@@ -19,7 +19,7 @@ import time
 import webbrowser
 from contextvars import ContextVar
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import aiohttp
 from aiohttp import web
@@ -205,6 +205,23 @@ def _open_browser(url: str) -> None:
 
 async def _is_dashboard_reusable(host: str, port: int) -> bool:
     return await is_dashboard_healthy(host, port)
+
+
+def _dashboard_session_url(
+    dashboard_url: str,
+    session_id: str | None,
+    cursor_session_ids: object = None,
+) -> str:
+    """Return the dashboard URL, deep-linked to one session when there is just one.
+
+    Cursor runs produce a session per conversation, so there is no single page to
+    open and the root stays correct.
+    """
+    if not session_id:
+        return dashboard_url
+    if isinstance(cursor_session_ids, (list, tuple, set)) and len(cursor_session_ids) > 1:
+        return dashboard_url
+    return f"{dashboard_url.rstrip('/')}/dashboard/session/{quote(str(session_id), safe='')}"
 
 
 def _dashboard_stop_command(host: str, port: int) -> str:
@@ -646,7 +663,9 @@ async def _async_main(args: argparse.Namespace) -> int:
             _print(f"   Session: {session_id}")
         _print(f"   Database: {resolve_db_path()}")
         if dashboard_url_value:
-            _print(f"   Dashboard: {dashboard_url_value}")
+            # Link straight at the session just recorded: its page carries the
+            # briefing, and the dashboard root would make the user hunt for it.
+            _print(f"   Dashboard: {_dashboard_session_url(dashboard_url_value, session_id, cursor_session_ids)}")
             _print(f"   Stop dashboard: {_dashboard_stop_command(dashboard_host, dashboard_port)}")
 
         if prompt_export_rc is not None:
@@ -803,6 +822,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  claude-tap export trace.jsonl --format prompt-md -o prompt.md Export prompt snapshot\n"
             "  claude-tap export trace.jsonl --format json Export as full JSON\n"
             "  claude-tap export trace.jsonl -o out.html  Export as HTML viewer\n"
+            "\n"
+            "session briefing:\n"
+            "  claude-tap summary trace.jsonl             Print the session briefing as JSON\n"
             "\n"
             "update:\n"
             "  claude-tap update                          Upgrade claude-tap in place\n"
@@ -1161,6 +1183,11 @@ def main_entry() -> None:
         from claude_tap.export import export_main
 
         sys.exit(export_main(sys.argv[2:]))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "summary":
+        from claude_tap.summary import summary_main
+
+        sys.exit(summary_main(sys.argv[2:]))
 
     if len(sys.argv) > 1 and sys.argv[1] == "update":
         sys.exit(update_main(sys.argv[2:]))

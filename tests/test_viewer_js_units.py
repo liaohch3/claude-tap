@@ -80,6 +80,7 @@ def test_viewer_split_js_core_units_run_without_playwright() -> None:
           'responses.js',
           'lazy_loading.js',
           'i18n_ui.js',
+          'session_briefing.js',
           'live_bootstrap.js',
           'filters_search.js',
           'sidebar.js',
@@ -1699,7 +1700,7 @@ def test_viewer_cache_invalidation_diagnostics_units() -> None:
 
         for (const assetName of [
           'state.js', 'responses.js', 'lazy_loading.js', 'i18n_ui.js',
-          'live_bootstrap.js', 'filters_search.js', 'sidebar.js', 'renderers.js',
+          'live_bootstrap.js', 'filters_search.js', 'sidebar.js', 'session_briefing.js', 'renderers.js',
           'diff.js', 'utilities_mobile.js',
         ]) {
           vm.runInContext(fs.readFileSync(path.join(assetDir, assetName), 'utf8'), context, { filename: assetName });

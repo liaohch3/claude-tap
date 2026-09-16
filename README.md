@@ -592,6 +592,9 @@ claude-tap build-macos-app --self-contained
 # Restore Claude/Codex configs if the menu app is force-killed while monitoring
 claude-tap monitor-restore
 
+# Print a session briefing (cost, cache break, largest tool results) as JSON
+claude-tap summary .traces/2026-02-28/trace_141557.jsonl
+
 # Regenerate a self-contained HTML viewer from JSONL or compact trace input
 claude-tap export .traces/2026-02-28/trace_141557.jsonl -o trace.html
 
@@ -655,6 +658,7 @@ The viewer is a single self-contained HTML file (zero external dependencies):
 - **Path filtering** — filter by API endpoint (e.g., `/v1/messages` only)
 - **Model grouping** — sidebar groups requests by model, with Claude-family priority ordering
 - **Token usage breakdown** — input / output / cache read / cache creation
+- **Session briefing** — header lines for estimated cost, the first cache-break turn, and the largest tool results; `claude-tap summary` prints the same JSON
 - **Tool inspector** — expandable cards with tool name, description, and parameter schema
 - **Search** — full-text search across messages, tools, prompts, and responses
 - **Dark mode** — toggle light/dark themes (respects system preference)

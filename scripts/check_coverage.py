@@ -38,6 +38,7 @@ VIEWER_JS_SOURCES = (
     "claude_tap/viewer_assets/responses.js",
     "claude_tap/viewer_assets/lazy_loading.js",
     "claude_tap/viewer_assets/i18n_ui.js",
+    "claude_tap/viewer_assets/session_briefing.js",
     "claude_tap/viewer_assets/live_bootstrap.js",
     "claude_tap/viewer_assets/filters_search.js",
     "claude_tap/viewer_assets/sidebar.js",
@@ -590,6 +591,18 @@ def collect_viewer_js_coverage() -> tuple[float, set[str], int, int]:
                     window.prompt = originalPrompt;
                     _buildDiffTargetOptions(Math.min(1, filtered.length - 1));
                     if (filtered.length > 1) showDiffForIdx(1, null, 0);
+                  }
+                  if (typeof renderSessionBriefing === 'function') {
+                    renderSessionBriefing();
+                    jumpToBriefingTurn(-1);
+                    const briefingTurn = document.querySelector('#session-briefing .briefing-turn');
+                    if (briefingTurn) briefingTurn.click();
+                    briefingHasContent(null);
+                    briefingMoney('nope');
+                    briefingCostLine({ unpriced: true });
+                    briefingCostLine({ usd: 1.5 });
+                    briefingCacheLine({ break_turn: 2, reason: 'cache_miss_system' });
+                    briefingToolsLine([{ name: 'Read', size_kb: '24.4', turn: 2 }]);
                   }
                   const stubEntry = buildStubEntry({
                     turn: '2.2',

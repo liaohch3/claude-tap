@@ -780,3 +780,23 @@ async def test_ensure_shared_dashboard_timeout_raises_error(monkeypatch: pytest.
             open_browser=False,
             open_browser_fn=lambda u: None,
         )
+
+
+def test_dashboard_session_url_deep_links_a_single_session() -> None:
+    """The end-of-run line should open the session page, not the dashboard root."""
+    from claude_tap.cli import _dashboard_session_url
+
+    base = "http://127.0.0.1:8420"
+    assert _dashboard_session_url(base, "abc123") == f"{base}/dashboard/session/abc123"
+    assert _dashboard_session_url(f"{base}/", "abc123") == f"{base}/dashboard/session/abc123"
+    assert _dashboard_session_url(base, "a/b c") == f"{base}/dashboard/session/a%2Fb%20c"
+
+
+def test_dashboard_session_url_stays_at_the_root_without_one_session() -> None:
+    """No session id, or several Cursor conversations, means no single page to open."""
+    from claude_tap.cli import _dashboard_session_url
+
+    base = "http://127.0.0.1:8420"
+    assert _dashboard_session_url(base, None) == base
+    assert _dashboard_session_url(base, "a", ["a", "b"]) == base
+    assert _dashboard_session_url(base, "a", ["a"]) == f"{base}/dashboard/session/a"

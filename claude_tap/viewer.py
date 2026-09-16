@@ -41,6 +41,7 @@ VIEWER_JS_PATHS = (
     VIEWER_ASSETS_DIR / "responses.js",
     VIEWER_ASSETS_DIR / "lazy_loading.js",
     VIEWER_ASSETS_DIR / "i18n_ui.js",
+    VIEWER_ASSETS_DIR / "session_briefing.js",
     VIEWER_ASSETS_DIR / "live_bootstrap.js",
     VIEWER_ASSETS_DIR / "filters_search.js",
     VIEWER_ASSETS_DIR / "sidebar.js",
@@ -1729,6 +1730,24 @@ def _pricing_data_js(cost_index: dict[str, dict]) -> str:
     return f"const EMBEDDED_COST_INDEX = {index_js};\nconst EMBEDDED_PRICING_META = {meta_js};\n"
 
 
+def _session_briefing_js(records: list[dict]) -> str:
+    """Return the JS const for the session briefing computed in Python."""
+    from claude_tap.session_briefing import summarize_session
+
+    payload = json.dumps(summarize_session(records), ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    return f"const EMBEDDED_SESSION_BRIEFING = {payload};\n"
+
+
+def _session_briefing_js_from_metadata(metadata: list[dict]) -> str:
+    """Return the JS const when only sidebar stubs are available."""
+    from claude_tap.session_briefing import summarize_session_from_metadata
+
+    payload = json.dumps(summarize_session_from_metadata(metadata), ensure_ascii=False, separators=(",", ":")).replace(
+        "</", "<\\/"
+    )
+    return f"const EMBEDDED_SESSION_BRIEFING = {payload};\n"
+
+
 def _generate_html_viewer(
     trace_path: Path,
     html_path: Path,
@@ -1792,8 +1811,10 @@ def _generate_html_viewer_from_compact_bundle(
     html_path_js = json.dumps(html_path_label)
     version_js = json.dumps(CLAUDE_TAP_VERSION)
     try:
-        cost_index = _build_cost_index(materialize_compact_trace_bundle(compact_bundle))
+        materialized = materialize_compact_trace_bundle(compact_bundle)
+        cost_index = _build_cost_index(materialized)
     except ValueError:
+        materialized = []
         cost_index = {}
     data_js = (
         f"const EMBEDDED_TRACE_COMPACT_DATA = {compact_js};\n"
@@ -1801,6 +1822,7 @@ def _generate_html_viewer_from_compact_bundle(
         f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
         f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
         f"{_pricing_data_js(cost_index)}"
+        f"{_session_briefing_js(materialized)}"
     )
 
     html = _read_viewer_template()
@@ -1819,8 +1841,15 @@ def _generate_html_viewer_from_metadata(
     display_trace_path: str | Path,
     display_html_path: str | Path,
     records_api_path: str | Path,
+    briefing_records: list[dict] | None = None,
 ) -> None:
-    """Write an online viewer that fetches full records on demand."""
+    """Write an online viewer that fetches full records on demand.
+
+    The sidebar runs on ``metadata`` stubs, but tool-result sizes and a named
+    cache cause need request bodies. Callers that already hold the full records
+    pass them as ``briefing_records`` so the banner matches an exported HTML
+    instead of silently dropping two of its three lines.
+    """
     if not VIEWER_TEMPLATE_PATH.exists():
         return
 
@@ -1840,6 +1869,7 @@ def _generate_html_viewer_from_metadata(
         f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
         # Cost already rides on each metadata record, so only provenance is added.
         f"{_pricing_data_js({})}"
+        f"{_session_briefing_js(briefing_records) if briefing_records else _session_briefing_js_from_metadata(metadata)}"
     )
 
     html = _read_viewer_template()
@@ -1877,6 +1907,14 @@ def _generate_html_viewer_from_records(
     version_js = json.dumps(CLAUDE_TAP_VERSION)
 
     use_lazy = len(records) > LAZY_THRESHOLD
+    briefing_records: list[dict] = []
+    for rec in record_json_lines:
+        try:
+            parsed = json.loads(rec)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            briefing_records.append(parsed)
 
     if use_lazy:
         # Extract metadata for sidebar rendering
@@ -1897,6 +1935,7 @@ def _generate_html_viewer_from_records(
             f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
             # Cost already rides on each metadata record, so only provenance is added.
             f"{_pricing_data_js({})}"
+            f"{_session_briefing_js(briefing_records)}"
         )
 
         html = _read_viewer_template()
@@ -1924,6 +1963,7 @@ def _generate_html_viewer_from_records(
             f"const __TRACE_HTML_PATH__ = {html_path_js};\n"
             f"const __CLAUDE_TAP_VERSION__ = {version_js};\n"
             f"{_pricing_data_js(_build_cost_index(parsed_records))}"
+            f"{_session_briefing_js(parsed_records)}"
         )
 
         html = _read_viewer_template()

@@ -74,6 +74,7 @@ function updateStaticTexts() {
   updateHistoryDeleteButton();
   updateSidebarSortControls();
   renderViewerActions();
+  if (typeof renderSessionBriefing === 'function') renderSessionBriefing();
 }
 
 function renderViewerActions() {
@@ -177,6 +178,12 @@ function renderEmptyTraceState() {
   $('#detail').style.display = 'none';
   $('#stats').style.display = 'none';
   $('#path-filter').style.display = 'none';
+  const briefing = document.getElementById('session-briefing');
+  if (briefing) {
+    briefing.hidden = true;
+    briefing.classList.remove('is-visible');
+    briefing.innerHTML = '';
+  }
   renderTracePathBar();
   const dropZone = $('#drop-zone');
   dropZone.style.display = 'flex';

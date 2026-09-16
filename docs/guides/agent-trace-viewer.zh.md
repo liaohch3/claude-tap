@@ -68,8 +68,13 @@ claude-tap --tap-client gemini -- -p "hello"
 打开本地 dashboard，或导出内嵌紧凑 trace 数据的独立 HTML 文件：
 
 ```bash
+claude-tap summary trace.jsonl
 claude-tap export trace.jsonl --format html
 ```
+
+查看器顶栏还会显示一份由已有 metadata 算出的会话简报：估算费用、
+第一次缓存断点，以及最大的工具结果。点击轮次即可跳转。
+`claude-tap summary` 打印同一份 JSON。
 
 ## 先看哪些内容？
 

@@ -46,6 +46,7 @@ function renderApp(preserveDetail) {
   }
   renderPathFilter(paths, pathCounts);
   renderTracePathBar();
+  if (typeof renderSessionBriefing === 'function') renderSessionBriefing();
   applyFilter(preserveDetail);
 }
 

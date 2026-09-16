@@ -580,9 +580,13 @@ class LiveViewerServer:
                 "compact": f"/api/sessions/{quote(session_id)}/export/compact",
                 "html": f"/api/sessions/{quote(session_id)}/export/html",
             }
+            # Records are already in hand for the sidebar stubs, so the briefing
+            # reads them directly. Deriving it from the stubs instead would drop
+            # tool-result sizes and the named cache cause for no reason.
+            records = list(store.load_records(session_id))
             metadata = [
                 redact_dashboard_summary(item)
-                for record in store.load_records(session_id)
+                for record in records
                 if (item := _extract_metadata_from_record(record)) is not None
             ]
             _generate_html_viewer_from_metadata(
@@ -591,6 +595,7 @@ class LiveViewerServer:
                 display_trace_path=export_urls["compact"],
                 display_html_path=f"/dashboard/session/{quote(session_id)}",
                 records_api_path=f"/api/sessions/{quote(session_id)}/records",
+                briefing_records=records,
             )
             if not html_path.exists():
                 return web.Response(status=500, text="Failed to generate session viewer")

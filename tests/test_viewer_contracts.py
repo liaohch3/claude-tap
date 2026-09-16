@@ -1157,6 +1157,43 @@ def _cache_diag_record(
     }
 
 
+def _session_briefing_records() -> tuple[dict[str, Any], ...]:
+    """Two turns: a cache hit, then a cold write with a 25 KB Read result."""
+    large = "x" * 25000
+    warm = _cache_diag_record(
+        request_id="req_briefing_warm",
+        turn=1,
+        timestamp="2026-08-25T10:00:00.000Z",
+        usage={"input_tokens": 8000, "output_tokens": 40, "cache_read_input_tokens": 6000},
+        system="Briefing original system prompt.",
+        messages=({"role": "user", "content": "warm turn"},),
+    )
+    cold = _cache_diag_record(
+        request_id="req_briefing_cold",
+        turn=2,
+        timestamp="2026-08-25T10:01:00.000Z",
+        usage={
+            "input_tokens": 20000,
+            "output_tokens": 80,
+            "cache_creation_input_tokens": 15000,
+            "cache_read_input_tokens": 0,
+        },
+        system="Briefing changed system prompt.",
+        messages=(
+            {"role": "user", "content": "read the file"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_read", "name": "Read", "input": {}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_read", "content": large}],
+            },
+        ),
+    )
+    return (warm, cold)
+
+
 def _contract_cases() -> tuple[ViewerContractCase, ...]:
     return (
         ViewerContractCase(
@@ -1347,6 +1384,17 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
                 "Split the pull request",
                 "Recap delivered.",
             ),
+        ),
+        ViewerContractCase(
+            name="session_briefing",
+            records=_session_briefing_records(),
+            expected_sections=("Tools", "System Prompt", "Messages", "Response"),
+            expected_system="Briefing original system prompt.",
+            expected_roles=("user",),
+            expected_tools=("Read",),
+            expected_output_types=("text",),
+            expected_usage={"input_tokens": 8000, "output_tokens": 40, "cache_read_input_tokens": 6000},
+            required_detail_text=("warm turn",),
         ),
         # One turn per cache-miss cause the viewer can report, so the card's markup
         # and both its styling variants stay inside the corpus that drives viewer
@@ -3842,6 +3890,29 @@ def test_viewer_codex_global_search_skips_non_navigable_and_orders_by_capture_tu
     assert errors == []
     assert search_state["totalMatches"] == 0
     assert sorted_ids == ["req_response_2", "req_mcp_between", "req_response_4"]
+
+
+def test_viewer_session_briefing_names_cost_cache_break_and_jumps_to_the_turn(tmp_path: Path, chromium_browser) -> None:
+    html_path = _generate_case_html(tmp_path, "session_briefing", _session_briefing_records())
+    page = chromium_browser.new_page()
+    try:
+        errors = _open_viewer_with_error_capture(page, html_path)
+        page.wait_for_selector("#session-briefing.is-visible", timeout=5000)
+        text = page.locator("#session-briefing").inner_text()
+        assert "Session briefing" in text
+        assert "Cost $" in text
+        assert "Cache miss from" in text
+        assert "Largest tool results" in text
+        assert "Read 24.4 KB" in text
+        assert page.locator("#session-briefing .briefing-turn").count() >= 1
+
+        page.locator("#session-briefing .briefing-turn").first.click()
+        page.wait_for_selector(".sidebar-item.active", timeout=5000)
+        assert page.locator(".sidebar-item.active").get_attribute("data-idx") is not None
+    finally:
+        page.close()
+
+    assert errors == []
 
 
 def test_viewer_labels_user_input_provenance_and_titles_groups_by_human_prose(tmp_path: Path, chromium_browser) -> None:
