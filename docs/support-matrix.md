@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-17
 source_of_truth: AGENTS.md
 ---
 
@@ -32,6 +32,9 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Kimi CLI (legacy kimi-cli) | Kimi CLI auth/config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported by config |
 | Kimi Code CLI | `~/.kimi-code/config.toml` + OAuth (`managed:kimi-code`) | `https://api.kimi.com/coding/v1` | none | HTTP/SSE Chat Completions | Unit-tested (`KIMI_CODE_HOME` sandbox) |
 | Kimi Code CLI | Custom `type = "kimi"` provider in config | `https://api.moonshot.ai/v1` | none | HTTP/SSE Chat Completions | Supported via `--tap-target` |
+| MiniMax Code (`mcode`) | Managed MiniMax access | Forward proxy to the managed MiniMax model upstream; only validated model-request shapes are persisted | n/a | HTTP/SSE Chat Completions; requires Node `--use-env-proxy` support | Real interactive multi-turn E2E verified with MCode 0.1.2 |
+| MiniMax Code (`mcode`) | BYOK or custom provider | Forward proxy to the configured provider; only validated model-request shapes are persisted | n/a | HTTP/SSE for Messages, Chat Completions, or Responses | Configuration and integration tested; real-provider E2E varies by user configuration |
+| MiniMax Code (`mcode`) | Codex OAuth | Forward proxy to the Codex backend | n/a | HTTP/SSE + WebSocket Responses | Path filtering and relay unit-tested; real Codex OAuth/WebSocket E2E not yet verified |
 | OpenCode | Provider creds via `opencode providers` (OpenAI OAuth and OpenCode free provider verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Real E2E verified |
 | OpenCode | Anthropic provider only (`--tap-proxy-mode reverse`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
 | MiMo Code | Provider creds via `mimo` TUI config or MiMo Platform OAuth | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
@@ -62,6 +65,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `dsh` | `forward` | A stored dsh model `baseURL` outranks `DEEPSEEK_BASE_URL`; verified Node environment-proxy support captures stored, environment-configured, and loopback endpoints while persisting only Chat Completions traffic |
 | `kimi` | `reverse` | Legacy kimi-cli; native `KIMI_BASE_URL` env var |
 | `kimi-code` | `reverse` | Patches `~/.kimi-code/config.toml` via temporary `KIMI_CODE_HOME` sandbox |
+| `mcode` | `forward` | Multi-provider agent; Node environment-proxy capture covers managed access, BYOK, custom providers, and Codex OAuth without rewriting user configuration. Only model request paths are persisted |
 | `mimo` | `forward` | OpenCode fork; multi-provider — forward proxy captures every upstream regardless of which env var the client honors |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
 | `openclaw` | `reverse` | Patches the selected OpenClaw provider config when possible, otherwise falls back to provider-specific base URL env vars |
@@ -134,6 +138,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_kimi_registered_in_client_configs` — verifies legacy Kimi CLI registration
 - `test_kimi_client_reverse_proxy` — e2e with fake Kimi Chat Completions stream (`KIMI_BASE_URL`)
 - `test_kimi_code_*` — verifies Kimi Code CLI registration, sandbox config patch, and e2e capture
+- `test_mcode_*` — verifies MiniMax Code registration, forward-only parsing, Node proxy/CA injection, argument preservation, and model-request trace filtering
 - `test_chat_completions_reasoning_content_is_mirrored_as_thinking` — verifies Kimi thinking stream rendering shape
 - `test_websocket_proxy_basic` — WS relay and trace recording
 - `test_hermes_*` — registration, parse_args default-mode resolution, forward/reverse env, argv rewrite
@@ -192,6 +197,10 @@ uv run python -m claude_tap --tap-client kimi -- --thinking
 # Kimi Code CLI
 uv run python -m claude_tap --tap-client kimi-code -- --thinking
 # Verify the trace contains /chat/completions records and thinking/text output
+
+# MiniMax Code
+uv run python -m claude_tap --tap-client mcode -- exec "Reply OK"
+# Verify the trace contains a model request and excludes account/control-plane traffic
 
 # Gemini CLI
 uv run python -m claude_tap --tap-client gemini -- -p "Reply OK" --yolo --output-format text

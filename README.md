@@ -13,7 +13,7 @@
 
 Website: [Local AI Agent Trace Viewer](https://liaohch3.com/claude-tap/) · Guide: [How to view agent traces locally](docs/guides/agent-trace-viewer.md)
 
-It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Codex App](https://openai.com/codex/), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Grok Build CLI](https://docs.x.ai/build/overview), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [MiMo Code](https://mimo.xiaomi.com/en/mimocode), [OpenCode](https://opencode.ai), [OpenClaw](https://github.com/openclaw/openclaw), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
+It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Codex App](https://openai.com/codex/), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Grok Build CLI](https://docs.x.ai/build/overview), [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), [MiniMax Code](https://www.npmjs.com/package/@minimax-ai/code), [MiMo Code](https://mimo.xiaomi.com/en/mimocode), [OpenCode](https://opencode.ai), [OpenClaw](https://github.com/openclaw/openclaw), [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Cursor CLI](https://cursor.com/cli), [Qoder CLI](https://qoder.com/cli), [Antigravity CLI](https://antigravity.google/product/antigravity-cli), and [CodeBuddy CLI](https://www.codebuddy.ai).
 
 <p align="center">
   <img src="docs/demo.gif" alt="claude-tap demo showing a real Codex trace" width="100%">
@@ -64,7 +64,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 - 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
 - 📦 **Share one portable artifact**: each run writes a local trace session that can be exported to a self-contained HTML viewer for review or archiving.
 - 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
-- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Codex App, Gemini CLI, Grok Build CLI, DeepSeek Harness, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
+- 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Codex App, Gemini CLI, Grok Build CLI, DeepSeek Harness, Kimi CLI, MiniMax Code, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
 
 ## Supported Clients
 
@@ -77,6 +77,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 | [Grok Build CLI](https://docs.x.ai/build/overview) | Grok subscription OAuth sessions through the official CLI chat proxy |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | `dsh` headless tasks and custom profiles using DeepSeek or compatible gateways |
 | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | Legacy kimi-cli and the newer Kimi Code CLI |
+| [MiniMax Code](https://www.npmjs.com/package/@minimax-ai/code) | Multi-provider MCode sessions through filtered forward proxy capture |
 | [MiMo Code](https://mimo.xiaomi.com/en/mimocode) | MiMo Code sessions (OpenCode fork with multi-provider support) |
 | [OpenCode](https://opencode.ai) | Multi-provider OpenCode sessions |
 | [OpenClaw](https://github.com/openclaw/openclaw) | Multi-provider OpenClaw sessions |
@@ -132,6 +133,9 @@ claude-tap --tap-client kimi
 
 # New Kimi Code CLI
 claude-tap --tap-client kimi-code
+
+# MiniMax Code (MCode)
+claude-tap --tap-client mcode -- exec "Reply OK"
 
 # MiMo Code (OpenCode fork)
 claude-tap --tap-client mimo
@@ -350,6 +354,23 @@ claude-tap --tap-client kimi --tap-target https://api.moonshot.ai/v1
 claude-tap --tap-client kimi-code
 claude-tap --tap-client kimi-code -- --thinking
 claude-tap --tap-client kimi-code --tap-target https://api.moonshot.ai/v1
+```
+
+</details>
+
+<details>
+<summary>MiniMax Code (MCode) examples</summary>
+
+[MiniMax Code](https://www.npmjs.com/package/@minimax-ai/code) is a multi-provider coding agent. `--tap-client mcode` uses forward proxy mode so managed MiniMax access, BYOK, custom providers, and Codex OAuth follow the same capture path. Account and control-plane requests are relayed but not persisted; only model request paths are written to the trace database.
+
+MCode capture requires a Node runtime where `node --use-env-proxy --version` succeeds.
+
+```bash
+# Interactive TUI
+claude-tap --tap-client mcode
+
+# Headless task; all arguments after -- are passed to MCode
+claude-tap --tap-client mcode -- exec "Reply OK"
 ```
 
 </details>
@@ -627,7 +648,7 @@ By default the launcher points at the current checkout; pass `--installed` if `c
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch/listen to: claude (default), agy, codex, codexapp, dsh, gemini, grok, kimi, kimi-code, mimo, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
+--tap-client CLIENT      Client to launch/listen to: claude (default), agy, codex, codexapp, dsh, gemini, grok, kimi, kimi-code, mcode, mimo, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer while the client runs (default: on)
 --tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)
@@ -639,7 +660,7 @@ All flags are forwarded to the selected client, except these `--tap-*` ones:
 --tap-no-launch          Only start the proxy, don't launch client
 --tap-max-traces N       Max trace sessions to keep (default: 50, 0 = unlimited)
 --tap-store-stream-events Persist raw SSE/WebSocket event arrays during capture so viewer/export output can show them (default: off)
---tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, forward for agy/codexapp/dsh/gemini/mimo/opencode/pi/hermes/qoder; cursor is transcript-only and ignores proxy MITM)
+--tap-proxy-mode MODE    Proxy mode: reverse or forward (default: reverse for claude/codex/grok/kimi/kimi-code/openclaw/codebuddy, forward for agy/codexapp/dsh/gemini/mcode/mimo/opencode/pi/hermes/qoder; cursor is transcript-only and ignores proxy MITM; mcode is forward-only)
 --tap-trust-ca           On macOS, explicitly trust the local CA in the user login keychain before launch (agy does this automatically)
 ```
 

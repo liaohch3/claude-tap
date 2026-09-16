@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-08-13
+last_reviewed: 2026-08-17
 source_of_truth: AGENTS.md
 ---
 
@@ -32,6 +32,9 @@ English version: [Support Matrix](support-matrix.md).
 | Kimi CLI（旧版 kimi-cli） | Kimi CLI 认证/配置 | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 配置支持 |
 | Kimi Code CLI | `~/.kimi-code/config.toml` + OAuth（`managed:kimi-code`） | `https://api.kimi.com/coding/v1` | 无 | HTTP/SSE Chat Completions | 单测覆盖（`KIMI_CODE_HOME` sandbox） |
 | Kimi Code CLI | 配置中自定义 `type = "kimi"` provider | `https://api.moonshot.ai/v1` | 无 | HTTP/SSE Chat Completions | 支持 `--tap-target` |
+| MiniMax Code（`mcode`） | MiniMax 托管访问 | Forward proxy 到 MiniMax 托管模型上游；只持久化通过校验的模型请求结构 | n/a | HTTP/SSE Chat Completions；要求 Node 支持 `--use-env-proxy` | 已使用 MCode 0.1.2 完成真实交互式多轮 E2E 验证 |
+| MiniMax Code（`mcode`） | BYOK 或自定义 provider | Forward proxy 到已配置 provider；只持久化通过校验的模型请求结构 | n/a | Messages、Chat Completions 或 Responses 的 HTTP/SSE | 配置与集成测试已覆盖；真实 provider E2E 取决于用户配置 |
+| MiniMax Code（`mcode`） | Codex OAuth | Forward proxy 到 Codex backend | n/a | HTTP/SSE + WebSocket Responses | 路径过滤与 relay 已由单测覆盖；尚未完成真实 Codex OAuth/WebSocket E2E |
 | OpenCode | 通过 `opencode providers` 配置 provider 凭据（OpenAI OAuth 与 OpenCode free provider 均已验证） | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 真实 E2E 已验证 |
 | OpenCode | 仅 Anthropic provider（`--tap-proxy-mode reverse`） | `https://api.anthropic.com` | 无 | HTTP/SSE | 单测覆盖 |
 | MiMo Code | 通过 `mimo` TUI 配置或 MiMo Platform OAuth 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
@@ -61,6 +64,7 @@ English version: [Support Matrix](support-matrix.md).
 | `dsh` | `forward` | dsh 模型设置中保存的 `baseURL` 优先于 `DEEPSEEK_BASE_URL`；经能力确认的 Node 环境代理可以捕获设置、环境变量及本地回环端点，并且仅持久化 Chat Completions 流量 |
 | `kimi` | `reverse` | 旧版 kimi-cli；原生 `KIMI_BASE_URL` 环境变量 |
 | `kimi-code` | `reverse` | 通过临时 `KIMI_CODE_HOME` sandbox 补丁 `~/.kimi-code/config.toml` |
+| `mcode` | `forward` | 多 provider agent；Node 环境代理无需改写用户配置即可覆盖托管访问、BYOK、自定义 provider 与 Codex OAuth，并且只持久化模型请求路径 |
 | `mimo` | `forward` | OpenCode fork；多 provider — forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
 | `opencode` | `forward` | 多 provider；forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
 | `openclaw` | `reverse` | 尽量补丁被选中的 OpenClaw provider 配置；否则 fallback 到对应 provider 的 base URL 环境变量 |
@@ -128,6 +132,7 @@ strip = CLIENT_CONFIGS[client].reverse_strip_path_prefix(target)
 - `test_kimi_registered_in_client_configs`：验证旧版 Kimi CLI 注册
 - `test_kimi_client_reverse_proxy`：使用 fake Kimi Chat Completions stream 覆盖 e2e（`KIMI_BASE_URL`）
 - `test_kimi_code_*`：验证 Kimi Code CLI 注册、sandbox 配置补丁与 e2e 捕获
+- `test_mcode_*`：验证 MiniMax Code 注册、仅 forward 参数解析、Node 代理/CA 注入、参数透传与模型请求 trace 过滤
 - `test_chat_completions_reasoning_content_is_mirrored_as_thinking`：验证 Kimi thinking stream 渲染形状
 - `test_websocket_proxy_basic`：验证 WebSocket relay 和 trace 记录
 - `test_hermes_*`：验证 Hermes 注册、parse_args 默认模式解析、forward/reverse 启动环境、argv 改写
@@ -186,6 +191,10 @@ uv run python -m claude_tap --tap-client kimi -- --thinking
 # Kimi Code CLI
 uv run python -m claude_tap --tap-client kimi-code -- --thinking
 # 验证 trace 包含 /chat/completions 记录和 thinking/text 输出
+
+# MiniMax Code
+uv run python -m claude_tap --tap-client mcode -- exec "Reply OK"
+# 验证 trace 包含模型请求，且不落盘账号/控制面流量
 
 # Gemini CLI
 uv run python -m claude_tap --tap-client gemini -- -p "Reply OK" --yolo --output-format text
