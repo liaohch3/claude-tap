@@ -19,6 +19,7 @@ SUPPORTED_CLIENTS = {
     "grok",
     "kimi",
     "kimi-code",
+    "mcode",
     "mimo",
     "opencode",
     "openclaw",
@@ -29,7 +30,14 @@ SUPPORTED_CLIENTS = {
     "codebuddy",
 }
 
-SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {"claude", "codexapp", "gemini", "kimi-code", "openclaw"}
+SINGLE_REVERSE_ENV_CLIENTS = SUPPORTED_CLIENTS - {
+    "claude",
+    "codexapp",
+    "gemini",
+    "kimi-code",
+    "mcode",
+    "openclaw",
+}
 
 SUPPORTED_DEFAULT_PROXY_MODES = {
     "agy": "forward",
@@ -41,6 +49,7 @@ SUPPORTED_DEFAULT_PROXY_MODES = {
     "grok": "reverse",
     "kimi": "reverse",
     "kimi-code": "reverse",
+    "mcode": "forward",
     "mimo": "forward",
     "opencode": "forward",
     "openclaw": "reverse",

@@ -127,6 +127,20 @@ def _matches_path_suffix(path: str, suffixes: tuple[str, ...]) -> bool:
     return any(clean.endswith(suffix.lower()) for suffix in suffixes)
 
 
+def _is_model_request_body(path: str, request_body: dict | None) -> bool:
+    if not isinstance(request_body, dict):
+        return False
+    model = request_body.get("model")
+    if not isinstance(model, str) or not model.strip():
+        return False
+    clean_path = path.split("?", 1)[0].rstrip("/").lower()
+    if clean_path.endswith(("/messages", "/messages/count_tokens", "/chat/completions")):
+        return isinstance(request_body.get("messages"), list)
+    if clean_path.endswith("/responses"):
+        return "input" in request_body
+    return False
+
+
 def _header_value(headers: Mapping[str, str], name: str) -> str:
     if value := headers.get(name):
         return value
@@ -279,6 +293,7 @@ class ForwardProxyServer:
         trace_methods: tuple[str, ...] = (),
         trace_path_prefixes: tuple[str, ...] = (),
         trace_path_suffixes: tuple[str, ...] = (),
+        trace_model_requests_only: bool = False,
         store_stream_events: bool = False,
         capture_only: bool = False,
     ) -> None:
@@ -292,6 +307,7 @@ class ForwardProxyServer:
         self._trace_methods = frozenset(method.upper() for method in trace_methods)
         self._trace_path_prefixes = trace_path_prefixes
         self._trace_path_suffixes = trace_path_suffixes
+        self._trace_model_requests_only = trace_model_requests_only
         self._store_stream_events = store_stream_events
         self._capture_only = capture_only
         self._server: asyncio.Server | None = None
@@ -300,16 +316,20 @@ class ForwardProxyServer:
         self._turn_counter = 0
         self.actual_port: int = port
 
-    def _should_trace_request(self, method: str, path: str) -> bool:
-        if self._trace_methods and method.upper() not in self._trace_methods:
+    def _should_trace_request(self, method: str, path: str, request_body: dict | None = None) -> bool:
+        normalized_method = method.upper()
+        if self._trace_methods and normalized_method not in self._trace_methods:
             return False
         has_path_filter = bool(self._trace_path_prefixes or self._trace_path_suffixes)
-        matches_path = _matches_path_prefix(path, self._trace_path_prefixes) or _matches_path_suffix(
-            path, self._trace_path_suffixes
-        )
-        if has_path_filter and not matches_path:
+        matches_prefix = _matches_path_prefix(path, self._trace_path_prefixes)
+        matches_suffix = _matches_path_suffix(path, self._trace_path_suffixes)
+        if has_path_filter and not (matches_prefix or matches_suffix):
             return False
-        return True
+        if not self._trace_model_requests_only:
+            return True
+        if normalized_method == "WEBSOCKET":
+            return matches_prefix
+        return _is_model_request_body(path, request_body)
 
     def _next_trace_turn(self) -> int:
         self._turn_counter += 1
@@ -559,14 +579,14 @@ class ForwardProxyServer:
         client_writer: asyncio.StreamWriter,
     ) -> None:
         """Forward request to upstream, record trace, send response back."""
-        should_trace = self._should_trace_request(method, path)
+        trace_body = _decode_request_body_for_trace(body, headers)
+        req_body = _parse_request_body_for_trace(trace_body, headers)
+        should_trace = self._should_trace_request(method, path, req_body)
         turn = self._next_trace_turn() if should_trace else None
         req_id = f"req_{uuid.uuid4().hex[:12]}"
         t0 = time.monotonic()
         log_prefix = f"[Turn {turn}]" if turn is not None else "[relay]"
 
-        trace_body = _decode_request_body_for_trace(body, headers)
-        req_body = _parse_request_body_for_trace(trace_body, headers)
         upstream_base_url = _upstream_base_url(upstream_url, path)
 
         is_streaming = is_capture_only_streaming_request(path, req_body)

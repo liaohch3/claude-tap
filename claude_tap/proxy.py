@@ -290,6 +290,12 @@ def capture_only_content_type(path: str, is_streaming: bool) -> str:
     return "application/json"
 
 
+def _is_anthropic_messages_request(clean_path: str, req_body: object) -> bool:
+    if clean_path.startswith("/v1/messages"):
+        return True
+    return clean_path.rstrip("/").endswith("/messages") and isinstance(req_body, dict) and "messages" in req_body
+
+
 def capture_only_response(path: str, req_body: object) -> dict:
     """Return a protocol-shaped success response without contacting upstream."""
     model = req_body.get("model", "claude-tap-capture") if isinstance(req_body, dict) else "claude-tap-capture"
@@ -304,7 +310,11 @@ def capture_only_response(path: str, req_body: object) -> dict:
         return {"input_tokens": 0}
     if clean_path.startswith("/v1/complete"):
         return _capture_only_anthropic_completion_response(model)
-    if clean_path.startswith(("/v1/messages", "/model/")) or _is_vertex_anthropic_raw_predict_path(clean_path):
+    if (
+        _is_anthropic_messages_request(clean_path, req_body)
+        or clean_path.startswith("/model/")
+        or _is_vertex_anthropic_raw_predict_path(clean_path)
+    ):
         return {
             "id": "msg_claude_tap_capture",
             "type": "message",
@@ -410,7 +420,7 @@ def capture_only_stream_bytes(path: str, req_body: object) -> bytes:
         return (
             f"data: {json.dumps(chunk, separators=(',', ':'))}\n\ndata: {json.dumps(done, separators=(',', ':'))}\n\n"
         ).encode("utf-8")
-    if clean_path.startswith("/v1/messages"):
+    if _is_anthropic_messages_request(clean_path, req_body):
         return _capture_only_anthropic_message_stream_bytes(resp_body)
     if _is_vertex_anthropic_raw_predict_path(clean_path) and clean_path.endswith(":streamRawPredict"):
         return _capture_only_anthropic_message_stream_bytes(resp_body)
