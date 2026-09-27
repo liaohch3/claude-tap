@@ -708,11 +708,20 @@ class ForwardProxyServer:
         t_upstream: float,
     ) -> None:
         """Handle a streaming response: forward chunks while recording SSE."""
+
         # Start the first upstream read concurrently with forwarding the
-        # status and headers downstream: ttft_ms is stamped when that read
-        # completes, before any body write, but header forwarding no longer
-        # waits for the first upstream byte.
-        first_chunk_task = asyncio.create_task(upstream_resp.content.readany())
+        # status and headers downstream: the read task stamps ttft_ms itself
+        # the moment the first byte lands, so downstream header drains cannot
+        # pollute it, while header forwarding no longer waits for the first
+        # upstream byte.
+        async def _read_first_chunk() -> tuple[bytes, int | None]:
+            chunk = await upstream_resp.content.readany()
+            if not chunk:
+                return b"", None
+            # First upstream byte ~= time-to-first-token for streams.
+            return chunk, int((time.monotonic() - t_upstream) * 1000)
+
+        first_chunk_task = asyncio.create_task(_read_first_chunk())
         ttft_ms: int | None = None
         is_bedrock_stream = is_bedrock_eventstream_path(path)
         reassembler = SSEReassembler(store_events=self._store_stream_events)
@@ -731,10 +740,8 @@ class ForwardProxyServer:
             client_writer.write(b"\r\n")
             await client_writer.drain()
 
-            first_chunk = await first_chunk_task
+            first_chunk, ttft_ms = await first_chunk_task
             if first_chunk:
-                # First upstream byte ~= time-to-first-token for streams.
-                ttft_ms = int((time.monotonic() - t_upstream) * 1000)
                 # Send as HTTP chunked encoding
                 chunk_header = f"{len(first_chunk):x}\r\n".encode()
                 client_writer.write(chunk_header + first_chunk + b"\r\n")

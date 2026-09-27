@@ -266,9 +266,10 @@ class _FakeSession:
 
 
 class _MemoryWriter:
-    def __init__(self, events: list[tuple[str, bytes]] | None = None) -> None:
+    def __init__(self, events: list[tuple[str, bytes]] | None = None, drain_delay_s: float = 0.0) -> None:
         self.data = bytearray()
         self._events = events
+        self._drain_delay_s = drain_delay_s
 
     def write(self, data: bytes) -> None:
         if self._events is not None:
@@ -276,7 +277,8 @@ class _MemoryWriter:
         self.data.extend(data)
 
     async def drain(self) -> None:
-        return None
+        if self._drain_delay_s:
+            await asyncio.sleep(self._drain_delay_s)
 
 
 @pytest.mark.asyncio
@@ -379,6 +381,56 @@ async def test_forward_proxy_ttft_timestamped_before_first_body_write(
     assert readany_idx < first_body_idx
     assert record["ttft_ms"] >= 40
     assert record["ttft_ms"] <= record["duration_ms"]
+    reset_trace_store()
+
+
+@pytest.mark.asyncio
+async def test_forward_proxy_ttft_excludes_downstream_drain_delay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ttft_ms is sampled inside the upstream read task, not after awaiting it.
+
+    The fake downstream client applies backpressure on the header drain while
+    the upstream first chunk is already available. The pre-task stamp would
+    have absorbed the drain delay (>= 100ms); the in-task stamp keeps ttft_ms
+    at the upstream-only latency.
+    """
+    frames = _anthropic_stream_frames()
+    store, session_id, writer = _make_writer(tmp_path, monkeypatch)
+    fake_session = _FakeSession(frames)
+    client_writer = _MemoryWriter(drain_delay_s=0.1)
+    server = ForwardProxyServer(
+        host="127.0.0.1",
+        port=0,
+        ca=object(),
+        writer=writer,
+        session=fake_session,
+        store_stream_events=True,
+    )
+
+    await server._forward_and_record(
+        "POST",
+        "/v1/messages",
+        {"Host": "api.anthropic.com", "Authorization": "Bearer test"},
+        json.dumps(
+            {
+                "model": "claude-sonnet-4-6",
+                "stream": True,
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            }
+        ).encode(),
+        "https://api.anthropic.com/v1/messages",
+        client_writer,
+    )
+
+    writer.close()
+    records = store.load_records(session_id)
+    assert len(records) == 1
+    record = records[0]
+    assert record["ttft_ms"] <= 50
+    assert record["ttft_ms"] <= record["duration_ms"]
+    assert record["duration_ms"] >= 100
     reset_trace_store()
 
 
