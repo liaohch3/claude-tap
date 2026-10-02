@@ -136,6 +136,12 @@ def _write_pi_agent(agent_dir: Path, models: dict[str, object]) -> None:
     (agent_dir / "extensions").mkdir()
     (agent_dir / "extensions" / "demo.js").write_text("export {}", encoding="utf-8")
     (agent_dir / "skills").mkdir()
+    (agent_dir / "npm").mkdir()
+    (agent_dir / "git").mkdir()
+    (agent_dir / "sessions").mkdir()
+    (agent_dir / "mcp.json").write_text("{}", encoding="utf-8")
+    (agent_dir / "pi-fff.json").write_text("{}", encoding="utf-8")
+    (agent_dir / ".hidden").write_text("dot", encoding="utf-8")
 
 
 def _pi_models() -> dict[str, object]:
@@ -185,9 +191,15 @@ async def test_pi_reverse_sandbox_contents_before_cleanup(monkeypatch: pytest.Mo
         seen["models_mode"] = stat.S_IMODE((sandbox_agent / "models.json").stat().st_mode)
         seen["auth_mode"] = stat.S_IMODE((sandbox_agent / "auth.json").stat().st_mode)
         seen["settings"] = (sandbox_agent / "settings.json").read_text(encoding="utf-8")
-        seen["extensions_link"] = (sandbox_agent / "extensions").is_symlink()
-        seen["extensions_target"] = os.readlink(sandbox_agent / "extensions")
-        seen["skills_link"] = (sandbox_agent / "skills").is_symlink()
+        linked = {}
+        for name in ("extensions", "skills", "npm", "git", "sessions", "mcp.json", "pi-fff.json", ".hidden"):
+            entry = sandbox_agent / name
+            linked[name] = (entry.is_symlink(), os.readlink(entry))
+        seen["linked"] = linked
+        seen["copied_are_files"] = all(
+            (sandbox_agent / name).is_file() and not (sandbox_agent / name).is_symlink()
+            for name in ("models.json", "settings.json", "auth.json")
+        )
         seen["prompts_absent"] = not (sandbox_agent / "prompts").exists()
         seen["session_dir"] = str(env["PI_CODING_AGENT_SESSION_DIR"])
         return _DummyProc()
@@ -229,9 +241,12 @@ async def test_pi_reverse_sandbox_contents_before_cleanup(monkeypatch: pytest.Mo
     settings = seen["settings"]
     assert isinstance(settings, str)
     assert "dark" in settings
-    assert seen["extensions_link"] is True
-    assert Path(str(seen["extensions_target"])) == agent_dir / "extensions"
-    assert seen["skills_link"] is True
+    linked = seen["linked"]
+    assert isinstance(linked, dict)
+    for name, (is_link, target) in linked.items():
+        assert is_link is True
+        assert Path(str(target)) == agent_dir / str(name)
+    assert seen["copied_are_files"] is True
     assert seen["prompts_absent"] is True
     assert seen["session_dir"] == str(tmp_path / "custom-sessions")
     assert not Path(str(seen["sandbox_agent"])).exists()

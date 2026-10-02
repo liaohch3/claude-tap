@@ -639,8 +639,7 @@ def _node_supports_env_proxy(env: dict[str, str]) -> bool:
 _PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR"
 _PI_SESSION_DIR_ENV = "PI_CODING_AGENT_SESSION_DIR"
 _PI_SANDBOX_DIR_PREFIX = "claude-tap-pi-"
-_PI_COPY_FILES = ("models.json", "settings.json", "auth.json")
-_PI_LINK_DIRS = ("extensions", "skills", "prompts", "themes", "node_modules")
+_PI_COPY_FILES = frozenset({"models.json", "settings.json", "auth.json"})
 _PI_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})
 
 
@@ -804,14 +803,17 @@ def _prepare_pi_reverse_sandbox(port: int, target: str) -> Path:
                 _rewrite_pi_models_file(dest, target, proxy_base_url)
             os.chmod(dest, 0o600)
 
-        for name in _PI_LINK_DIRS:
-            source = source_agent / name
-            if not (source.exists() or source.is_symlink()):
-                continue
-            try:
-                os.symlink(source, sandbox_agent / name)
-            except OSError as exc:
-                _print(f"Warning: could not link Pi {name} into the reverse sandbox ({exc}).")
+        # Everything except the rewritten config is linked. An allowlist misses
+        # runtime state (npm/, git/, sessions/, mcp.json, ...) and makes Pi
+        # reinstall or reclone it on every launch.
+        if source_agent.is_dir():
+            for source in source_agent.iterdir():
+                if source.name in _PI_COPY_FILES:
+                    continue
+                try:
+                    os.symlink(os.path.abspath(source), sandbox_agent / source.name)
+                except OSError as exc:
+                    _print(f"Warning: could not link Pi {source.name} into the reverse sandbox ({exc}).")
     except Exception:
         shutil.rmtree(sandbox_root, ignore_errors=True)
         raise
