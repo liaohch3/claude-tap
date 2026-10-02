@@ -77,7 +77,7 @@ from claude_tap.trace import TraceWriter, create_trace_writer
 from claude_tap.trace_log_handler import SQLiteLogHandler
 from claude_tap.trace_store import TraceStore, get_trace_store, resolve_db_path
 
-_COMMAND_STDOUT: ContextVar[object | None] = ContextVar("command_stdout", default=None)
+_COMMAND_STDOUT = ContextVar("command_stdout", default=None)
 
 # Force UTF-8 + line-buffered stdout/stderr so emoji output works on Windows
 # consoles (GBK/cp936) and `uv tool` doesn't fully buffer our progress prints.
