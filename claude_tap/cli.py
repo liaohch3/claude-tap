@@ -41,6 +41,7 @@ from claude_tap.cli_clients import (
     _extend_no_proxy,
     _has_settings_arg,
     _maybe_rewrite_hermes_gateway_start,
+    _pi_forward_target,
     _prepare_codex_app_forward_launch,
     _read_codebuddy_endpoint_cache,
     _read_codex_config,
@@ -76,7 +77,7 @@ from claude_tap.trace import TraceWriter, create_trace_writer
 from claude_tap.trace_log_handler import SQLiteLogHandler
 from claude_tap.trace_store import TraceStore, get_trace_store, resolve_db_path
 
-_COMMAND_STDOUT = ContextVar("command_stdout", default=None)
+_COMMAND_STDOUT: ContextVar[object | None] = ContextVar("command_stdout", default=None)
 
 # Force UTF-8 + line-buffered stdout/stderr so emoji output works on Windows
 # consoles (GBK/cp936) and `uv tool` doesn't fully buffer our progress prints.
@@ -997,6 +998,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             args.target = detector() if detector else client_cfg.default_target
     if args.proxy_mode is None:
         args.proxy_mode = client_cfg.default_proxy_mode
+    if args.client == "pi" and args.proxy_mode == "reverse":
+        # Pi reverse requests already include /v1. Strip one trailing /v1 from
+        # the target so a bare origin and a /v1 gateway both forward it once.
+        args.target = _pi_forward_target(args.target)
     if args.client == "codexapp" and args.proxy_mode != "forward":
         tap_parser.error("--tap-client codexapp only supports forward proxy mode")
     if args.trust_ca and (client_cfg.transcript_only or args.proxy_mode != "forward"):

@@ -39,7 +39,7 @@ English version: [Support Matrix](support-matrix.md).
 | OpenClaw | 通过 `~/.openclaw/openclaw.json` 或 `OPENCLAW_CONFIG_PATH` 配置 provider 凭据 | 通过临时配置文件补丁被选中的 provider `baseUrl` | 取决于 provider | HTTP/SSE | 单测覆盖 |
 | OpenClaw | 无可补丁配置（`--tap-proxy-mode reverse`） | provider 环境变量 fallback（`OPENAI_BASE_URL`、`ANTHROPIC_BASE_URL`、`GOOGLE_GEMINI_BASE_URL` 或 `OPENROUTER_BASE_URL`） | 取决于 provider | HTTP/SSE | 单测覆盖 |
 | Pi | 通过 Pi `/login` 或 `PI_CODING_AGENT_DIR` auth 文件配置 provider 凭据（`openai-codex` OAuth 已验证） | Forward proxy（任意 HTTPS 上游）。`models.json` 里指向 `127.0.0.1` / `localhost` 的 loopback `baseUrl` 会被 `NO_PROXY` 排除、抓不到；claude-tap 会警告并建议改用 reverse | n/a | HTTP/SSE + WebSocket | 真实 E2E 已验证 |
-| Pi | 自定义 OpenAI 兼容配置，包括本地回环网关（`--tap-proxy-mode reverse --tap-target <网关>`） | `OPENAI_BASE_URL`，外加临时 `PI_CODING_AGENT_DIR`：`models.json` 中 host:port 与 `--tap-target` 相同的 `baseUrl` 改写为 `http://127.0.0.1:<port>/v1`。会话仍写回原 agent 目录 | 无 | HTTP/SSE | 单测覆盖 |
+| Pi | 本地回环 OpenAI 兼容网关（`--tap-proxy-mode reverse --tap-target http://127.0.0.1:<网关端口>`） | 只改写 `models.json` 里 host 为 `127.0.0.1` 或 `localhost`、且 host:port 与 `--tap-target` 相同的 `baseUrl`，写入临时副本并指向 `http://127.0.0.1:<tap端口>/v1`。target 末尾的 `/v1` 会先去掉一次再转发，避免 `/v1/chat/completions` 变成 `/v1/v1`。远程 provider（含内置 OpenAI）不改写。`settings.json` 与 `auth.json` 是临时副本：这次会话里的登录和设置改动不会写回。会话仍在 `<agent>/sessions/<encoded-cwd>/` | 无 | HTTP/SSE | 单测覆盖 |
 | Hermes Agent | 通过 `~/.hermes/` 配置 provider 凭据 | Forward proxy（任意 HTTPS 上游） | n/a | HTTP/SSE | 单测覆盖 |
 | Hermes Agent | 自定义 OpenAI 兼容 provider（`--tap-proxy-mode reverse`） | `https://api.openai.com` | `/v1` | HTTP/SSE | 单测覆盖 |
 | Cursor CLI / IDE Agent | Cursor 登录（`cursor-agent login`）或 Cursor IDE | 本地 `agent-transcripts` 监听（不走 MITM 代理） | n/a | 本地 transcript JSONL（`cursor-transcript`） | 单测已覆盖；transcript-only 切换后手动 E2E 待确认 |
@@ -64,7 +64,7 @@ English version: [Support Matrix](support-matrix.md).
 | `mimo` | `forward` | OpenCode fork；多 provider — forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
 | `opencode` | `forward` | 多 provider；forward proxy 可以捕获所有上游，而不依赖客户端支持哪个环境变量 |
 | `openclaw` | `reverse` | 尽量补丁被选中的 OpenClaw provider 配置；否则 fallback 到对应 provider 的 base URL 环境变量 |
-| `pi` | `forward` | 多 provider；Pi 可以使用 OpenAI Codex OAuth 和自定义 model registry provider，forward proxy 不依赖单一 base URL 覆盖即可捕获远程流量。`models.json` 里的 loopback 网关会绕过该代理；用 `--tap-proxy-mode reverse --tap-target <该 baseUrl>`，claude-tap 只在临时 agent 目录里改写匹配的条目 |
+| `pi` | `forward` | 多 provider；forward proxy 捕获远程 provider。`models.json` 里 host 为 `127.0.0.1` 或 `localhost` 的 baseUrl 会绕过 `NO_PROXY`；用 `--tap-proxy-mode reverse --tap-target http://127.0.0.1:<该端口>`（origin，不要带 `/v1`），只改写匹配的 loopback 条目 |
 | `hermes` | `forward` | 多 provider 的 Python agent；`httpx` 与 `requests` 都原生认 `HTTPS_PROXY`，forward proxy 捕获是最自然的默认 |
 | `cursor` | `transcript`（既非 reverse 也非 forward） | 对话只来自 `~/.cursor/projects/*/agent-transcripts/*.jsonl`。最短命令 `claude-tap --tap-client cursor` 会启动 `cursor-agent` 并实时 watch 写入 dashboard（**每个 Cursor 会话 JSONL 对应一个独立 tap session**）；`--tap-no-launch` 仅 watch IDE。不启动 HTTPS 代理 / CA |
 | `qoder` | `forward` | Qoder CLI 会访问多个 Qoder 服务端点，且没有可靠的单一 base URL 覆盖能力 |
