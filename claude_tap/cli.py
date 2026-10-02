@@ -443,6 +443,7 @@ async def _async_main(args: argparse.Namespace) -> int:
                         capture_only=False,
                         codex_app_preflighted=codex_app_preflighted,
                         codex_app_user_data_dir=codex_app_user_data_dir,
+                        target=args.target,
                     )
                 except asyncio.CancelledError:
                     pass
@@ -539,6 +540,7 @@ async def _async_main(args: argparse.Namespace) -> int:
                         capture_only=capture_only,
                         codex_app_preflighted=codex_app_preflighted,
                         codex_app_user_data_dir=codex_app_user_data_dir,
+                        target=args.target,
                     )
                 except asyncio.CancelledError:
                     pass
