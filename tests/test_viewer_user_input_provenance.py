@@ -426,6 +426,12 @@ def test_a_json_prompt_array_prefers_the_human_item() -> None:
     assert _clean_session_user_text('[{"prompt":""},{"prompt":"Only one speaks"}]') == "Only one speaks"
 
 
+def test_deeply_nested_json_prompt_falls_back_without_recursion_error() -> None:
+    nested = ("[" * 1_100) + '"human prompt"' + ("]" * 1_100)
+
+    assert _clean_session_user_text(nested) == nested
+
+
 def test_ordinary_prose_beginning_with_analyze_reads_as_human() -> None:
     """A harness opener has to be unmistakable template text, not a plain English stem.
 
