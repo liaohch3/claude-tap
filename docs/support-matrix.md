@@ -1,6 +1,6 @@
 ---
 owner: claude-tap-maintainers
-last_reviewed: 2026-08-13
+last_reviewed: 2026-10-02
 source_of_truth: AGENTS.md
 ---
 
@@ -38,8 +38,8 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | MiMo Code | Anthropic provider only (`--tap-proxy-mode reverse`; sets `MIMOCODE_MIMO_ONLY=false`) | `https://api.anthropic.com` | none | HTTP/SSE | Unit-tested |
 | OpenClaw | Provider creds via `~/.openclaw/openclaw.json` or `OPENCLAW_CONFIG_PATH` | Selected provider `baseUrl` patched through a temporary config file | provider-dependent | HTTP/SSE | Unit-tested |
 | OpenClaw | No patchable config (`--tap-proxy-mode reverse`) | Provider env fallback (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, or `OPENROUTER_BASE_URL`) | provider-dependent | HTTP/SSE | Unit-tested |
-| Pi | Provider creds via Pi `/login` or `PI_CODING_AGENT_DIR` auth file (`openai-codex` OAuth verified) | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE + WebSocket | Real E2E verified |
-| Pi | Custom OpenAI-compatible setup (`--tap-proxy-mode reverse`) | `https://api.openai.com` | none | HTTP/SSE | Unit-tested |
+| Pi | Provider creds via Pi `/login` or `PI_CODING_AGENT_DIR` auth file (`openai-codex` OAuth verified) | Forward proxy (any HTTPS upstream). Loopback `baseUrl` entries in `models.json` (`127.0.0.1` / `localhost`) are excluded by `NO_PROXY` and are not captured; claude-tap warns and suggests reverse mode | n/a | HTTP/SSE + WebSocket | Real E2E verified |
+| Pi | Loopback OpenAI-compatible gateway (`--tap-proxy-mode reverse --tap-target http://127.0.0.1:<gateway-port>`) | Only `models.json` `baseUrl` values whose host is `127.0.0.1` or `localhost` and whose host:port matches `--tap-target` are rewritten, in a temporary copy, to `http://127.0.0.1:<tap-port>/v1`. A trailing `/v1` on the target is stripped once before forwarding, so `/v1/chat/completions` is not doubled. Remote providers, including the built-in OpenAI provider, are not rewritten. `settings.json` and `auth.json` are temporary copies: login and settings changes inside that session are discarded. Sessions stay at `<agent>/sessions/<encoded-cwd>/` | none | HTTP/SSE | Unit-tested |
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
 | Cursor CLI / IDE Agent | Cursor login (`cursor-agent login`) or Cursor IDE | Local `agent-transcripts` watch (no MITM proxy) | n/a | Local transcript JSONL (`cursor-transcript`) | Unit-tested; manual E2E pending after transcript-only switch |
@@ -65,7 +65,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `mimo` | `forward` | OpenCode fork; multi-provider — forward proxy captures every upstream regardless of which env var the client honors |
 | `opencode` | `forward` | Multi-provider; forward proxy captures every upstream regardless of which env var the client honors |
 | `openclaw` | `reverse` | Patches the selected OpenClaw provider config when possible, otherwise falls back to provider-specific base URL env vars |
-| `pi` | `forward` | Multi-provider; Pi can use OpenAI Codex OAuth and custom model registry providers, so forward proxy captures traffic without relying on a single base URL override |
+| `pi` | `forward` | Multi-provider; forward proxy captures remote providers. A loopback `models.json` baseUrl (`127.0.0.1` or `localhost`) bypasses `NO_PROXY`; use `--tap-proxy-mode reverse --tap-target http://127.0.0.1:<that-port>` (origin, not `/v1`) so only matching loopback entries are rewritten |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
 | `cursor` | `transcript` (neither reverse nor forward) | Conversation comes only from `~/.cursor/projects/*/agent-transcripts/*.jsonl`. Bare `claude-tap --tap-client cursor` launches `cursor-agent` and live-watches transcripts into the dashboard (**one tap session per Cursor conversation JSONL**); `--tap-no-launch` is IDE watch-only. No HTTPS proxy / CA |
 | `qoder` | `forward` | Qoder CLI uses multiple Qoder service endpoints and has no reliable single base URL override |
