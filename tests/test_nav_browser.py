@@ -461,3 +461,77 @@ class TestDiffNavInBrowser:
         assert "mcp__codex_apps__github" in result["summary"]
         assert "_fetch_pr" in result["body"]
         assert "repo_full_name" in result["json"]
+
+
+@pytest.mark.parametrize(
+    ("old_body", "new_body", "expected_keys"),
+    [
+        (
+            {"client_metadata": {"session_id": "session", "nested": {"b": 2, "a": 1}}},
+            {"client_metadata": {"nested": {"a": 1, "b": 2}, "session_id": "session"}},
+            [],
+        ),
+        (
+            {"reasoning": {"effort": "medium", "summary": "auto"}},
+            {"reasoning": {"summary": "auto", "effort": "medium"}},
+            [],
+        ),
+        ({"metadata": [{"b": 2, "a": 1}]}, {"metadata": [{"a": 1, "b": 2}]}, []),
+        ({"metadata": [1, 2]}, {"metadata": [2, 1]}, ["metadata"]),
+        ({"max_output_tokens": 1}, {"max_output_tokens": "1"}, ["max_output_tokens"]),
+        ({}, {"metadata": None}, ["metadata"]),
+        ({"metadata": None}, {}, ["metadata"]),
+        ({"metadata": {"a": 1}}, {"metadata": {"a": 1, "b": 2}}, ["metadata"]),
+        (
+            {"metadata": '{"a":1,"b":2}'},
+            {"metadata": '{"b":2,"a":1}'},
+            ["metadata"],
+        ),
+    ],
+)
+def test_parameter_diff_ignores_only_object_key_order(browser_page, old_body, new_body, expected_keys):
+    result = browser_page.evaluate(
+        """([oldBody, newBody]) => {
+            const before = JSON.stringify([oldBody, newBody]);
+            const changes = structuralDiff(oldBody, newBody).fieldChanges;
+            return {
+                keys: changes.map(change => change.key),
+                added: changes.map(change => change.added),
+                removed: changes.map(change => change.removed),
+                unchangedInput: before === JSON.stringify([oldBody, newBody]),
+            };
+        }""",
+        [old_body, new_body],
+    )
+    assert result["keys"] == expected_keys
+    assert result["unchangedInput"]
+    if not old_body:
+        assert result["added"] == [True]
+    if not new_body:
+        assert result["removed"] == [True]
+
+
+def test_parameter_diff_renders_only_actual_changed_lines(browser_page):
+    result = browser_page.evaluate(
+        """() => {
+            const oldBody = {reasoning: {effort: 'medium', summary: 'auto'}};
+            const newBody = {reasoning: {summary: 'auto', effort: 'high'}};
+            const diff = structuralDiff(oldBody, newBody);
+            const overlay = document.createElement('div');
+            overlay.id = 'parameter-order-test';
+            overlay.innerHTML = renderStructuralDiff(diff);
+            document.body.appendChild(overlay);
+            const result = {
+                keys: diff.fieldChanges.map(change => change.key),
+                deleted: [...overlay.querySelectorAll('.sbs-cell.del')].map(el => el.textContent),
+                added: [...overlay.querySelectorAll('.sbs-cell.add')].map(el => el.textContent),
+                stringJson: formatDiffValue('{"b":2,"a":1}'),
+            };
+            overlay.remove();
+            return result;
+        }"""
+    )
+    assert result["keys"] == ["reasoning"]
+    assert result["deleted"] == ['  "effort": "medium",']
+    assert result["added"] == ['  "effort": "high",']
+    assert result["stringJson"] == '{\n  "a": 1,\n  "b": 2\n}'

@@ -411,7 +411,8 @@ function structuralDiff(oldB, newB) {
   const allKeys = new Set([...Object.keys(oldB), ...Object.keys(newB)]);
   for (const k of allKeys) {
     if (skip.has(k)) continue;
-    const ov = JSON.stringify(oldB[k]), nv = JSON.stringify(newB[k]);
+    // Object key order is not a parameter change; array order and scalar values are.
+    const ov = JSON.stringify(sortedDeepValue(oldB[k])), nv = JSON.stringify(sortedDeepValue(newB[k]));
     if (ov !== nv) d.fieldChanges.push({ key: k, oldVal: oldB[k], newVal: newB[k], added: ov === undefined, removed: nv === undefined });
   }
   return d;
@@ -437,7 +438,7 @@ function normalizeDiffValue(value) {
 function formatDiffValue(value) {
   if (value === undefined) return '';
   const normalized = normalizeDiffValue(value);
-  return typeof normalized === 'string' ? normalized : JSON.stringify(normalized, null, 2);
+  return typeof normalized === 'string' ? normalized : JSON.stringify(sortedDeepValue(normalized), null, 2);
 }
 
 function renderParamChange(f) {
