@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from claude_tap.trace_store import TraceStore, get_trace_store
-from claude_tap.usage import normalize_usage
+from claude_tap.usage import normalize_usage, usage_total_tokens
 
 if TYPE_CHECKING:
     from claude_tap.live import LiveViewerServer
@@ -34,6 +34,7 @@ class TraceWriter:
         self.total_output_tokens = 0
         self.total_cache_read_tokens = 0
         self.total_cache_create_tokens = 0
+        self.total_tokens = 0
         self.models_used: dict[str, int] = {}
         self._live_server = live_server
         self._metadata = metadata or {}
@@ -112,6 +113,7 @@ class TraceWriter:
         self.total_output_tokens += usage.get("output_tokens", 0)
         self.total_cache_read_tokens += usage.get("cache_read_input_tokens", 0)
         self.total_cache_create_tokens += usage.get("cache_creation_input_tokens", 0)
+        self.total_tokens += usage_total_tokens(usage)
 
         response = record.get("response")
         if isinstance(response, dict):
@@ -137,6 +139,7 @@ class TraceWriter:
             "output_tokens": self.total_output_tokens,
             "cache_read_tokens": self.total_cache_read_tokens,
             "cache_create_tokens": self.total_cache_create_tokens,
+            "total_tokens": self.total_tokens,
             "models_used": self.models_used,
             "has_error": has_error,
             "trace_storage_errors": self.storage_error_count,

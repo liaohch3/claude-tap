@@ -368,9 +368,12 @@ def test_summary_repair_migrates_legacy_double_counted_totals(trace_db) -> None:
     conn.commit()
 
     summary = next(item for item in list_trace_sessions() if item["id"] == session_id)
+    persisted = json.loads(store.load_session_row(session_id)["summary_json"])
 
     assert summary["total_tokens"] == 11773
     assert summary["cache_read_tokens"] == 11648
+    assert persisted["total_tokens"] == 11773
+    assert persisted["summary_version"] == DASHBOARD_SUMMARY_VERSION
 
 
 def test_dashboard_load_session_can_page_sqlite_records(trace_db, tmp_path: Path) -> None:
@@ -2456,6 +2459,73 @@ async def test_trace_writer_persists_records_to_sqlite(trace_db) -> None:
 
     assert len(records) == 1
     assert records[0]["capture"]["client"] == "claude"
+
+
+@pytest.mark.asyncio
+async def test_trace_writer_finalize_preserves_dashboard_usage_metadata_totals(trace_db) -> None:
+    store = get_trace_store()
+    session_id = store.create_session(client="agy", proxy_mode="reverse")
+    writer = TraceWriter(session_id, store=store, metadata={"client": "agy", "proxy_mode": "reverse"})
+    try:
+        await writer.write(_antigravity_record())
+    finally:
+        writer.close()
+
+    summary = json.loads(store.load_session_row(session_id)["summary_json"])
+
+    assert summary["input_tokens"] == 100
+    assert summary["output_tokens"] == 5
+    assert summary["total_tokens"] == 105
+
+
+@pytest.mark.asyncio
+async def test_sessions_api_repairs_off_page_stale_totals_before_aggregating(trace_db) -> None:
+    store = get_trace_store()
+    session_ids = []
+    for index in range(2):
+        session_id = store.create_session(
+            client="codex",
+            proxy_mode="reverse",
+            started_at=datetime(2026, 5, 20, 8, 25 + index, tzinfo=timezone.utc),
+        )
+        record = _anthropic_record(turn=index + 1)
+        record["capture"]["client"] = "codex"
+        record["request"]["path"] = "/v1/responses"
+        record["response"]["body"]["usage"] = {
+            "input_tokens": 219921,
+            "input_tokens_details": {"cached_tokens": 170496},
+            "output_tokens": 3562,
+            "total_tokens": 223483,
+        }
+        store.append_record(session_id, record)
+        store.finalize_session(session_id, {"api_calls": 1})
+        stale_summary = json.loads(store.load_session_row(session_id)["summary_json"])
+        stale_summary["summary_version"] = DASHBOARD_SUMMARY_VERSION - 1
+        stale_summary["total_tokens"] = 393979
+        conn = store._connect()
+        conn.execute(
+            "UPDATE sessions SET summary_json = ? WHERE id = ?",
+            (json.dumps(stale_summary, separators=(",", ":")), session_id),
+        )
+        conn.commit()
+        session_ids.append(session_id)
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/api/sessions?limit=1") as resp:
+                assert resp.status == 200
+                payload = await resp.json()
+    finally:
+        await server.stop()
+
+    assert len(payload["sessions"]) == 1
+    assert payload["total_tokens"] == 446966
+    for session_id in session_ids:
+        cached = json.loads(store.load_session_row(session_id)["summary_json"])
+        assert cached["summary_version"] == DASHBOARD_SUMMARY_VERSION
+        assert cached["total_tokens"] == 223483
 
 
 def test_get_session_aggregates(trace_db) -> None:

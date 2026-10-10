@@ -99,3 +99,25 @@ def normalize_usage(usage: object) -> dict:
             normalized["cache_creation_input_tokens"] = cache_write
 
     return normalized
+
+
+def usage_total_tokens(usage: dict) -> int:
+    """Return the provider-reported total, or a shape-aware derived fallback.
+
+    Anthropic-style cache-read is a separate bucket and is added. OpenAI/Codex/
+    Gemini-style cached tokens already sit inside ``input_tokens``
+    (``cache_read_in_input=True``) and must not be added again.
+    """
+    usage = normalize_usage(usage)
+    reported = usage.get("total_tokens")
+    if isinstance(reported, int) and not isinstance(reported, bool) and reported >= 0:
+        return reported
+
+    cache_read = _as_count(usage.get("cache_read_input_tokens"))
+    embedded = usage.get("cache_read_in_input") is True
+    return (
+        _as_count(usage.get("input_tokens"))
+        + _as_count(usage.get("output_tokens"))
+        + (0 if embedded else cache_read)
+        + _as_count(usage.get("cache_creation_input_tokens"))
+    )
