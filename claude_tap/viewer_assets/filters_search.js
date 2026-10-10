@@ -457,20 +457,213 @@ function updateSidebarSortControls() {
 }
 
 /* ─── Search ─── */
+/* Search-only hydration store — never mutates `entries` so sidebar/sort/detail
+   rendering keeps their existing display metadata untouched. */
+const searchHydratedEntries = new Map(); // rawIdx -> full entry
+let searchHydrateJob = null;             // { aborted: boolean }
+
 function onSearch(value) {
   searchQuery = value.toLowerCase().trim();
   $('#search-clear').style.display = searchQuery ? '' : 'none';
   applyFilter();
+  if (searchQuery) ensureEntriesHydratedForSearch();
+  else abortSearchHydration();
 }
 function clearSearch() {
   searchQuery = '';
   $('#search-input').value = '';
   $('#search-clear').style.display = 'none';
+  abortSearchHydration();
   applyFilter();
 }
+
+function abortSearchHydration() {
+  if (searchHydrateJob) searchHydrateJob.aborted = true;
+  searchHydrateJob = null;
+  const ind = document.getElementById('search-hydrate-indicator');
+  if (ind) ind.remove();
+}
+
+function renderSearchHydrateProgress(done, total) {
+  const bar = document.getElementById('search-bar');
+  if (!bar) return;
+  let ind = document.getElementById('search-hydrate-indicator');
+  if (!total || done >= total) {
+    if (ind) ind.remove();
+    return;
+  }
+  if (!ind) {
+    ind = document.createElement('span');
+    ind.id = 'search-hydrate-indicator';
+    ind.style.cssText = 'margin-left:6px;font-size:11px;color:var(--text-secondary,#888);white-space:nowrap;';
+    bar.appendChild(ind);
+  }
+  ind.textContent = 'hydrating ' + done + '/' + total;
+}
+
+async function ensureEntriesHydratedForSearch() {
+  abortSearchHydration();
+  const job = { aborted: false };
+  searchHydrateJob = job;
+
+  const targets = [];
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (!e || !e._isStub) continue;
+    const idx = e._rawIdx;
+    if (typeof idx !== 'number') continue;
+    if (searchHydratedEntries.has(idx)) continue;
+    targets.push(e);
+  }
+  if (!targets.length) return;
+
+  let cursor = 0;
+  let done = 0;
+  const total = targets.length;
+  renderSearchHydrateProgress(0, total);
+  let refreshTimer = null;
+  const scheduleRefresh = () => {
+    if (job.aborted || refreshTimer) return;
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      if (job.aborted || !searchQuery) return;
+      /* preserveDetail=false so renderSidebar re-groups from scratch; passing
+         true was leaving previously-collapsed model groups collapsed and hiding
+         newly-matched turns in those groups. */
+      applyFilter(false);
+    }, 220);
+  };
+
+  const CONCURRENCY = 6;
+  const worker = async () => {
+    while (!job.aborted && cursor < targets.length) {
+      const my = cursor++;
+      const stub = targets[my];
+      try {
+        const full = await fetchRemoteEntry(stub);
+        if (job.aborted) return;
+        if (full && full !== stub) {
+          searchHydratedEntries.set(stub._rawIdx, full);
+          scheduleRefresh();
+        }
+      } catch (_) { /* per-record failure is non-fatal */ }
+      done++;
+      renderSearchHydrateProgress(done, total);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, worker));
+  renderSearchHydrateProgress(total, total);
+  if (!job.aborted && searchQuery) {
+    if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+    applyFilter(false);
+  }
+}
+/* Build a lowercase haystack of *human-readable text* on a full entry. Only
+   pulls fields that a person would actually type into the search box — text /
+   thinking / role / name / id / tool_use_id / tool_result body / tool_use
+   input values. Skips tool `input_schema` and never JSON.stringifies whole
+   blocks (those are tool definitions or structural JSON, not searchable
+   content). Reads raw `body.messages` / `body.tools` / `response.body.content`
+   directly to bypass display normalizers that filter for rendering. Cached on
+   `e._searchHaystack` — runs at most once per entry per page lifetime. */
+function _hsPushStr(parts, v) {
+  if (typeof v === 'string' && v.length) parts.push(v);
+  else if (typeof v === 'number' || typeof v === 'boolean') parts.push(String(v));
+}
+function _hsPushValues(parts, v) {
+  if (v == null) return;
+  const t = typeof v;
+  if (t === 'string' || t === 'number' || t === 'boolean') { _hsPushStr(parts, v); return; }
+  if (Array.isArray(v)) { for (const x of v) _hsPushValues(parts, x); return; }
+  if (t === 'object') { for (const k of Object.keys(v)) _hsPushValues(parts, v[k]); }
+}
+function _hsPushBlock(parts, block) {
+  if (block == null) return;
+  if (typeof block === 'string') { _hsPushStr(parts, block); return; }
+  if (typeof block !== 'object') return;
+  const type = block.type;
+  if (type === 'text' || type === 'input_text' || type === 'output_text') {
+    _hsPushStr(parts, block.text);
+  } else if (type === 'thinking') {
+    _hsPushStr(parts, block.thinking);
+  } else if (type === 'tool_use') {
+    _hsPushStr(parts, block.name);
+    _hsPushStr(parts, block.id);
+    if (block.input) _hsPushValues(parts, block.input);
+  } else if (type === 'tool_result') {
+    _hsPushStr(parts, block.tool_use_id);
+    const c = block.content;
+    if (typeof c === 'string') _hsPushStr(parts, c);
+    else if (Array.isArray(c)) { for (const sub of c) _hsPushBlock(parts, sub); }
+    else if (c) _hsPushValues(parts, c);
+  } else if (type === 'image' || type === 'input_image') {
+    /* no searchable text */
+  } else {
+    _hsPushStr(parts, block.text);
+    _hsPushStr(parts, block.name);
+    _hsPushStr(parts, block.id);
+    _hsPushStr(parts, block.thinking);
+  }
+}
+/* Haystack alignment: the four detail-view sections a user actually reads
+   (Tools / System / Messages / Response — detail_trace.js:136–145) are
+   populated by these four helpers. Reuse the exact same helpers here so a
+   search hit ⇔ the matching text is visible in one of those sections. The
+   "Full JSON" section (detail_trace.js:149, renderJSONTree(e)) dumps the raw
+   entry including headers / timestamps / request_id / capture metadata /
+   model / path — those fields are intentionally NOT included below so a
+   search never matches text that only exists inside the Full JSON tree. */
+function buildEntrySearchHaystack(e) {
+  const parts = [];
+  const reqBody = e?.request?.body;
+  const respPayload = getResponsePayload(e);
+
+  /* === System section (renderSystemPrompt → extractSystem) === */
+  _hsPushStr(parts, extractSystem(reqBody));
+
+  /* === Messages section (renderMessages → getMessages) ===
+     getMessages already filters system/developer roles + empty content and
+     normalizes OpenAI tool_calls into content blocks, so we walk the same
+     shape the UI walks. */
+  const msgs = getMessages(reqBody);
+  for (const m of msgs) {
+    if (!m) continue;
+    _hsPushStr(parts, m.role);
+    const c = m.content;
+    if (typeof c === 'string') _hsPushStr(parts, c);
+    else if (Array.isArray(c)) { for (const sub of c) _hsPushBlock(parts, sub); }
+    else if (c) _hsPushValues(parts, c);
+  }
+
+  /* === Tools section (renderTools → getDetailTools + toolDisplayName + toolDescription) ===
+     input_schema / parameters intentionally omitted — those are structural
+     definitions rendered inside the Tools panel's expandable params view but
+     also visible in Full JSON, and the user asked to exclude Full-JSON-only
+     content. Tool DESCRIPTION (which is what a person reads) is kept. */
+  const tools = getDetailTools(e, reqBody, respPayload);
+  for (const td of tools) {
+    if (!td) continue;
+    _hsPushStr(parts, toolDisplayName(td));
+    _hsPushStr(parts, toolDescription(td));
+  }
+
+  /* === Response section (renderResponseContent → getResponseOutput().content) === */
+  const respOutput = getResponseOutput(e);
+  const rc = respOutput?.content;
+  if (Array.isArray(rc)) { for (const block of rc) _hsPushBlock(parts, block); }
+
+  return parts.join('\n').toLowerCase();
+}
+
 function matchSearch(e, q) {
+  /* Swap in the hydrated full entry so the haystack sees real content instead
+     of the tiny stub metadata TRACE_META ships in lazy mode. */
+  if (e && e._isStub && typeof e._rawIdx === 'number' && searchHydratedEntries.has(e._rawIdx)) {
+    e = searchHydratedEntries.get(e._rawIdx);
+  }
   if (e._isStub) {
-    // In lazy mode: search metadata fields only (fast, no parsing)
+    // Stub-only path: metadata fields TRACE_META did ship (no hydration yet).
     const model = e.request?.body?.model || '';
     if (model.toLowerCase().includes(q)) return true;
     const path = e.request?.path || '';
@@ -492,29 +685,11 @@ function matchSearch(e, q) {
     }
     return false;
   }
-  const body = e.request?.body;
-  if ((body?.model || '').toLowerCase().includes(q)) return true;
-  const sys = extractSystem(body) || '';
-  if (sys.toLowerCase().includes(q)) return true;
-  const msgs = getMessages(body);
-  for (const m of msgs) {
-    const mc = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-    if (mc.toLowerCase().includes(q)) return true;
+  /* Full entry — cached field-extraction haystack. */
+  if (typeof e._searchHaystack !== 'string') {
+    e._searchHaystack = buildEntrySearchHaystack(e);
   }
-  const requestTools = getRequestTools(body);
-  const tools = requestTools.length ? requestTools : getRequestTools(getResponsePayload(e));
-  for (const td of tools) {
-    if (toolDisplayName(td).toLowerCase().includes(q)) return true;
-    if (toolDescription(td).toLowerCase().includes(q)) return true;
-  }
-  const ro = getResponseOutput(e);
-  const rc = ro?.content;
-  if (Array.isArray(rc)) {
-    for (const block of rc) {
-      if ((block.text || block.name || '').toLowerCase().includes(q)) return true;
-    }
-  }
-  return false;
+  return e._searchHaystack.indexOf(q) !== -1;
 }
 
 /* ─── Global search (Cmd/Ctrl+F) ─── */
