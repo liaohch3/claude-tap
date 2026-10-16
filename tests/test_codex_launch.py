@@ -731,3 +731,45 @@ def test_codex_reverse_trace_options_allow_websocket() -> None:
         "strip_path_prefix": "/v1",
         "force_http": False,
     }
+
+
+def _write_custom_codex_config(codex_home, base_url: str) -> None:
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'model_provider = "custom"\n\n'
+        f'[model_providers.custom]\nname = "gw"\nbase_url = "{base_url}"\nwire_api = "responses"\n'
+    )
+
+
+def test_codexapp_forward_trace_prefixes_include_custom_provider_path(monkeypatch, tmp_path) -> None:
+    from claude_tap.cli import _forward_proxy_trace_prefixes
+
+    codex_home = tmp_path / "codex"
+    _write_custom_codex_config(codex_home, "https://gateway.example.com/compatible-mode/v1/")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    prefixes = _forward_proxy_trace_prefixes("codexapp", ("/extra",))
+
+    assert "/compatible-mode/v1" in prefixes
+    assert "/extra" in prefixes
+    assert "/backend-api/codex/responses" in prefixes
+
+
+def test_codexapp_forward_trace_prefixes_host_root_provider(monkeypatch, tmp_path) -> None:
+    from claude_tap.cli import _forward_proxy_trace_prefixes
+
+    codex_home = tmp_path / "codex"
+    _write_custom_codex_config(codex_home, "https://gateway.example.com")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    prefixes = _forward_proxy_trace_prefixes("codexapp", ())
+
+    assert "/responses" in prefixes
+    assert "/chat/completions" in prefixes
+
+
+def test_forward_trace_prefixes_unfiltered_client_stays_unfiltered(monkeypatch, tmp_path) -> None:
+    from claude_tap.cli import _forward_proxy_trace_prefixes
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    assert _forward_proxy_trace_prefixes("claude", ("/x",)) == ()
