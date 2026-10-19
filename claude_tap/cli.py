@@ -115,6 +115,28 @@ def _reverse_proxy_path_prefixes(
     return allowed_prefixes, trace_prefixes
 
 
+def _forward_proxy_trace_prefixes(client: str, extra_allowed_paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Return the forward-proxy trace filter, extended for custom Codex providers.
+
+    Clients without a filter keep tracing every request. For Codex App, the
+    provider selected in the shared Codex config may live on a third-party path,
+    so its base URL path is traced as well, as are explicit --tap-allow-path values.
+    """
+    trace_prefixes = CLIENT_CONFIGS[client].forward_trace_path_prefixes
+    if not trace_prefixes:
+        return trace_prefixes
+    extras = list(extra_allowed_paths)
+    if client == "codexapp":
+        selected = _selected_codex_provider_base_url()
+        if selected is not None:
+            base_path = urlparse(selected[1]).path.rstrip("/")
+            if base_path:
+                extras.append(base_path)
+            else:
+                extras.extend(("/responses", "/chat/completions"))
+    return (*trace_prefixes, *(p for p in extras if p not in trace_prefixes))
+
+
 class _LazyTraceWriter:
     """Create a trace session only when side-channel capture writes a record."""
 
@@ -484,7 +506,7 @@ async def _async_main(args: argparse.Namespace) -> int:
                         args.client
                     ].forward_base_url_allowed_path_prefixes,
                     trace_methods=CLIENT_CONFIGS[args.client].forward_trace_methods,
-                    trace_path_prefixes=CLIENT_CONFIGS[args.client].forward_trace_path_prefixes,
+                    trace_path_prefixes=_forward_proxy_trace_prefixes(args.client, tuple(args.extra_allowed_paths)),
                     trace_path_suffixes=CLIENT_CONFIGS[args.client].forward_trace_path_suffixes,
                     store_stream_events=args.store_stream_events,
                     capture_only=capture_only,
