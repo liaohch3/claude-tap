@@ -322,6 +322,8 @@ claude-tap --tap-client codex -- --full-auto
 
 Codex App is launched through claude-tap's forward proxy so the final `/backend-api/codex/responses` HTTP and WebSocket request bodies can be captured in the same trace viewer as other clients. Current macOS installs ship as `ChatGPT.app` (bundle id `com.openai.codex`); older standalone `Codex.app` installs are still recognized. Non-model product traffic is relayed but not persisted as trace rows. On macOS, claude-tap trusts its local CA in the current user's login keychain when needed so the bundled app-server can connect through the proxy.
 
+The normal command below configures the launched app automatically; do not export proxy or certificate variables yourself. claude-tap passes Chromium's `--proxy-server`, sets the upper- and lower-case `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` variables, and exposes the CA through `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CODEX_CA_CERTIFICATE`, and `REQUESTS_CA_BUNDLE`. The separate CA variables are intentional because the Electron/Node and Rust app-server processes use different TLS stacks.
+
 ```bash
 # Launch Codex App (ChatGPT.app or Codex.app) and inspect captured backend requests
 claude-tap --tap-client codexapp
@@ -334,6 +336,33 @@ CODEX_APP_EXECUTABLE=/path/to/ChatGPT.app/Contents/MacOS/ChatGPT claude-tap --ta
 ```
 
 If Codex/ChatGPT App is already running, claude-tap launches an isolated second instance with a dedicated `--user-data-dir` under `~/.claude-tap/codex-app-profiles/tap` so your current window keeps working. You may need to sign in again in the tapped window. Override the profile with `CODEX_APP_USER_DATA_DIR`. This mode records live backend traffic instead of importing local session JSONL transcripts.
+
+If the Codex log reports `invalid peer certificate: UnknownIssuer`, trust the generated CA, quit every Codex/ChatGPT App process, and launch it again through claude-tap:
+
+```bash
+claude-tap trust-ca
+claude-tap --tap-client codexapp
+```
+
+An empty trace does not always mean proxy setup failed. Product requests such as task lists and analytics appear in proxy logs as `trace skipped by client filter`; only model traffic to `/backend-api/codex/responses` becomes a trace row. Start or continue a local Codex task and confirm that endpoint appears. If it does not, inspect the Codex App log for a certificate or WebSocket error.
+
+When using `--tap-no-launch`, claude-tap cannot inject the launch environment. Use a fixed port, trust the CA once, and configure the manually launched app explicitly:
+
+```bash
+# Terminal 1
+claude-tap trust-ca
+claude-tap --tap-client codexapp --tap-no-launch --tap-port 59444
+
+# Terminal 2 (make sure no existing Codex/ChatGPT App process is running)
+tap_proxy='http://127.0.0.1:59444'
+tap_ca="$HOME/.claude-tap/ca.pem"
+env HTTP_PROXY="$tap_proxy" HTTPS_PROXY="$tap_proxy" ALL_PROXY="$tap_proxy" \
+    http_proxy="$tap_proxy" https_proxy="$tap_proxy" all_proxy="$tap_proxy" \
+    NODE_EXTRA_CA_CERTS="$tap_ca" SSL_CERT_FILE="$tap_ca" \
+    CODEX_CA_CERTIFICATE="$tap_ca" REQUESTS_CA_BUNDLE="$tap_ca" \
+    /Applications/ChatGPT.app/Contents/MacOS/ChatGPT \
+    --proxy-server="$tap_proxy"
+```
 
 </details>
 
