@@ -590,10 +590,20 @@ async def test_reverse_proxy_preserves_bedrock_stream_error_without_stream_event
 class _FakeStreamContent:
     def __init__(self, body: bytes) -> None:
         self._body = body
+        self._offset = 0
+
+    async def readany(self) -> bytes:
+        if self._offset >= len(self._body):
+            return b""
+        chunk = self._body[self._offset : self._offset + 80]
+        self._offset += len(chunk)
+        return chunk
 
     async def iter_any(self):
-        yield self._body[:80]
-        yield self._body[80:]
+        while self._offset < len(self._body):
+            chunk = self._body[self._offset : self._offset + 80]
+            self._offset += len(chunk)
+            yield chunk
 
 
 class _FakeStreamResponse:
