@@ -18,6 +18,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
+from urllib.parse import urlparse
 
 from claude_tap.cli_output import print_status as _print
 
@@ -73,8 +74,6 @@ def _is_aws_native_bedrock_url(url: str) -> bool:
     or company proxies do NOT use SigV4, so rewriting their URL is safe.
     """
     try:
-        from urllib.parse import urlparse
-
         host = urlparse(url).hostname or ""
     except Exception:
         return False
@@ -521,10 +520,10 @@ CLIENT_CONFIGS: dict[str, ClientConfig] = {
         cmd="pi",
         label="Pi",
         install_url="https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent",
-        # Pi is multi-provider and stores provider base URLs in its model
-        # registry/models.json rather than a single global env var. Reverse
-        # mode remains structurally available for custom OpenAI-compatible
-        # setups, but forward mode is the reliable default.
+        # Pi is multi-provider and stores provider base URLs in models.json,
+        # which does not honor OPENAI_BASE_URL. Forward mode captures remote
+        # providers; loopback baseUrls bypass NO_PROXY and need reverse mode,
+        # which rewrites matching entries in a temporary PI_CODING_AGENT_DIR.
         base_url_env="OPENAI_BASE_URL",
         base_url_suffix="/v1",
         default_target="https://api.openai.com",
@@ -637,6 +636,246 @@ def _node_supports_env_proxy(env: dict[str, str]) -> bool:
     return result.returncode == 0
 
 
+_PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR"
+_PI_SESSION_DIR_ENV = "PI_CODING_AGENT_SESSION_DIR"
+_PI_SANDBOX_DIR_PREFIX = "claude-tap-pi-"
+_PI_COPY_FILES = frozenset({"models.json", "settings.json", "auth.json"})
+_PI_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})
+
+
+def _pi_agent_dir() -> Path:
+    """Return the Pi agent directory, honoring ``PI_CODING_AGENT_DIR``."""
+    explicit = os.environ.get(_PI_AGENT_DIR_ENV, "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    return Path.home() / ".pi" / "agent"
+
+
+def _pi_url_host_port(url: str) -> tuple[str, int] | None:
+    try:
+        parsed = urlparse(url.strip())
+        hostname = (parsed.hostname or "").lower()
+        if parsed.scheme not in {"http", "https"} or not hostname:
+            return None
+        if parsed.port is not None:
+            port = parsed.port
+        elif parsed.scheme == "https":
+            port = 443
+        else:
+            port = 80
+    except ValueError:
+        _print(f"Warning: skipping unreadable Pi baseUrl {url!r}; launch continues.")
+        return None
+    return hostname, port
+
+
+def _pi_forward_target(target: str) -> str:
+    """Drop a trailing ``/v1`` so Pi's own ``/v1`` request path is not doubled.
+
+    Pi appends ``/v1/chat/completions`` to a provider baseUrl. The sandbox
+    rewrites that baseUrl to ``http://127.0.0.1:<port>/v1``, and the reverse
+    proxy then joins ``--tap-target`` with the incoming path. A target that
+    already ends in ``/v1`` would become ``/v1/v1/chat/completions``. A bare
+    origin and any other prefix are left untouched, matching OpenClaw's
+    openai-compatible target normalization.
+    """
+    stripped = target.strip().rstrip("/")
+    if stripped.endswith("/v1"):
+        return stripped[:-3].rstrip("/") or stripped
+    return stripped
+
+
+def _pi_loopback_endpoint(parsed: tuple[str, int]) -> tuple[str, int]:
+    """Collapse 127.0.0.1 and localhost so either spelling names the same gateway."""
+    host, port = parsed
+    if host in _PI_LOOPBACK_HOSTS:
+        return "loopback", port
+    return host, port
+
+
+def _pi_loopback_base_url_matches_target(base_url: str, target: str) -> bool:
+    parsed_base = _pi_url_host_port(base_url)
+    parsed_target = _pi_url_host_port(target)
+    if parsed_base is None or parsed_target is None:
+        return False
+    if parsed_base[0] not in _PI_LOOPBACK_HOSTS:
+        return False
+    return _pi_loopback_endpoint(parsed_base) == _pi_loopback_endpoint(parsed_target)
+
+
+def _rewrite_pi_base_url(value: object, target: str, proxy_base_url: str) -> tuple[object, bool]:
+    if not isinstance(value, str) or not _pi_loopback_base_url_matches_target(value, target):
+        return value, False
+    if value == proxy_base_url:
+        return value, False
+    return proxy_base_url, True
+
+
+def _rewrite_pi_models_payload(payload: object, target: str, proxy_base_url: str) -> int:
+    """Rewrite matching loopback provider and model base URLs in place."""
+    if not isinstance(payload, dict):
+        return 0
+    providers = payload.get("providers")
+    if not isinstance(providers, dict):
+        return 0
+    rewritten = 0
+    for provider in providers.values():
+        if not isinstance(provider, dict):
+            continue
+        new_url, changed = _rewrite_pi_base_url(provider.get("baseUrl"), target, proxy_base_url)
+        if changed:
+            provider["baseUrl"] = new_url
+            rewritten += 1
+        models = provider.get("models")
+        if not isinstance(models, list):
+            continue
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            model_url, model_changed = _rewrite_pi_base_url(model.get("baseUrl"), target, proxy_base_url)
+            if model_changed:
+                model["baseUrl"] = model_url
+                rewritten += 1
+    return rewritten
+
+
+def _pi_loopback_base_urls(payload: object) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    providers = payload.get("providers")
+    if not isinstance(providers, dict):
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def consider(value: object) -> None:
+        if not isinstance(value, str) or value in seen:
+            return
+        parsed = _pi_url_host_port(value)
+        if parsed is None or parsed[0] not in _PI_LOOPBACK_HOSTS:
+            return
+        seen.add(value)
+        found.append(value)
+
+    for provider in providers.values():
+        if not isinstance(provider, dict):
+            continue
+        consider(provider.get("baseUrl"))
+        models = provider.get("models")
+        if not isinstance(models, list):
+            continue
+        for model in models:
+            if isinstance(model, dict):
+                consider(model.get("baseUrl"))
+    return found
+
+
+def _warn_pi_forward_loopback(agent_dir: Path) -> None:
+    """Warn when a Pi models.json points at a loopback gateway forward mode cannot see."""
+    models_path = agent_dir / "models.json"
+    if not models_path.is_file():
+        return
+    try:
+        payload = json.loads(models_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        _print(f"Warning: could not read Pi models.json at {models_path}; loopback gateway check skipped.")
+        return
+    loopback_urls = _pi_loopback_base_urls(payload)
+    if not loopback_urls:
+        return
+    listed = ", ".join(loopback_urls)
+    suggested = _pi_forward_target(loopback_urls[0])
+    _print(
+        "Warning: Pi models.json sends provider traffic to a loopback baseUrl "
+        f"({listed}). Forward mode leaves loopback out of the proxy via NO_PROXY, "
+        "so that traffic will not be captured. Re-run with "
+        f"--tap-proxy-mode reverse --tap-target {suggested}"
+    )
+
+
+def _rewrite_pi_models_file(path: Path, target: str, proxy_base_url: str) -> None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _print(f"Warning: could not rewrite Pi models.json ({exc}); leaving the sandbox copy unchanged.")
+        return
+    rewritten = _rewrite_pi_models_payload(payload, target, proxy_base_url)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    if rewritten:
+        return
+    _print(
+        "Warning: Pi reverse sandbox left every models.json baseUrl unchanged. "
+        "Only loopback entries (localhost or 127.0.0.1) whose host and port match "
+        f"--tap-target ({target or 'unset'}) are rewritten. Remote providers, including "
+        "the built-in OpenAI provider, still use OPENAI_BASE_URL or their own URL."
+    )
+
+
+def _prepare_pi_reverse_sandbox(port: int, target: str) -> Path:
+    """Copy Pi agent config into a temp dir and rewrite matching loopback base URLs."""
+    source_agent = _pi_agent_dir()
+    sandbox_root = Path(tempfile.mkdtemp(prefix=_PI_SANDBOX_DIR_PREFIX))
+    try:
+        os.chmod(sandbox_root, 0o700)
+        sandbox_agent = sandbox_root / "agent"
+        sandbox_agent.mkdir(mode=0o700)
+        os.chmod(sandbox_agent, 0o700)
+        proxy_base_url = CLIENT_CONFIGS["pi"].reverse_base_url(port)
+
+        for name in _PI_COPY_FILES:
+            source = source_agent / name
+            if not source.is_file():
+                continue
+            dest = sandbox_agent / name
+            shutil.copy2(source, dest)
+            # chmod before rewriting: copy2 preserves a read-only source mode.
+            os.chmod(dest, 0o600)
+            if name == "models.json":
+                _rewrite_pi_models_file(dest, target, proxy_base_url)
+
+        # Everything except the rewritten config is linked. An allowlist misses
+        # runtime state (npm/, git/, sessions/, mcp.json, ...) and makes Pi
+        # reinstall or reclone it on every launch.
+        if source_agent.is_dir():
+            for source in source_agent.iterdir():
+                if source.name in _PI_COPY_FILES:
+                    continue
+                try:
+                    os.symlink(os.path.abspath(source), sandbox_agent / source.name)
+                except OSError as exc:
+                    _print(f"Warning: could not link Pi {source.name} into the reverse sandbox ({exc}).")
+    except Exception:
+        shutil.rmtree(sandbox_root, ignore_errors=True)
+        raise
+
+    return sandbox_root
+
+
+async def _terminate_spawned_client(proc: asyncio.subprocess.Process) -> None:
+    """Stop a client after this task is cancelled, before its sandbox is removed."""
+    if proc.returncode is not None:
+        return
+    proc.terminate()
+    try:
+        await asyncio.shield(proc.wait())
+    except asyncio.CancelledError:
+        if proc.returncode is None:
+            proc.kill()
+
+
+def _cleanup_client_paths(paths: list[Path]) -> None:
+    for path in paths:
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink(missing_ok=True)
+            elif path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
 async def run_client(
     port: int,
     extra_args: list[str],
@@ -647,6 +886,7 @@ async def run_client(
     capture_only: bool = False,
     codex_app_preflighted: bool = False,
     codex_app_user_data_dir: Path | None = None,
+    target: str = "",
 ) -> int:
     cfg = CLIENT_CONFIGS[client]
 
@@ -679,6 +919,7 @@ async def run_client(
 
     env = os.environ.copy()
     cleanup_paths: list[Path] = []
+    pi_reverse = False
 
     cmd_args = list(extra_args)
     cmd_args = _maybe_rewrite_hermes_gateway_start(client, cmd_args)
@@ -736,6 +977,8 @@ async def run_client(
             # hermes is Python (httpx + requests); SSL_CERT_FILE covers httpx,
             # REQUESTS_CA_BUNDLE covers the requests library.
             env["REQUESTS_CA_BUNDLE"] = str(ca_cert_path)
+        if client == "pi":
+            _warn_pi_forward_loopback(_pi_agent_dir())
 
         if cfg.inject_settings_env:
             if not _has_settings_arg(cmd_args):
@@ -785,6 +1028,14 @@ async def run_client(
             reverse_env["MIMOCODE_MIMO_ONLY"] = "false"
         else:
             reverse_env = cfg.reverse_base_url_env_map(port)
+        pi_reverse = client == "pi"
+        if pi_reverse:
+            # Do not set PI_CODING_AGENT_SESSION_DIR. Pi treats that env as the
+            # directory that directly holds session jsonl, while its native layout
+            # is <agent>/sessions/<encoded-cwd>/. The sandbox symlinks sessions/,
+            # so the native layout (and settings.sessionDir) stays intact. An
+            # explicit user value is already in env and is left alone.
+            reverse_env[_PI_AGENT_DIR_ENV] = ""
         cleanup_path = reverse_env.pop(_OPENCLAW_CLEANUP_ENV, None)
         if cleanup_path:
             cleanup_paths.append(Path(cleanup_path))
@@ -816,6 +1067,13 @@ async def run_client(
     elif client == "kimi-code":
         _print(f"   KIMI_CODE_HOME={env.get('KIMI_CODE_HOME', '')}")
         _print(f"   KIMI_CODE_BASE_URL={env.get('KIMI_CODE_BASE_URL', '')}")
+    elif client == "pi" and not pi_reverse:
+        _print(f"   {_PI_AGENT_DIR_ENV}={env.get(_PI_AGENT_DIR_ENV, '')}")
+        for env_key, base_url in cfg.reverse_base_url_env_map(port).items():
+            _print(f"   {env_key}={base_url}")
+    elif client == "pi":
+        for env_key, base_url in cfg.reverse_base_url_env_map(port).items():
+            _print(f"   {env_key}={base_url}")
     else:
         for env_key, base_url in cfg.reverse_base_url_env_map(port).items():
             _print(f"   {env_key}={base_url}")
@@ -827,107 +1085,112 @@ async def run_client(
     # stdio detached so claude-tap's terminal only shows capture status.
     hide_child_output = client == "codexapp"
     use_fg = not hide_child_output and hasattr(os, "tcsetpgrp") and sys.stdin.isatty()
-
+    # TODO: SIGTERM to the claude-tap parent still uses the upstream signal path
+    # and can leave a child running. This block only guarantees cleanup when the
+    # launch task itself is cancelled or the child spawn/wait fails.
+    proc: asyncio.subprocess.Process | None = None
+    handlers_installed = False
+    loop = asyncio.get_running_loop()
+    sigtstp = getattr(signal, "SIGTSTP", None)
+    old_sigtstp = None
+    started_at = loop.time()
+    code = 1
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            env=env,
-            stdin=subprocess.DEVNULL if hide_child_output else None,
-            stdout=subprocess.DEVNULL if hide_child_output else None,
-            stderr=subprocess.DEVNULL if hide_child_output else None,
-            **({"process_group": 0} if use_fg else {}),
-        )
-    except Exception:
-        for path in cleanup_paths:
+        if pi_reverse:
+            sandbox_root = _prepare_pi_reverse_sandbox(port, target)
+            cleanup_paths.append(sandbox_root)
+            env[_PI_AGENT_DIR_ENV] = str(sandbox_root / "agent")
+            _print(f"   {_PI_AGENT_DIR_ENV}={env[_PI_AGENT_DIR_ENV]}")
+        if use_fg:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                env=env,
+                stdin=None,
+                stdout=None,
+                stderr=None,
+                process_group=0,
+            )
+        else:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                env=env,
+                stdin=subprocess.DEVNULL if hide_child_output else None,
+                stdout=subprocess.DEVNULL if hide_child_output else None,
+                stderr=subprocess.DEVNULL if hide_child_output else None,
+            )
+
+        if use_fg:
             try:
-                path.unlink(missing_ok=True)
+                os.tcsetpgrp(sys.stdin.fileno(), proc.pid)
             except OSError:
                 pass
-        if client == "kimi-code" and proxy_mode == "reverse" and kimi_code_sandbox is not None:
-            shutil.rmtree(kimi_code_sandbox, ignore_errors=True)
-        raise
 
-    if use_fg:
-        try:
-            os.tcsetpgrp(sys.stdin.fileno(), proc.pid)
-        except OSError:
-            pass
+        # --- Signal handling: graceful Ctrl+C / Ctrl+Z ---
+        old_sigtstp = signal.signal(sigtstp, signal.SIG_IGN) if sigtstp is not None else None
+        sigint_count = 0
 
-    # --- Signal handling: graceful Ctrl+C / Ctrl+Z ---
-    loop = asyncio.get_running_loop()
-
-    # SIGTSTP is Unix-only; on Windows the attribute is absent.
-    sigtstp = getattr(signal, "SIGTSTP", None)
-    old_sigtstp = signal.signal(sigtstp, signal.SIG_IGN) if sigtstp is not None else None
-
-    sigint_count = 0
-
-    def _handle_sigint():
-        nonlocal sigint_count
-        sigint_count += 1
-        if sigint_count == 1:
-            if proc.returncode is None:
-                proc.terminate()
-                _print(f"\n⏳ Shutting down {cfg.label}... (Ctrl+C again to force)")
-        else:
-            if proc.returncode is None:
+        def _handle_sigint():
+            nonlocal sigint_count
+            sigint_count += 1
+            if sigint_count == 1:
+                if proc is not None and proc.returncode is None:
+                    proc.terminate()
+                    _print(f"\n⏳ Shutting down {cfg.label}... (Ctrl+C again to force)")
+            elif proc is not None and proc.returncode is None:
                 proc.kill()
 
-    def _handle_sigtstp():
-        if proc.returncode is None:
-            proc.terminate()
-            _print(f"\n⏳ Shutting down {cfg.label}...")
+        def _handle_sigtstp():
+            if proc is not None and proc.returncode is None:
+                proc.terminate()
+                _print(f"\n⏳ Shutting down {cfg.label}...")
 
-    try:
-        loop.add_signal_handler(signal.SIGINT, _handle_sigint)
-        if sigtstp is not None:
-            loop.add_signal_handler(sigtstp, _handle_sigtstp)
-    except (NotImplementedError, OSError):
-        pass
+        try:
+            loop.add_signal_handler(signal.SIGINT, _handle_sigint)
+            if sigtstp is not None:
+                loop.add_signal_handler(sigtstp, _handle_sigtstp)
+            handlers_installed = True
+        except (NotImplementedError, OSError):
+            pass
 
-    started_at = loop.time()
-    try:
-        code = await proc.wait()
+        started_at = loop.time()
+        try:
+            code = await proc.wait()
+        except asyncio.CancelledError:
+            await _terminate_spawned_client(proc)
+            raise
     finally:
-        for path in cleanup_paths:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        _cleanup_client_paths(cleanup_paths)
         if (
             client == "kimi-code"
             and proxy_mode == "reverse"
             and kimi_code_sandbox is not None
+            and proc is not None
             and kimi_code_source_home is not None
         ):
             _merge_kimi_code_session_index(kimi_code_source_home, kimi_code_sandbox)
             _persist_kimi_code_sandbox(kimi_code_source_home, kimi_code_sandbox)
             _remap_kimi_code_sandbox_paths(kimi_code_source_home, kimi_code_sandbox)
+        if client == "kimi-code" and proxy_mode == "reverse" and kimi_code_sandbox is not None:
             shutil.rmtree(kimi_code_sandbox, ignore_errors=True)
-
-    # Restore parent as foreground process group.
-    # Ignore SIGTTOU first — the parent is still in the background group
-    # and any terminal write (including tcsetpgrp) would suspend it.
-    if use_fg:
-        old_sigttou = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
-        try:
-            os.tcsetpgrp(sys.stdin.fileno(), os.getpgrp())
-        except OSError:
-            pass
-        signal.signal(signal.SIGTTOU, old_sigttou)
-
-    # Restore original SIGTSTP handler and remove async signal handlers
-    if sigtstp is not None and old_sigtstp is not None:
-        signal.signal(sigtstp, old_sigtstp)
-    try:
-        loop.remove_signal_handler(signal.SIGINT)
-    except (NotImplementedError, OSError):
-        pass
-    if sigtstp is not None:
-        try:
-            loop.remove_signal_handler(sigtstp)
-        except (NotImplementedError, OSError):
-            pass
+        if use_fg and proc is not None:
+            old_sigttou = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+            try:
+                os.tcsetpgrp(sys.stdin.fileno(), os.getpgrp())
+            except OSError:
+                pass
+            signal.signal(signal.SIGTTOU, old_sigttou)
+        if handlers_installed:
+            if sigtstp is not None and old_sigtstp is not None:
+                signal.signal(sigtstp, old_sigtstp)
+            try:
+                loop.remove_signal_handler(signal.SIGINT)
+            except (NotImplementedError, OSError):
+                pass
+            if sigtstp is not None:
+                try:
+                    loop.remove_signal_handler(sigtstp)
+                except (NotImplementedError, OSError):
+                    pass
 
     elapsed = loop.time() - started_at
     _print(f"\n📋 {cfg.label} exited with code {code}")
@@ -1750,7 +2013,14 @@ def _persist_kimi_code_config_edits(sandbox: Path) -> None:
     patched_sha256 = metadata.get("patched_sha256")
     proxy_base = metadata.get("proxy_base")
     upstream_base = metadata.get("upstream_base")
-    if not all(isinstance(value, str) and value for value in (source_config_raw, sandbox_config_raw, patched_sha256)):
+    if (
+        not isinstance(source_config_raw, str)
+        or not isinstance(sandbox_config_raw, str)
+        or not isinstance(patched_sha256, str)
+        or not source_config_raw
+        or not sandbox_config_raw
+        or not patched_sha256
+    ):
         return
     sandbox_config = Path(sandbox_config_raw)
     if not sandbox_config.is_file():
