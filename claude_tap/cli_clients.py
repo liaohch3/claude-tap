@@ -49,6 +49,7 @@ _CODEX_APP_ISOLATED_PROFILE_ROOT = Path.home() / ".claude-tap" / "codex-app-prof
 # per-run directory under ``_CODEX_APP_ISOLATED_PROFILE_ROOT``.
 _CODEX_APP_ISOLATED_PROFILE_DIR = _CODEX_APP_ISOLATED_PROFILE_ROOT / "tap"
 _CODEX_APP_PROCESS_CHATGPT_BUNDLE_RE = re.compile(r"(/[^\s]*ChatGPT\.app)(?:/|\s|$)")
+_SIGHUP_TERMINATE_GRACE_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -853,14 +854,16 @@ async def run_client(
         except OSError:
             pass
 
-    # --- Signal handling: graceful Ctrl+C / Ctrl+Z ---
+    # --- Signal handling: graceful Ctrl+C / Ctrl+Z / terminal hangup ---
     loop = asyncio.get_running_loop()
 
-    # SIGTSTP is Unix-only; on Windows the attribute is absent.
+    # SIGTSTP and SIGHUP are Unix-only; on Windows the attributes are absent.
     sigtstp = getattr(signal, "SIGTSTP", None)
+    sighup = getattr(signal, "SIGHUP", None)
     old_sigtstp = signal.signal(sigtstp, signal.SIG_IGN) if sigtstp is not None else None
 
     sigint_count = 0
+    sighup_escalation_scheduled = False
 
     def _handle_sigint():
         nonlocal sigint_count
@@ -878,10 +881,23 @@ async def run_client(
             proc.terminate()
             _print(f"\n⏳ Shutting down {cfg.label}...")
 
+    def _handle_sighup():
+        nonlocal sighup_escalation_scheduled
+        if proc.returncode is None:
+            proc.terminate()
+            if not sighup_escalation_scheduled:
+                sighup_escalation_scheduled = True
+                loop.call_later(
+                    _SIGHUP_TERMINATE_GRACE_SECONDS,
+                    lambda: proc.kill() if proc.returncode is None else None,
+                )
+
     try:
         loop.add_signal_handler(signal.SIGINT, _handle_sigint)
         if sigtstp is not None:
             loop.add_signal_handler(sigtstp, _handle_sigtstp)
+        if sighup is not None:
+            loop.add_signal_handler(sighup, _handle_sighup)
     except (NotImplementedError, OSError):
         pass
 
@@ -889,21 +905,40 @@ async def run_client(
     try:
         code = await proc.wait()
     finally:
-        for path in cleanup_paths:
+        try:
+            for path in cleanup_paths:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            if (
+                client == "kimi-code"
+                and proxy_mode == "reverse"
+                and kimi_code_sandbox is not None
+                and kimi_code_source_home is not None
+            ):
+                _merge_kimi_code_session_index(kimi_code_source_home, kimi_code_sandbox)
+                _persist_kimi_code_sandbox(kimi_code_source_home, kimi_code_sandbox)
+                _remap_kimi_code_sandbox_paths(kimi_code_source_home, kimi_code_sandbox)
+                shutil.rmtree(kimi_code_sandbox, ignore_errors=True)
+        finally:
+            # Remove async signal handlers and restore the original SIGTSTP handler.
             try:
-                path.unlink(missing_ok=True)
-            except OSError:
+                loop.remove_signal_handler(signal.SIGINT)
+            except (NotImplementedError, OSError):
                 pass
-        if (
-            client == "kimi-code"
-            and proxy_mode == "reverse"
-            and kimi_code_sandbox is not None
-            and kimi_code_source_home is not None
-        ):
-            _merge_kimi_code_session_index(kimi_code_source_home, kimi_code_sandbox)
-            _persist_kimi_code_sandbox(kimi_code_source_home, kimi_code_sandbox)
-            _remap_kimi_code_sandbox_paths(kimi_code_source_home, kimi_code_sandbox)
-            shutil.rmtree(kimi_code_sandbox, ignore_errors=True)
+            if sigtstp is not None:
+                try:
+                    loop.remove_signal_handler(sigtstp)
+                except (NotImplementedError, OSError):
+                    pass
+            if sigtstp is not None and old_sigtstp is not None:
+                signal.signal(sigtstp, old_sigtstp)
+            if sighup is not None:
+                try:
+                    loop.remove_signal_handler(sighup)
+                except (NotImplementedError, OSError):
+                    pass
 
     # Restore parent as foreground process group.
     # Ignore SIGTTOU first — the parent is still in the background group
@@ -915,19 +950,6 @@ async def run_client(
         except OSError:
             pass
         signal.signal(signal.SIGTTOU, old_sigttou)
-
-    # Restore original SIGTSTP handler and remove async signal handlers
-    if sigtstp is not None and old_sigtstp is not None:
-        signal.signal(sigtstp, old_sigtstp)
-    try:
-        loop.remove_signal_handler(signal.SIGINT)
-    except (NotImplementedError, OSError):
-        pass
-    if sigtstp is not None:
-        try:
-            loop.remove_signal_handler(sigtstp)
-        except (NotImplementedError, OSError):
-            pass
 
     elapsed = loop.time() - started_at
     _print(f"\n📋 {cfg.label} exited with code {code}")
