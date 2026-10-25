@@ -789,12 +789,7 @@ async def run_client(
         if cleanup_path:
             cleanup_paths.append(Path(cleanup_path))
         env.update(reverse_env)
-        if client == "mimo":
-            # MiMo talks to a local HTTP server in TUI mode; preserve any existing
-            # NO_PROXY entries and bypass localhost the same way forward mode does.
-            _extend_no_proxy(env, ("localhost", "127.0.0.1", "::1"))
-        else:
-            env["NO_PROXY"] = "127.0.0.1"
+        _extend_no_proxy(env, ("localhost", "127.0.0.1", "::1"))
         if cfg.inject_settings_env and not _has_settings_arg(cmd_args):
             cmd_args = _settings_arg(reverse_env) + cmd_args
         if client == "codex":
