@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.147] - 2026-10-25
+
 ### Fixed
 
 - Preserve inherited proxy bypass entries and synchronize `NO_PROXY` and `no_proxy` so reverse-mode clients reach loopback directly (#474).
