@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 变更
+
+- 在对话历史、轮次差异和响应中显示 Responses 推理文字，包括服务商写在 `content`、`summary` 为空的推理。
+- 由文本块组成的工具输出（例如 Codex `exec` 的结果）按纯文本显示，不再显示为转义后的 JSON 字符串。
+- 自定义工具调用的输入（例如 Codex 发给 `exec` 的 JavaScript）按纯文本显示。
+- 显示 `namespace` 工具的成员，以及 `format`、`external_web_access` 等其他工具定义字段。
+
 ## [0.1.146] - 2026-10-17
 
 ### 变更

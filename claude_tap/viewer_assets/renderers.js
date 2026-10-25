@@ -604,10 +604,11 @@ function normalizeResponseOutput(output) {
         else content.push(c);
       }
     } else if (isResponseCallItem(item)) {
-      content.push({ type: 'tool_use', id: item.call_id || item.id || '', name: responseCallToolName(item), input: responseCallInput(item) });
+      content.push(responseCallToolUse(item));
     } else if (item.type === 'reasoning') {
-      if (!item.summary) continue;
-      const summaryText = Array.isArray(item.summary) ? item.summary.map(s => s?.text || '').join('\n') : (item.summary.text || JSON.stringify(item.summary));
+      const summaryText = item.summary && !Array.isArray(item.summary)
+        ? (item.summary.text || JSON.stringify(item.summary))
+        : reasoningItemText(item);
       if (summaryText.trim()) content.push({ type: 'thinking', thinking: summaryText });
     }
   }
@@ -1030,7 +1031,10 @@ function renderContent(content, role, options = {}) {
     }
     if (block.type === 'tool_use') {
       const label = block.id ? `${block.name || 'tool_use'} (${block.id})` : (block.name || 'tool_use');
-      return wrapContentBlock(`<span class="tool-use-label">${esc(label)}</span>${renderToolInput(block.input)}`, block, index, blocks.length, options);
+      const inputHtml = typeof block._freeformInput === 'string'
+        ? `<div class="pre-text">${esc(block._freeformInput)}</div>`
+        : renderToolInput(block.input);
+      return wrapContentBlock(`<span class="tool-use-label">${esc(label)}</span>${inputHtml}`, block, index, blocks.length, options);
     }
     if (block.type === 'tool_result') {
       const rc = block.content;
@@ -1114,6 +1118,12 @@ function renderToolInput(input) {
     + `</div>`;
 }
 
+/* Fields renderTools already shows (name, description, schema, nested tools)
+   or that carry no detail worth a block (type, strict). Anything else, such as
+   a custom tool's `format` grammar or `external_web_access`, is shown as JSON
+   so the tool block does not silently drop part of the definition. */
+const TOOL_FIELDS_RENDERED_ELSEWHERE = new Set(['name', 'description', 'parameters', 'input_schema', 'function', 'tools', 'type', 'strict']);
+
 function renderTools(tools) {
   return tools.map(td => {
     const name = toolDisplayName(td) || 'unknown', desc = toolDescription(td);
@@ -1132,7 +1142,14 @@ function renderTools(tools) {
         return `<div class="tb-param"><div class="tb-param-row1"><span class="tb-pname">${esc(k)}</span>${typeTag}${req}</div>${descLine}</div>`;
       }).join('');
     }
-    return `<div class="tool-block"><div class="tool-block-header"><span class="tb-arrow">&#9654;</span><span class="tb-name">${esc(name)}</span><span class="tb-desc">${esc(shortDesc)}</span></div><div class="tool-block-body">${desc ? `<div class="tb-full-desc">${esc(desc)}</div>` : ''}${paramsHtml}</div></div>`;
+    /* A `namespace` tool (Codex groups its sub-agent tools this way) lists
+       its members in `tools`; render them as nested tool blocks. */
+    const nestedHtml = Array.isArray(td.tools) && td.tools.length
+      ? `<div class="tb-params-title">${t('section_tools')} (${td.tools.length})</div>${renderTools(td.tools)}`
+      : '';
+    const extra = Object.fromEntries(Object.entries(td).filter(([key]) => !TOOL_FIELDS_RENDERED_ELSEWHERE.has(key)));
+    const extraHtml = Object.keys(extra).length ? `<pre class="tb-extra">${esc(JSON.stringify(extra, null, 2))}</pre>` : '';
+    return `<div class="tool-block"><div class="tool-block-header"><span class="tb-arrow">&#9654;</span><span class="tb-name">${esc(name)}</span><span class="tb-desc">${esc(shortDesc)}</span></div><div class="tool-block-body">${desc ? `<div class="tb-full-desc">${esc(desc)}</div>` : ''}${paramsHtml}${nestedHtml}${extraHtml}</div></div>`;
   }).join('');
 }
 

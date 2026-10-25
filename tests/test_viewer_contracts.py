@@ -363,6 +363,126 @@ def _responses_empty_input_record() -> dict[str, Any]:
     return record
 
 
+def _codex_direct_custom_tool_records() -> tuple[dict[str, Any], dict[str, Any]]:
+    """A Codex tool round over a direct WebSocket: a custom `exec` call, then text-part output.
+
+    Shaped after a Codex CLI run against MiniMax, which returns reasoning text in
+    `content` with an empty `summary`.
+    """
+    tools = [
+        {
+            "type": "custom",
+            "name": "exec",
+            "description": "Run JavaScript code to orchestrate tool calls.",
+            "format": {"type": "grammar", "syntax": "lark", "definition": "start: SOURCE"},
+        },
+        {
+            "type": "namespace",
+            "name": "collaboration",
+            "description": "Tools for spawning and managing sub-agents.",
+            "tools": [{"type": "function", "name": "spawn_agent", "description": "Spawn a sub-agent."}],
+        },
+        {"type": "web_search", "external_web_access": False},
+    ]
+    command = 'const r = await tools.exec_command({cmd:"cat -n src/App.tsx"});\ntext(r.output);'
+    base_request = {"method": "WEBSOCKET", "path": "/v1/responses", "headers": {}, "ws_events": []}
+    tool_turn = {
+        "timestamp": "2026-10-24T03:21:41+00:00",
+        "request_id": "req_direct_custom_tool",
+        "turn": 3,
+        "transport": "websocket",
+        "duration_ms": 100,
+        "request": {
+            **base_request,
+            "body": {
+                "type": "response.create",
+                "model": "MiniMax-M3.1-Flash",
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{"type": "input_text", "text": "You are Codex contract system prompt."}],
+                    },
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Where is the data?"}],
+                    },
+                ],
+                "tools": tools,
+            },
+        },
+        "response": {
+            "status": 101,
+            "headers": {},
+            "ws_events": [],
+            "body": {
+                "id": "resp_direct_custom_tool",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "summary": [],
+                        "content": [{"type": "reasoning_text", "text": "Read src/App.tsx first."}],
+                    },
+                    {"type": "custom_tool_call", "call_id": "call_read_app", "name": "exec", "input": command},
+                ],
+                "usage": {"input_tokens": 120, "output_tokens": 30},
+            },
+        },
+    }
+    final_turn = {
+        "timestamp": "2026-10-24T03:21:45+00:00",
+        "request_id": "req_direct_custom_final",
+        "turn": "3.2",
+        "transport": "websocket",
+        "duration_ms": 100,
+        "request": {
+            **base_request,
+            "body": {
+                "type": "response.create",
+                "model": "MiniMax-M3.1-Flash",
+                "previous_response_id": "resp_direct_custom_tool",
+                "input": [
+                    {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call_read_app",
+                        "output": [
+                            {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                            {"type": "input_text", "text": "     1\tconst projects = [\n     2\t  { name: 'notes' },"},
+                        ],
+                    }
+                ],
+                "tools": tools,
+            },
+        },
+        "response": {
+            "status": 101,
+            "headers": {},
+            "ws_events": [],
+            "body": {
+                "id": "resp_direct_custom_final",
+                "status": "completed",
+                "previous_response_id": "resp_direct_custom_tool",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "summary": [],
+                        "content": [{"type": "reasoning_text", "text": "The projects array holds the data."}],
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "The data is in src/App.tsx:1-2."}],
+                    },
+                ],
+                "usage": {"input_tokens": 160, "output_tokens": 20},
+            },
+        },
+    }
+    return tool_turn, final_turn
+
+
 def _codex_websocket_record() -> dict[str, Any]:
     return {
         "timestamp": "2026-05-13T13:22:00+00:00",
@@ -1401,6 +1521,23 @@ def _contract_cases() -> tuple[ViewerContractCase, ...]:
             expected_usage={"input_tokens": 140, "output_tokens": 8},
             required_detail_text=("Continue after a tool call.", "exec_command", "WebSocket final OK."),
             min_stream_events=3,
+        ),
+        ViewerContractCase(
+            name="codex_direct_custom_tool",
+            records=_codex_direct_custom_tool_records(),
+            expected_sections=("Tools", "Request Context", "Response"),
+            expected_system=None,
+            expected_roles=("developer", "user", "assistant", "tool"),
+            expected_tools=("exec", "collaboration", "web_search"),
+            expected_output_types=("thinking", "text"),
+            expected_usage={"input_tokens": 160, "output_tokens": 20},
+            required_detail_text=(
+                'tools.exec_command({cmd:"cat -n src/App.tsx"});\ntext(r.output);',
+                "     1\tconst projects = [",
+                "The projects array holds the data.",
+                "The data is in src/App.tsx:1-2.",
+            ),
+            entry_index=1,
         ),
         ViewerContractCase(
             name="chat_completions",

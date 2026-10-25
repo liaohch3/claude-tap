@@ -132,6 +132,15 @@ function responseCallInput(item) {
   return input;
 }
 
+/* A custom tool takes one freeform string (Codex `exec` takes JavaScript)
+   rather than JSON arguments. `input` keeps the `{input}` object other code
+   already reads; `_freeformInput` lets the renderer show the string itself. */
+function responseCallToolUse(item) {
+  const block = { type: 'tool_use', id: item.call_id || item.id || '', name: responseCallToolName(item), input: responseCallInput(item) };
+  if (item.type === 'custom_tool_call' && typeof item.input === 'string') block._freeformInput = item.input;
+  return block;
+}
+
 function isResponseToolResultItem(item) {
   if (!item || typeof item !== 'object' || typeof item.type !== 'string') return false;
   return item.type === 'tool_search_output' || item.type.endsWith('_call_output');
@@ -148,6 +157,20 @@ function normalizedScreenshotBlock(output) {
   return { type: 'input_image', image_url: url };
 }
 
+const RESPONSE_TEXT_PART_TYPES = new Set(['input_text', 'output_text', 'text']);
+
+/* Codex returns tool output as a list of `input_text` parts. That list is
+   text, so the default view shows it as text instead of a JSON string full of
+   `\n` and `\t`. Joining keeps the single `result (call_id)` block. */
+function responseTextPartsContent(output) {
+  if (!Array.isArray(output) || output.length === 0) return null;
+  if (!output.every(part => part && RESPONSE_TEXT_PART_TYPES.has(part.type) && typeof part.text === 'string')) return null;
+  return output.reduce((text, part) => {
+    const sep = text && !text.endsWith('\n') && part.text ? '\n' : '';
+    return text + sep + part.text;
+  }, '');
+}
+
 function responseToolResultContent(item, forBloat) {
   if (item?.type === 'tool_search_output') return toolSearchOutputContent(item, forBloat);
   if (Object.prototype.hasOwnProperty.call(item || {}, 'output')) {
@@ -155,6 +178,8 @@ function responseToolResultContent(item, forBloat) {
     const screenshot = normalizedScreenshotBlock(item.output);
     if (screenshot) return [screenshot];
     if (forBloat) return item.output;
+    const text = responseTextPartsContent(item.output);
+    if (text !== null) return text;
     return JSON.stringify(item.output, null, 2);
   }
   const content = responseResultLeftoverContent(item);
@@ -187,18 +212,32 @@ function responseResultBloatPayload(item) {
   return item.output;
 }
 
+/* Readable text of a Responses `reasoning` item. Some providers leave
+   `summary` empty and put the text in `content` as `reasoning_text` parts;
+   an item that carries only `encrypted_content` has no readable text. */
+function reasoningItemText(item) {
+  const fromParts = parts => (Array.isArray(parts) ? parts : [])
+    .map(part => (typeof part?.text === 'string' ? part.text : ''))
+    .filter(text => text.trim())
+    .join('\n');
+  return fromParts(item?.summary) || fromParts(item?.content);
+}
+
 function responseInputItemToMessage(item, forBloat) {
   if (!item || typeof item !== 'object') return item;
+  /* Replayed reasoning shows up as a thinking block in the history, the same
+     way it shows up in the response that produced it. The bloat scan keeps
+     measuring the raw item. */
+  if (!forBloat && item.type === 'reasoning') {
+    const text = reasoningItemText(item);
+    if (!text) return item;
+    return { type: 'message', role: 'assistant', content: [{ type: 'thinking', thinking: text }] };
+  }
   if (isResponseCallItem(item)) {
     return {
       type: 'message',
       role: 'assistant',
-      content: [{
-        type: 'tool_use',
-        id: item.call_id || item.id || '',
-        name: responseCallToolName(item),
-        input: responseCallInput(item)
-      }]
+      content: [responseCallToolUse(item)]
     };
   }
   if (isResponseToolResultItem(item)) {
@@ -237,12 +276,7 @@ function webSocketOutputMessages(events) {
       messages.push({
         type: 'message',
         role: 'assistant',
-        content: [{
-          type: 'tool_use',
-          id: item.call_id || item.id || '',
-          name: responseCallToolName(item),
-          input: responseCallInput(item)
-        }]
+        content: [responseCallToolUse(item)]
       });
     } else if (item.type === 'message') {
       messages.push({
@@ -264,12 +298,7 @@ function responseBodyOutputMessages(output) {
       messages.push({
         type: 'message',
         role: 'assistant',
-        content: [{
-          type: 'tool_use',
-          id: item.call_id || item.id || '',
-          name: responseCallToolName(item),
-          input: responseCallInput(item)
-        }]
+        content: [responseCallToolUse(item)]
       });
       continue;
     }

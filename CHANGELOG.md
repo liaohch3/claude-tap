@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Show Responses reasoning text in the conversation history, the turn diff, and the response, including reasoning that providers put in `content` with an empty `summary`.
+- Render tool output made of text parts, such as Codex `exec` results, as plain text instead of an escaped JSON string.
+- Show custom tool call input, such as the JavaScript Codex sends to `exec`, as plain text.
+- Show `namespace` tool members and other tool definition fields such as `format` and `external_web_access`.
+
 ## [0.1.146] - 2026-10-17
 
 ### Changed
