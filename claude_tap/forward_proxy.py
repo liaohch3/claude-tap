@@ -617,6 +617,9 @@ class ForwardProxyServer:
         fwd_headers["Accept-Encoding"] = "identity"
 
         try:
+            # TTFT reference point: immediately before the upstream request,
+            # so local request parsing/normalization stays out of ttft_ms.
+            t_upstream = time.monotonic()
             upstream_resp = await self._session.request(
                 method=method,
                 url=upstream_url,
@@ -671,6 +674,7 @@ class ForwardProxyServer:
                 req_body,
                 log_prefix,
                 upstream_base_url,
+                t_upstream=t_upstream,
             )
         else:
             await self._handle_non_streaming(
@@ -701,25 +705,51 @@ class ForwardProxyServer:
         req_body: dict | None,
         log_prefix: str,
         upstream_base_url: str,
+        t_upstream: float,
     ) -> None:
         """Handle a streaming response: forward chunks while recording SSE."""
-        # Send response status line
-        status_line = f"HTTP/1.1 {upstream_resp.status} {upstream_resp.reason}\r\n"
-        client_writer.write(status_line.encode())
 
-        # Send response headers (filter hop-by-hop, use chunked transfer)
-        for key, value in upstream_resp.headers.items():
-            if key.lower() not in HOP_BY_HOP:
-                client_writer.write(f"{key}: {value}\r\n".encode())
-        client_writer.write(b"Transfer-Encoding: chunked\r\n")
-        client_writer.write(b"\r\n")
-        await client_writer.drain()
+        # Start the first upstream read concurrently with forwarding the
+        # status and headers downstream: the read task stamps ttft_ms itself
+        # the moment the first byte lands, so downstream header drains cannot
+        # pollute it, while header forwarding no longer waits for the first
+        # upstream byte.
+        async def _read_first_chunk() -> tuple[bytes, int | None]:
+            chunk = await upstream_resp.content.readany()
+            if not chunk:
+                return b"", None
+            # First upstream byte ~= time-to-first-token for streams.
+            return chunk, int((time.monotonic() - t_upstream) * 1000)
 
+        first_chunk_task = asyncio.create_task(_read_first_chunk())
+        ttft_ms: int | None = None
         is_bedrock_stream = is_bedrock_eventstream_path(path)
         reassembler = SSEReassembler(store_events=self._store_stream_events)
         raw_chunks: list[bytes] = []
 
         try:
+            # Send response status line
+            status_line = f"HTTP/1.1 {upstream_resp.status} {upstream_resp.reason}\r\n"
+            client_writer.write(status_line.encode())
+
+            # Send response headers (filter hop-by-hop, use chunked transfer)
+            for key, value in upstream_resp.headers.items():
+                if key.lower() not in HOP_BY_HOP:
+                    client_writer.write(f"{key}: {value}\r\n".encode())
+            client_writer.write(b"Transfer-Encoding: chunked\r\n")
+            client_writer.write(b"\r\n")
+            await client_writer.drain()
+
+            first_chunk, ttft_ms = await first_chunk_task
+            if first_chunk:
+                # Send as HTTP chunked encoding
+                chunk_header = f"{len(first_chunk):x}\r\n".encode()
+                client_writer.write(chunk_header + first_chunk + b"\r\n")
+                await client_writer.drain()
+                if is_bedrock_stream:
+                    raw_chunks.append(first_chunk)
+                else:
+                    reassembler.feed_bytes(first_chunk)
             async for chunk in upstream_resp.content.iter_any():
                 # Send as HTTP chunked encoding
                 chunk_header = f"{len(chunk):x}\r\n".encode()
@@ -731,6 +761,9 @@ class ForwardProxyServer:
                     reassembler.feed_bytes(chunk)
         except (ConnectionError, asyncio.CancelledError):
             pass
+        finally:
+            if not first_chunk_task.done():
+                first_chunk_task.cancel()
 
         # Send final chunk
         try:
@@ -776,6 +809,7 @@ class ForwardProxyServer:
             reconstructed,
             sse_events=reassembler.events,
             upstream_base_url=upstream_base_url,
+            ttft_ms=ttft_ms,
         )
         await self._writer.write(record)
 

@@ -266,6 +266,36 @@ def test_export_json_tolerates_null_request_body_and_stream_text_response(tmp_pa
     assert f"Exported 2 turns to {json_path}" in capsys.readouterr().out
 
 
+def test_export_json_preserves_ttft_ms_for_streaming_records_only(tmp_path, capsys) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    json_path = tmp_path / "trace.export.json"
+    records = [
+        {
+            "timestamp": "2026-04-28T12:00:00",
+            "turn": 1,
+            "duration_ms": 900,
+            "ttft_ms": 412,
+            "request": {"method": "POST", "body": {"model": "claude-sonnet-4-6", "stream": True}},
+            "response": {"status": 200, "body": {"content": [{"type": "text", "text": "streamed"}]}},
+        },
+        {
+            "timestamp": "2026-04-28T12:00:01",
+            "turn": 2,
+            "duration_ms": 120,
+            "request": {"method": "POST", "body": {"model": "claude-sonnet-4-6"}},
+            "response": {"status": 200, "body": {"content": [{"type": "text", "text": "non-streamed"}]}},
+        },
+    ]
+    trace_path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+    assert export_main([str(trace_path), "--format", "json", "-o", str(json_path)]) == 0
+
+    exported = json.loads(json_path.read_text(encoding="utf-8"))
+    assert exported[0]["ttft_ms"] == 412
+    assert "ttft_ms" not in exported[1]
+    assert f"Exported 2 turns to {json_path}" in capsys.readouterr().out
+
+
 def test_export_accepts_positional_sqlite_session_id(trace_db, tmp_path, capsys) -> None:
     from claude_tap.trace_store import get_trace_store
 
