@@ -316,6 +316,8 @@ claude-tap --tap-client codex -- --full-auto
 
 Codex App 会通过 claude-tap 的 forward proxy 启动，因此最终发往 `/backend-api/codex/responses` 的 HTTP 和 WebSocket 请求体会像其他客户端一样进入 trace viewer。当前 macOS 安装包多为 `ChatGPT.app`（bundle id 仍是 `com.openai.codex`）；旧版独立 `Codex.app` 也会被识别。非模型产品流量会照常转发，但不会持久化成 trace 行。在 macOS 上，必要时 claude-tap 会把本地 CA 信任到当前用户的登录钥匙串中，让内置 app-server 能通过代理连接。
 
+下面的常规命令会自动完成启动配置，无需手动导出代理或证书变量。claude-tap 会传入 Chromium 的 `--proxy-server`，同时设置大写和小写形式的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`，并通过 `NODE_EXTRA_CA_CERTS`、`SSL_CERT_FILE`、`CODEX_CA_CERTIFICATE`、`REQUESTS_CA_BUNDLE` 暴露 CA。之所以需要多组 CA 变量，是因为 Electron/Node 与 Rust app-server 使用不同的 TLS 栈。
+
 ```bash
 # 启动 Codex App（ChatGPT.app 或 Codex.app），并在 dashboard 中查看捕获到的后端请求
 claude-tap --tap-client codexapp
@@ -328,6 +330,33 @@ CODEX_APP_EXECUTABLE=/path/to/ChatGPT.app/Contents/MacOS/ChatGPT claude-tap --ta
 ```
 
 如果 Codex/ChatGPT App 已经在运行，claude-tap 会用独立的 `--user-data-dir`（默认 `~/.claude-tap/codex-app-profiles/tap`）再拉起第二份实例，不打断你当前窗口；被代理的那份窗口可能需要重新登录。可用 `CODEX_APP_USER_DATA_DIR` 覆盖 profile 路径。这个模式捕获实时后端流量，不再导入本地 session JSONL transcript。
+
+如果 Codex 日志出现 `invalid peer certificate: UnknownIssuer`，先信任生成的 CA，彻底退出所有 Codex/ChatGPT App 进程，再通过 claude-tap 重新启动：
+
+```bash
+claude-tap trust-ca
+claude-tap --tap-client codexapp
+```
+
+trace 为空不一定代表代理配置失败。任务列表、analytics 等产品请求会在代理日志中显示为 `trace skipped by client filter`；只有发往 `/backend-api/codex/responses` 的模型流量会生成 trace 行。启动或继续一个本地 Codex 任务，并确认日志中出现了该端点。如果没有，请检查 Codex App 日志中的证书或 WebSocket 错误。
+
+使用 `--tap-no-launch` 时，claude-tap 无法注入启动环境。此时需要固定代理端口、信任一次 CA，并为手动启动的 App 显式配置环境：
+
+```bash
+# 终端 1
+claude-tap trust-ca
+claude-tap --tap-client codexapp --tap-no-launch --tap-port 59444
+
+# 终端 2（先确认没有已运行的 Codex/ChatGPT App 进程）
+tap_proxy='http://127.0.0.1:59444'
+tap_ca="$HOME/.claude-tap/ca.pem"
+env HTTP_PROXY="$tap_proxy" HTTPS_PROXY="$tap_proxy" ALL_PROXY="$tap_proxy" \
+    http_proxy="$tap_proxy" https_proxy="$tap_proxy" all_proxy="$tap_proxy" \
+    NODE_EXTRA_CA_CERTS="$tap_ca" SSL_CERT_FILE="$tap_ca" \
+    CODEX_CA_CERTIFICATE="$tap_ca" REQUESTS_CA_BUNDLE="$tap_ca" \
+    /Applications/ChatGPT.app/Contents/MacOS/ChatGPT \
+    --proxy-server="$tap_proxy"
+```
 
 </details>
 
