@@ -820,8 +820,13 @@ async def run_client(
     # group so they have full terminal control (e.g. Cmd+Delete, Ctrl+U).
     # Codex App is a GUI process with very noisy app-server logs; keep its
     # stdio detached so claude-tap's terminal only shows capture status.
+    # It also never needs the controlling terminal, so start it in its own
+    # session: terminal hangups sent to claude-tap's process group (e.g. a
+    # shell exiting after `nohup claude-tap --tap-client codexapp &`) must not
+    # kill the app. claude-tap still terminates it via its own signal handlers.
     hide_child_output = client == "codexapp"
     use_fg = not hide_child_output and hasattr(os, "tcsetpgrp") and sys.stdin.isatty()
+    detach_session = hide_child_output and hasattr(os, "setsid")
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -831,6 +836,7 @@ async def run_client(
             stdout=subprocess.DEVNULL if hide_child_output else None,
             stderr=subprocess.DEVNULL if hide_child_output else None,
             **({"process_group": 0} if use_fg else {}),
+            **({"start_new_session": True} if detach_session else {}),
         )
     except Exception:
         for path in cleanup_paths:

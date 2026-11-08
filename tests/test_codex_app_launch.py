@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import signal
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -433,6 +435,117 @@ async def test_run_client_codexapp_forward_launches_app_with_proxy_env(
     out = capsys.readouterr().err
     assert "Codex App exited immediately" in out
     assert "already-running Codex/ChatGPT App" in out
+
+
+@pytest.mark.skipif(not hasattr(os, "setsid"), reason="POSIX sessions only")
+@pytest.mark.asyncio
+async def test_run_client_codexapp_starts_app_in_new_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex App must not share claude-tap's process group (#464).
+
+    Even from an interactive terminal, the GUI child is detached into its own
+    session instead of the foreground process-group handoff used for TUIs, so
+    terminal hangups aimed at claude-tap's job group cannot kill it.
+    """
+    captured: dict[str, object] = {}
+    tcsetpgrp_calls: list[tuple[int, int]] = []
+
+    async def fake_create_subprocess_exec(*cmd: str, **kwargs: object) -> _DummyProc:
+        captured.update(kwargs)
+        return _DummyProc()
+
+    monkeypatch.setattr(
+        "claude_tap.cli_clients._resolve_client_executable",
+        lambda client, cfg, client_cmd: "/Applications/Codex.app/Contents/MacOS/Codex",
+    )
+    monkeypatch.setattr("claude_tap.cli_clients._codex_app_existing_processes", lambda: [])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(os, "tcsetpgrp", lambda fd, pgrp: tcsetpgrp_calls.append((fd, pgrp)), raising=False)
+
+    code = await run_client(43123, [], client="codexapp", proxy_mode="forward")
+
+    assert code == 0
+    assert captured["start_new_session"] is True
+    assert "process_group" not in captured
+    assert captured["stdin"] == subprocess.DEVNULL
+    assert tcsetpgrp_calls == []
+
+
+@pytest.mark.skipif(not hasattr(os, "setsid"), reason="POSIX sessions only")
+@pytest.mark.asyncio
+async def test_run_client_codexapp_detached_child_still_terminated_on_ctrl_c(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A detached Codex App no longer receives the terminal's SIGINT directly,
+    so claude-tap's own SIGINT handler must still shut it down."""
+    handlers: dict[int, object] = {}
+    calls: list[str] = []
+
+    class _WaitingProc(_DummyProc):
+        async def wait(self) -> int:
+            handler = handlers[signal.SIGINT]
+            handler()  # first Ctrl+C -> terminate
+            handler()  # second Ctrl+C -> kill only if still running
+            return self.returncode if self.returncode is not None else 0
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+            self.returncode = -15
+
+        def kill(self) -> None:
+            calls.append("kill")
+            self.returncode = -9
+
+    async def fake_create_subprocess_exec(*cmd: str, **kwargs: object) -> _DummyProc:
+        assert kwargs["start_new_session"] is True
+        return _WaitingProc()
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "add_signal_handler", lambda sig, cb, *args: handlers.__setitem__(sig, cb))
+    monkeypatch.setattr(loop, "remove_signal_handler", lambda sig: handlers.pop(sig, None) is not None)
+    monkeypatch.setattr(
+        "claude_tap.cli_clients._resolve_client_executable",
+        lambda client, cfg, client_cmd: "/Applications/Codex.app/Contents/MacOS/Codex",
+    )
+    monkeypatch.setattr("claude_tap.cli_clients._codex_app_existing_processes", lambda: [])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    code = await run_client(43123, [], client="codexapp", proxy_mode="forward")
+
+    assert code == -15
+    assert calls == ["terminate"]
+    assert signal.SIGINT not in handlers
+
+
+@pytest.mark.skipif(not hasattr(os, "tcsetpgrp"), reason="POSIX job control only")
+@pytest.mark.asyncio
+async def test_run_client_tui_client_keeps_foreground_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-GUI clients keep the foreground process-group handoff unchanged."""
+    captured: dict[str, object] = {}
+
+    async def fake_create_subprocess_exec(*cmd: str, **kwargs: object) -> _DummyProc:
+        captured.update(kwargs)
+        return _DummyProc()
+
+    monkeypatch.setattr(
+        "claude_tap.cli_clients._resolve_client_executable",
+        lambda client, cfg, client_cmd: "/usr/bin/codex",
+    )
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(sys.stdin, "fileno", lambda: 0, raising=False)
+    monkeypatch.setattr(os, "tcsetpgrp", lambda fd, pgrp: None)
+
+    code = await run_client(43123, [], client="codex", proxy_mode="reverse")
+
+    assert code == 0
+    assert captured["process_group"] == 0
+    assert "start_new_session" not in captured
 
 
 @pytest.mark.asyncio
