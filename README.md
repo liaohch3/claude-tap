@@ -63,7 +63,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 - 👀 **See the exact context**: inspect prompts, messages, tool definitions, tool calls, tool results, reconstructed streaming responses, and token usage.
 - 🔎 **Debug behavior with evidence**: compare adjacent requests and pinpoint which prompt, message, tool, or parameter changed.
 - 📦 **Share one portable artifact**: each run writes a local trace session that can be exported to a self-contained HTML viewer for review or archiving.
-- 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are redacted before recording.
+- 🔒 **Keep traces on your machine**: no hosted dashboard is required, and common auth headers are fully replaced with `***` before recording, without retaining credential prefixes. Upstream requests receive the original headers. Request/response bodies, URLs, and diagnostic text are not covered by this header redaction.
 - 🧩 **Use one workflow across clients**: trace Claude Code, Codex CLI, Codex App, Gemini CLI, Grok Build CLI, DeepSeek Harness, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, Cursor CLI, Qoder CLI, and CodeBuddy.
 
 ## Supported Clients

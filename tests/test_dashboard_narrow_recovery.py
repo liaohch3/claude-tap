@@ -407,7 +407,7 @@ async def test_display_recovery_preserves_captured_auth_and_raw_downloads(trace_
         {"Set-Cookie": "session=" + auth_tail},
         {"content": [{"type": "text", "text": "Checked."}]},
     )
-    assert captured["request"]["headers"]["Authorization"] == original_authorization[:12] + "..."
+    assert captured["request"]["headers"]["Authorization"] == "***"
     assert captured["request"]["headers"]["Cookie"] == "***"
     assert captured["response"]["headers"]["Set-Cookie"] == "***"
     assert auth_tail not in dumps(captured)

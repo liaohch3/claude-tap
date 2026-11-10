@@ -65,7 +65,6 @@ SENSITIVE_HEADER_KEYS = frozenset(
         "cosy-user",
     }
 )
-PREFIX_REDACTED_HEADER_KEYS = frozenset({"authorization", "x-api-key"})
 
 
 def filter_headers(headers: dict[str, str], *, redact_keys: bool = False) -> dict[str, str]:
@@ -76,7 +75,7 @@ def filter_headers(headers: dict[str, str], *, redact_keys: bool = False) -> dic
         if key in HOP_BY_HOP:
             continue
         if redact_keys and key in SENSITIVE_HEADER_KEYS:
-            out[k] = v[:12] + "..." if key in PREFIX_REDACTED_HEADER_KEYS and len(v) > 12 else "***"
+            out[k] = "***"
         else:
             out[k] = v
     return out

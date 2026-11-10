@@ -320,7 +320,7 @@ def _run_test(upstream_port, store_stream_events=False):
     # API key redaction (header name may be title-cased)
     hdrs = {k.lower(): v for k, v in r1["request"]["headers"].items()}
     api_key = hdrs.get("x-api-key", "")
-    assert api_key.endswith("..."), f"API key not redacted: {api_key}"
+    assert api_key == "***"
     assert "12345678" not in api_key
     print("  ✅ Turn 1 (non-streaming, gzip): OK")
 
@@ -2872,9 +2872,9 @@ def test_filter_headers():
 
     # With redaction
     out = filter_headers(headers, redact_keys=True)
-    assert out["x-api-key"].endswith("...")
+    assert out["x-api-key"] == "***"
     assert "very-long-secret" not in out["x-api-key"]
-    assert out["Authorization"].endswith("...")
+    assert out["Authorization"] == "***"
     assert "secret-token" not in out["Authorization"]
     assert out["Cookie"] == "***"
     assert "cookie-secret" not in out["Cookie"]
@@ -3934,7 +3934,7 @@ async def test_forward_proxy_connect():
             # Check header redaction
             hdrs = {k.lower(): v for k, v in records[0]["request"]["headers"].items()}
             api_key = hdrs.get("x-api-key", "")
-            assert api_key.endswith("..."), f"API key not redacted: {api_key}"
+            assert api_key == "***"
             print("  OK: API key redacted in trace")
 
         finally:
