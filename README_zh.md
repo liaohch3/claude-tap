@@ -63,7 +63,7 @@
 - 👀 **看见真实上下文**：检查 prompt、messages、工具定义、工具调用、工具结果、流式 chunk 和 token 用量。
 - 🔎 **用证据定位问题**：对比相邻请求，明确是哪段 prompt、消息、工具或参数发生了变化。
 - 📦 **留下可分享证据**：每次运行都会写入 JSONL trace，并生成自包含 HTML 查看器，方便 review 或归档。
-- 🔒 **数据留在本机**：不依赖云端 dashboard；常见认证 header 会在记录前自动脱敏。
+- 🔒 **数据留在本机**：不依赖云端 dashboard；常见认证 header 会在记录前完整替换为 `***`，不保留凭据前缀。上游请求仍使用原始 header。此 header 脱敏不覆盖请求/响应正文、URL 或诊断文本。
 - 🧩 **覆盖主流编码客户端**：同一套流程可用于 Claude Code、Codex CLI、Codex App、Gemini CLI、Grok Build CLI、DeepSeek Harness、Kimi CLI、MiMo Code、OpenCode、OpenClaw、Pi、Hermes Agent、Cursor CLI、Qoder CLI、Antigravity CLI 和 CodeBuddy CLI。
 
 ## 支持的客户端
