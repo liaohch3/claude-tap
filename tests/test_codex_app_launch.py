@@ -520,6 +520,131 @@ async def test_run_client_codexapp_detached_child_still_terminated_on_ctrl_c(
     assert signal.SIGINT not in handlers
 
 
+def _patch_codexapp_launch(monkeypatch: pytest.MonkeyPatch, proc: _DummyProc, handlers: dict[int, object]) -> None:
+    async def fake_create_subprocess_exec(*cmd: str, **kwargs: object) -> _DummyProc:
+        assert kwargs["start_new_session"] is True
+        return proc
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "add_signal_handler", lambda sig, cb, *args: handlers.__setitem__(sig, cb))
+    monkeypatch.setattr(loop, "remove_signal_handler", lambda sig: handlers.pop(sig, None) is not None)
+    monkeypatch.setattr(
+        "claude_tap.cli_clients._resolve_client_executable",
+        lambda client, cfg, client_cmd: "/Applications/Codex.app/Contents/MacOS/Codex",
+    )
+    monkeypatch.setattr("claude_tap.cli_clients._codex_app_existing_processes", lambda: [])
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="POSIX hangups only")
+@pytest.mark.asyncio
+async def test_run_client_codexapp_terminates_app_on_hangup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without nohup, a hangup still ends claude-tap, so the detached app must
+    be terminated first instead of outliving its proxy."""
+    handlers: dict[int, object] = {}
+    calls: list[str] = []
+    kills: list[tuple[int, int]] = []
+
+    class _HangupProc(_DummyProc):
+        async def wait(self) -> int:
+            handlers[signal.SIGHUP]()
+            return self.returncode if self.returncode is not None else 0
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+            self.returncode = -15
+
+    monkeypatch.setattr(signal, "getsignal", lambda sig: signal.SIG_DFL)
+    restored: dict[int, object] = {}
+    real_signal = signal.signal
+
+    def fake_signal(sig: int, handler: object) -> object:
+        if sig == signal.SIGHUP:
+            restored[sig] = handler
+            return signal.SIG_DFL
+        return real_signal(sig, handler)
+
+    monkeypatch.setattr(signal, "signal", fake_signal)
+    monkeypatch.setattr(os, "kill", lambda pid, sig: kills.append((pid, sig)))
+    _patch_codexapp_launch(monkeypatch, _HangupProc(), handlers)
+
+    code = await run_client(43123, [], client="codexapp", proxy_mode="forward")
+
+    assert code == -15
+    assert calls == ["terminate"]
+    assert signal.SIGHUP not in handlers
+    assert restored == {signal.SIGHUP: signal.SIG_DFL}
+    # The hangup is re-delivered so claude-tap still exits as before.
+    assert kills == [(os.getpid(), signal.SIGHUP)]
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="POSIX hangups only")
+@pytest.mark.asyncio
+async def test_run_client_codexapp_keeps_inherited_sighup_ignore(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under nohup (SIGHUP ignored) the hangup must not stop the capture."""
+    handlers: dict[int, object] = {}
+    seen: list[int] = []
+
+    class _RecordingProc(_DummyProc):
+        async def wait(self) -> int:
+            seen.extend(handlers)
+            return 0
+
+    monkeypatch.setattr(signal, "getsignal", lambda sig: signal.SIG_IGN)
+    _patch_codexapp_launch(monkeypatch, _RecordingProc(), handlers)
+
+    assert await run_client(43123, [], client="codexapp", proxy_mode="forward") == 0
+    assert signal.SIGINT in seen
+    assert signal.SIGHUP not in seen
+
+
+_HANGUP_REPRO = """
+import asyncio, sys
+from claude_tap.cli import run_client
+sys.exit(asyncio.run(run_client(43123, [], client="codexapp", proxy_mode="forward", client_cmd=sys.argv[1])))
+"""
+
+
+@pytest.mark.skipif(not hasattr(os, "setsid") or sys.platform == "win32", reason="POSIX sessions only")
+def test_codexapp_child_does_not_outlive_hung_up_claude_tap(tmp_path: Path) -> None:
+    """Real-process check: SIGHUP to claude-tap also ends the detached app."""
+    pid_file = tmp_path / "app.pid"
+    fake_app = tmp_path / "fake-codex-app"
+    fake_app.write_text(f'#!/bin/sh\necho $$ > "{pid_file}"\nexec sleep 60\n')
+    fake_app.chmod(0o755)
+
+    parent = subprocess.Popen(
+        [sys.executable, "-c", _HANGUP_REPRO, str(fake_app)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=Path(__file__).resolve().parent.parent,
+    )
+    try:
+        for _ in range(200):
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            subprocess.run(["sleep", "0.05"], check=False)
+        child_pid = int(pid_file.read_text().strip())
+
+        parent.send_signal(signal.SIGHUP)
+        assert parent.wait(timeout=15) == -signal.SIGHUP
+
+        for _ in range(200):
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            subprocess.run(["sleep", "0.05"], check=False)
+        else:
+            os.kill(child_pid, signal.SIGKILL)
+            pytest.fail("detached Codex App survived claude-tap's hangup")
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait()
+
+
 @pytest.mark.skipif(not hasattr(os, "tcsetpgrp"), reason="POSIX job control only")
 @pytest.mark.asyncio
 async def test_run_client_tui_client_keeps_foreground_process_group(
