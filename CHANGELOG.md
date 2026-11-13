@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Preserve inherited proxy bypass entries and synchronize `NO_PROXY` and `no_proxy` so reverse-mode clients reach loopback directly (#474).
-- Launch the Codex App in its own session so closing the terminal of a background (`nohup`) `--tap-client codexapp` run no longer kills the app with SIGHUP; without `nohup`, a hangup now terminates the app before claude-tap exits instead of leaving it on a dead proxy (#464).
+- Launch the Codex App in its own session so closing the terminal of a background (`nohup`) `--tap-client codexapp` run no longer kills the app with SIGHUP; without `nohup`, a hangup, and likewise a SIGTERM to claude-tap or its process group, now terminates the app before claude-tap exits instead of leaving it on a dead proxy (#464).
 
 ## [0.1.146] - 2026-10-17
 

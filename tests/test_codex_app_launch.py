@@ -645,6 +645,163 @@ def test_codexapp_child_does_not_outlive_hung_up_claude_tap(tmp_path: Path) -> N
             parent.wait()
 
 
+@pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="POSIX signals only")
+@pytest.mark.asyncio
+async def test_run_client_codexapp_terminates_app_on_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A SIGTERM aimed at claude-tap's process group no longer reaches the
+    detached app, so claude-tap must forward it and then exit on it."""
+    handlers: dict[int, object] = {}
+    calls: list[str] = []
+    kills: list[tuple[int, int]] = []
+    later: list[float] = []
+
+    class _TermProc(_DummyProc):
+        async def wait(self) -> int:
+            handlers[signal.SIGTERM]()
+            return self.returncode if self.returncode is not None else 0
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+            self.returncode = -15
+
+    monkeypatch.setattr(signal, "getsignal", lambda sig: signal.SIG_DFL)
+    restored: dict[int, object] = {}
+    real_signal = signal.signal
+
+    def fake_signal(sig: int, handler: object) -> object:
+        if sig in (signal.SIGHUP, signal.SIGTERM):
+            restored[sig] = handler
+            return signal.SIG_DFL
+        return real_signal(sig, handler)
+
+    monkeypatch.setattr(signal, "signal", fake_signal)
+    monkeypatch.setattr(os, "kill", lambda pid, sig: kills.append((pid, sig)))
+    _patch_codexapp_launch(monkeypatch, _TermProc(), handlers)
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "call_later", lambda delay, cb, *args: later.append(delay))
+
+    code = await run_client(43123, [], client="codexapp", proxy_mode="forward")
+
+    assert code == -15
+    assert calls == ["terminate"]
+    # Bounded cleanup: a SIGKILL fallback is scheduled after the grace period.
+    assert later == [cli_clients._HANGUP_KILL_GRACE_SECONDS]
+    assert signal.SIGTERM not in handlers
+    assert signal.SIGHUP not in handlers
+    assert restored == {signal.SIGHUP: signal.SIG_DFL, signal.SIGTERM: signal.SIG_DFL}
+    # SIGTERM is re-delivered so claude-tap still exits on it as before.
+    assert kills == [(os.getpid(), signal.SIGTERM)]
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="POSIX signals only")
+@pytest.mark.asyncio
+async def test_run_client_codexapp_kills_app_that_ignores_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the app ignores SIGTERM, the scheduled fallback kills it."""
+    handlers: dict[int, object] = {}
+    calls: list[str] = []
+    later: list[object] = []
+
+    class _StubbornProc(_DummyProc):
+        async def wait(self) -> int:
+            handlers[signal.SIGTERM]()
+            later.pop()()
+            return self.returncode
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+
+        def kill(self) -> None:
+            calls.append("kill")
+            self.returncode = -9
+
+    monkeypatch.setattr(signal, "getsignal", lambda sig: signal.SIG_DFL)
+    real_signal = signal.signal
+    monkeypatch.setattr(
+        signal,
+        "signal",
+        lambda sig, handler: signal.SIG_DFL if sig in (signal.SIGHUP, signal.SIGTERM) else real_signal(sig, handler),
+    )
+    monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+    _patch_codexapp_launch(monkeypatch, _StubbornProc(), handlers)
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "call_later", lambda delay, cb, *args: later.append(cb))
+
+    assert await run_client(43123, [], client="codexapp", proxy_mode="forward") == -9
+    assert calls == ["terminate", "kill"]
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="POSIX signals only")
+@pytest.mark.asyncio
+async def test_run_client_codexapp_keeps_inherited_sigterm_ignore(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An inherited SIG_IGN for SIGTERM is left alone, like SIGHUP under nohup."""
+    handlers: dict[int, object] = {}
+    seen: list[int] = []
+
+    class _RecordingProc(_DummyProc):
+        async def wait(self) -> int:
+            seen.extend(handlers)
+            return 0
+
+    monkeypatch.setattr(signal, "getsignal", lambda sig: signal.SIG_IGN if sig == signal.SIGTERM else signal.SIG_DFL)
+    real_signal = signal.signal
+    monkeypatch.setattr(
+        signal,
+        "signal",
+        lambda sig, handler: signal.SIG_DFL if sig == signal.SIGHUP else real_signal(sig, handler),
+    )
+    _patch_codexapp_launch(monkeypatch, _RecordingProc(), handlers)
+
+    assert await run_client(43123, [], client="codexapp", proxy_mode="forward") == 0
+    assert signal.SIGHUP in seen
+    assert signal.SIGTERM not in seen
+
+
+@pytest.mark.skipif(not hasattr(os, "setsid") or sys.platform == "win32", reason="POSIX sessions only")
+@pytest.mark.parametrize("to_group", [False, True], ids=["pid", "process-group"])
+def test_codexapp_child_does_not_outlive_terminated_claude_tap(tmp_path: Path, to_group: bool) -> None:
+    """Real-process check: SIGTERM to claude-tap (or its process group) also
+    ends the detached app."""
+    pid_file = tmp_path / "app.pid"
+    fake_app = tmp_path / "fake-codex-app"
+    fake_app.write_text(f'#!/bin/sh\necho $$ > "{pid_file}"\nexec sleep 60\n')
+    fake_app.chmod(0o755)
+
+    # Own session so a process-group SIGTERM cannot reach pytest itself.
+    parent = subprocess.Popen(
+        [sys.executable, "-c", _HANGUP_REPRO, str(fake_app)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=Path(__file__).resolve().parent.parent,
+        start_new_session=True,
+    )
+    try:
+        for _ in range(200):
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            subprocess.run(["sleep", "0.05"], check=False)
+        child_pid = int(pid_file.read_text().strip())
+
+        if to_group:
+            os.killpg(parent.pid, signal.SIGTERM)
+        else:
+            parent.send_signal(signal.SIGTERM)
+        assert parent.wait(timeout=15) == -signal.SIGTERM
+
+        for _ in range(200):
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            subprocess.run(["sleep", "0.05"], check=False)
+        else:
+            os.kill(child_pid, signal.SIGKILL)
+            pytest.fail("detached Codex App survived claude-tap's SIGTERM")
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait()
+
+
 @pytest.mark.skipif(not hasattr(os, "tcsetpgrp"), reason="POSIX job control only")
 @pytest.mark.asyncio
 async def test_run_client_tui_client_keeps_foreground_process_group(
