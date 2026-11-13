@@ -30,6 +30,10 @@ _BEDROCK_HOST_RE = re.compile(
 )
 
 _CODEX_APP_FAST_EXIT_HINT_SECONDS = 5.0
+# How long a detached Codex App gets to exit after SIGTERM when claude-tap
+# itself is hung up or terminated.
+_HANGUP_KILL_GRACE_SECONDS = 5.0
+
 # Standalone Codex.app and the current ChatGPT.app bundle (same CFBundleIdentifier
 # com.openai.codex) both host the desktop Codex runtime.
 # Keep this ERE-compatible for ``pgrep -fl`` (no non-capturing ``(?:...)`` groups).
@@ -820,8 +824,13 @@ async def run_client(
     # group so they have full terminal control (e.g. Cmd+Delete, Ctrl+U).
     # Codex App is a GUI process with very noisy app-server logs; keep its
     # stdio detached so claude-tap's terminal only shows capture status.
+    # It also never needs the controlling terminal, so start it in its own
+    # session: terminal hangups sent to claude-tap's process group (e.g. a
+    # shell exiting after `nohup claude-tap --tap-client codexapp &`) must not
+    # kill the app. claude-tap still terminates it via its own signal handlers.
     hide_child_output = client == "codexapp"
     use_fg = not hide_child_output and hasattr(os, "tcsetpgrp") and sys.stdin.isatty()
+    detach_session = hide_child_output and hasattr(os, "setsid")
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -831,6 +840,7 @@ async def run_client(
             stdout=subprocess.DEVNULL if hide_child_output else None,
             stderr=subprocess.DEVNULL if hide_child_output else None,
             **({"process_group": 0} if use_fg else {}),
+            **({"start_new_session": True} if detach_session else {}),
         )
     except Exception:
         for path in cleanup_paths:
@@ -873,12 +883,44 @@ async def run_client(
             proc.terminate()
             _print(f"\n⏳ Shutting down {cfg.label}...")
 
+    # A detached Codex App no longer receives signals sent to claude-tap's
+    # process group: neither the terminal's SIGHUP nor a group-wide SIGTERM
+    # (e.g. `kill -TERM -<pgid>`). Either would end claude-tap but leave the
+    # app running with its proxy settings pointing at a dead proxy. Terminate
+    # it first, then re-deliver the signal below. An inherited SIG_IGN (e.g.
+    # the `nohup` case for SIGHUP) is left alone so the capture keeps running.
+    stop_signals = []
+    if detach_session:
+        for name in ("SIGHUP", "SIGTERM"):
+            sig = getattr(signal, name, None)
+            if sig is None:
+                continue
+            old_handler = signal.getsignal(sig)
+            if old_handler is not signal.SIG_IGN:
+                stop_signals.append((sig, old_handler))
+    watched_stop_signals = []
+    received_stop_signal = None
+
+    def _handle_stop_signal(sig):
+        nonlocal received_stop_signal
+        if received_stop_signal is None:
+            received_stop_signal = sig
+        if proc.returncode is None:
+            proc.terminate()
+            loop.call_later(_HANGUP_KILL_GRACE_SECONDS, lambda: proc.returncode is None and proc.kill())
+
     try:
         loop.add_signal_handler(signal.SIGINT, _handle_sigint)
         if sigtstp is not None:
             loop.add_signal_handler(sigtstp, _handle_sigtstp)
     except (NotImplementedError, OSError):
         pass
+    for sig, old_handler in stop_signals:
+        try:
+            loop.add_signal_handler(sig, lambda sig=sig: _handle_stop_signal(sig))
+        except (NotImplementedError, OSError, RuntimeError, ValueError):
+            continue
+        watched_stop_signals.append((sig, old_handler))
 
     started_at = loop.time()
     try:
@@ -923,6 +965,15 @@ async def run_client(
             loop.remove_signal_handler(sigtstp)
         except (NotImplementedError, OSError):
             pass
+    for sig, old_handler in watched_stop_signals:
+        try:
+            loop.remove_signal_handler(sig)
+        except (NotImplementedError, OSError, RuntimeError, ValueError):
+            pass
+        signal.signal(sig, old_handler if old_handler is not None else signal.SIG_DFL)
+    if received_stop_signal is not None:
+        # The child is gone; exit on the signal as claude-tap did before.
+        os.kill(os.getpid(), received_stop_signal)
 
     elapsed = loop.time() - started_at
     _print(f"\n📋 {cfg.label} exited with code {code}")
