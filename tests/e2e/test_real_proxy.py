@@ -223,8 +223,8 @@ class TestRealProxy:
                         if k.lower() == key_name:
                             val = v
                             break
-                if val and len(val) > 10:
-                    assert "..." in val, f"Header {key_name} not redacted: {val[:30]}..."
+                if val:
+                    assert val == "***"
 
     @pytest.mark.timeout(180)
     def test_streaming_sse_capture(self, claude_env):
