@@ -83,6 +83,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi sessions, including OpenAI Codex OAuth providers |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Multi-provider Hermes TUI or gateway sessions |
 | [Cursor](https://cursor.com/cli) CLI / IDE Agent | Launch `cursor-agent` + live transcript watch (`claude-tap --tap-client cursor`) |
+| [Manus Studio](https://manus.im/desktop) | Watch the open task in the signed-in macOS app through Accessibility |
 | [Qoder CLI](https://qoder.com/cli) | Qoder Agent sessions through forward proxy mode |
 | [Antigravity CLI](https://antigravity.google/product/antigravity-cli) | Antigravity Agent sessions through forward proxy mode |
 | [CodeBuddy CLI](https://www.codebuddy.ai) | Tencent CodeBuddy SaaS or internal Copilot endpoint |
@@ -624,12 +625,24 @@ On macOS, `claude-tap build-macos-app` creates a local `Claude Tap.app` bundle. 
 
 By default the launcher points at the current checkout; pass `--installed` if `claude-tap` is installed in the Python environment used to build the app. Pass `--self-contained` to build an Apple Silicon PyInstaller bundle under `Contents/Resources` so the app does not depend on a colleague's Python installation. Ad-hoc signed builds may still require the recipient to remove quarantine or approve the app in macOS security settings.
 
+### Watch Manus Studio tasks on macOS
+
+Open a task in your signed-in Manus Studio app, then start the watcher:
+
+```bash
+claude-tap --tap-client manus
+```
+
+The watcher uses macOS Accessibility to copy visible messages and recognized task states into the local dashboard. Each task gets its own session when you open it in Studio. The watcher uses your existing app session and requires macOS Command Line Tools plus Accessibility access for the app running the command. If access is missing, grant it under **System Settings → Privacy & Security → Accessibility**, then restart the watcher.
+
+Older messages may be absent if Studio has not loaded them. A turn can also be missed if Studio replaces the visible conversation between checks. Raw tool calls, model request bodies, system prompts, and token usage are unavailable in this mode. The watcher starts its dashboard on loopback and stops with Ctrl+C.
+
 ### CLI Options
 
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch/listen to: claude (default), agy, codex, codexapp, dsh, gemini, grok, kimi, kimi-code, mimo, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
+--tap-client CLIENT      Client to launch or watch: claude (default), agy, codex, codexapp, dsh, gemini, grok, kimi, kimi-code, mimo, opencode, openclaw, pi, hermes, cursor, qoder, codebuddy, or manus
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer while the client runs (default: on)
 --tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)

@@ -598,9 +598,13 @@ function displayTurnPath(entry) {
   return (entry?.request?.path || '/unknown').replace(/\?.*$/, '');
 }
 
+function isManusTaskEntry(entry) {
+  return entry?.transport === 'manus-task';
+}
+
 function isDisplayTurnCandidate(entry) {
   if (!entry || typeof entry !== 'object') return false;
-  if (entry.transport === 'cursor-transcript') return true;
+  if (entry.transport === 'cursor-transcript' || isManusTaskEntry(entry)) return true;
   const path = displayTurnPath(entry);
   if (path.includes('/count_tokens') || path.endsWith('/models') || path.includes('/models?')) return false;
   if (isResponsesPath(path) && !isDisplayableResponsesEntry(entry)) return false;

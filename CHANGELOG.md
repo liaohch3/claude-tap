@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Watch the open task in a signed-in Manus Studio desktop app on macOS through Accessibility.
+
 ### Fixed
 
 - Preserve inherited proxy bypass entries and synchronize `NO_PROXY` and `no_proxy` so reverse-mode clients reach loopback directly (#474).

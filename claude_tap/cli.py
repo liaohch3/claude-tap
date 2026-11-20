@@ -62,6 +62,8 @@ from claude_tap.cursor_transcript import CursorTranscriptWatcher, model_from_cur
 from claude_tap.forward_proxy import ForwardProxyServer
 from claude_tap.history import cleanup_trace_sessions, migrate_legacy_traces
 from claude_tap.live import LiveViewerServer
+from claude_tap.manus_desktop import ManusDesktopError, manus_desktop_reader
+from claude_tap.manus_watcher import ManusWatcher
 from claude_tap.proxy import proxy_handler
 from claude_tap.shared_dashboard import (
     DEFAULT_DASHBOARD_PORT,
@@ -86,6 +88,56 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 log = logging.getLogger("claude-tap")
+
+_MANUS_POLL_SECONDS = 1.0
+_MANUS_WAITING_MESSAGES = {
+    "app_not_running": "Open Manus Studio to start capturing.",
+    "no_task": "Open a task in Manus Studio to start capturing.",
+    "conversation_unavailable": "Waiting for the open Manus Studio conversation to load.",
+    "snapshot_incomplete": "Waiting for a complete Manus Studio Accessibility snapshot.",
+}
+
+
+async def _run_manus_watch(args: argparse.Namespace, store: TraceStore) -> int:
+    _print(f"🔍 claude-tap v{__version__} watching the open task in Manus Studio")
+    _print(f"🗄️  Trace database: {resolve_db_path()}")
+    _print("   One dashboard session per task. Press Ctrl+C to stop.")
+    watcher = ManusWatcher(store)
+    last_status = ""
+    try:
+        async with manus_desktop_reader() as reader:
+            while True:
+                snapshot = await reader.read()
+                status = snapshot["status"]
+                if status == "permission_denied":
+                    _print(
+                        "Allow the app running claude-tap in macOS System Settings → Privacy & Security → Accessibility.",
+                        file=sys.stderr,
+                    )
+                    return 1
+                if status == "ok" or status in _MANUS_WAITING_MESSAGES:
+                    watcher.sync_snapshot(snapshot)
+                    if status != "ok" and last_status != status:
+                        _print(_MANUS_WAITING_MESSAGES[status])
+                else:
+                    raise ManusDesktopError("Could not identify the Manus Studio Accessibility snapshot state.")
+                last_status = status
+                await asyncio.sleep(_MANUS_POLL_SECONDS)
+    except asyncio.CancelledError:
+        return 0
+    except ManusDesktopError as exc:
+        _print(str(exc), file=sys.stderr)
+        return 1
+    except sqlite3.Error:
+        _print("Manus watch could not write to the trace database.", file=sys.stderr)
+        return 1
+    finally:
+        try:
+            watcher.close()
+            if args.max_traces > 0 and watcher.session_ids:
+                cleanup_trace_sessions(args.max_traces, protected_session_ids=watcher.session_ids)
+        except sqlite3.Error:
+            _print("Manus watch could not finalize trace storage.", file=sys.stderr)
 
 
 def _create_trace_writer(
@@ -314,6 +366,11 @@ def _ensure_ca_trust_for_forward_proxy(args: argparse.Namespace, ca_cert_path: P
 
 
 async def _async_main(args: argparse.Namespace) -> int:
+    manus = args.client == "manus"
+    if manus and sys.platform != "darwin":
+        _print("Manus Studio watch requires macOS.", file=sys.stderr)
+        return 1
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     if not args.live_viewer:
@@ -326,9 +383,9 @@ async def _async_main(args: argparse.Namespace) -> int:
             )
 
     store = get_trace_store()
-    client_cfg = CLIENT_CONFIGS[args.client]
-    transcript_only = bool(client_cfg.transcript_only)
-    effective_proxy_mode = "transcript" if transcript_only else args.proxy_mode
+    transcript_only = not manus and CLIENT_CONFIGS[args.client].transcript_only
+    watch_only = transcript_only or manus
+    effective_proxy_mode = "manus-desktop" if manus else "transcript" if transcript_only else args.proxy_mode
     trace_metadata = {"client": args.client, "proxy_mode": effective_proxy_mode}
 
     codex_app_preflighted = False
@@ -342,17 +399,16 @@ async def _async_main(args: argparse.Namespace) -> int:
 
     ca_cert_path: Path | None = None
     ca_key_path: Path | None = None
-    if not transcript_only and args.proxy_mode == "forward":
+    if not watch_only and args.proxy_mode == "forward":
         ca_cert_path, ca_key_path = ensure_ca()
         trust_result = _ensure_ca_trust_for_forward_proxy(args, ca_cert_path)
         if trust_result != 0:
             return trust_result
 
-    # Transcript-only clients open one tap session per Cursor conversation JSONL.
-    # Do not create an umbrella session that would merge unrelated chats.
+    # Watchers create a session for each observed conversation.
     writer: TraceWriter | _LazyTraceWriter | None
     session_id: str | None
-    if transcript_only:
+    if watch_only:
         writer = None
         session_id = None
     else:
@@ -364,8 +420,7 @@ async def _async_main(args: argparse.Namespace) -> int:
         )
         session_id = writer.session_id
 
-    # Capture the Cursor watch window before dashboard startup so transcripts
-    # written while ensure_shared_dashboard() boots are still imported.
+    # Start watching from before the dashboard boots.
     watch_since = time.time()
 
     # Ensure the shared dashboard is running (one port for all sessions).
@@ -387,6 +442,9 @@ async def _async_main(args: argparse.Namespace) -> int:
                 _print(f"🌐 Dashboard: {dashboard_url_value} (shared)")
         except (RuntimeError, sqlite3.Error) as exc:
             _print(f"⚠️  {exc}", file=sys.stderr)
+
+    if manus:
+        return await _run_manus_watch(args, store)
 
     # Proxy logs go to SQLite, not terminal (avoids polluting Claude TUI)
     sqlite_handler: SQLiteLogHandler | None = None
@@ -696,7 +754,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="claude-tap",
         description=(
             "Trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, "
-            "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy or transcript import. "
+            "Cursor CLI, Qoder CLI, Antigravity CLI, CodeBuddy CLI, or Manus Studio through a proxy or task import. "
             "All flags not listed below are forwarded to the selected client."
         ),
         epilog=(
@@ -776,6 +834,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             '  claude-tap --tap-client cursor -- -p --trust --model auto "hello"\n'
             "  # Cursor readable messages are imported from local transcripts after exit\n"
             "\n"
+            "manus studio (watch the open task on macOS):\n"
+            "  claude-tap --tap-client manus\n"
+            "\n"
             "qoder cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask\n'
             "  # Authenticate first with `qodercli login` or QODER_PERSONAL_ACCESS_TOKEN / QODER_JOB_TOKEN\n"
@@ -836,10 +897,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     proxy_group.add_argument(
         "--tap-client",
-        choices=sorted(CLIENT_CONFIGS.keys()),
+        choices=sorted((*CLIENT_CONFIGS, "manus")),
         default="claude",
         dest="client",
-        help="Client to launch (default: claude)",
+        help="Client to launch or watch (default: claude)",
     )
     proxy_group.add_argument(
         "--tap-target",
@@ -966,6 +1027,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Strip leading "--" separator if present (argparse leaves it in remainder)
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
+    if args.client == "manus":
+        if claude_args:
+            tap_parser.error("Manus watch mode does not launch an app or accept app arguments")
+        if (
+            args.port != 0
+            or args.proxy_mode is not None
+            or args.target is not None
+            or args.trust_ca
+            or args.extra_allowed_paths
+            or args.codexapp_cdp_endpoint is not None
+            or args.store_stream_events
+            or args.export_prompt
+        ):
+            tap_parser.error("Manus watch mode does not support proxy or prompt export options")
+        if args.host is None:
+            args.host = "127.0.0.1"
+        elif args.host != "localhost":
+            try:
+                is_loopback = ipaddress.ip_address(args.host).is_loopback
+            except ValueError:
+                is_loopback = False
+            if not is_loopback:
+                tap_parser.error("Manus watch mode requires a loopback dashboard address")
+        args.claude_args = []
+        return args
     args.client_cmd, claude_args = _extract_wrapped_client_command(args.client, claude_args)
     if any(arg == "--tap-codexapp-cdp-capture" for arg in claude_args):
         tap_parser.error("--tap-codexapp-cdp-capture was removed; --tap-client codexapp now captures via forward proxy")

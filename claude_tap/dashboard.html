@@ -1138,6 +1138,7 @@ const state = {
 	  sessionTotal: 0,
 	  sessionRecordTotal: 0,
 	  sessionTotalTokens: 0,
+	  tokenUnavailableSessions: 0,
 	  sessionTotalErrors: 0,
 	  sessionsHasMore: false,
 	  dateOptions: [],
@@ -1225,6 +1226,7 @@ const DASHBOARD_I18N = {
     metric_traces: "Traces",
     metric_error_rate: "Error Rate",
     metric_total_tokens: "Total Tokens",
+    manus_tokens_unavailable: "Model token usage is unavailable in Manus Studio desktop traces.",
     table_start_time: "Start Time",
     table_first_message: "First Message",
     table_traces: "Traces",
@@ -1332,6 +1334,7 @@ const DASHBOARD_I18N = {
     metric_traces: "轨迹数",
     metric_error_rate: "错误率",
     metric_total_tokens: "总 Token",
+    manus_tokens_unavailable: "Manus Studio 桌面轨迹不包含模型 Token 用量。",
     table_start_time: "开始时间",
     table_first_message: "首条用户 Prompt",
     table_traces: "轨迹",
@@ -1567,6 +1570,7 @@ async function fetchJSON(url, options = {}) {
 	  const loadedRecordTotal = state.sessions.reduce((sum, session) => sum + Number(session.record_count || 0), 0);
 	  state.sessionRecordTotal = Number(payload.total_records ?? loadedRecordTotal);
 	  state.sessionTotalTokens = Number(payload.total_tokens || 0);
+	  state.tokenUnavailableSessions = Number(payload.token_unavailable_sessions || 0);
 	  state.sessionTotalErrors = Number(payload.total_errors || 0);
 	  state.sessionsHasMore = Boolean(payload.has_more);
 	  state.dateOptions = Array.isArray(payload.dates) ? payload.dates : state.dateOptions;
@@ -1585,6 +1589,7 @@ async function fetchJSON(url, options = {}) {
 	  state.sessionTotal = 0;
 	  state.sessionRecordTotal = 0;
 	  state.sessionTotalTokens = 0;
+	  state.tokenUnavailableSessions = 0;
 	  state.sessionTotalErrors = 0;
 	  state.sessionsHasMore = false;
 	  state.selectedSessionIds.clear();
@@ -1837,6 +1842,8 @@ function isSessionRowActionTarget(target) {
 	  const firstMessage = preview || t("no_user_prompt");
 	  const status = statusInfo(session);
 	  const isLoading = state.loadingSessionId === session.id;
+	  const tokens = session.total_tokens === null ? "—" : fmtNumber(session.total_tokens);
+	  const tokenHint = session.total_tokens === null ? t("manus_tokens_unavailable") : "";
 	  const isDeleting = state.deletingSessionIds.has(session.id);
 	  const canSelect = canDeleteSession(session);
 	  const isSelected = state.selectedSessionIds.has(session.id);
@@ -1851,7 +1858,7 @@ function isSessionRowActionTarget(target) {
 	      <td class="mono-cell">${esc(fmtTableTime(session.started_at || session.updated_at))}</td>
 	      <td><div class="first-message" title="${esc(firstMessage)}">${esc(firstMessage)}</div></td>
 	      <td><span class="trace-count">${fmtNumber(session.record_count)}</span></td>
-      <td><span class="token-pill">${fmtNumber(session.total_tokens)}</span></td>
+	      <td><span class="token-pill" title="${esc(tokenHint)}">${tokens}</span></td>
       <td><span class="model-pill" title="${esc(session.model || t("unknown"))}">${esc(session.model || t("unknown"))}</span></td>
       <td><span class="agent-pill">${esc(session.agent || t("unknown"))}</span></td>
       <td><span class="status-pill ${status.className}">${esc(status.label)}</span></td>
@@ -1873,10 +1880,20 @@ function renderOverview() {
   $("#overview-threads").textContent = fmtNumber(threads);
   $("#overview-traces").textContent = fmtNumber(traces);
   $("#overview-error-rate").textContent = errorRate;
-  $("#overview-tokens").textContent = fmtNumber(tokens);
+  const unavailable = state.tokenUnavailableSessions;
+  const overviewTokens = $("#overview-tokens");
+  overviewTokens.textContent = unavailable && unavailable === threads ? "—" : fmtNumber(tokens) + (unavailable ? "+" : "");
+  overviewTokens.title = unavailable ? t("manus_tokens_unavailable") : "";
 }
 
 	function statusInfo(session) {
+	  if (session.agent_key === "manus-studio") {
+	    const label = session.manus_task_status || "—";
+	    if (label === "error") return {label, className: "err"};
+	    if (label === "running" || label === "waiting") return {label, className: "live"};
+	    const className = label === "stopped" ? "ok" : "empty-status";
+	    return {label, className};
+	  }
 	  if (session.status === "error") return {label: "ERR", className: "err"};
 	  if (session.status === "empty") return {label: t("status_empty_short"), className: "empty-status"};
 	  if (session.live || session.status === "active") return {label: "LIVE", className: "live"};
@@ -2115,6 +2132,7 @@ function sessionDetailFingerprint(session) {
   return [
     session.id || "",
     session.status || "",
+    session.manus_task_status || "",
     session.record_count || 0,
     session.turn_count || 0,
     session.input_tokens || 0,
@@ -2131,7 +2149,7 @@ function updateDetailSessionSummary(session) {
   state.detailSession = {...(state.detailSession || {}), ...session};
   state.detailFingerprint = sessionDetailFingerprint(session);
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
-  $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
+  $("#detail-subtitle").textContent = session.manus_task_title || session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
 }
 
@@ -2197,7 +2215,7 @@ async function loadMoreSessionRecords(session, records, button) {
   state.detailFingerprint = sessionDetailFingerprint(session);
   state.detailSession = session;
   $("#detail-title").textContent = t("session_details", {agent: session.agent || t("session_detail")});
-  $("#detail-subtitle").textContent = session.legacy_rel_path || session.id || "";
+  $("#detail-subtitle").textContent = session.manus_task_title || session.legacy_rel_path || session.id || "";
   updateTracePathBar(session);
   $("#detail").innerHTML = `
     <div class="detail-inspector-bar">
@@ -2306,10 +2324,12 @@ function renderRecord(record, index) {
   const response = record.response || {};
   const userText = requestText(request.body) || t("request_empty");
   const responseText = responseTextFromRecord(record) || response.error || t("response_empty");
-  const status = response.status ?? "";
-  const path = request.path || "";
+  const manus = record.transport === "manus-task";
+  const event = manus ? response.body?.manus_event : null;
+  const status = manus ? event?.agent_status || event?.status || response.body?.manus_task?.status || "—" : response.status ?? "";
+  const path = [event?.type, request.path].filter(Boolean).join(" · ");
   const jsonId = `json-${index}`;
-  const statusClass = Number(status) >= 400 ? "error" : "";
+  const statusClass = status === "error" || Number(status) >= 400 ? "error" : "";
   return `
     <article class="section">
       <div class="section-header">

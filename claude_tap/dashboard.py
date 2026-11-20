@@ -37,6 +37,7 @@ CLIENT_LABELS = {
     "hermes": "Hermes",
     "kimi": "Kimi",
     "kimi-code": "Kimi Code",
+    "manus": "Manus Studio",
     "mimo": "MiMo Code",
     "opencode": "OpenCode",
     "pi": "Pi",
@@ -271,6 +272,19 @@ def _recompute_total_tokens(summary: dict[str, Any]) -> int:
     )
 
 
+def _manus_task_fields(record: dict[str, Any]) -> dict[str, str]:
+    if record.get("transport") != "manus-task":
+        return {}
+    response = record.get("response")
+    body = response.get("body") if isinstance(response, dict) else None
+    task = body.get("manus_task") if isinstance(body, dict) else None
+    if not isinstance(task, dict):
+        return {}
+    return {
+        f"manus_task_{key}": value for key in ("title", "status") if isinstance(value := task.get(key), str) and value
+    }
+
+
 def merge_record_into_summary(
     summary: dict[str, Any] | None,
     *,
@@ -318,7 +332,8 @@ def merge_record_into_summary(
     summary["cache_create_tokens"] = int(summary.get("cache_create_tokens") or 0) + (
         usage.get("cache_creation_input_tokens") or 0
     )
-    summary["total_tokens"] = _recompute_total_tokens(summary)
+    manus = row["client"] == "manus"
+    summary["total_tokens"] = None if manus else _recompute_total_tokens(summary)
     summary["duration_ms"] = int(summary.get("duration_ms") or 0) + _duration_ms(record)
     model = _record_model(record)
     if model:
@@ -328,7 +343,10 @@ def merge_record_into_summary(
         summary["updated_at"] = timestamp
         if not summary.get("started_at"):
             summary["started_at"] = timestamp
-    summary["last_response"] = _last_response_preview([record])
+    last_response = _last_response_preview([record])
+    if last_response or not manus:
+        summary["last_response"] = last_response
+    summary.update(_manus_task_fields(record))
     preview_user = _first_user_preview([record])
     if preview_user:
         existing_first = str(summary.get("first_user") or "")
@@ -586,7 +604,7 @@ def _normalize_cached_session_summary(row: sqlite3.Row, cached: dict[str, Any]) 
         summary["agent"] = _infer_agent([], {"client": row["client"] or "", "proxy_mode": row["proxy_mode"] or ""})
     summary["agent_key"] = _agent_key(str(summary.get("agent") or ""))
     token_total = _recompute_total_tokens(summary)
-    summary["total_tokens"] = token_total if token_total else int(cached.get("total_tokens") or 0)
+    summary["total_tokens"] = None if row["client"] == "manus" else token_total or int(cached.get("total_tokens") or 0)
     return redact_dashboard_summary(summary)
 
 
@@ -634,8 +652,10 @@ def _summarize_session(
     models: dict[str, int] = {}
     duration_ms = 0
     turns: set[int] = set()
+    manus_fields: dict[str, str] = {}
 
     for record in records:
+        manus_fields.update(_manus_task_fields(record))
         usage = _record_usage(record)
         input_tokens += usage.get("input_tokens") or 0
         output_tokens += usage.get("output_tokens") or 0
@@ -692,15 +712,16 @@ def _summarize_session(
             "cache_read_tokens": cache_read_tokens,
             "cache_read_in_input_tokens": cache_read_in_input_tokens,
             "cache_create_tokens": cache_create_tokens,
-            "total_tokens": input_tokens
-            + output_tokens
-            + cache_read_tokens
-            - cache_read_in_input_tokens
-            + cache_create_tokens,
+            "total_tokens": (
+                None
+                if manifest_entry.get("client") == "manus"
+                else input_tokens + output_tokens + cache_read_tokens - cache_read_in_input_tokens + cache_create_tokens
+            ),
             "model": _top_key(models) or _record_model(last_record) or "unknown",
             "first_user": _first_user_preview(preview_records),
             "last_response": _last_response_preview(preview_records),
             "error": _first_error(error_display_records),
+            **manus_fields,
         }
     )
 
@@ -1194,6 +1215,10 @@ def _last_response_preview(records: list[dict[str, Any]]) -> str:
 def _record_response_text(record: dict[str, Any]) -> str:
     response = record.get("response")
     body = response.get("body") if isinstance(response, dict) else None
+    if record.get("transport") == "manus-task":
+        event = body.get("manus_event") if isinstance(body, dict) else None
+        if not isinstance(event, dict) or event.get("type") != "assistant_message":
+            return ""
     text = _response_text(body)
     if text:
         return text

@@ -83,6 +83,7 @@
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi 会话，包括 OpenAI Codex OAuth 提供方 |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 多提供方 Hermes TUI 或 gateway 会话 |
 | [Cursor](https://cursor.com/cli) CLI / IDE Agent | 启动 `cursor-agent` + 实时 transcript watch（`claude-tap --tap-client cursor`） |
+| [Manus Studio](https://manus.im/desktop) | 通过 macOS 辅助功能读取已登录 App 中当前打开的任务 |
 | [Qoder CLI](https://qoder.com/cli) | 通过 forward proxy 捕获 Qoder Agent 会话 |
 | [Antigravity CLI](https://antigravity.google/product/antigravity-cli) | 通过 forward proxy 捕获 Antigravity Agent 会话 |
 | [CodeBuddy CLI](https://www.codebuddy.ai) | 腾讯 CodeBuddy SaaS 或内部 Copilot 端点 |
@@ -615,12 +616,24 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 
 默认 launcher 指向当前 checkout；如果构建时所用 Python 环境已经安装了 `claude-tap`，可加 `--installed`。加 `--self-contained` 会用 PyInstaller 构建 Apple Silicon 自包含 bundle，并放在 `Contents/Resources` 下，这样 App 不依赖同事机器上的 Python 安装。Ad-hoc 签名的构建仍可能需要接收方移除 quarantine 或在 macOS 安全设置中手动允许。
 
+### 在 macOS 上监听 Manus Studio 任务
+
+在已登录的 Manus Studio 中打开一个任务，然后启动监听：
+
+```bash
+claude-tap --tap-client manus
+```
+
+监听器通过 macOS 辅助功能读取当前任务可见的消息和可识别的任务状态，写入本地 dashboard。切换任务时，每个任务对应独立会话。它复用桌面端的现有登录，需要 macOS 命令行开发工具，以及运行命令的应用拥有辅助功能权限。如果缺少权限，可在 **系统设置 → 隐私与安全性 → 辅助功能** 中授权后重启监听。
+
+未加载的旧消息可能缺失。如果 Studio 在两次读取之间替换了可见对话，也可能漏采一轮。此模式没有原始工具调用、原始模型请求、系统提示词或 token 用量。监听器在本机回环地址启动 dashboard，按 Ctrl+C 停止。
+
 ### CLI 选项
 
 除以下 `--tap-*` 参数外，所有参数均透传给所选客户端：
 
 ```
---tap-client CLIENT      启动或监听的客户端: claude（默认）/ agy / codex / codexapp / dsh / gemini / grok / kimi / kimi-code / mimo / opencode / openclaw / pi / hermes / cursor / qoder / codebuddy
+--tap-client CLIENT      启动或监听的客户端: claude（默认）/ agy / codex / codexapp / dsh / gemini / grok / kimi / kimi-code / mimo / opencode / openclaw / pi / hermes / cursor / qoder / codebuddy / manus
 --tap-target URL         上游 API 地址（默认: 根据客户端自动选择）
 --tap-live               客户端运行时启动实时查看器（默认开启）
 --tap-no-live            关闭实时查看器（恢复 v0.1.75 之前的行为）

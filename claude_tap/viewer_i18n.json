@@ -119,7 +119,9 @@
     "origin_kind_subagent": "subagent",
     "origin_kind_compaction": "compaction",
     "origin_kind_websearch": "web search",
-    "origin_kind_attachment": "attachment"
+    "origin_kind_attachment": "attachment",
+    "section_manus_task": "Manus Studio task",
+    "manus_metrics_unavailable": "Manus Studio desktop traces show visible task activity. Model calls, token usage, and API costs are unavailable."
   },
   "zh-CN": {
     "title": "claude-tap",
@@ -241,7 +243,9 @@
     "origin_kind_subagent": "子智能体",
     "origin_kind_compaction": "压缩",
     "origin_kind_websearch": "网页搜索",
-    "origin_kind_attachment": "附件"
+    "origin_kind_attachment": "附件",
+    "section_manus_task": "Manus Studio 任务",
+    "manus_metrics_unavailable": "Manus Studio 桌面轨迹显示可见的任务活动。模型调用、Token 用量和 API 成本不可用。"
   },
   "ja": {
     "title": "claude-tap",
@@ -363,7 +367,9 @@
     "origin_kind_subagent": "サブエージェント",
     "origin_kind_compaction": "圧縮",
     "origin_kind_websearch": "ウェブ検索",
-    "origin_kind_attachment": "添付"
+    "origin_kind_attachment": "添付",
+    "section_manus_task": "Manus Studio タスク",
+    "manus_metrics_unavailable": "Manus Studio のデスクトップトレースには、画面に表示されたタスクのアクティビティが含まれます。モデル呼び出し、トークン使用量、API コストは取得できません。"
   },
   "ko": {
     "title": "claude-tap",
@@ -485,7 +491,9 @@
     "origin_kind_subagent": "서브에이전트",
     "origin_kind_compaction": "압축",
     "origin_kind_websearch": "웹 검색",
-    "origin_kind_attachment": "첨부"
+    "origin_kind_attachment": "첨부",
+    "section_manus_task": "Manus Studio 작업",
+    "manus_metrics_unavailable": "Manus Studio 데스크톱 기록에는 화면에 표시된 작업 활동이 포함됩니다. 모델 호출, 토큰 사용량 및 API 비용은 확인할 수 없습니다."
   },
   "fr": {
     "title": "claude-tap",
@@ -607,7 +615,9 @@
     "origin_kind_subagent": "sous-agent",
     "origin_kind_compaction": "compaction",
     "origin_kind_websearch": "recherche web",
-    "origin_kind_attachment": "pièce jointe"
+    "origin_kind_attachment": "pièce jointe",
+    "section_manus_task": "Tâche Manus Studio",
+    "manus_metrics_unavailable": "Les traces du client de bureau Manus Studio montrent l’activité visible de la tâche. Les appels au modèle, les jetons utilisés et les coûts API sont indisponibles."
   },
   "ar": {
     "title": "claude-tap",
@@ -729,7 +739,9 @@
     "origin_kind_subagent": "وكيل فرعي",
     "origin_kind_compaction": "ضغط",
     "origin_kind_websearch": "بحث ويب",
-    "origin_kind_attachment": "مرفق"
+    "origin_kind_attachment": "مرفق",
+    "section_manus_task": "مهمة Manus Studio",
+    "manus_metrics_unavailable": "تعرض سجلات تطبيق Manus Studio لسطح المكتب نشاط المهمة الظاهر. لا تتوفر بيانات استدعاءات النموذج أو استخدام الرموز أو تكاليف واجهة API."
   },
   "de": {
     "title": "claude-tap",
@@ -851,7 +863,9 @@
     "origin_kind_subagent": "Subagent",
     "origin_kind_compaction": "Komprimierung",
     "origin_kind_websearch": "Websuche",
-    "origin_kind_attachment": "Anhang"
+    "origin_kind_attachment": "Anhang",
+    "section_manus_task": "Manus Studio-Aufgabe",
+    "manus_metrics_unavailable": "Manus Studio-Desktop-Traces zeigen sichtbare Aufgabenaktivität. Modellaufrufe, Tokenverbrauch und API-Kosten sind nicht verfügbar."
   },
   "ru": {
     "title": "claude-tap",
@@ -973,6 +987,8 @@
     "origin_kind_subagent": "субагент",
     "origin_kind_compaction": "сжатие",
     "origin_kind_websearch": "веб-поиск",
-    "origin_kind_attachment": "вложение"
+    "origin_kind_attachment": "вложение",
+    "section_manus_task": "Задача Manus Studio",
+    "manus_metrics_unavailable": "Трассировки настольного Manus Studio показывают видимые действия по задаче. Данные о вызовах модели, токенах и стоимости API недоступны."
   }
 }

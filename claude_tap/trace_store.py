@@ -109,56 +109,134 @@ class TraceStore:
     ) -> str:
         """Create a new active trace session and return its id."""
         session_id = str(uuid.uuid4())
+        with self._write_access() as conn:
+            self._insert_session(conn, session_id, client, proxy_mode, started_at)
+            conn.commit()
+        return session_id
+
+    @staticmethod
+    def _insert_session(
+        conn: sqlite3.Connection,
+        session_id: str,
+        client: str,
+        proxy_mode: str,
+        started_at: datetime | None,
+    ) -> None:
         now = started_at or datetime.now(timezone.utc)
         started_at_iso = now.isoformat()
         date_key = now.astimezone().date().isoformat()
-        with self._write_access() as conn:
-            conn.execute(
-                """
-                INSERT INTO sessions (
-                    id, started_at, updated_at, date_key, client, proxy_mode, status, record_count
-                )
-                VALUES (?, ?, ?, ?, ?, ?, 'active', 0)
-                """,
-                (session_id, started_at_iso, started_at_iso, date_key, client, proxy_mode),
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                id, started_at, updated_at, date_key, client, proxy_mode, status, record_count
             )
-            conn.commit()
-        return session_id
+            VALUES (?, ?, ?, ?, ?, ?, 'active', 0)
+            """,
+            (session_id, started_at_iso, started_at_iso, date_key, client, proxy_mode),
+        )
 
     def append_record(self, session_id: str, record: dict[str, Any]) -> None:
         """Append one API trace record to a session."""
         with self._write_access() as conn:
-            next_index = self._next_record_index(conn, session_id)
-            updated_at = _str_or_none(record.get("timestamp")) or datetime.now(timezone.utc).isoformat()
-            payload_json = self._encode_record(conn, session_id, record)
-            conn.execute(
+            self._append_record(conn, session_id, record)
+            conn.commit()
+
+    def append_imported_record(
+        self,
+        session_id: str,
+        record: dict[str, Any],
+        *,
+        expected_record_count: int,
+        client: str,
+        proxy_mode: str,
+    ) -> bool:
+        """Append to a stable external session if no other importer has advanced it."""
+        with self._write_access() as conn:
+            row = conn.execute("SELECT record_count FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            current_count = row["record_count"] if row is not None else 0
+            if current_count != expected_record_count:
+                return False
+            if row is None:
+                self._insert_session(conn, session_id, client, proxy_mode, started_at=None)
+            self._append_record(conn, session_id, {**record, "turn": current_count + 1})
+            conn.commit()
+            return True
+
+    def replace_latest_imported_record(
+        self,
+        session_id: str,
+        record: dict[str, Any],
+        *,
+        expected_record_count: int,
+        expected_record: dict[str, Any],
+    ) -> bool:
+        """Update a growing imported message if it is still the latest stored record."""
+        from claude_tap.dashboard import build_stored_session_summary
+
+        with self._write_access() as conn:
+            session = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if session is None or session["record_count"] != expected_record_count:
+                return False
+            last = conn.execute(
                 """
-                INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
-                VALUES (?, ?, ?, ?, ?)
+                SELECT session_id, record_index, payload_json FROM records
+                WHERE session_id = ? ORDER BY record_index DESC LIMIT 1
                 """,
-                (
-                    session_id,
-                    next_index,
-                    _int_or_none(record.get("turn")),
-                    _str_or_none(record.get("timestamp")),
-                    payload_json,
-                ),
-            )
-            conn.execute(
-                """
-                UPDATE sessions
-                SET updated_at = ?, record_count = record_count + 1, status = 'active'
-                WHERE id = ?
-                """,
-                (updated_at, session_id),
-            )
-            count_row = conn.execute(
-                "SELECT record_count FROM sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
-            record_count = int(count_row["record_count"]) if count_row is not None else next_index
-            self._refresh_summary_after_append(conn, session_id, record, record_count)
+            if last is None or self._rows_to_records(conn, [last]) != [expected_record]:
+                return False
+            updated_at = _str_or_none(record.get("timestamp")) or datetime.now(timezone.utc).isoformat()
+            replacement = {**record, "turn": expected_record["turn"]}
+            conn.execute(
+                "UPDATE records SET timestamp = ?, payload_json = ? WHERE session_id = ? AND record_index = ?",
+                (updated_at, self._encode_record(conn, session_id, replacement), session_id, last["record_index"]),
+            )
+            conn.execute(
+                "UPDATE sessions SET updated_at = ?, status = 'active' WHERE id = ?",
+                (updated_at, session_id),
+            )
+            session = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            records = self._load_records_with_connection(conn, session_id)
+            summary = build_stored_session_summary(session, records)
+            conn.execute(
+                "UPDATE sessions SET summary_json = ? WHERE id = ?",
+                (json.dumps(summary, ensure_ascii=False, separators=(",", ":")), session_id),
+            )
             conn.commit()
+            return True
+
+    def _append_record(self, conn: sqlite3.Connection, session_id: str, record: dict[str, Any]) -> None:
+        next_index = self._next_record_index(conn, session_id)
+        updated_at = _str_or_none(record.get("timestamp")) or datetime.now(timezone.utc).isoformat()
+        payload_json = self._encode_record(conn, session_id, record)
+        conn.execute(
+            """
+            INSERT INTO records (session_id, record_index, turn, timestamp, payload_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                next_index,
+                _int_or_none(record.get("turn")),
+                _str_or_none(record.get("timestamp")),
+                payload_json,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE sessions
+            SET updated_at = ?, record_count = record_count + 1, status = 'active'
+            WHERE id = ?
+            """,
+            (updated_at, session_id),
+        )
+        count_row = conn.execute(
+            "SELECT record_count FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        record_count = int(count_row["record_count"]) if count_row is not None else next_index
+        self._refresh_summary_after_append(conn, session_id, record, record_count)
 
     def replace_record_payloads(self, session_id: str, records: list[dict[str, Any]]) -> int:
         """Rewrite stored record payloads without changing ``record_count``.
@@ -376,6 +454,7 @@ class TraceStore:
                     COUNT(*) AS total_sessions,
                     COALESCE(SUM(record_count), 0) AS total_records,
                     COALESCE(SUM(CAST(json_extract(summary_json, '$.total_tokens') AS INTEGER)), 0) AS total_tokens,
+                    COALESCE(SUM(CASE WHEN client = 'manus' THEN 1 ELSE 0 END), 0) AS token_unavailable_sessions,
                     COALESCE(SUM(CASE WHEN status = 'error' OR (status = 'active' AND json_valid(summary_json) AND json_extract(summary_json, '$.status') = 'error') THEN 1 ELSE 0 END), 0) AS total_errors
                 FROM sessions
                 {where_sql}
@@ -386,6 +465,7 @@ class TraceStore:
             "total_sessions": int(row["total_sessions"] or 0) if row else 0,
             "total_records": int(row["total_records"] or 0) if row else 0,
             "total_tokens": int(row["total_tokens"] or 0) if row else 0,
+            "token_unavailable_sessions": int(row["token_unavailable_sessions"] or 0) if row else 0,
             "total_errors": int(row["total_errors"] or 0) if row else 0,
         }
 
