@@ -43,14 +43,15 @@ Simplified Chinese version: [支持矩阵](support-matrix.zh.md).
 | Hermes Agent | Provider creds via `~/.hermes/` | Forward proxy (any HTTPS upstream) | n/a | HTTP/SSE | Unit-tested |
 | Hermes Agent | Custom OpenAI-compatible provider (`--tap-proxy-mode reverse`) | `https://api.openai.com` | `/v1` | HTTP/SSE | Unit-tested |
 | Cursor CLI / IDE Agent | Cursor login (`cursor-agent login`) or Cursor IDE | Local `agent-transcripts` watch (no MITM proxy) | n/a | Local transcript JSONL (`cursor-transcript`) | Unit-tested; manual E2E pending after transcript-only switch |
+| Manus Studio (macOS) | Existing Manus Studio sign-in | Open task | n/a | macOS Accessibility and read-only local SQLite task cache | Real E2E verified for visible chat and cached terminal commands and output on Studio 2.1.5. |
 | Qoder CLI | Qoder login / `QODER_PERSONAL_ACCESS_TOKEN` / `QODER_JOB_TOKEN` | Forward proxy (Qoder endpoints) | n/a | HTTP/SSE | Real E2E verified |
 | Antigravity CLI | Antigravity login | Forward proxy + `CLOUD_CODE_URL` bridge to `https://daily-cloudcode-pa.googleapis.com` | `CLOUD_CODE_URL` | HTTP/SSE | Manual E2E verified; launch env, Code Assist bridge, and automatic macOS user-keychain CA trust are unit-tested |
 | CodeBuddy CLI | CodeBuddy login (iOA / WeChat / Google-Github / Enterprise Domain) | Auto-detected from `~/.codebuddy/local_storage/` cache; default `https://copilot.tencent.com/v2` | `CODEBUDDY_BASE_URL` | HTTP/SSE Chat Completions | Real E2E verified on iOA |
 
 ## Default Proxy Mode by Client
 
-Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
-`--tap-proxy-mode` is omitted:
+Proxy-backed clients use their configured default when `--tap-proxy-mode` is
+omitted. Local watch modes are listed alongside them.
 
 | Client | Default mode | Reason |
 |--------|--------------|--------|
@@ -68,6 +69,7 @@ Each client in `CLIENT_CONFIGS` declares a `default_proxy_mode` used when
 | `pi` | `forward` | Multi-provider; Pi can use OpenAI Codex OAuth and custom model registry providers, so forward proxy captures traffic without relying on a single base URL override |
 | `hermes` | `forward` | Multi-provider Python agent; `httpx` and `requests` honor `HTTPS_PROXY` natively, so forward proxy capture is the natural default |
 | `cursor` | `transcript` (neither reverse nor forward) | Conversation comes only from `~/.cursor/projects/*/agent-transcripts/*.jsonl`. Bare `claude-tap --tap-client cursor` launches `cursor-agent` and live-watches transcripts into the dashboard (**one tap session per Cursor conversation JSONL**); `--tap-no-launch` is IDE watch-only. No HTTPS proxy / CA |
+| `manus` | `manus-desktop` | Use `claude-tap --tap-client manus` to watch the open task in the signed-in macOS app. Accessibility identifies the task and supplies visible chat. If available, its read-only local cache supplies terminal commands and output. Each task gets one dashboard session. Use the existing Studio sign-in without an API key. |
 | `qoder` | `forward` | Qoder CLI uses multiple Qoder service endpoints and has no reliable single base URL override |
 | `agy` | `forward` | Antigravity uses multiple Google / Antigravity endpoints; claude-tap sets `HTTPS_PROXY` for auxiliary traffic and `CLOUD_CODE_URL` for Code Assist model traffic |
 | `codebuddy` | `reverse` | Single provider, native `CODEBUDDY_BASE_URL` env var; supports `--settings` env injection. Endpoint auto-detected from CodeBuddy's login cache |
@@ -170,6 +172,12 @@ uv run python -m claude_tap --tap-client cursor
 
 # IDE Agent watch only
 uv run python -m claude_tap --tap-client cursor --tap-no-launch
+
+# Manus Studio on macOS
+# Open a test task in the signed-in app before starting the watcher.
+uv run python -m claude_tap --tap-client manus
+# Verify the dashboard shows the open task's chat and status. If that task ran a
+# terminal command, check for its command and output when cached events are available.
 
 # Codex App
 uv run python -m claude_tap --tap-client codexapp

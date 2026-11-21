@@ -56,6 +56,120 @@ def _event(record):
     return record["response"]["body"]["manus_event"]
 
 
+def _terminal(event_id, command, output):
+    return {"id": event_id, "type": "tool_call", "tool_name": "terminal", "command": command, "output": output}
+
+
+def test_imports_terminal_events_without_faking_model_metadata_or_overwriting_assistant_preview(tmp_path):
+    store = TraceStore(tmp_path / "traces.db")
+    watcher = ManusWatcher(store)
+    events = [
+        {**_terminal("tool1", "printf 'first'", "first"), "timestamp_ms": 1795221000123},
+        _terminal("tool2", "printf 'second'", "https://example.test/file?signature=PRIVATE_TEST_VALUE"),
+        _terminal("missing-output", "printf 'skip'", None),
+        {**_terminal("other-tool", "ignored", "ignored"), "tool_name": "browser"},
+        "malformed-event",
+    ]
+    snapshot = _snapshot(_user("Check the output"), _assistant("Done"), task_status="completed", terminal_events=events)
+    assert watcher.sync_snapshot(snapshot) == 4
+    assert watcher.sync_snapshot(snapshot) == 0
+    user, reply, first, second = _records_for_task(store)
+    assert [_event(record)["type"] for record in (user, reply, first, second)] == [
+        "user_message",
+        "assistant_message",
+        "tool_used",
+        "tool_used",
+    ]
+    assert _event(first) == {
+        "id": "tool1",
+        "type": "tool_used",
+        "tool": "terminal",
+        "input": {"command": "printf 'first'"},
+        "output": "first",
+        "timestamp_ms": 1795221000123,
+    }
+    summary = json.loads(store.list_session_rows()[0]["summary_json"])
+    assert summary["last_response"] == "Done"
+    assert summary["manus_task_status"] == "completed"
+    assert first["capture"]["manus_source"] == "desktop-task-cache"
+    assert first["capture"]["timestamp_kind"] == "observed"
+    assert "usage" not in first["response"]["body"]
+    assert "status" not in first["response"]
+    assert "duration_ms" not in first
+    assert _event(second)["output"] == "https://example.test/file"
+    assert "timestamp_ms" not in _event(second)
+    assert [record["turn"] for record in (user, reply, first, second)] == [1, 2, 3, 4]
+
+
+def test_masks_recognizable_terminal_header_and_shell_secrets_before_storage(tmp_path):
+    store = TraceStore(tmp_path / "traces.db")
+    watcher = ManusWatcher(store)
+    command = (
+        'OPENAI_API_KEY="secret alpha" MAX_TOKENS=40 curl '
+        "-H 'Authorization: Bearer secret-beta' -H 'X-API-Key: secret-gamma' "
+        '-H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Api-Key: $(read_credential)" https://example.test'
+    )
+    output = (
+        "Proxy-Authorization: Basic secret-delta\n"
+        "GITHUB_TOKEN=secret-epsilon\n"
+        "DATABASE_PASSWORD='secret zeta'\n"
+        "OPENAI_API_KEY=$OPENAI_API_KEY\n"
+        "TOKEN=$(read_credential)\n"
+        "OPENAI_API_KEY= env\n"
+        "MAX_TOKENS=40\n"
+        "The key number remains meaningful."
+    )
+    assert watcher.sync_snapshot(_snapshot(terminal_events=[_terminal("tool", command, output)])) == 1
+    [record] = _records_for_task(store)
+    event = _event(record)
+    assert event["input"]["command"] == (
+        'OPENAI_API_KEY="REDACTED" MAX_TOKENS=40 curl '
+        "-H 'Authorization: Bearer REDACTED' -H 'X-API-Key: REDACTED' "
+        '-H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Api-Key: $(read_credential)" https://example.test'
+    )
+    assert event["output"] == (
+        "Proxy-Authorization: Basic REDACTED\n"
+        "GITHUB_TOKEN=REDACTED\n"
+        "DATABASE_PASSWORD='REDACTED'\n"
+        "OPENAI_API_KEY=$OPENAI_API_KEY\n"
+        "TOKEN=$(read_credential)\n"
+        "OPENAI_API_KEY= env\n"
+        "MAX_TOKENS=40\n"
+        "The key number remains meaningful."
+    )
+    assert "secret" not in json.dumps(record)
+
+
+def test_revises_tool_output_by_source_id_without_breaking_chat_overlap_or_separate_tasks(tmp_path):
+    store = TraceStore(tmp_path / "traces.db")
+    first = ManusWatcher(store)
+    initial = _terminal("same-id", "printf 'output'", "partial")
+    assert first.sync_snapshot(_snapshot(_user("Run it"), _assistant("Very"), terminal_events=[initial])) == 3
+    old_tool = _records_for_task(store)[-1]
+
+    second = ManusWatcher(TraceStore(store.db_path))
+    revised = {**initial, "output": "full output"}
+    late = _terminal("late-id", "printf 'late'", "late")
+    assert (
+        second.sync_snapshot(_snapshot(_user("Run it"), _assistant("Very good"), terminal_events=[revised, late])) == 1
+    )
+    assert (
+        second.sync_snapshot(_snapshot(_user("Run it"), _assistant("Very good"), terminal_events=[revised, late])) == 0
+    )
+    user, reply, tool, late_tool = _records_for_task(store)
+    assert _event(reply)["content"] == "Very good"
+    assert tool["request_id"] == old_tool["request_id"]
+    assert tool["turn"] == old_tool["turn"]
+    assert _event(tool)["output"] == "full output"
+    assert _event(late_tool)["id"] == "late-id"
+
+    assert second.sync_snapshot(_snapshot(_user("Follow-up"), terminal_events=[late])) == 0
+    assert second.sync_snapshot(_snapshot(_user("Run it"), _assistant("Very good"), _user("Follow-up"))) == 1
+    assert second.sync_snapshot(_snapshot(task_id=_OTHER_TASK_ID, terminal_events=[initial])) == 1
+    assert _event(_records_for_task(store, _OTHER_TASK_ID)[0])["output"] == "partial"
+    assert _event(_records_for_task(store)[2])["output"] == "full output"
+
+
 def test_imports_attributed_messages_without_copying_other_controls_or_credentials(tmp_path):
     store = TraceStore(tmp_path / "traces.db")
     watcher = ManusWatcher(store)

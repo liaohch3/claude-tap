@@ -83,7 +83,7 @@
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi 会话，包括 OpenAI Codex OAuth 提供方 |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | 多提供方 Hermes TUI 或 gateway 会话 |
 | [Cursor](https://cursor.com/cli) CLI / IDE Agent | 启动 `cursor-agent` + 实时 transcript watch（`claude-tap --tap-client cursor`） |
-| [Manus Studio](https://manus.im/desktop) | 通过 macOS 辅助功能读取已登录 App 中当前打开的任务 |
+| [Manus Studio](https://manus.im/desktop) | 监听已登录的 macOS 应用中当前打开的任务，并读取可用的终端命令和输出缓存 |
 | [Qoder CLI](https://qoder.com/cli) | 通过 forward proxy 捕获 Qoder Agent 会话 |
 | [Antigravity CLI](https://antigravity.google/product/antigravity-cli) | 通过 forward proxy 捕获 Antigravity Agent 会话 |
 | [CodeBuddy CLI](https://www.codebuddy.ai) | 腾讯 CodeBuddy SaaS 或内部 Copilot 端点 |
@@ -624,9 +624,11 @@ macOS 上，`claude-tap build-macos-app` 会生成本地 `Claude Tap.app`。该 
 claude-tap --tap-client manus
 ```
 
-监听器通过 macOS 辅助功能读取当前任务可见的消息和可识别的任务状态，写入本地 dashboard。切换任务时，每个任务对应独立会话。它复用桌面端的现有登录，需要 macOS 命令行开发工具，以及运行命令的应用拥有辅助功能权限。如果缺少权限，可在 **系统设置 → 隐私与安全性 → 辅助功能** 中授权后重启监听。
+监听器通过 macOS 辅助功能识别当前打开的任务，读取可见消息和可识别的任务状态。当 Studio 的本地 SQLite 任务缓存可用时，监听器以只读方式读取当前任务中缓存的终端命令和输出。如果这些事件不可用，dashboard 仍会显示可见对话。每个任务对应独立的本地 dashboard 会话。条目按采集顺序排列，缓存的终端事件会保留 Studio 记录的原始时间。
 
-未加载的旧消息可能缺失。如果 Studio 在两次读取之间替换了可见对话，也可能漏采一轮。此模式没有原始工具调用、原始模型请求、系统提示词或 token 用量。监听器在本机回环地址启动 dashboard，按 Ctrl+C 停止。
+监听器复用 Studio 的现有登录，无需 API Key。请安装 macOS 命令行开发工具，并在 **系统设置 → 隐私与安全性 → 辅助功能** 中为运行命令的应用授权。授权后重启监听器。
+
+未加载的旧消息可能缺失。如果 Studio 在两次读取之间替换了可见对话，也可能漏采一轮。此模式无法获取原始模型请求、系统提示词或模型提供方的 token 用量。监听器在本机回环地址启动 dashboard，按 Ctrl+C 停止。
 
 ### CLI 选项
 

@@ -1,5 +1,5 @@
 import sys
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -13,6 +13,26 @@ async def test_helper_output_is_decoded_as_an_accessibility_snapshot(tmp_path, m
 
     assert await ManusDesktopReader(executable).read() == {"status": "no_task"}
     assert helper.await_args.args == (str(executable),)
+
+
+async def test_only_enrich_an_open_conversation(tmp_path, monkeypatch):
+    helper = AsyncMock(
+        side_effect=[
+            b'{"status":"conversation_unavailable","task_id":"0123456789abcdefghijkl"}',
+            b'{"status":"ok","task_id":"0123456789abcdefghijkl","conversation":{}}',
+            b'{"status":"ok","task_id":"0123456789abcdefghijkl","conversation":{}}',
+        ]
+    )
+    event = {"id": "tool-1", "type": "tool_call", "tool_name": "terminal", "command": "pwd", "output": "/tmp"}
+    cache = Mock(side_effect=[[event], []])
+    monkeypatch.setattr("claude_tap.manus_desktop._run_helper", helper)
+    monkeypatch.setattr("claude_tap.manus_desktop.read_terminal_events", cache)
+    reader = ManusDesktopReader(tmp_path / "helper")
+    assert (await reader.read())["status"] == "conversation_unavailable"
+    cache.assert_not_called()
+    assert (await reader.read())["terminal_events"] == [event]
+    cache.assert_called_once_with("0123456789abcdefghijkl")
+    assert "terminal_events" not in await reader.read()
 
 
 @pytest.mark.parametrize("output", [b"private task text", b'{"private task text":true}'])

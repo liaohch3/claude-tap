@@ -162,7 +162,7 @@ class TraceStore:
             conn.commit()
             return True
 
-    def replace_latest_imported_record(
+    def replace_imported_record(
         self,
         session_id: str,
         record: dict[str, Any],
@@ -170,27 +170,27 @@ class TraceStore:
         expected_record_count: int,
         expected_record: dict[str, Any],
     ) -> bool:
-        """Update a growing imported message if it is still the latest stored record."""
+        """Replace an imported record while its session and payload still match the caller's snapshot."""
         from claude_tap.dashboard import build_stored_session_summary
 
         with self._write_access() as conn:
             session = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
             if session is None or session["record_count"] != expected_record_count:
                 return False
-            last = conn.execute(
+            stored = conn.execute(
                 """
                 SELECT session_id, record_index, payload_json FROM records
-                WHERE session_id = ? ORDER BY record_index DESC LIMIT 1
+                WHERE session_id = ? AND record_index = ?
                 """,
-                (session_id,),
+                (session_id, expected_record["turn"]),
             ).fetchone()
-            if last is None or self._rows_to_records(conn, [last]) != [expected_record]:
+            if stored is None or self._rows_to_records(conn, [stored]) != [expected_record]:
                 return False
             updated_at = _str_or_none(record.get("timestamp")) or datetime.now(timezone.utc).isoformat()
             replacement = {**record, "turn": expected_record["turn"]}
             conn.execute(
                 "UPDATE records SET timestamp = ?, payload_json = ? WHERE session_id = ? AND record_index = ?",
-                (updated_at, self._encode_record(conn, session_id, replacement), session_id, last["record_index"]),
+                (updated_at, self._encode_record(conn, session_id, replacement), session_id, stored["record_index"]),
             )
             conn.execute(
                 "UPDATE sessions SET updated_at = ?, status = 'active' WHERE id = ?",

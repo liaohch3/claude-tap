@@ -10,6 +10,8 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
+from claude_tap.manus_cache import read_terminal_events
+
 
 class ManusDesktopError(RuntimeError):
     """An Accessibility helper error safe to show without task contents."""
@@ -54,6 +56,11 @@ class ManusDesktopReader:
             raise ManusDesktopError(failure) from None
         if not isinstance(snapshot, dict) or not isinstance(snapshot.get("status"), str):
             raise ManusDesktopError(failure)
+        task_id = snapshot.get("task_id")
+        if snapshot["status"] == "ok" and isinstance(task_id, str) and isinstance(snapshot.get("conversation"), dict):
+            events = await asyncio.to_thread(read_terminal_events, task_id)
+            if events:
+                snapshot["terminal_events"] = events
         return snapshot
 
 
