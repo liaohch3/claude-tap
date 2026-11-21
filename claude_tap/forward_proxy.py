@@ -26,7 +26,7 @@ import time
 import uuid
 import zlib
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from urllib.parse import urlparse
 
 import aiohttp
@@ -281,6 +281,7 @@ class ForwardProxyServer:
         trace_path_suffixes: tuple[str, ...] = (),
         store_stream_events: bool = False,
         capture_only: bool = False,
+        ws_text_observer: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -294,6 +295,7 @@ class ForwardProxyServer:
         self._trace_path_suffixes = trace_path_suffixes
         self._store_stream_events = store_stream_events
         self._capture_only = capture_only
+        self._ws_text_observer = ws_text_observer
         self._server: asyncio.Server | None = None
         self._client_tasks: set[asyncio.Task] = set()
         self._client_writers: set[asyncio.StreamWriter] = set()
@@ -310,6 +312,15 @@ class ForwardProxyServer:
         if has_path_filter and not matches_path:
             return False
         return True
+
+    def _observe_ws_text(self, hostname: str, path: str, text: str) -> None:
+        """Hand an upstream WebSocket text message to the observer without affecting the relay."""
+        if self._ws_text_observer is None:
+            return
+        try:
+            self._ws_text_observer(hostname, path, text)
+        except Exception:
+            log.exception("WebSocket observer failed; the message was still relayed")
 
     def _next_trace_turn(self) -> int:
         self._turn_counter += 1
@@ -1131,6 +1142,7 @@ class ForwardProxyServer:
             nonlocal server_message_count
             async for msg in upstream_ws:
                 if msg.type == WSMsgType.TEXT:
+                    self._observe_ws_text(hostname, path, msg.data)
                     completed_snapshot = None
                     if should_trace:
                         server_message_count += 1
