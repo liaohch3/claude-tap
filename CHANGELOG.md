@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Watch the open task in a signed-in Manus Studio desktop app on macOS through Accessibility.
+- Record every task in a signed-in Manus Studio desktop app on macOS, with messages, status, and tool calls with their output, by reading the app's live event stream through the forward proxy.
 
 ### Fixed
 

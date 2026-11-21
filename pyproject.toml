@@ -44,7 +44,7 @@ version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
 
 [tool.setuptools.package-data]
-claude_tap = ["dashboard.html", "viewer.html", "viewer_i18n.json", "model_prices.json", "py.typed", "manus_accessibility.swift"]
+claude_tap = ["dashboard.html", "viewer.html", "viewer_i18n.json", "model_prices.json", "py.typed"]
 "claude_tap.viewer_assets" = ["*.css", "*.js"]
 
 [project.optional-dependencies]
