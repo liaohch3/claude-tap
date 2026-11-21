@@ -194,6 +194,37 @@ def test_disappearing_interim_prose_never_blocks_final_reply(tmp_path):
     ]
 
 
+def test_new_turn_holds_unconfirmed_reply_even_if_thinking_was_never_seen(tmp_path):
+    store = TraceStore(tmp_path / "traces.db")
+    watcher = ManusWatcher(store)
+    settled = (_user("Continue"), _assistant("First result"))
+    assert watcher.sync_snapshot(_snapshot(*settled, task_status="completed")) == 2
+    assert watcher.sync_snapshot(_snapshot(_user("Old viewport"), _assistant("Old result"))) == 0
+
+    followup = _user("Continue")
+    interim = _assistant("I'll use the terminal.")
+    assert watcher.sync_snapshot(_snapshot(*settled, followup, interim)) == 1
+    assert [_event(record)["content"] for record in _records_for_task(store)] == [
+        "Continue",
+        "First result",
+        "Continue",
+    ]
+    assert "status" not in _records_for_task(store)[-1]["response"]["body"]["manus_task"]
+
+    restarted = ManusWatcher(TraceStore(store.db_path))
+    assert restarted.sync_snapshot(_snapshot(followup, interim, _assistant("MANUS-DESK"))) == 0
+    assert len(_records_for_task(store)) == 3
+    final = _snapshot(*settled, followup, _assistant("MANUS-DESKTOP-FIFTH"), task_status="completed")
+    assert restarted.sync_snapshot(final) == 1
+    assert restarted.sync_snapshot(final) == 0
+    assert [_event(record)["content"] for record in _records_for_task(store)] == [
+        "Continue",
+        "First result",
+        "Continue",
+        "MANUS-DESKTOP-FIFTH",
+    ]
+
+
 def test_unavailable_task_or_empty_chat_does_not_make_a_session(tmp_path):
     store = TraceStore(tmp_path / "traces.db")
     watcher = ManusWatcher(store)

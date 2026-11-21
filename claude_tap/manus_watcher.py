@@ -128,7 +128,7 @@ def _overlap(stored: list[_Message], observed: list[_Message]) -> tuple[int, boo
     return 0, False
 
 
-def _record(task: dict[str, str], message: _Message, position: int) -> dict[str, Any]:
+def _record(task: dict[str, str], message: _Message, position: int, *, reply_pending: bool = False) -> dict[str, Any]:
     task_id = task["id"]
     source_id = f"{task_id}-{position}"
     user_message = [{"role": "user", "content": message.text}] if message.role == "user" else []
@@ -142,6 +142,7 @@ def _record(task: dict[str, str], message: _Message, position: int) -> dict[str,
             "proxy_mode": _MODE,
             "manus_task_id": task_id,
             "timestamp_kind": "observed",
+            **({"manus_reply_pending": True} if reply_pending else {}),
         },
         "request": {"method": "MANUS_EVENT", "path": f"/manus/tasks/{task_id}", "body": {"messages": user_message}},
         "response": {
@@ -198,13 +199,7 @@ class ManusWatcher:
             self._running_task_id = task_id
         elif self._running_task_id != task_id:
             self._running_task_id = None
-        running = self._running_task_id == task_id
-
         observed = list(_messages(conversation))
-        # All prose following the latest user message can still change or disappear
-        # while Manus is working, even when its thinking indicator briefly vanishes.
-        while running and observed and observed[-1].role == "assistant":
-            observed.pop()
         if not observed:
             return 0
 
@@ -217,6 +212,25 @@ class ManusWatcher:
         saved = self._store.load_records(session_id)
         stored = [_stored_message(record) for record in saved]
         overlap, grew = _overlap(stored, observed)
+        if saved and phase is None and status != "completed" and self._running_task_id is None:
+            latest = saved[-1]
+            settled = (
+                stored[-1].role == "assistant" and latest["response"]["body"]["manus_task"].get("status") == "completed"
+            )
+            # A user message beyond a matching settled turn starts a new reply,
+            # even if the entire positive thinking indicator fell between polls.
+            anchored_new_user = overlap and any(message.role == "user" for message in observed[overlap:])
+            if latest["capture"].get("manus_reply_pending") or (settled and anchored_new_user):
+                self._running_task_id = task_id
+        running = self._running_task_id == task_id
+        # All prose following the latest user message can still change or disappear
+        # while Manus is working, even when its thinking indicator vanishes.
+        if running and observed[-1].role == "assistant":
+            while observed and observed[-1].role == "assistant":
+                observed.pop()
+            if not observed:
+                return 0
+            overlap, grew = _overlap(stored, observed)
         if stored:
             self._session_ids.add(session_id)
             # Studio can replace the entire visible row set at the start of a follow-up.
@@ -230,14 +244,16 @@ class ManusWatcher:
             )
             if not overlap and not starts_followup:
                 return 0
-        status_only_update = (
+        metadata_only_update = (
             bool(overlap)
             and overlap == len(observed)
-            and "status" in task
-            and saved[-1]["response"]["body"]["manus_task"].get("status") != status
+            and (
+                ("status" in task and saved[-1]["response"]["body"]["manus_task"].get("status") != status)
+                or saved[-1]["capture"].get("manus_reply_pending", False) != running
+            )
         )
-        if grew or status_only_update:
-            record = _record(task, observed[overlap - 1], len(stored))
+        if grew or metadata_only_update:
+            record = _record(task, observed[overlap - 1], len(stored), reply_pending=running)
             if not self._store.replace_latest_imported_record(
                 session_id,
                 record,
@@ -246,10 +262,12 @@ class ManusWatcher:
             ):
                 return 0
         imported = 0
-        for message in observed[overlap:]:
+        for index, message in enumerate(observed[overlap:], start=overlap):
             if not self._store.append_imported_record(
                 session_id,
-                _record(task, message, len(stored) + imported + 1),
+                _record(
+                    task, message, len(stored) + imported + 1, reply_pending=running and index == len(observed) - 1
+                ),
                 expected_record_count=len(stored) + imported,
                 client=_CLIENT,
                 proxy_mode=_MODE,
