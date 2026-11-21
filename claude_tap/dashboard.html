@@ -2322,10 +2322,11 @@ function updateDetailI18n(session) {
 function renderRecord(record, index) {
   const request = record.request || {};
   const response = record.response || {};
-  const userText = requestText(request.body) || t("request_empty");
-  const responseText = responseTextFromRecord(record) || response.error || t("response_empty");
   const manus = record.transport === "manus-task";
   const event = manus ? response.body?.manus_event : null;
+  const activity = manusActivityText(event);
+  const userText = activity.request || requestText(request.body) || t("request_empty");
+  const responseText = activity.response || responseTextFromRecord(record) || response.error || t("response_empty");
   const status = manus ? event?.agent_status || event?.status || response.body?.manus_task?.status || "—" : response.status ?? "";
   const path = [event?.type, request.path].filter(Boolean).join(" · ");
   const jsonId = `json-${index}`;
@@ -2358,6 +2359,30 @@ function renderRecord(record, index) {
 
 function emptyRecord() {
   return `<div class="empty">${esc(t("empty_session"))}</div>`;
+}
+
+// Manus tool calls, status changes and plans carry no chat text, so show what
+// the agent ran and what came back in place of the empty request and response.
+function manusActivityText(event) {
+  if (!event || typeof event !== "object") return {};
+  if (event.type === "tool_used") {
+    const input = event.input && typeof event.input === "object" ? event.input : {};
+    const queries = Array.isArray(input.queries) ? input.queries.join("\n") : "";
+    const target = [input.command, input.path, input.url, queries, input.param].find(value => typeof value === "string" && value);
+    const call = [event.tool, input.action].filter(Boolean).join(" · ");
+    const written = typeof input.content === "string" ? input.content : "";
+    const output = typeof event.output === "string" ? event.output : event.output == null ? written : JSON.stringify(event.output, null, 2);
+    return { request: [call, target].filter(Boolean).join("\n"), response: output || event.description || event.brief || "" };
+  }
+  if (event.type === "status") {
+    return { response: [event.agent_status, event.brief, event.description].filter(Boolean).join(" · ") };
+  }
+  if (event.type === "plan") {
+    const steps = Array.isArray(event.steps) ? event.steps : [];
+    return { response: steps.map(step => [step?.status, step?.title].filter(Boolean).join(" · ")).join("\n") };
+  }
+  if (event.type === "plan_step") return { response: event.title || "" };
+  return {};
 }
 
 function requestText(body) {

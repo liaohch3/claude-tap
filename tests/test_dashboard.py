@@ -690,6 +690,72 @@ def test_dashboard_cursor_transcript_overrides_protobuf_first_user(trace_db) -> 
     assert "prod" not in summary["first_user"]
 
 
+@pytest.mark.asyncio
+async def test_dashboard_session_shows_what_a_manus_tool_ran_and_returned(trace_db) -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    if _pw_skip is not None:
+        pytest.skip(_pw_skip)
+    from claude_tap.manus_events import ManusEventRecorder
+
+    task_id = "0123456789abcdefghijkl"
+    events = [
+        {"id": "u1", "type": "chat", "sender": "user", "content": "Probe the sandbox"},
+        {"id": "s1", "type": "statusUpdate", "agentStatus": "running", "brief": "Working"},
+        {"id": "p1", "type": "planUpdate", "tasks": [{"title": "Run probe", "status": "doing"}]},
+        {
+            "id": "t1",
+            "type": "toolUsed",
+            "tool": "terminal",
+            "status": "success",
+            "detail": {"terminal": {"action": "execute", "command": "echo probe", "output": ["probe-output"]}},
+        },
+        {
+            "id": "t2",
+            "type": "toolUsed",
+            "tool": "text_editor",
+            "status": "success",
+            "detail": {"textEditor": {"action": "write", "path": "/tmp/probe.txt", "content": "written-text"}},
+        },
+        {"id": "a1", "type": "chat", "sender": "assistant", "content": "Probe finished"},
+    ]
+    recorder = ManusEventRecorder(get_trace_store())
+    for event in events:
+        packet = ["message", {"type": "event", "sessionId": task_id, "event": event}]
+        assert recorder.feed("42" + json.dumps(packet)) == 1
+    [session_id] = recorder.session_ids
+
+    server = LiveViewerServer(port=0, dashboard_mode=True)
+    port = await server.start()
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                await page.goto(
+                    f"http://127.0.0.1:{port}/dashboard/session/{session_id}", wait_until="domcontentloaded"
+                )
+                await page.wait_for_selector("#raw-tab .section", timeout=5000)
+                sections = page.locator("#raw-tab .section")
+                texts = [await sections.nth(index).locator(".conversation").inner_text() for index in range(6)]
+            finally:
+                await browser.close()
+    finally:
+        await server.stop()
+
+    assert "Probe the sandbox" in texts[0]
+    assert "running · Working" in texts[1]
+    assert "doing · Run probe" in texts[2]
+    assert "terminal · execute\necho probe" in texts[3]
+    assert "probe-output" in texts[3]
+    assert "text_editor · write\n/tmp/probe.txt" in texts[4]
+    assert "written-text" in texts[4]
+    assert "Probe finished" in texts[5]
+    # Activity text replaces the empty-body placeholders only where there is activity to show.
+    assert "no user-facing message" not in texts[3]
+    assert "no assistant text" not in texts[3]
+    assert "no user-facing message" in texts[5]
+
+
 def test_dashboard_manus_task_keeps_task_status_and_marks_missing_token_usage(trace_db) -> None:
     store = get_trace_store()
     session_id = store.create_session(client="manus", proxy_mode="manus-desktop")
