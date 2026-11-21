@@ -2057,6 +2057,15 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
 
     tool_bloat = _detect_tool_bloat(_extract_request_messages(body, for_bloat=True))
     session_user_text, session_user_origin = _session_user_title(msgs)
+    manus_metadata = {}
+    if r.get("transport") == "manus-task":
+        task = _dict_or_empty(resp_body.get("manus_task"))
+        event = _dict_or_empty(resp_body.get("manus_event"))
+        manus_metadata = {
+            "manus_task_title": task.get("title", ""),
+            "manus_event_type": event.get("type", ""),
+            "manus_agent_status": event.get("agent_status", ""),
+        }
 
     return {
         "turn": r.get("turn"),
@@ -2099,6 +2108,7 @@ def _extract_metadata_from_record(r: dict) -> dict | None:
         "sys_hint": sys_text[:200],
         "tool_names": tool_names,
         "response_tool_names": response_tool_names,
+        **manus_metadata,
     }
 
 

@@ -13,6 +13,7 @@ import shlex
 # existing tests and private integrations that monkeypatch shutil.which there.
 import shutil
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -62,6 +63,7 @@ from claude_tap.cursor_transcript import CursorTranscriptWatcher, model_from_cur
 from claude_tap.forward_proxy import ForwardProxyServer
 from claude_tap.history import cleanup_trace_sessions, migrate_legacy_traces
 from claude_tap.live import LiveViewerServer
+from claude_tap.manus_events import ManusEventRecorder, is_manus_event_stream
 from claude_tap.proxy import proxy_handler
 from claude_tap.shared_dashboard import (
     DEFAULT_DASHBOARD_PORT,
@@ -86,6 +88,121 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 log = logging.getLogger("claude-tap")
+
+_MANUS_APP_ENV = "CLAUDE_TAP_MANUS_APP"
+_MANUS_APP = "/Applications/Manus Studio.app/Contents/MacOS/Manus Studio"
+_MANUS_QUIT_TIMEOUT_SECONDS = 10
+
+
+class _DiscardingTraceWriter:
+    """Manus traffic other than task events is relayed without being stored."""
+
+    async def write(self, record: dict) -> None:
+        return None
+
+    async def write_next_turn(self, record: dict) -> None:
+        return None
+
+
+def _manus_app_path() -> Path:
+    return Path(os.environ.get(_MANUS_APP_ENV, "").strip() or _MANUS_APP)
+
+
+def _manus_is_running(app: Path) -> bool:
+    try:
+        result = subprocess.run(["/usr/bin/pgrep", "-x", app.name], capture_output=True, check=False)
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+async def _run_manus_capture(args: argparse.Namespace, store: TraceStore, ca_cert_path: Path, ca_key_path: Path) -> int:
+    """Relay Manus Studio through a local proxy and record its task events."""
+    app = _manus_app_path()
+    if not args.no_launch:
+        if not app.is_file():
+            _print(
+                f"Manus Studio was not found at {app}. Install it from https://manus.im/desktop "
+                f"or set {_MANUS_APP_ENV} to its executable.",
+                file=sys.stderr,
+            )
+            return 1
+        if _manus_is_running(app):
+            _print(
+                "Manus Studio is already open. Quit it, then run this command again; "
+                "claude-tap reopens it through the capture proxy.",
+                file=sys.stderr,
+            )
+            return 1
+
+    recorder = ManusEventRecorder(store)
+
+    def observe(hostname: str, path: str, text: str) -> None:
+        if is_manus_event_stream(hostname, path):
+            recorder.feed(text)
+
+    session = aiohttp.ClientSession(auto_decompress=False, trust_env=True)
+    proxy = ForwardProxyServer(
+        host=args.host,
+        port=args.port,
+        ca=CertificateAuthority(ca_cert_path, ca_key_path),
+        writer=_DiscardingTraceWriter(),  # type: ignore[arg-type]
+        session=session,
+        # No HTTP method matches, so nothing but observed task events is kept.
+        trace_methods=("MANUS_TASK_EVENT",),
+        ws_text_observer=observe,
+    )
+    process: asyncio.subprocess.Process | None = None
+    # Other clients file asyncio's connection warnings under their session log. Tasks are
+    # the only sessions here, so keep the warnings about connections the app drops off the terminal.
+    asyncio_log = logging.getLogger("asyncio")
+    quiet = logging.NullHandler()
+    asyncio_log.addHandler(quiet)
+    propagate, asyncio_log.propagate = asyncio_log.propagate, False
+    try:
+        port = await proxy.start()
+        proxy_url = f"http://{args.host}:{port}"
+        _print(f"🔍 claude-tap v{__version__} recording Manus Studio task events through {proxy_url}")
+        _print(f"🗄️  Trace database: {resolve_db_path()}")
+        if args.no_launch:
+            _print(f'   Start Manus Studio yourself: "{app}" --proxy-server={proxy_url}')
+            _print("   One dashboard session per task. Press Ctrl+C to stop.")
+            await asyncio.Event().wait()
+        else:
+            _print("   One dashboard session per task. Quit Manus Studio or press Ctrl+C to stop.")
+            process = await asyncio.create_subprocess_exec(
+                str(app),
+                f"--proxy-server={proxy_url}",
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await process.wait()
+        return 0
+    except asyncio.CancelledError:
+        return 0
+    except OSError as exc:
+        _print(f"Could not start the Manus Studio capture: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if process is not None and process.returncode is None:
+            # Without the proxy the app would be left offline, so it stops with the capture.
+            # It must go first: the proxy cannot finish stopping while the app holds connections open.
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=_MANUS_QUIT_TIMEOUT_SECONDS)
+            except (TimeoutError, asyncio.CancelledError):
+                process.kill()
+        await proxy.stop()
+        await session.close()
+        asyncio_log.removeHandler(quiet)
+        asyncio_log.propagate = propagate
+        try:
+            recorder.close()
+            if args.max_traces > 0 and recorder.session_ids:
+                cleanup_trace_sessions(args.max_traces, protected_session_ids=recorder.session_ids)
+        except sqlite3.Error:
+            _print("Manus capture could not finalize trace storage.", file=sys.stderr)
 
 
 def _create_trace_writer(
@@ -314,6 +431,11 @@ def _ensure_ca_trust_for_forward_proxy(args: argparse.Namespace, ca_cert_path: P
 
 
 async def _async_main(args: argparse.Namespace) -> int:
+    manus = args.client == "manus"
+    if manus and sys.platform != "darwin":
+        _print("Manus Studio capture requires macOS.", file=sys.stderr)
+        return 1
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     if not args.live_viewer:
@@ -326,9 +448,9 @@ async def _async_main(args: argparse.Namespace) -> int:
             )
 
     store = get_trace_store()
-    client_cfg = CLIENT_CONFIGS[args.client]
-    transcript_only = bool(client_cfg.transcript_only)
-    effective_proxy_mode = "transcript" if transcript_only else args.proxy_mode
+    transcript_only = not manus and CLIENT_CONFIGS[args.client].transcript_only
+    watch_only = transcript_only or manus
+    effective_proxy_mode = "manus-desktop" if manus else "transcript" if transcript_only else args.proxy_mode
     trace_metadata = {"client": args.client, "proxy_mode": effective_proxy_mode}
 
     codex_app_preflighted = False
@@ -342,17 +464,25 @@ async def _async_main(args: argparse.Namespace) -> int:
 
     ca_cert_path: Path | None = None
     ca_key_path: Path | None = None
-    if not transcript_only and args.proxy_mode == "forward":
+    if manus:
+        # Manus Studio validates TLS against the macOS keychain.
+        ca_cert_path, ca_key_path = ensure_ca()
+        if not is_macos_ca_trusted(ca_cert_path):
+            _print("🔐 Manus Studio needs the claude-tap CA trusted in your macOS login keychain.")
+            _print("   Installing for the current user only; no sudo or System keychain write is used.")
+            trust_result = _trust_ca_for_current_user(ca_cert_path)
+            if trust_result != 0:
+                return trust_result
+    elif not watch_only and args.proxy_mode == "forward":
         ca_cert_path, ca_key_path = ensure_ca()
         trust_result = _ensure_ca_trust_for_forward_proxy(args, ca_cert_path)
         if trust_result != 0:
             return trust_result
 
-    # Transcript-only clients open one tap session per Cursor conversation JSONL.
-    # Do not create an umbrella session that would merge unrelated chats.
+    # Watchers create a session for each observed conversation.
     writer: TraceWriter | _LazyTraceWriter | None
     session_id: str | None
-    if transcript_only:
+    if watch_only:
         writer = None
         session_id = None
     else:
@@ -364,8 +494,7 @@ async def _async_main(args: argparse.Namespace) -> int:
         )
         session_id = writer.session_id
 
-    # Capture the Cursor watch window before dashboard startup so transcripts
-    # written while ensure_shared_dashboard() boots are still imported.
+    # Start watching from before the dashboard boots.
     watch_since = time.time()
 
     # Ensure the shared dashboard is running (one port for all sessions).
@@ -387,6 +516,11 @@ async def _async_main(args: argparse.Namespace) -> int:
                 _print(f"🌐 Dashboard: {dashboard_url_value} (shared)")
         except (RuntimeError, sqlite3.Error) as exc:
             _print(f"⚠️  {exc}", file=sys.stderr)
+
+    if manus:
+        assert ca_cert_path is not None
+        assert ca_key_path is not None
+        return await _run_manus_capture(args, store, ca_cert_path, ca_key_path)
 
     # Proxy logs go to SQLite, not terminal (avoids polluting Claude TUI)
     sqlite_handler: SQLiteLogHandler | None = None
@@ -696,7 +830,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="claude-tap",
         description=(
             "Trace Claude Code, Codex CLI, Codex App, Gemini CLI, Kimi CLI, MiMo Code, OpenCode, OpenClaw, Pi, Hermes Agent, "
-            "Cursor CLI, Qoder CLI, Antigravity CLI, or CodeBuddy CLI API requests via a local proxy or transcript import. "
+            "Cursor CLI, Qoder CLI, Antigravity CLI, CodeBuddy CLI, or Manus Studio via a local proxy or transcript import. "
             "All flags not listed below are forwarded to the selected client."
         ),
         epilog=(
@@ -776,6 +910,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             '  claude-tap --tap-client cursor -- -p --trust --model auto "hello"\n'
             "  # Cursor readable messages are imported from local transcripts after exit\n"
             "\n"
+            "manus studio (reopens the macOS app through the capture proxy):\n"
+            "  claude-tap --tap-client manus\n"
+            "\n"
             "qoder cli (defaults to forward proxy mode):\n"
             '  claude-tap --tap-client qoder -- -p "hello" --permission-mode dont_ask\n'
             "  # Authenticate first with `qodercli login` or QODER_PERSONAL_ACCESS_TOKEN / QODER_JOB_TOKEN\n"
@@ -836,7 +973,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     proxy_group.add_argument(
         "--tap-client",
-        choices=sorted(CLIENT_CONFIGS.keys()),
+        choices=sorted((*CLIENT_CONFIGS, "manus")),
         default="claude",
         dest="client",
         help="Client to launch (default: claude)",
@@ -966,6 +1103,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Strip leading "--" separator if present (argparse leaves it in remainder)
     if claude_args and claude_args[0] == "--":
         claude_args = claude_args[1:]
+    if args.client == "manus":
+        if claude_args:
+            tap_parser.error("Manus capture does not accept app arguments")
+        if (
+            args.proxy_mode not in (None, "forward")
+            or args.target is not None
+            or args.extra_allowed_paths
+            or args.codexapp_cdp_endpoint is not None
+            or args.store_stream_events
+            or args.export_prompt
+        ):
+            tap_parser.error("Manus capture does not support reverse proxy or prompt export options")
+        if args.host is None:
+            args.host = "127.0.0.1"
+        elif args.host != "localhost":
+            try:
+                is_loopback = ipaddress.ip_address(args.host).is_loopback
+            except ValueError:
+                is_loopback = False
+            if not is_loopback:
+                tap_parser.error("Manus capture requires a loopback address")
+        args.claude_args = []
+        return args
     args.client_cmd, claude_args = _extract_wrapped_client_command(args.client, claude_args)
     if any(arg == "--tap-codexapp-cdp-capture" for arg in claude_args):
         tap_parser.error("--tap-codexapp-cdp-capture was removed; --tap-client codexapp now captures via forward proxy")

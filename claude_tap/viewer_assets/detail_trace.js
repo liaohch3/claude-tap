@@ -106,6 +106,7 @@ function renderDetail(e) {
   currentDetailEntryKey = entryStableKey(e);
   const d = $('#detail');
   const reqBody = e.request?.body, respBody = e.response?.body, usage = getUsage(e);
+  const manus = isManusTaskEntry(e);
   const statusCode = getResponseStatus(e);
   const isError = statusCode >= 400;
   const errorMessage = getResponseErrorMessage(e);
@@ -126,6 +127,13 @@ function renderDetail(e) {
   const contextOnly = shouldRenderRequestContext(e, reqBody, msgs, respOutput);
   const streamEvents = getResponseEvents(e);
   html += renderDetailViewTabs();
+  if (manus) {
+    const task = respBody?.manus_task;
+    const event = respBody?.manus_event;
+    const details = `<div class="pre-text">${esc(t('manus_metrics_unavailable'))}</div>` +
+      `<div class="trace-pretty">${renderTracePrettyValue({ task, event })}</div>`;
+    html += section(t('section_manus_task'), details, true, null, task?.status);
+  }
 
   if (detailViewMode === 'default') {
     const actionBarHtml = `<div class="action-bar">
@@ -147,7 +155,7 @@ function renderDetail(e) {
       ? section(t('section_sse'), renderSSEEvents(streamEvents), false, null, streamEvents.length + ' ' + t('badge_events'))
       : '';
     const jsonSection = section(t('section_json'), `<div class="json-view">${renderJSONTree(e)}</div>`, false, JSON.stringify(e, null, 2));
-    html += actionBarHtml;
+    if (!manus) html += actionBarHtml;
     if (usage) html += renderTokenUsage(usage);
     html += renderCacheDiagnostic(e);
     html += toolsSection + systemSection + messagesSection + responseSection;
@@ -177,15 +185,17 @@ function renderTraceBlock(title, payload, badge = '') {
 }
 
 function renderTraceDetail(entry, ctx) {
+  const manus = isManusTaskEntry(entry);
+  const status = manus ? undefined : getResponseStatus(entry);
   const inputPayload = {
     system: ctx.sysPrompt || undefined,
     messages: ctx.msgs || [],
     tools: ctx.tools || [],
   };
   const responsePayload = {
-    status: getResponseStatus(entry),
+    status,
     output: ctx.respOutput?.content || [],
-    usage: ctx.usage || {},
+    usage: manus ? undefined : ctx.usage || {},
     body: getResponsePayload(entry) || {},
   };
   const metadata = {
@@ -195,13 +205,13 @@ function renderTraceDetail(entry, ctx) {
     turn: entry.turn ?? '',
     record_index: entry.record_index ?? '',
     websocket_response_index: entry.websocket_response_index ?? '',
-    duration_ms: entry.duration_ms ?? 0,
+    duration_ms: manus ? undefined : entry.duration_ms ?? 0,
     transport: entry.transport || 'http',
     upstream_base_url: entry.upstream_base_url || '',
     method: entry.request?.method || '',
     path: entry.request?.path || '',
     model: ctx.reqBody?.model || '',
-    status: getResponseStatus(entry),
+    status,
   };
 
   let html = renderTraceFormatControls();
@@ -216,7 +226,7 @@ function renderTraceDetail(entry, ctx) {
   html += renderTraceBlock(
     t('tok_output'),
     responsePayload,
-    `${getResponseStatus(entry)}`
+    manus ? '' : String(status)
   );
   if (ctx.streamEvents.length) {
     html += renderTraceBlock(

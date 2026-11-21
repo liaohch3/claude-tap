@@ -83,6 +83,7 @@ It works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Co
 | [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | Pi sessions, including OpenAI Codex OAuth providers |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | Multi-provider Hermes TUI or gateway sessions |
 | [Cursor](https://cursor.com/cli) CLI / IDE Agent | Launch `cursor-agent` + live transcript watch (`claude-tap --tap-client cursor`) |
+| [Manus Studio](https://manus.im/desktop) | Every task in the signed-in macOS app: messages, tool calls with their output, status and plan updates |
 | [Qoder CLI](https://qoder.com/cli) | Qoder Agent sessions through forward proxy mode |
 | [Antigravity CLI](https://antigravity.google/product/antigravity-cli) | Antigravity Agent sessions through forward proxy mode |
 | [CodeBuddy CLI](https://www.codebuddy.ai) | Tencent CodeBuddy SaaS or internal Copilot endpoint |
@@ -624,12 +625,26 @@ On macOS, `claude-tap build-macos-app` creates a local `Claude Tap.app` bundle. 
 
 By default the launcher points at the current checkout; pass `--installed` if `claude-tap` is installed in the Python environment used to build the app. Pass `--self-contained` to build an Apple Silicon PyInstaller bundle under `Contents/Resources` so the app does not depend on a colleague's Python installation. Ad-hoc signed builds may still require the recipient to remove quarantine or approve the app in macOS security settings.
 
+### Record Manus Studio tasks on macOS
+
+Quit Manus Studio, then let claude-tap reopen it through a local capture proxy:
+
+```bash
+claude-tap --tap-client manus
+```
+
+claude-tap reads the live event stream that Manus Studio receives for your tasks. Each task gets its own local dashboard session, including tasks you never open. A session lists, in the order they happened, your messages, the agent's replies, status and plan updates, and every tool call with its input and its output: terminal commands, file reads and writes, web page extraction, search, and connector calls. Recognizable credentials and signed link parameters are masked before anything is saved. No other Manus traffic is stored.
+
+The capture uses your existing Studio sign-in and needs no API key. Manus Studio checks certificates against the macOS keychain, so the first run trusts the claude-tap CA in your login keychain; macOS may ask for your keychain password. Only activity that happens while the capture is running is recorded. Model request bodies, system prompts, and provider token usage are unavailable because the model runs on Manus servers.
+
+Quitting Manus Studio ends the capture. Ctrl+C ends the capture and closes Manus Studio, because the app would be offline without the proxy. To start the app yourself, run `claude-tap --tap-client manus --tap-no-launch --tap-port 8899` and open it with `--proxy-server=http://127.0.0.1:8899`.
+
 ### CLI Options
 
 All flags are forwarded to the selected client, except these `--tap-*` ones:
 
 ```
---tap-client CLIENT      Client to launch/listen to: claude (default), agy, codex, codexapp, dsh, gemini, grok, kimi, kimi-code, mimo, opencode, openclaw, pi, hermes, cursor, qoder, or codebuddy
+--tap-client CLIENT      Client to launch: claude (default), agy, codex, codexapp, dsh, gemini, grok, kimi, kimi-code, mimo, opencode, openclaw, pi, hermes, cursor, qoder, codebuddy, or manus
 --tap-target URL         Upstream API URL (default: auto per client)
 --tap-live               Start real-time viewer while the client runs (default: on)
 --tap-no-live            Disable the real-time viewer server (pre-v0.1.75 behavior)

@@ -4618,6 +4618,71 @@ async def test_forward_proxy_client_filter_records_traced_websocket_connect_fail
 
 
 @pytest.mark.asyncio
+async def test_forward_proxy_websocket_observer_sees_untraced_upstream_text():
+    """An observer receives upstream WebSocket text even when tracing is filtered out or it fails."""
+    import ssl
+
+    import aiohttp
+
+    from claude_tap.certs import CertificateAuthority, ensure_ca
+    from claude_tap.forward_proxy import ForwardProxyServer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        ca_cert_path, ca_key_path = ensure_ca(tmpdir / "ca")
+        upstream_port = await _start_fake_wss_upstream(tmpdir)
+        store, session_id, writer = _writer_for_dir(tmpdir)
+        upstream_ssl_ctx = ssl.create_default_context()
+        upstream_ssl_ctx.check_hostname = False
+        upstream_ssl_ctx.verify_mode = ssl.CERT_NONE
+        session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=upstream_ssl_ctx), auto_decompress=False)
+        observed = []
+
+        def observe(hostname: str, path: str, text: str) -> None:
+            observed.append((hostname, path, json.loads(text)["type"]))
+            raise RuntimeError("observer failures must not interrupt the relay")
+
+        server = ForwardProxyServer(
+            host="127.0.0.1",
+            port=0,
+            ca=CertificateAuthority(ca_cert_path, ca_key_path),
+            writer=writer,
+            session=session,
+            trace_methods=("NO_SUCH_METHOD",),
+            ws_text_observer=observe,
+        )
+        proxy_port = await server.start()
+        try:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.load_verify_locations(str(ca_cert_path))
+            received = []
+            async with aiohttp.ClientSession(auto_decompress=False) as client:
+                ws = await client.ws_connect(
+                    f"https://127.0.0.1:{upstream_port}/v1/responses",
+                    proxy=f"http://127.0.0.1:{proxy_port}",
+                    ssl=ssl_ctx,
+                )
+                await ws.send_json({"model": "gpt-test", "input": "hello"})
+                while True:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        received.append(json.loads(msg.data)["type"])
+                    elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
+                        break
+                await ws.close()
+
+            assert received[0] == "response.created"
+            assert received[-1] == "response.completed"
+            assert observed == [("127.0.0.1", "/v1/responses", kind) for kind in received]
+            await asyncio.sleep(0.1)
+            writer.close()
+            assert store.export_jsonl(session_id).strip() == ""
+        finally:
+            await server.stop()
+            await session.close()
+
+
+@pytest.mark.asyncio
 async def test_forward_proxy_connect_websocket_capture_only(monkeypatch: pytest.MonkeyPatch):
     """Capture-only WebSocket mode should synthesize a local response and trace the client prompt."""
     import ssl

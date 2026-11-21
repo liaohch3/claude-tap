@@ -659,6 +659,14 @@ function shouldContinueSessionGroup(entry, info, currentGroup) {
    title alone reads that diff as `payload` -- so the detail badge would say
    reminder while the group header above it said pasted. */
 function sessionKeyForEntry(entry, currentGroup) {
+  if (isManusTaskEntry(entry)) {
+    return {
+      key: 'manus:' + getPath(entry),
+      userText: entry.response?.body?.manus_task?.title || latestUserInputInfo(entry).userText,
+      userIndex: -1,
+      origin: 'human',
+    };
+  }
   const codexApp = codexAppSessionInfo(entry);
   const info = latestUserInputInfo(entry);
   const metadataOnly = isTitleGenerationEntry(entry);
@@ -711,7 +719,7 @@ function sessionKeyForEntry(entry, currentGroup) {
   }
   /* No title of its own, so no provenance to carry: the group keeps whatever the
      titling entry established. */
-  if (currentGroup) {
+  if (currentGroup && !currentGroup.key.startsWith('manus:')) {
     return { key: currentGroup.key, userText: '', userIndex: currentGroup.userIndex, metadataOnly, rootTurn };
   }
   const rootTurnText = String(captureTurnValue(entry) ?? '').split('.')[0];
@@ -731,7 +739,7 @@ function buildSessionGroups(items) {
   const titleGenerationItems = [];
 
   function canMergeNonContiguousSession(info) {
-    return typeof info.key === 'string' && info.key.startsWith('codexapp:');
+    return typeof info.key === 'string' && (info.key.startsWith('codexapp:') || info.key.startsWith('manus:'));
   }
 
   function createGroup(info, item) {
@@ -941,13 +949,15 @@ function getTaskColor(fp) {
 function createSidebarItem(e, i) {
   const item = document.createElement('div');
   const statusCode = getResponseStatus(e);
-  const failed = statusCode >= 400;
+  const manus = isManusTaskEntry(e);
+  const manusEvent = e.response?.body?.manus_event;
+  const failed = statusCode >= 400 || (manus && (manusEvent?.type === 'error' || manusEvent?.agent_status === 'error'));
   item.className = 'sidebar-item' + (failed ? ' is-error' : '');
   item.dataset.idx = i;
   const u = getUsage(e);
   const inTok = u?.input_tokens || 0, outTok = u?.output_tokens || 0;
   const model = e.request?.body?.model || '';
-  const shortModel = model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+  const shortModel = manus ? manusEvent?.type || '' : model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
   const badge = modelBadge(model);
   const timeStr = e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '';
   // Task type coloring
@@ -967,7 +977,7 @@ function createSidebarItem(e, i) {
       : t('tool_bloat_hint');
     bloatBadgeHtml = `<span class="si-bloat-badge" title="${esc(hint)}">&#9888; ${esc(worst.sizeKB)}KB</span>`;
   }
-  const errorDot = failed ? `<span class="si-error-dot" title="HTTP ${statusCode}"></span>` : '';
+  const errorDot = failed ? `<span class="si-error-dot"${manus ? '' : ` title="HTTP ${statusCode}"`}></span>` : '';
   item.innerHTML = `
     <div class="si-row1">
       <span class="si-turn-wrap"><span class="si-turn">${t('turn')} ${displayTurnLabel(e)}</span>${errorDot}</span>
@@ -976,8 +986,8 @@ function createSidebarItem(e, i) {
       <span class="si-model" style="background:${badge.bg};color:${badge.fg}">${esc(shortModel)}</span>
     </div>
     <div class="si-row2">
-      <span class="si-tok">${(inTok + outTok).toLocaleString()} ${t('tok')}</span>
-      <span class="si-dur">${fmtDuration(e.duration_ms || 0)}</span>
+      ${manus ? '' : `<span class="si-tok">${(inTok + outTok).toLocaleString()} ${t('tok')}</span>
+      <span class="si-dur">${fmtDuration(e.duration_ms || 0)}</span>`}
       <span class="si-time">${esc(timeStr)}</span>
     </div>
     <div class="si-path">${esc((e.request?.method || '') + ' ' + (e.request?.path || ''))}</div>`;
@@ -987,6 +997,7 @@ function createSidebarItem(e, i) {
 
 function createSessionGroupHeader(group, groupIdx, groupKey, onToggle) {
   const firstEntry = group.items[0]?.entry;
+  const groupName = isManusTaskEntry(firstEntry) ? t('section_manus_task') : `${t('sort_session')} ${groupIdx + 1}`;
   const taskInfo = firstEntry ? getTaskFingerprint(firstEntry) : null;
   const taskColor = taskInfo ? getTaskColor(taskInfo.fp) : TASK_COLORS[groupIdx % TASK_COLORS.length];
   const isCollapsed = collapsedGroups.has(groupKey);
@@ -1003,7 +1014,7 @@ function createSessionGroupHeader(group, groupIdx, groupKey, onToggle) {
     : `<span class="group-origin origin-${origin}" title="${esc(t(origin === 'harness' ? 'origin_harness_hint' : 'origin_payload_hint'))}">${esc(t(origin === 'harness' ? 'origin_harness' : 'origin_payload'))}</span>`;
   const header = document.createElement('div');
   header.className = 'sidebar-group-header';
-  header.innerHTML = `<span class="group-dot" style="background:${taskColor.color}"></span><span class="group-name">${esc(t('sort_session'))} ${groupIdx + 1}${label ? ' - ' + esc(label) : ''}</span>${originTag}<span class="group-count">${group.items.length}</span><span class="group-chevron${isCollapsed ? '' : ' open'}">&#9654;</span>`;
+  header.innerHTML = `<span class="group-dot" style="background:${taskColor.color}"></span><span class="group-name">${esc(groupName)}${label ? ' - ' + esc(label) : ''}</span>${originTag}<span class="group-count">${group.items.length}</span><span class="group-chevron${isCollapsed ? '' : ' open'}">&#9654;</span>`;
   bindSessionInputTooltip(header, group.userText, label);
   header.onclick = () => {
     hideSessionTooltip(header);

@@ -542,6 +542,7 @@ class LiveViewerServer:
                 "total": total,
                 "total_records": total_records,
                 "total_tokens": total_tokens,
+                "token_unavailable_sessions": aggregates["token_unavailable_sessions"],
                 "total_errors": total_errors,
                 "offset": offset,
                 "limit": limit,
