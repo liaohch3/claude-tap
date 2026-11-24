@@ -135,7 +135,7 @@ jobs:
         run: claude-tap --tap-client claude --tap-no-live --tap-no-open -- --version
 
   coverage:
-    # Playwright 1.58 supports Ubuntu 24.04, but not Ubuntu 26.04.
+    # playwright 1.58.0 cannot install chromium on ubuntu-latest (26.04); pin until playwright supports it.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
