@@ -149,6 +149,7 @@ class _LazyTraceWriter:
             "output_tokens": 0,
             "cache_read_tokens": 0,
             "cache_create_tokens": 0,
+            "total_tokens": 0,
             "models_used": {},
             "has_error": False,
         }
@@ -621,6 +622,7 @@ async def _async_main(args: argparse.Namespace) -> int:
                 "output_tokens": 0,
                 "cache_read_tokens": 0,
                 "cache_create_tokens": 0,
+                "total_tokens": 0,
                 "models_used": {},
                 "has_error": False,
             }
