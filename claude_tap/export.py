@@ -362,6 +362,11 @@ def _export_json(records: list[dict]) -> str:
         if tools:
             entry["tools"] = tools
 
+        # Streaming records only: mirrors the raw record shape, where
+        # non-streaming records omit the key.
+        if r.get("ttft_ms") is not None:
+            entry["ttft_ms"] = r["ttft_ms"]
+
         cleaned.append(entry)
 
     return json.dumps(cleaned, indent=2, ensure_ascii=False)
