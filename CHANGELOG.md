@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Record every task in a signed-in Manus Studio desktop app on macOS, with messages, status, and tool calls with their output, by reading the app's live event stream through the forward proxy.
 
+## [0.1.147] - 2026-11-24
+
 ### Fixed
 
 - Preserve inherited proxy bypass entries and synchronize `NO_PROXY` and `no_proxy` so reverse-mode clients reach loopback directly (#474).
