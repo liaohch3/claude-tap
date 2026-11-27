@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Record every task in a signed-in Manus Studio desktop app on macOS, with messages, status, and tool calls with their output, by reading the app's live event stream through the forward proxy.
+
 ## [0.1.147] - 2026-11-24
 
 ### Fixed

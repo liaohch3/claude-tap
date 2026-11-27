@@ -92,6 +92,10 @@ function buildStubEntry(meta, rawIdx) {
   };
   if (typeof meta.response_generate === 'boolean') responseBody.generate = meta.response_generate;
   if (meta.response_output_count) responseBody.output = Array.from({ length: meta.response_output_count }, () => ({}));
+  if (meta.transport === 'manus-task') {
+    responseBody.manus_task = { title: meta.manus_task_title };
+    responseBody.manus_event = { type: meta.manus_event_type, agent_status: meta.manus_agent_status };
+  }
 
   const stub = {
     _isStub: true,

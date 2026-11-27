@@ -9,6 +9,7 @@ function getPath(e) { return (e.request?.path || '/unknown').replace(/\?.*$/, ''
  */
 function filterPathKey(p) {
   if (typeof p === 'string' && p.startsWith('/cursor/transcript/')) return '/cursor/transcript/';
+  if (typeof p === 'string' && p.startsWith('/manus/tasks/')) return '/manus/tasks/';
   return p;
 }
 
@@ -139,7 +140,7 @@ let pathFilterExpanded = false;
  *   secondary – useful auxiliary APIs (MCP, models, token counting), collapsed behind "+N more"
  *   noise     – plugin manifests, bot APIs, asset downloads, version checks — hidden by default
  */
-const PRIMARY_PATH_PREFIXES = ['/cursor/transcript/', '/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1beta/models', '/v1alpha/models', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
+const PRIMARY_PATH_PREFIXES = ['/cursor/transcript/', '/manus/tasks/', '/v1/messages', '/v1/responses', '/backend-api/codex/responses', '/v1/chat/completions', '/v1/completions', '/v1beta/models', '/v1alpha/models', '/v1internal:generateContent', '/v1internal:streamGenerateContent'];
 const SECONDARY_PATH_PREFIXES = ['/v1/mcp', '/v1/models', '/v1/embeddings', '/v1/files', '/responses', '/models', '/chat/completions', '/completions', '/files', '/search', '/fetch', '/usages', '/feedback'];
 function isBedrockInvokePath(p) {
   return p.startsWith('/model/') && (p.endsWith('/invoke') || p.endsWith('/invoke-with-response-stream'));
@@ -301,7 +302,12 @@ function applyFilter(preserveDetail) {
   let sumInput = 0, sumOutput = 0, sumCacheRead = 0, sumCacheCreate = 0;
   let sumCacheDenominator = 0;
   let sumCost = 0, sumSaved = 0, pricedTurns = 0, unpricedTurns = 0, subscriptionTurns = 0;
+  let manusTurns = 0;
   filtered.forEach(e => {
+    if (isManusTaskEntry(e)) {
+      manusTurns++;
+      return;
+    }
     totalDuration += e.duration_ms || 0;
     const u = getUsage(e);
     const costRecord = entryCostRecord(e);
@@ -337,8 +343,15 @@ function applyFilter(preserveDetail) {
     }
   });
   $('#stat-turns').textContent = filtered.length;
-  $('#stat-tokens').textContent = totalTokens.toLocaleString();
-  $('#stat-duration').textContent = fmtDuration(totalDuration);
+  const onlyManus = manusTurns > 0 && manusTurns === filtered.length;
+  const tokens = $('#stat-tokens');
+  tokens.textContent = onlyManus ? '—' : totalTokens.toLocaleString() + (manusTurns ? '+' : '');
+  const tokensHint = manusTurns ? t('manus_metrics_unavailable') : t('stats_tokens_hint');
+  if (tokens.parentElement) {
+    tokens.parentElement.title = tokensHint;
+    tokens.parentElement.setAttribute('aria-label', tokensHint);
+  }
+  $('#stat-duration').textContent = onlyManus ? '—' : fmtDuration(totalDuration);
   // Token breakdown in header
   if (totalTokens > 0) {
     $('#stat-input').textContent = sumInput.toLocaleString();
@@ -359,18 +372,22 @@ function applyFilter(preserveDetail) {
   } else {
     ['stat-input-group','stat-output-group','stat-cache-read-group','stat-cache-write-group','stat-cache-hit-rate-group'].forEach(id => $('#'+id).style.display = 'none');
   }
-  renderCostStats(sumCost, sumSaved, pricedTurns, unpricedTurns, subscriptionTurns);
+  renderCostStats(sumCost, sumSaved, pricedTurns, unpricedTurns, subscriptionTurns, manusTurns);
   renderToolFilter();
   renderSidebar(preserveDetail);
   updatePositionIndicator();
 }
 
-function renderCostStats(sumCost, sumSaved, pricedTurns, unpricedTurns, subscriptionTurns = 0) {
+function renderCostStats(sumCost, sumSaved, pricedTurns, unpricedTurns, subscriptionTurns = 0, manusTurns = 0) {
   const costGroup = $('#stat-cost-group');
   const savedGroup = $('#stat-saved-group');
   if (!costGroup || !savedGroup) return;
   if (!pricedTurns) {
-    costGroup.style.display = 'none';
+    if (manusTurns) {
+      $('#stat-cost').textContent = '—';
+      costGroup.title = t('manus_metrics_unavailable');
+    }
+    costGroup.style.display = manusTurns ? 'flex' : 'none';
     savedGroup.style.display = 'none';
     return;
   }
@@ -380,11 +397,12 @@ function renderCostStats(sumCost, sumSaved, pricedTurns, unpricedTurns, subscrip
      label, not only a tooltip. Subscription turns are named separately: those
      tokens were covered by a monthly plan, which is a different reason for
      absence than a model the table cannot price. */
-  const partial = unpricedTurns > 0 || subscriptionTurns > 0;
+  const partial = unpricedTurns > 0 || subscriptionTurns > 0 || manusTurns > 0;
   const sourceNote = meta?.source ? `${meta.source}${pricingStamp(meta)}` : '';
   const notes = [];
   if (unpricedTurns > 0) notes.push(formatText('cost_partial', { n: unpricedTurns }));
   if (subscriptionTurns > 0) notes.push(formatText('cost_subscription', { n: subscriptionTurns }));
+  if (manusTurns > 0) notes.push(t('manus_metrics_unavailable'));
 
   $('#stat-cost').textContent = formatCostUsd(sumCost) + (partial ? '+' : '');
   costGroup.title = [t('cost_tooltip'), sourceNote, ...notes].filter(Boolean).join(' · ');
